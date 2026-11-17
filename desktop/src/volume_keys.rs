@@ -12,9 +12,9 @@ pub use hook::KeyHook;
 #[cfg(all(windows, not(test)))]
 pub use popup::show as show_level;
 
-/// How far volume up and volume down move the master, the same 3 points as on
-/// the Mac.
-pub const STEP: f64 = 3.0;
+/// How far volume up and volume down move the master, as Windows steps its
+/// own volume.
+pub const STEP: f64 = 2.0;
 
 /// A volume key the hook takes; play/pause and the track keys never are.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,14 +50,14 @@ mod tests {
 
     // covers: S429
     #[test]
-    fn volume_up_raises_the_master_by_three() {
-        assert_eq!(master_after(VolumeKey::Up, 40.0, 50.0), 43.0);
+    fn volume_up_raises_the_master_by_two() {
+        assert_eq!(master_after(VolumeKey::Up, 40.0, 50.0), 42.0);
     }
 
     // covers: S429
     #[test]
-    fn volume_down_lowers_the_master_by_three() {
-        assert_eq!(master_after(VolumeKey::Down, 40.0, 50.0), 37.0);
+    fn volume_down_lowers_the_master_by_two() {
+        assert_eq!(master_after(VolumeKey::Down, 40.0, 50.0), 40.0 - STEP);
     }
 
     // covers: S429

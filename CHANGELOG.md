@@ -2,7 +2,7 @@
 
 User-visible changes in each version. Loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/). Downloads are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page.
 
-## [Unreleased]
+## [0.9.3] - 2026-11-15
 
 ### Added
 
@@ -15,7 +15,6 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Changed
 
-- Volume keys now move the volume 3 points per press instead of about 6 on the Mac and 2 on Windows.
 - On the Mac, AudioSync remembers the macOS volume each local output last played at through it, sets it again before the output's first audio, and puts back the level it found when the output stops or AudioSync quits. A level you set in macOS in between wins and becomes the remembered one.
 - On the Mac, the preset and the equalizer curve you picked show on a grey second line under Presets and Equalizer, in the main window and the menu bar panel. The Edited mark and the dots for the preset in use are gone.
 - On the Mac, the Presets row in the main window folds open into a list: one click recalls a preset, each row's options button renames, updates or deletes it, and Save as Preset is the last row.
@@ -1115,7 +1114,7 @@ The first public release, an early alpha.
 - Now Playing works with Spotify and Music only.
 - The prebuilt app needs macOS 26 (Tahoe) or later.
 
-[Unreleased]: https://github.com/yassersutojoyo/audiosync/compare/v0.9.2...HEAD
+[0.9.3]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.9.3
 [0.9.2]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.9.2
 [0.9.1]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.9.1
 [0.9.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.9.0

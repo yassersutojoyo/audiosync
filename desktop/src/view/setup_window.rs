@@ -1,4 +1,4 @@
-//! File > Check Setup… (`ui/setup.slint`, S435). The rows' states come from
+//! Settings > Check Setup… (`ui/setup.slint`, S435). The rows' states come from
 //! `setup_check.rs`: the network's from the connected networks' profiles,
 //! read on a thread while the window is open, and the microphone's from every
 //! refresh, open or not, since Windows says it blocks the microphone only
@@ -209,7 +209,7 @@ mod tests {
         assert!(!window.is_visible());
         app.main.invoke_setup_requested();
         draw_frames();
-        assert!(window.is_visible(), "File > Check Setup… opens it");
+        assert!(window.is_visible(), "Settings > Check Setup… opens it");
         assert_eq!(
             app.strings().invoke_setup_summary(false, false),
             "Windows doesn't ask AudioSync for permissions. Nothing here needs your attention."

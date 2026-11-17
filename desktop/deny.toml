@@ -43,6 +43,7 @@ exceptions = [
     { crate = "i-slint-core", allow = ["GPL-3.0-only"] },
     { crate = "i-slint-core-macros", allow = ["GPL-3.0-only"] },
     { crate = "i-slint-renderer-femtovg", allow = ["GPL-3.0-only"] },
+    { crate = "i-slint-renderer-skia", allow = ["GPL-3.0-only"] },
     { crate = "i-slint-renderer-software", allow = ["GPL-3.0-only"] },
     { crate = "slint", allow = ["GPL-3.0-only"] },
     { crate = "slint-build", allow = ["GPL-3.0-only"] },
@@ -84,7 +85,6 @@ ignore = [
     { id = "RUSTSEC-2026-0370", reason = "zvariant: unmaintained, under zbus 5, no maintained replacement yet" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names: unmaintained, under zbus 5, no maintained replacement yet" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: unmaintained, under zbus 5, no maintained replacement yet" },
-    { id = "RUSTSEC-2026-0543", reason = "chrono: unmaintained, only under Slint's i-slint-core, no maintained replacement yet" },
 ]
 
 [bans]

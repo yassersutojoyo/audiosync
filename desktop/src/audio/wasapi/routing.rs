@@ -1,11 +1,12 @@
 //! The snapshot the double-audio check reads: each active render endpoint's
 //! name and kind, whether it is the default output, its mute and master
 //! volume (`IAudioEndpointVolume`), and the processes with an active audio
-//! session on it (`IAudioSessionManager2`). It only reads: no mute, volume or
+//! session on it (`IAudioSessionManager2`), with those whose sessions carry no
+//! sound (`IAudioMeterInformation`). It only reads: no mute, volume or
 //! default output is ever changed here.
 
 use windows::Win32::Foundation::S_OK;
-use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
+use windows::Win32::Media::Audio::Endpoints::{IAudioEndpointVolume, IAudioMeterInformation};
 use windows::Win32::Media::Audio::{
     AudioSessionStateActive, DEVICE_STATE_ACTIVE, IAudioSessionControl2, IAudioSessionManager2,
     IMMDevice, eConsole, eRender,
@@ -59,13 +60,16 @@ pub(super) fn endpoint_audio() -> Result<Vec<EndpointAudio>, BackendError> {
             }
             Err(_) => (String::new(), false),
         };
+        let (active_pids, silent_pids, mix_pids) = session_pids(&device);
         endpoints.push(EndpointAudio {
             is_default: default_id.as_deref() == Some(id.as_str()),
             id,
             name,
             virtual_device,
             volume: volume(&device),
-            active_pids: active_session_pids(&device),
+            active_pids,
+            silent_pids,
+            mix_pids,
         });
     }
     Ok(endpoints)
@@ -85,22 +89,38 @@ fn volume(device: &IMMDevice) -> Option<EndpointVolume> {
     }
 }
 
+/// A session peak at or below this (-60 dBFS) carries no sound.
+const SILENT_PEAK: f32 = 0.001;
+
+/// A session carrying sound whose peak is within this share of the
+/// endpoint's own peak, read right after it, reads the mix's level.
+const MIX_TOLERANCE: f32 = 0.01;
+
 /// The IDs of the processes with an active audio session on the endpoint,
-/// sorted. The system sounds session and sessions that aren't active
-/// (paused, or expired) are left out, and so is a session that fails.
-fn active_session_pids(device: &IMMDevice) -> Vec<u32> {
+/// sorted, those of them whose every active session reads a peak at or
+/// below [`SILENT_PEAK`], and those whose every session carrying sound reads
+/// the level of the endpoint's whole mix ([`MIX_TOLERANCE`]), as a recorder
+/// of the endpoint does. The system sounds session and sessions that aren't
+/// active (paused, or expired) are left out, and so is a session that fails; a peak that
+/// can't be read counts as sound, and not as the mix.
+fn session_pids(device: &IMMDevice) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
     let mut pids = Vec::new();
+    let mut sounding = Vec::new();
+    let mut off_mix = Vec::new();
     // SAFETY: calls on live COM objects this function owns; only reads.
     unsafe {
         let Ok(manager) = device.Activate::<IAudioSessionManager2>(CLSCTX_ALL, None) else {
-            return pids;
+            return (pids, Vec::new(), Vec::new());
         };
         let Ok(sessions) = manager.GetSessionEnumerator() else {
-            return pids;
+            return (pids, Vec::new(), Vec::new());
         };
         let Ok(total) = sessions.GetCount() else {
-            return pids;
+            return (pids, Vec::new(), Vec::new());
         };
+        let endpoint_meter = device
+            .Activate::<IAudioMeterInformation>(CLSCTX_ALL, None)
+            .ok();
         for number in 0..total {
             let Ok(session) = sessions.GetSession(number) else {
                 continue;
@@ -121,12 +141,38 @@ fn active_session_pids(device: &IMMDevice) -> Vec<u32> {
                 && pid != 0
             {
                 pids.push(pid);
+                let peak = session
+                    .cast::<IAudioMeterInformation>()
+                    .and_then(|meter| meter.GetPeakValue())
+                    .ok();
+                if peak.is_none_or(|peak| peak > SILENT_PEAK) {
+                    sounding.push(pid);
+                    let mix = endpoint_meter
+                        .as_ref()
+                        .and_then(|meter| meter.GetPeakValue().ok());
+                    if !peak
+                        .zip(mix)
+                        .is_some_and(|(peak, mix)| (peak - mix).abs() <= mix * MIX_TOLERANCE)
+                    {
+                        off_mix.push(pid);
+                    }
+                }
             }
         }
     }
     pids.sort_unstable();
     pids.dedup();
-    pids
+    let silent = pids
+        .iter()
+        .copied()
+        .filter(|pid| !sounding.contains(pid))
+        .collect();
+    let mix = pids
+        .iter()
+        .copied()
+        .filter(|pid| sounding.contains(pid) && !off_mix.contains(pid))
+        .collect();
+    (pids, silent, mix)
 }
 
 #[cfg(test)]
@@ -142,12 +188,13 @@ mod tests {
         let before = endpoint_audio().expect("the endpoints can be read");
         for endpoint in &before {
             println!(
-                "{:?}: default {}, virtual {}, volume {:?}, active sessions {:?}",
+                "{:?}: default {}, virtual {}, volume {:?}, active sessions {:?}, silent {:?}",
                 endpoint.name,
                 endpoint.is_default,
                 endpoint.virtual_device,
                 endpoint.volume,
-                endpoint.active_pids
+                endpoint.active_pids,
+                endpoint.silent_pids
             );
             assert!(!endpoint.id.is_empty());
             if let Some(volume) = endpoint.volume {

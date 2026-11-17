@@ -23,7 +23,7 @@ use crate::view::App;
 pub fn start(log: &DebugLog) -> Result<Started, StartError> {
     log.log(|| "audio: example speakers from the mock backend; nothing plays".to_owned());
     Ok(Started {
-        backend: Box::new(crate::ui_model::MockBackend::new()),
+        backend: crate::view::Engine::here(Box::new(crate::ui_model::MockBackend::new())),
         media: Media,
     })
 }
@@ -40,7 +40,7 @@ pub fn start(_log: &DebugLog) -> Result<Started, StartError> {
 #[cfg(all(feature = "mock-backend", not(target_os = "linux")))]
 pub fn start_with(_log: &DebugLog, backend: Box<dyn crate::ui_model::Backend>) -> Started {
     Started {
-        backend,
+        backend: crate::view::Engine::here(backend),
         media: Media,
     }
 }

@@ -192,8 +192,6 @@ final class AppModel: ObservableObject {
         var permissionNotNow: (Permission) -> Void = { _ in }
         var toggleZone: (String) -> Void = { _ in }
         var deleteZone: (String) -> Void = { _ in }
-        /// Asks before Delete Zone deletes the zone of this name; true on Delete.
-        var confirmDeleteZone: (String) -> Bool = { _ in false }
         /// Zone ID, the name typed (`ZoneEdit.renaming`).
         var renameZone: (String, String) -> Void = { _, _ in }
         /// Calibrate Zone… for zone `id` (S255).
@@ -509,7 +507,8 @@ final class AppModel: ObservableObject {
     /// The device volume hint `speaker`'s row shows: none on an AirPlay row
     /// or a row switched off (S198).
     func deviceVolume(of speaker: Speaker) -> DeviceVolumeHint? {
-        DeviceVolumes.hint(for: speaker.id, airPlay: speaker.isAirPlay || speaker.isCast, enabled: speaker.enabled,
+        DeviceVolumes.hint(for: speaker.id, airPlay: speaker.isAirPlay || speaker.isCast,
+                           headphones: speaker.calibrationLeftOut == .headphones, enabled: speaker.enabled,
                            in: deviceVolumes)
     }
 
@@ -573,9 +572,8 @@ final class AppModel: ObservableObject {
         AccessibilityNotification.Announcement(text.speakerMovedToZone(member.name, zone: zone.name)).post()
     }
 
-    /// Delete Zone: once the user confirms, its members go back to the plain lists.
+    /// Delete Zone: its members go back to the plain lists, without asking.
     func delete(_ zone: Zone) {
-        guard actions.confirmDeleteZone(zone.name) else { return }
         actions.deleteZone(zone.id)
         AccessibilityNotification.Announcement(text.zoneDeleted(zone.name)).post()
     }
@@ -931,18 +929,10 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         if presented { dismiss() }
         let actions = model.actions
         MainActor.assumeIsolated {
-            let menu = StatusItemMenu.make(text: model.text, running: model.running,
-                                           launchAtLogin: model.launchAtLogin, open: actions.openMainWindow,
-                                           setPower: actions.setPower, setLaunchAtLogin: actions.setLaunchAtLogin,
-                                           quit: actions.quit)
-            // The app's theme, not the menu bar's.
-            menu.appearance = NSApp.effectiveAppearance
-            menu.keepUntilNextPopUp()
-            // As the status item's own menu AppKit places it under the menu bar; a
-            // pop-up at the button reached into the bar and scrolled its first item away.
-            statusItem.menu = menu
-            button.performClick(nil)
-            statusItem.menu = nil
+            StatusItemMenu.make(text: model.text, running: model.running, launchAtLogin: model.launchAtLogin,
+                                open: actions.openMainWindow, setPower: actions.setPower,
+                                setLaunchAtLogin: actions.setLaunchAtLogin, quit: actions.quit)
+                .popUp(under: button)
         }
     }
 
@@ -2468,21 +2458,29 @@ struct SourcePicker: View {
                         .accessibilityHidden(true)
                 }
                 Text(model.currentSource?.name ?? t.sourceSystem)
+                    .foregroundStyle(.tint)
                     .lineLimit(1)
-                if !hero { Spacer() }
+                Spacer()
+                if hero {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: PanelLayout.chevronPoint, weight: .semibold))
+                        .foregroundStyle(.tint)
+                        .padding(.trailing, PanelLayout.menuChevronInset)
+                }
             }
+            .contentShape(Rectangle())
             // The menu takes its title from this content, which read the
             // chosen app's name instead of the fixed label.
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(t.sourceLabel)
             .accessibilityValue(model.currentSource?.name ?? t.sourceSystem)
         }
-        .menuStyle(.borderlessButton)
+        .modifier(SourceMenuStyle(hero: hero))
         // A borderless menu draws its label and chevron in the tint; the brand
         // teal fell near 2:1 on the panel's material over a dark window.
         .tint(hero ? Brand.secondaryText : .primary)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.leading, hero ? PanelLayout.sourceLeading : 10)
+        .padding(.leading, hero ? 0 : 10)
         .padding(.trailing, hero ? 0 : 10)
         .padding(.vertical, hero ? 0 : large ? 8 : 6)
         .background(RoundedRectangle(cornerRadius: 9).fill(.quaternary.opacity(hero ? 0 : 0.6)))
@@ -2516,6 +2514,21 @@ struct SourcePicker: View {
     }
 }
 
+/// AppKit draws a borderless menu's label on whole pixels, so in the card, which the panel's
+/// intro moves by fractions of a point, the menu shows the label as laid out instead.
+private struct SourceMenuStyle: ViewModifier {
+    let hero: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if hero {
+            content.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+        } else {
+            content.menuStyle(.borderlessButton)
+        }
+    }
+}
+
 /// The panel's preset row (S260): recall only, the current one checked, the
 /// preset picked last named under it (`ChoiceLine`). Choosing one leaves the
 /// panel open.
@@ -2526,7 +2539,7 @@ struct PresetPicker: View {
         let t = model.text
         let line = ChoiceLine.preset(model.presets)
         // A plain menu draws its label as laid out here, so the icon, the label and the chevron all open it.
-        VStack(alignment: .leading, spacing: 0) {
+        PresetRowLayout {
             Menu {
                 ForEach(model.presets) { preset in
                     Toggle(preset.name, isOn: Binding(get: { preset.current },
@@ -2564,9 +2577,26 @@ struct PresetPicker: View {
             ChoiceLineView(line: line, fold: model.foldPanelZone)
                 .padding(.leading, PanelLayout.textColumn)
         }
-        // Both lines fit in the row's 34 pt; only a wrapped name adds a line.
-        .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
         .padding(.trailing, PanelLayout.presetTrailing)
+    }
+}
+
+/// The preset row's menu, then the picked preset's name under it (`PanelLayout.presetRow`).
+private struct PresetRowLayout: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let heights = subviews.map { $0.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil)).height }
+        let row = PanelLayout.presetRow(label: heights.first ?? 0, line: heights.dropFirst().reduce(0, +))
+        return CGSize(width: proposal.width ?? 0, height: row.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let width = ProposedViewSize(width: bounds.width, height: nil)
+        let heights = subviews.map { $0.sizeThatFits(width).height }
+        var y = bounds.minY + PanelLayout.presetRow(label: heights.first ?? 0, line: 0).labelTop
+        for (subview, height) in zip(subviews, heights) {
+            subview.place(at: CGPoint(x: bounds.minX, y: y), proposal: width)
+            y += height
+        }
     }
 }
 
@@ -2786,7 +2816,7 @@ struct NoticeBanner<Footer: View>: View {
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
             .accessibilityLabel(notice.dismissLabel(text))
-            .help(text.dismissNotice)
+            .help(notice.dismissLabel(text))
         }
         // The panel's notice is text on the panel, without a box.
         .padding(card ? 10 : 0)
@@ -2929,8 +2959,6 @@ struct MasterMuteButton: View {
 struct MasterSlider: View {
     @ObservedObject var model: AppModel
     let text: UIStrings
-    @StateObject private var click = SliderClick()
-    @FocusState private var focused: Bool
     static let height: CGFloat = 18
 
     static func key(_ key: KeyEquivalent) -> MasterTrack.Key? {
@@ -2965,24 +2993,11 @@ struct MasterSlider: View {
             .frame(width: width, height: geo.size.height)
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0).onChanged { drag in
-                if !click.clicked { click.clicked = true }
                 model.actions.setMaster(MasterTrack.level(at: drag.location.x, width: width))
-            }
-            // The mouse-down drops the focus asked for in onChanged; a still click has no later event to ask again.
-            .onEnded { _ in click.clicked = true; focused = true })
+            })
         }
         .frame(height: MasterSlider.height)
-        .background(ScrollWatch { event in
-            let up = event.isDirectionInvertedFromDevice ? -event.scrollingDeltaY : event.scrollingDeltaY
-            model.actions.setMaster(MasterTrack.level(afterScroll: Double(up), precise: event.hasPreciseScrollingDeltas,
-                                                      from: model.master))
-        })
-        // As the equalizer bands: NSSlider's rule, the ring only under keyboard navigation, a clicked slider keeps the arrows.
-        .focusable(interactions: click.clicked ? .edit : .activate)
-        .focused($focused)
-        .focusEffectDisabled(!NSApp.isFullKeyboardAccessEnabled)
-        .onChange(of: click.clicked) { _, now in if now { focused = true } }
-        .onChange(of: focused) { _, now in if !now { click.clicked = false } }
+        .focusable()
         .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow, .pageUp, .pageDown, .home, .end]) { press in
             guard let key = MasterSlider.key(press.key) else { return .ignored }
             model.actions.setMaster(MasterTrack.level(after: key, from: model.master))
@@ -2993,33 +3008,6 @@ struct MasterSlider: View {
         }
         .accessibilityLabel(text.masterVolume)
         .accessibilityValue(text.volumeValue(model.master))
-    }
-}
-
-/// Hands the scrolls over the view it backs to `scrolled` and keeps them from
-/// the column's scroll view: SwiftUI's own views here let them pass.
-private struct ScrollWatch: NSViewRepresentable {
-    let scrolled: (NSEvent) -> Void
-
-    func makeNSView(context: Context) -> WatchView { WatchView() }
-    func updateNSView(_ view: WatchView, context: Context) { view.scrolled = scrolled }
-
-    final class WatchView: NSView {
-        var scrolled: (NSEvent) -> Void = { _ in }
-        private var monitor: Any?
-
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            if let monitor { NSEvent.removeMonitor(monitor) }
-            monitor = nil
-            guard window != nil else { return }
-            monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-                guard let self, let window = self.window, event.window === window,
-                      self.bounds.contains(self.convert(event.locationInWindow, from: nil)) else { return event }
-                self.scrolled(event)
-                return nil
-            }
-        }
     }
 }
 

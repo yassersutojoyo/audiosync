@@ -173,26 +173,6 @@ extension AppDelegate {
         return true
     }
 
-    /// Delete Zone, which the user chose, asks first: Cancel is the default.
-    private func confirmDeleteZone(_ name: String) -> Bool {
-        menuBar?.close()
-        NSApp.activate(ignoringOtherApps: true)
-        let prompt = NSAlert()
-        prompt.messageText = text.deleteZoneTitle(name)
-        prompt.informativeText = text.deleteZoneMessage
-        let cancel = prompt.addButton(withTitle: text.cancel)
-        cancel.keyEquivalent = "\r"
-        prompt.addButton(withTitle: text.deleteZoneConfirm).hasDestructiveAction = true
-        // AppKit maps Escape to a Cancel title only while it has no other key equivalent.
-        let escape = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard event.keyCode == 53 else { return event }   // 53: Escape
-            cancel.performClick(nil)
-            return nil
-        }
-        defer { if let escape = escape { NSEvent.removeMonitor(escape) } }
-        return prompt.runModal() == .alertSecondButtonReturn
-    }
-
     private func acceptPermission(_ permission: Permission) {
         permissions.accept(permission)
         permissions.save(store)
@@ -456,7 +436,6 @@ extension AppDelegate {
         }
         a.toggleZone = { [weak self] id in self?.toggleZone(id) }
         a.deleteZone = { [weak self] id in self?.deleteZone(id) }
-        a.confirmDeleteZone = { [weak self] name in self?.confirmDeleteZone(name) ?? false }
         a.renameZone = { [weak self] id, typed in self?.renameZone(id, to: typed) }
         a.calibrateZone = { [weak self] id in self?.calibrateZone(id) }
         a.setZoneVolume = { [weak self] id, position in self?.setZoneVolume(id, position) }

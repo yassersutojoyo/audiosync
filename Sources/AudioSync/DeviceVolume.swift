@@ -274,10 +274,11 @@ final class DeviceVolumes {
     }
 
     /// What a row shows (S198): a switched-on local output's hint; nothing on
-    /// an AirPlay row or a row switched off.
-    static func hint(for id: String, airPlay: Bool, enabled: Bool,
+    /// an AirPlay row, a row switched off, or headphones, where a low level is
+    /// already loud.
+    static func hint(for id: String, airPlay: Bool, headphones: Bool = false, enabled: Bool,
                      in hints: [String: DeviceVolumeHint]) -> DeviceVolumeHint? {
-        guard !airPlay, enabled else { return nil }
+        guard !airPlay, !headphones, enabled else { return nil }
         return hints[id]
     }
 

@@ -1,13 +1,15 @@
 #!/bin/bash
 #
 # Generates the Windows app's icons from the brand files, with no dependencies
-# beyond Xcode's command line tools:
-#   desktop/res/audiosync.ico         the app icon (Explorer, the taskbar, the title bar)
-#   desktop/res/audiosync-256.png     the same at 256 px, the Slint windows' icon
+# beyond Xcode's command line tools and Pillow:
+#   desktop/res/audiosync.ico, audiosync-tile-256.png and the MSIX logos
+#                                     the app icon, from scripts/brand/app_tile.py
+#   desktop/res/audiosync-256.png     the white plate at 256 px (receiver artwork,
+#                                     the Linux tray, the installer's pictures)
 #   desktop/res/tray-{light,dark}.ico           the tray icon for a light or dark taskbar
 #   desktop/res/tray-{light,dark}-off.ico       the same, dimmed while streaming is off
 #   desktop/res/tray-*-notice.ico               each with a badge while a notice is up
-# The app icon is brand/audiosync-icon.svg cropped to its tile; the tray icons are
+# The plate is brand/audiosync-icon.svg cropped to its tile; the tray icons are
 # brand/audiosync-mark.svg in the token colors (scripts/brand/ico.py).
 #
 # Usage: scripts/brand/windows-icons.sh
@@ -40,8 +42,7 @@ for name in tray-light tray-dark tray-light-off tray-dark-off; do
   render "$name-notice" 16 20 24 32 40 48
 done
 
-render app 16 20 24 32 40 48 64 256
-mv "$out/app.ico" "$out/audiosync.ico"
-cp "$work/app-256.png" "$out/audiosync-256.png"
+"$work/render-svg" "$work/app.svg" "$out/audiosync-256.png" 256
+python3 -I scripts/brand/app_tile.py
 
 echo "✅ Windows icons written to $out/"

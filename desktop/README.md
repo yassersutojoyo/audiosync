@@ -84,12 +84,6 @@ build you make yourself, you write that file as shown below), and run it.
   `%TEMP%\audiosync-debug.log`; it starts over at every launch and stops at
   50 MB. [docs/DEVELOPMENT.md](../docs/DEVELOPMENT.md) says what it records.
   Attach it when you report a problem.
-- **Debug log, MSIX install:** quit AudioSync from the tray, then run
-  `$env:AUDIOSYNC_DEBUG=1; audiosync.exe` in PowerShell from any folder (the
-  package puts `audiosync.exe` on the PATH). The log goes to
-  `audiosync-debug.log` in the package's `LocalCache` folder, not `%TEMP%`:
-  look under `%LOCALAPPDATA%\Packages` in the folder with `AudioSync` in its
-  name.
 
 ## Linux: a silent output
 
@@ -324,8 +318,12 @@ cargo check --target aarch64-pc-windows-msvc
   colors and sizes
 - `res/audiosync.exe.manifest`: supported Windows versions and per-monitor DPI
   awareness; `build.rs` embeds it with the icons and the version information
-- `res/*.ico`, `res/audiosync-256.png`: the app and tray icons, generated from
-  the brand mark by `scripts/brand/windows-icons.sh` (on a Mac)
+- `res/tray-*.ico`, `res/audiosync-256.png`: the tray icons and the app icon's
+  white plate (receiver artwork, the Linux tray, the installer's pictures),
+  generated from the brand mark by `scripts/brand/windows-icons.sh` (on a Mac);
+  `res/audiosync.ico`, `res/audiosync-tile-256.png` and the logos in
+  `msix/Assets/`: the app icon, the white mark on a teal tile, drawn by
+  `scripts/brand/app_tile.py` (Pillow, on any host)
 - `deny.toml`: the licenses dependencies may use (`cargo deny check licenses`)
 
 CI (`.github/workflows/windows.yml`) checks formatting, runs clippy and the

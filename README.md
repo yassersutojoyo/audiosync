@@ -25,77 +25,79 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/main-window-light.png" width="360" alt="AudioSync main window on a Mac in the light theme: the song playing with its art, the audio source, and the speakers, each with a round on/off icon and a volume slider">
-  <img src="docs/images/main-window-dark.png" width="360" alt="AudioSync main window on a Mac in the dark theme: the song playing with its art, the audio source, and the speakers, each with a round on/off icon and a volume slider">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/main-window-dark.png">
+    <img src="docs/images/main-window-light.png" width="720" alt="AudioSync main window on a Mac: the song playing with its art, the audio source, and the speakers, each with a round on/off icon and a volume slider">
+  </picture>
 </p>
 
-AirPlay speakers play a little late and local speakers don't, so the same song on both turns into an echo. AudioSync grabs your computer's audio once, sends it to the network speakers and holds each local speaker back by its own delay, so everything plays together. It's the same app on macOS, Windows and Linux, and all three run the same Rust core for the audio, the sync and the AirPlay and Google Cast senders.
+AirPlay speakers play a little late and local speakers don't, so the same song on both turns into an echo. AudioSync grabs your computer's audio once, sends it to the AirPlay speakers and plays a delayed copy on each local speaker, so everything lines up. It's free, and it's a beta, so expect rough edges.
+
+It's one app on the Mac, Windows and Linux. All three run the same Rust core for the audio, the sync and the AirPlay and Google Cast senders; only the window around it differs.
+
+You don't have to find each delay by ear. Calibrate with Microphone plays a short sweep on each speaker, hears when it arrives and sets the delay. On a Mac, 12 runs on one Bluetooth speaker gave offsets within ±1.6 ms of each other.
+
+On AirPlay, AudioSync adds 0.1 s to the wait the speaker asks for, and never more than 0.2 s. It steps up to 0.2 s after a speaker had to skip a bit of audio, in a quiet moment such as the gap between two songs, and comes back to 0.1 s by itself.
 
 ## What it does
 
-- Speakers: AirPlay speakers and Apple TVs (up to 16 AirPlay 2 speakers at once, a stereo pair or an Apple TV with its HomePods as one row), Google Cast speakers and groups, and whatever your computer plays to: built-in, headphones, HDMI, USB, Bluetooth.
-- Sync: a delay per local speaker, from −2 to +20 s, and one for AirPlay, set by hand or by Calibrate with Microphone, which plays a short sweep on each speaker and sets the delay from when it hears it.
+- A delay per local speaker, from −2 to +20 s, and one for AirPlay, set by hand or by Calibrate with Microphone.
 - Source: all system audio, one app, several apps (or every app except a few), or an input like a mic.
-- Control: volume per speaker and master, a 10-band EQ, Now Playing, zones, presets, and a Web Remote that runs in your phone's browser.
+- Zones, presets, and a Web Remote that runs in your phone's browser.
+- Outputs: AirPlay speakers and Apple TVs, Google Cast speakers, and whatever your computer plays to: built-in, headphones, HDMI, USB, Bluetooth.
+- Volume per speaker and master, a 10-band EQ and Now Playing.
+- Free and GPL-3.0-or-later. The engine and the senders are my own code; the libraries it uses are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
-## Platforms
+On the Mac it lives in the menu bar, on Windows it's a window with a tray icon, and on Linux it sits in the tray when your desktop has one (it plays through PipeWire).
 
-| | You need | Where it lives | Updates |
-|---|---|---|---|
-| macOS | macOS 15 or later, Apple silicon | The menu bar, plus a main window | By itself |
-| Windows | Windows 11, x64 or ARM64 | A window, plus a tray icon | By itself |
-| Linux | x86_64 or aarch64, glibc 2.39 or later, PipeWire | A window, plus a tray icon when your desktop has a tray | The AppImage by itself, a `.deb` by hand |
+Up to 16 AirPlay 2 speakers play at once, and a stereo pair or an Apple TV with its HomePods shows up as one row. Google Cast plays one speaker or Google Home group at a time. Cast has no shared clock, so you set its offset by ear once and it's remembered; Resync under its volume fixes drift.
+
+Not made by Rogue Amoeba, and no shared code with Airfoil.
 
 ## Install
 
-### macOS
-- From Terminal, with no Open Anyway step: `curl -fsSL https://github.com/yassersutojoyo/audiosync/releases/latest/download/install.sh | bash`
-- Or get `AudioSync.dmg` from the [latest release](https://github.com/yassersutojoyo/audiosync/releases/latest) and drag it to Applications. On the first launch, click Done, then System Settings → Privacy & Security → Open Anyway.
+macOS 15 or later, Apple silicon:
+
+- Get `AudioSync.dmg` from the [latest release](https://github.com/yassersutojoyo/audiosync/releases/latest) and drag it to Applications. It isn't notarized, so on the first launch click Done, then System Settings → Privacy & Security → Open Anyway.
+- Or from Terminal, with no Open Anyway step: `curl -fsSL https://github.com/yassersutojoyo/audiosync/releases/latest/download/install.sh | bash`
 - Or with Homebrew, which installs the same DMG: `brew install --cask yassersutojoyo/audiosync/audiosync`
 
-### Windows
-- From PowerShell, no admin and no SmartScreen: `irm https://github.com/yassersutojoyo/audiosync/releases/latest/download/install.ps1 | iex`
-- Or get the x64 or ARM64 zip from the [latest release](https://github.com/yassersutojoyo/audiosync/releases/latest), unzip it into its own folder and run `audiosync.exe`. If SmartScreen asks, click More info, then Run anyway.
+Windows 11, x64 or ARM64:
 
-### Linux
-- From a terminal, no sudo: `curl -fsSL https://github.com/yassersutojoyo/audiosync/releases/latest/download/install-linux.sh | bash`
-- Or get the AppImage for your machine from the [latest release](https://github.com/yassersutojoyo/audiosync/releases/latest), make it executable and run it.
-- Or on Debian or Ubuntu, the `.deb`: `sudo apt install ./AudioSync-<version>-amd64.deb` (or `arm64`).
+- Get the zip for your PC from [Releases](https://github.com/yassersutojoyo/audiosync/releases), unzip it into its own folder and run `audiosync.exe`. It isn't signed, so SmartScreen may ask: click More info, then Run anyway. [desktop/README.md](desktop/README.md#running-the-exe) has more.
+- Or from PowerShell, no admin and no SmartScreen: `irm https://github.com/yassersutojoyo/audiosync/releases/latest/download/install.ps1 | iex`
 
-Each install script checks the download against the release's SHA-256 checksums; run it again to update. To build it yourself, see [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
+Linux, x86_64 or aarch64, glibc 2.39 or newer and PipeWire:
+
+- Get the AppImage from [Releases](https://github.com/yassersutojoyo/audiosync/releases), make it executable and run it.
+- Or from a terminal, no sudo: `curl -fsSL https://github.com/yassersutojoyo/audiosync/releases/latest/download/install-linux.sh | bash`
+- On Debian or Ubuntu there's a `.deb` too: `sudo apt install ./AudioSync-<version>-amd64.deb` (or `arm64`).
+- On Fedora 40 or newer there's an `.rpm` for x86_64: `sudo dnf install ./AudioSync-<version>-x86_64.rpm`.
+- Hear the source twice with no output to spare? [desktop/README.md](desktop/README.md#linux-a-silent-output) shows how to add a silent one.
+
+Each install script checks the download against the release's SHA-256 checksums; run it again to update. The Mac app, the Windows exe and the AppImage update themselves; a `.deb` or `.rpm` install and Windows 0.7.1 don't, so get the next version by hand. To build it yourself, see [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
 ## Use
 
-1. Pick a source.
-2. Click a speaker's round icon to turn it on. Speakers that want a code or password ask when you do.
-3. Speaker too early? Raise its delay. Too late? Lower it, below zero if needed. Bluetooth usually lands around −150 to −300 ms.
-
+- Leave your computer's sound output on a local device, not a HomePod.
+- Pick a source and click a speaker's round icon to turn it on. Speakers that want a code or password ask when you do.
+- On the Mac, the window doesn't open at login. Click the Dock icon.
+- Speaker too early? Raise its delay. Too late? Lower it, below zero if needed. Bluetooth usually lands around −150 to −300 ms.
 - For video, a player with an audio delay setting (mpv, VLC, IINA) can hold the picture back to match.
-- HomePods: in Allow Speaker & TV Access, pick “Anyone on the Same Network” on a network you trust.
-- On the Mac, leave the sound output on a local device, not a HomePod. The window doesn't open at login; click the Dock icon.
-- On Linux, hear the source twice with no output to spare? [desktop/README.md](desktop/README.md#linux-a-silent-output) shows how to add a silent one.
-- The rest is in Help > AudioSync Guide.
-
-## Good to know
-
-- Google Cast plays one speaker or Google Home group at a time. Cast has no shared clock, so you set its offset by ear once and it's remembered; Resync under its volume fixes drift.
-- Several Bluetooth outputs at once share one radio, which shares 2.4 GHz with Wi-Fi, so they may stutter. Fewer of them, 5 GHz Wi-Fi or AirPlay for the rest helps.
+- Several Bluetooth outputs at once may stutter, since one radio serves them all and shares 2.4 GHz with Wi-Fi. Fewer of them, 5 GHz Wi-Fi or AirPlay for the rest helps.
 - The Web Remote is plain HTTP, so I'd keep it off on networks you share with strangers.
-
-## Something broken?
-
-[Open an issue](https://github.com/yassersutojoyo/audiosync/issues/new/choose) with a debug log. Quit AudioSync, start it as below, do the thing again and attach the log:
-
-- macOS, in Terminal: `AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync`, then attach `/tmp/audiosync-debug.log`.
-- Windows, in PowerShell in the app's folder: `$env:AUDIOSYNC_DEBUG=1; .\audiosync.exe`, then attach `%TEMP%\audiosync-debug.log` ([more on the exe](desktop/README.md#running-the-exe)).
-- Linux, in a terminal: `AUDIOSYNC_DEBUG=1 audiosync` (use `~/.local/bin/audiosync` after the script install, or the AppImage's path), then attach `$XDG_STATE_HOME/audiosync/debug.log` (`~/.local/state/audiosync/debug.log` when `XDG_STATE_HOME` isn't set).
+- HomePods: in Allow Speaker & TV Access, pick “Anyone on the Same Network” on a network you trust.
+- More in Help > AudioSync Guide.
+- Something broken? [Open an issue](https://github.com/yassersutojoyo/audiosync/issues/new/choose) with a log. On the Mac, quit AudioSync, run `AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync`, do it again and attach `/tmp/audiosync-debug.log`. On Windows, see [Running the exe](desktop/README.md#running-the-exe).
 
 ## License and credits
 
-Copyright (c) 2026 Yasser Sutojoyo Kusumo. GPL-3.0-or-later, no warranty. See [`LICENSE`](LICENSE). Stuff it bundles from others, like the Poppins font, is listed with its license in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). The engine and the senders are my own code.
+Copyright (c) 2026 Yasser Sutojoyo Kusumo. GPL-3.0-or-later, no warranty. See [`LICENSE`](LICENSE). Stuff it bundles from others, like the Poppins font, is listed with its license in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
-Not made by Rogue Amoeba, and no shared code with Airfoil. Apple, AirPlay and HomePod are trademarks of Apple Inc., Airfoil of Rogue Amoeba Software, LLC, and the Bluetooth® word mark of Bluetooth SIG, Inc. AudioSync isn't affiliated with or endorsed by any of them.
+Apple, AirPlay and HomePod are trademarks of Apple Inc., Airfoil of Rogue Amoeba Software, LLC, and the Bluetooth® word mark of Bluetooth SIG, Inc. AudioSync isn't affiliated with or endorsed by any of them.
 
-Building, contributing, security: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md), [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md). Privacy and signing: [`PRIVACY.md`](PRIVACY.md), [Code signing policy](docs/CODE_SIGNING_POLICY.md).
+Building, contributing, security: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md), [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
+
+Privacy and signing: [`PRIVACY.md`](PRIVACY.md), [Code signing policy](docs/CODE_SIGNING_POLICY.md).
 
 And of course, thank god for Anthropic and Claude.

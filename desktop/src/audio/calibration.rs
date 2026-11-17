@@ -513,7 +513,7 @@ impl RecordingClock {
 }
 
 /// A running recording of the default input device, mono.
-pub trait Microphone {
+pub trait Microphone: Send {
     fn id(&self) -> MicrophoneId;
     /// When its first frame was recorded, on the core's clock.
     fn first_frame_ns(&self) -> Option<u64>;
@@ -1252,10 +1252,10 @@ pub(crate) fn logged_after_estimates(log: &DebugLog, path: &std::path::Path) -> 
 
 #[cfg(test)]
 mod tests {
-    use std::cell::{Cell, RefCell};
-    use std::rc::Rc;
+    use std::cell::RefCell;
 
     use super::*;
+    use crate::audio::test_cells::SyncCell;
     use crate::debug_log::{FILE_NAME, assert_in_order, test_dir};
 
     const MIC_RATE: u32 = 44_100;
@@ -1273,11 +1273,11 @@ mod tests {
     #[derive(Default)]
     struct MicFault {
         /// No first frame ever comes.
-        cold: Cell<bool>,
+        cold: SyncCell<bool>,
         /// No frame comes after this moment.
-        frozen_at: Cell<Option<u64>>,
+        frozen_at: SyncCell<Option<u64>>,
         /// It stopped on its own, as an unplugged device does.
-        stopped: Cell<bool>,
+        stopped: SyncCell<bool>,
     }
 
     impl MicFault {
@@ -1290,12 +1290,12 @@ mod tests {
     struct FakeMic {
         id: MicrophoneId,
         first_ns: u64,
-        now: Rc<Cell<u64>>,
+        now: Arc<SyncCell<u64>>,
         tap: Arc<CalibrationTap>,
         heard_after_ms: Option<f64>,
         deaf: bool,
         gap_at: Option<usize>,
-        fault: Rc<MicFault>,
+        fault: Arc<MicFault>,
     }
 
     impl Microphone for FakeMic {
@@ -1358,7 +1358,7 @@ mod tests {
     }
 
     struct FakeRig {
-        now: Rc<Cell<u64>>,
+        now: Arc<SyncCell<u64>>,
         engine: Engine,
         offsets: BTreeMap<String, f64>,
         tap: Arc<CalibrationTap>,
@@ -1367,7 +1367,7 @@ mod tests {
         mic: Result<MicrophoneId, MicrophoneError>,
         /// Where each recording loses audio.
         mic_gap_at: Option<usize>,
-        mic_fault: Rc<MicFault>,
+        mic_fault: Arc<MicFault>,
         /// The capture writes no block, as when the source sends nothing.
         capture_off: bool,
         set_offsets: RefCell<Vec<(String, f64)>>,
@@ -1377,7 +1377,7 @@ mod tests {
         fn new() -> FakeRig {
             let ids = ["builtin", "usb"];
             FakeRig {
-                now: Rc::new(Cell::new(1_000_000_000)),
+                now: Arc::new(SyncCell::new(1_000_000_000)),
                 engine: Engine {
                     session: Some(1),
                     playing: ids.iter().map(|id| (*id).to_owned()).collect(),
@@ -1404,7 +1404,7 @@ mod tests {
                     rate: MIC_RATE,
                 }),
                 mic_gap_at: None,
-                mic_fault: Rc::default(),
+                mic_fault: Arc::default(),
                 capture_off: false,
                 set_offsets: RefCell::new(Vec::new()),
             }
@@ -1456,12 +1456,12 @@ mod tests {
             Ok(Box::new(FakeMic {
                 id,
                 first_ns: self.now.get() + 30_000_000,
-                now: Rc::clone(&self.now),
+                now: Arc::clone(&self.now),
                 tap: Arc::clone(&self.tap),
                 heard_after_ms,
                 deaf: self.room.deaf,
                 gap_at: self.mic_gap_at,
-                fault: Rc::clone(&self.mic_fault),
+                fault: Arc::clone(&self.mic_fault),
             }))
         }
 

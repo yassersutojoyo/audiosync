@@ -29,7 +29,7 @@ pub fn start(log: &DebugLog) -> Result<Started, StartError> {
     log.log(|| "audio: the WASAPI backend is open".to_owned());
     let backend = engine::backend(audio, log, &labels, Box::new(track_reader));
     Ok(Started {
-        backend,
+        backend: crate::view::Engine::movable(backend),
         media: Media::new(labels, Box::new(card_reader)),
     })
 }
@@ -40,7 +40,7 @@ pub fn start(log: &DebugLog) -> Result<Started, StartError> {
 pub fn start_with(log: &DebugLog, backend: Box<dyn crate::ui_model::Backend>) -> Started {
     let (_track_reader, card_reader) = audio::wasapi::read_media_sessions(log.clone());
     Started {
-        backend,
+        backend: crate::view::Engine::here(backend),
         media: Media::new(SharedLabels::default(), Box::new(card_reader)),
     }
 }

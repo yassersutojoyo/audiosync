@@ -25,7 +25,10 @@
 //! for as long as it stays silent: it will play there again, and muting them
 //! shows at once. An endpoint AudioSync plays to ages as usual, since moving
 //! the app away from it shows only once the app plays again, and so does an
-//! endpoint that went away.
+//! endpoint that went away. For the whole system, a session counts only while
+//! it carries sound: other apps keep open streams that play silence, and
+//! recorders of what an endpoint plays. An app source's silent session still
+//! counts, since a paused app plays there again and that output gets no copy.
 //!
 //! [`check`] is the decision, plain Rust over a snapshot the driver takes;
 //! the controller runs it every few seconds while streaming and reports a
@@ -82,6 +85,12 @@ pub struct EndpointAudio {
     pub volume: Option<EndpointVolume>,
     /// The processes with an active audio session on it.
     pub active_pids: Vec<u32>,
+    /// Those of `active_pids` whose active sessions carry no sound: open
+    /// streams playing silence, or recording what the endpoint plays.
+    pub silent_pids: Vec<u32>,
+    /// Those of `active_pids` whose sessions carrying sound read the level
+    /// of the endpoint's whole mix, as a recorder of what it plays does.
+    pub mix_pids: Vec<u32>,
 }
 
 impl EndpointAudio {
@@ -190,13 +199,22 @@ fn played_on(
     rendered: &[String],
     last: &[PlayedOn],
 ) -> Vec<PlayedOn> {
+    let whole_system = matches!(captured, Captured::AllExcept(_));
     let active: BTreeSet<&str> = endpoints
         .iter()
         .filter(|endpoint| {
-            endpoint
-                .active_pids
+            let sounding = |pid: &u32| !endpoint.silent_pids.contains(pid);
+            // When AudioSync's own copy reads the mix's level, the mix is that
+            // copy alone, and another session at that level only records it.
+            let mix_is_own_copy = endpoint
+                .mix_pids
                 .iter()
-                .any(|&pid| captured.captures(pid))
+                .any(|pid| !captured.captures(*pid) && sounding(pid));
+            endpoint.active_pids.iter().any(|pid| {
+                captured.captures(*pid)
+                    && !(whole_system
+                        && (!sounding(pid) || (mix_is_own_copy && endpoint.mix_pids.contains(pid))))
+            })
         })
         .map(|endpoint| endpoint.id.as_str())
         .collect();
@@ -253,6 +271,8 @@ mod tests {
                 level: 0.5,
             }),
             active_pids: active_pids.to_vec(),
+            silent_pids: Vec::new(),
+            mix_pids: Vec::new(),
         }
     }
 
@@ -549,6 +569,93 @@ mod tests {
             "sorted by endpoint ID"
         );
         assert!(answer.paths[1].audiosync_plays_here);
+    }
+
+    // covers: S382
+    #[test]
+    fn a_session_that_carries_no_sound_isnt_heard() {
+        let mut speakers = endpoint("speakers", &[OWN, OTHER]);
+        speakers.silent_pids = vec![OTHER];
+        let mut headphones = endpoint("headphones", &[OTHER]);
+        headphones.silent_pids = vec![OTHER];
+        let cable = EndpointAudio {
+            virtual_device: true,
+            ..default_endpoint("cable", &[OTHER])
+        };
+        let answer = check(
+            &whole_system(),
+            &[cable, headphones, speakers],
+            &ids(&["speakers"]),
+            &[],
+        );
+        assert!(answer.paths.is_empty(), "{answer:?}");
+        assert_eq!(answer.played_on, played(&[("cable", 0)]));
+    }
+
+    // covers: S382
+    #[test]
+    fn a_recorder_of_audiosyncs_copy_isnt_heard() {
+        const RECORDER: u32 = 4000;
+        let mut speakers = endpoint("speakers", &[OWN, RECORDER]);
+        speakers.mix_pids = vec![OWN, RECORDER];
+        let mut headphones = endpoint("headphones", &[OTHER]);
+        headphones.silent_pids = vec![OTHER];
+        let answer = check(
+            &whole_system(),
+            &[headphones, speakers],
+            &ids(&["speakers"]),
+            &[],
+        );
+        assert!(answer.paths.is_empty(), "{answer:?}");
+    }
+
+    // covers: S382
+    #[test]
+    fn an_app_beside_audiosyncs_copy_and_a_recorder_is_heard() {
+        const RECORDER: u32 = 4000;
+        let mut speakers = endpoint("speakers", &[OWN, OTHER, RECORDER]);
+        speakers.mix_pids = vec![RECORDER];
+        let mut tv = endpoint("tv", &[OTHER, RECORDER]);
+        tv.mix_pids = vec![OTHER, RECORDER];
+        let answer = check(&whole_system(), &[speakers, tv], &ids(&["speakers"]), &[]);
+        assert_eq!(
+            heard(&answer),
+            [
+                ("speakers", DirectReason::Session),
+                ("tv", DirectReason::Session)
+            ]
+        );
+    }
+
+    // covers: S382
+    #[test]
+    fn an_app_that_audiosyncs_copy_partly_cancels_is_heard() {
+        // The delayed copy cancels part of the app's sound, so the app's
+        // session reads the mix's level while the copy's reads louder.
+        let mut speakers = endpoint("speakers", &[OWN, OTHER]);
+        speakers.mix_pids = vec![OTHER];
+        let answer = check(&whole_system(), &[speakers], &ids(&["speakers"]), &[]);
+        assert_eq!(heard(&answer), [("speakers", DirectReason::Session)]);
+    }
+
+    // covers: S382, S470
+    #[test]
+    fn an_app_paused_at_the_start_still_plays_on_its_output() {
+        let mut speakers = endpoint("speakers", &[PLAYER]);
+        speakers.silent_pids = vec![PLAYER];
+        let endpoints = [speakers, endpoint("tv", &[OWN])];
+        let answer = check(&player(), &endpoints, &ids(&["tv"]), &[]);
+        assert_eq!(answer.played_on, played(&[("speakers", 0)]));
+    }
+
+    // covers: S382, S470
+    #[test]
+    fn an_app_silent_everywhere_keeps_its_output_held_out() {
+        let mut speakers = endpoint("speakers", &[PLAYER, PLAYER_HELPER]);
+        speakers.silent_pids = vec![PLAYER, PLAYER_HELPER];
+        let endpoints = [speakers, endpoint("tv", &[OWN])];
+        let answer = checks(HOLD_CHECKS * 3, &player(), &endpoints, &ids(&["tv"]), &[]);
+        assert_eq!(answer.played_on, played(&[("speakers", 0)]));
     }
 
     // covers: S382

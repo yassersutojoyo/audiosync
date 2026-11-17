@@ -1995,6 +1995,14 @@ do {
     }
 
     do {
+        let iemHints: [String: DeviceVolumeHint] = ["iem": .low(percent: 18), "edifier": .low(percent: 18)]
+        check(DeviceVolumes.hint(for: "iem", airPlay: false, headphones: true, enabled: true, in: iemHints) == nil
+                && DeviceVolumes.hint(for: "edifier", airPlay: false, headphones: false, enabled: true,
+                                      in: iemHints) == .low(percent: 18),
+              "device volume: headphones and in-ears show no low-volume hint; speakers keep it")
+    }
+
+    do {
         let host = Host()
         host.access.set(builtIn, .volume, 0.8)
         host.access.set(builtIn, .mute, 0)
@@ -6379,66 +6387,6 @@ do {
         check(!links.begin(uid: "bt", ticket: calmTicket, session: 1) && links.held.isEmpty,
               "EC2 Bluetooth fresh link: the second restart runs only once")
     }
-    // covers: S325 (a link back mid-session re-seats the other outputs at its first start and its calm restart only)
-    do {
-        let reseatLinks = FreshLinkWatch()
-        reseatLinks.noteListing(["bt", "builtin", "usb"], now: 0, session: 1)
-        _ = reseatLinks.decide(uid: "bt", bluetooth: true, now: 0.5, session: 1)
-        let atSessionStart = reseatLinks.takeReseat(uid: "bt", session: 1, now: 0.5)
-        reseatLinks.noteListing(["builtin", "usb"], now: 10, session: 1)
-        let reseatArmed = reseatLinks.noteListing(["bt", "builtin", "usb"], now: 20, session: 1)
-        _ = reseatLinks.decide(uid: "bt", bluetooth: true, now: 20.5, session: 1)
-        let atReturn = reseatLinks.takeReseat(uid: "bt", session: 1, now: 20.5)
-        let atReturnAgain = reseatLinks.takeReseat(uid: "bt", session: 1, now: 20.5)
-        _ = reseatLinks.begin(uid: "bt", ticket: reseatLinks.pendingTicket(uid: "bt") ?? -1, session: 1)
-        reseatLinks.release(uid: "bt")
-        _ = reseatLinks.decide(uid: "bt", bluetooth: true, now: 23.5, session: 1)
-        let atQuickRestart = reseatLinks.takeReseat(uid: "bt", session: 1, now: 23.5)
-        _ = reseatLinks.begin(uid: "bt", ticket: reseatArmed["bt"] ?? -1, session: 1)
-        reseatLinks.release(uid: "bt")
-        _ = reseatLinks.decide(uid: "bt", bluetooth: true, now: 326.5, session: 1)
-        let atCalmRestart = reseatLinks.takeReseat(uid: "bt", session: 1, now: 326.5)
-        let atCalmAgain = reseatLinks.takeReseat(uid: "bt", session: 1, now: 326.5)
-        reseatLinks.noteListing(["builtin", "usb"], now: 400, session: 1)
-        reseatLinks.noteListing(["bt", "builtin", "usb"], now: 410, session: 1)
-        let reseatNextSession = reseatLinks.takeReseat(uid: "bt", session: 2, now: 700)
-        let reseatCalls = FreshLinkWatch.reseats(of: "bt", running: ["bt", "builtin", "usb"],
-                                                 holdBacks: ["bt": 0, "builtin": 211, "usb": 361],
-                                                 before: ["bt": 0, "builtin": 211, "usb": 361])
-        check(!atSessionStart && atReturn && !atReturnAgain && !atQuickRestart && atCalmRestart && !atCalmAgain
-                && !reseatNextSession && reseatCalls == ["builtin": 211, "usb": 361],
-              "EC2 Bluetooth fresh link: a link back mid-session gives every other output one call at its current "
-                + "hold-back at its first start and at its calm restart, none at an ordinary start",
-              "\(atSessionStart) \(atReturn) \(atReturnAgain) \(atQuickRestart) \(atCalmRestart) \(atCalmAgain) "
-                + "\(reseatNextSession) \(reseatCalls)")
-    }
-    // covers: S325 (a re-seat comes at most once per 5 minutes per speaker, skips an output this sync re-timed, ends with a sleep)
-    do {
-        let flapLinks = FreshLinkWatch()
-        flapLinks.noteListing(["bt", "builtin"], now: 0, session: 1)
-        flapLinks.noteListing(["builtin"], now: 5, session: 1)
-        flapLinks.noteListing(["bt", "builtin"], now: 10, session: 1)
-        let flapFirst = flapLinks.takeReseat(uid: "bt", session: 1, now: 10.5)
-        flapLinks.noteListing(["builtin"], now: 60, session: 1)
-        let flapArmed = flapLinks.noteListing(["bt", "builtin"], now: 70, session: 1)
-        let flapSecond = flapLinks.takeReseat(uid: "bt", session: 1, now: 70.5)
-        _ = flapLinks.begin(uid: "bt", ticket: flapArmed["bt"] ?? -1, session: 1)
-        flapLinks.release(uid: "bt")
-        let flapCalm = flapLinks.takeReseat(uid: "bt", session: 1, now: 375.5)
-        let nappedLinks = FreshLinkWatch()
-        nappedLinks.noteListing(["bt"], now: 0, session: 1)
-        nappedLinks.noteListing([], now: 5, session: 1)
-        nappedLinks.noteListing(["bt"], now: 10, session: 1)
-        nappedLinks.sleeping()
-        let nappedReseat = nappedLinks.takeReseat(uid: "bt", session: 1, now: 10.5)
-        let reseatSkipped = FreshLinkWatch.reseats(of: "bt", running: ["bt", "builtin", "usb"],
-                                                   holdBacks: ["bt": 0, "builtin": 211, "usb": 361],
-                                                   before: ["bt": 0, "builtin": 0, "usb": 361])
-        check(flapFirst && !flapSecond && flapCalm && !nappedReseat && reseatSkipped == ["usb": 361],
-              "EC2 Bluetooth fresh link: a return 60 s after a re-seat re-seats nothing, its calm restart 305 s on does; "
-                + "a sleep drops a re-seat due, and an output this sync re-timed is not re-seated again",
-              "\(flapFirst) \(flapSecond) \(flapCalm) \(nappedReseat) \(reseatSkipped)")
-    }
     do {
         var defaultLog = DefaultDeviceLog()
         let launchLine = defaultLog.note("output", uid: "builtin")
@@ -7193,14 +7141,14 @@ do {
 // MARK: The keyboard's volume keys moving the master
 // covers: S429
 do {
-    check(VolumeKeys.master(after: .up, level: 40, remembered: 50) == 43,
-          "volume keys: volume up raises the master by 3")
-    check(VolumeKeys.master(after: .down, level: 40, remembered: 50) == 37,
-          "volume keys: volume down lowers the master by 3")
+    check(VolumeKeys.master(after: .up, level: 40, remembered: 50) == 46.25,
+          "volume keys: volume up raises the master by a sixteenth")
+    check(VolumeKeys.master(after: .down, level: 40, remembered: 50) == 33.75,
+          "volume keys: volume down lowers the master by a sixteenth")
     check(VolumeKeys.master(after: .up, level: 97, remembered: 50) == 100
           && VolumeKeys.master(after: .up, level: 100, remembered: 50) == 100
-          && VolumeKeys.master(after: .down, level: 2, remembered: 50) == 0
-          && VolumeKeys.master(after: .down, level: 3.4, remembered: 50) == 0,
+          && VolumeKeys.master(after: .down, level: 3, remembered: 50) == 0
+          && VolumeKeys.master(after: .down, level: 6.5, remembered: 50) == 0,
           "volume keys: the master stays within 0 and 100, and a trace becomes 0")
     check(VolumeKeys.master(after: .mute, level: 40, remembered: 40) == 0
           && VolumeKeys.master(after: .mute, level: 0, remembered: 40) == 40,
@@ -8041,7 +7989,7 @@ do {
             && column.contains(".padding(.bottom, MainColumns.separatorPadding.bottom)"),
           "left column: the slider knob and the Presets icon sit 12 pt from the hairline between them",
           "\(MainColumns.separatorPadding)")
-    let castAdd = part("MainWindow.swift", "if lines.castAdd { Divider()", "\n                }\n")
+    let castAdd = part("MainWindow.swift", "if lines.castAdd { Divider() }", "\n                }\n")
     check(castAdd.contains(".buttonStyle(HouseButtonStyle(small: true))") && !castAdd.contains(".controlSize(.small)"),
           "speaker list: Add by Address is the house button, not a default push button")
 }
@@ -9254,12 +9202,8 @@ do {
     check(PanelLayout.gaps.allSatisfy { $0 == PanelLayout.gap },
           "menu bar panel: one gap between the now playing card, the preset row (or the volume knob when no preset row shows), the volume knob, This Mac's circles, the divider and the list",
           "\(PanelLayout.gaps)")
-    check(PanelLayout.menuLeadingInset + PanelLayout.sourceLeading == 0,
-          "menu bar panel: the source name starts on the title's and the artist's column")
-    // 14 Nov at 1x: the menu's label frame sat on the title's, but "Spotify"'s ink still started 1 pt right of it.
-    check(PanelLayout.sourceLeading == -3.5,
-          "menu bar panel: the source name's ink starts on the title's and the artist's ink",
-          "\(PanelLayout.sourceLeading)")
+    check(bar.contains(".padding(.leading, hero ? 0 : 10)"),
+          "menu bar panel: the source name, SwiftUI's own text like the title's, starts on the title's and the artist's column")
     check(Set(PanelLayout.trailingInk).count == 1,
           "menu bar panel: the card's chevron, the preset chevron and the volume number end on one edge",
           "\(PanelLayout.trailingInk)")
@@ -9279,6 +9223,21 @@ do {
             && panelPresetSource.contains(".font(.system(size: QuickRowIcon.point))")
             && muteSource.contains(".system(size: QuickRowIcon.point)"),
           "menu bar panel source: the preset and volume icons share This Mac's circle box, inside what opens them, and the main window rows' icon size; their text starts on the names' column; with no preset row the volume keeps the card's gap")
+    // 16 Nov at 2x: with a preset's name under it the centred row put its icon 4.5 pt under the card, not 12.
+    check(panelPresetSource.contains("PresetRowLayout {") && !panelPresetSource.contains("minHeight: 34, alignment: .leading"),
+          "menu bar panel source: the preset row keeps its label where a plain row has it when the preset's name shows under it, so the card's gap holds")
+    let plainPresetRow = PanelLayout.presetRow(label: 16, line: 0)
+    let namedPresetRow = PanelLayout.presetRow(label: 16, line: 15)
+    check(plainPresetRow.height == PanelLayout.presetRowHeight && namedPresetRow.labelTop == plainPresetRow.labelTop
+            && namedPresetRow.height == PanelLayout.presetRowHeight + 7.5,
+          "menu bar panel: a preset's name under the preset row pushes only what is below it down, by half its height",
+          "\(plainPresetRow) \(namedPresetRow)")
+    // 16 Nov at 60 fps: the borderless menu's AppKit label moved in whole pixels while the intro moved the card in fractions.
+    let sourceMenuStyle = bar.components(separatedBy: "private struct SourceMenuStyle: ViewModifier {").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    check(sourceMenuStyle.contains("if hero {\n            content.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)")
+            && bar.contains(".modifier(SourceMenuStyle(hero: hero))"),
+          "menu bar panel source: the card's source name and chevron are SwiftUI's own drawing, so they glide with the card as it opens and closes")
     let mainSource = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
     let quickIconSource = mainSource.components(separatedBy: "struct QuickRowIcon: View {").dropFirst().first?
         .components(separatedBy: "\n}\n").first ?? ""
@@ -9323,12 +9282,6 @@ do {
             && sliderSource.contains("case .rightArrow, .upArrow: return .up") && sliderSource.contains("case .leftArrow, .downArrow: return .down")
             && sliderSource.contains("default: return nil"),
           "master slider: arrows step 1, Page Up and Down 10, Home and End go to either end", "\(keyed)")
-    check(sliderSource.contains(".focusable(interactions: click.clicked ? .edit : .activate)")
-            && sliderSource.contains("click.clicked = true")
-            && sliderSource.contains(".focusEffectDisabled(!NSApp.isFullKeyboardAccessEnabled)"),
-          "master slider source: a click or drag takes the arrow keys without a focus ring under keyboard navigation off, Tab reaches it with keyboard navigation on")
-    check(sliderSource.contains(".onEnded { _ in click.clicked = true; focused = true }"),
-          "master slider source: a still click on the thumb takes the arrow keys, its mouse-down focus loss is won back at mouse-up")
     // covers: S403
     check(rowsSource.contains(".clipShape(FoldClip(moving: zoneDisclosure.moving))") && mainSource.contains("moving = true"),
           "menu bar panel source: a fold clips each zone to its own moving edge, so the rows and the footer below never slide over its fading rows")
@@ -18040,42 +17993,6 @@ do {
           "zone header: both focusable parts take Left and Right through ZoneHeaderHit.arrowFolds, in the panel and the main window")
 }
 
-// MARK: Delete Zone asks first (MenuBar.swift, AppDelegate+Windows.swift)
-do {
-    let findingsBar = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
-    let findingsAlerts = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+Windows.swift", encoding: .utf8)) ?? ""
-    check(findingsBar.contains("guard actions.confirmDeleteZone(zone.name) else { return }")
-            && findingsAlerts.contains("a.confirmDeleteZone = ")
-            && findingsAlerts.contains("let cancel = prompt.addButton(withTitle: text.cancel)\n        cancel.keyEquivalent = \"\\r\"\n        prompt.addButton(withTitle: text.deleteZoneConfirm).hasDestructiveAction = true")
-            && findingsAlerts.contains("guard event.keyCode == 53 else { return event }")
-            && findingsAlerts.contains("cancel.performClick(nil)"),
-          "Delete Zone: asks first, Return and Escape press Cancel (AppKit gives a Cancel title only Escape), Delete is destructive")
-}
-
-// MARK: The wheel over the master volume (MenuBar.swift, WindowRules.swift)
-do {
-    let wheelBar = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
-    check(wheelBar.contains("MasterTrack.level(afterScroll:"),
-          "master volume: the wheel and the trackpad over the slider move it")
-    check(MasterTrack.level(afterScroll: 1, precise: false, from: 40) == 43
-            && MasterTrack.level(afterScroll: -3, precise: false, from: 40) == 37
-            && MasterTrack.level(afterScroll: 20, precise: true, from: 40) == 46
-            && MasterTrack.level(afterScroll: 1, precise: false, from: 99) == 100
-            && MasterTrack.level(afterScroll: -1, precise: false, from: 2) == 0,
-          "master volume: a wheel notch moves it by the volume keys' step, 10 trackpad points by one, within 0 and 100")
-}
-
-// MARK: The menu bar icon's menu (MenuBar.swift)
-do {
-    let statusMenuBar = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
-    check(!statusMenuBar.contains(".popUp(under: button)")
-            && statusMenuBar.contains("statusItem.menu = menu")
-            && statusMenuBar.contains("button.performClick(nil)"),
-          "menu bar icon menu: AppKit places it as the status item's own menu, so no scroll arrow hides Open AudioSync")
-    check(statusMenuBar.contains("menu.appearance = NSApp.effectiveAppearance"),
-          "menu bar icon menu: it takes the app's theme, not the menu bar's")
-}
-
 // MARK: A delay pane closed while its field has the focus leaves no ring on a neighbour (MainWindow.swift, PanelZoneHeader.swift)
 do {
     let ringWindow = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
@@ -18630,6 +18547,11 @@ do {
 }
 
 do {
+    check(UIStrings().presetOptions(name: "Evening") == "Options for Evening",
+          "presets: a preset's options button names the preset, as a speaker's does")
+}
+
+do {
     let words = UIStrings()
     // covers: S153
     check(words.noSpeakerNoticeName == "no speaker on"
@@ -18706,14 +18628,10 @@ do {
     let equalizer = (try? String(contentsOfFile: "Sources/AudioSync/EqualizerWindow.swift", encoding: .utf8)) ?? ""
     let bandSlider = equalizer.components(separatedBy: "struct VerticalSlider").dropFirst().first ?? ""
     func inBandSlider(_ needle: String) -> Int { bandSlider.components(separatedBy: needle).count - 1 }
-    check(inBandSlider(".focused($focused)") == 1 && inBandSlider("click.clicked = true") >= 1,
+    check(inBandSlider(".focused($focused)") == 1 && inBandSlider("click.clicked = true") == 1,
           "equalizer band: a click gives the band keyboard focus, with keyboard navigation off too")
     check(inBandSlider(".focusable(interactions: click.clicked ? .edit : .activate)") == 1,
           "equalizer band: Tab reaches a band it was not clicked into only with keyboard navigation on")
-    check(inBandSlider(".focusEffectDisabled(!NSApp.isFullKeyboardAccessEnabled)") == 1,
-          "equalizer band: a click shows no focus ring with keyboard navigation off")
-    check(inBandSlider(".onEnded { _ in click.clicked = true; focused = true }") == 1,
-          "equalizer band: a still click takes the arrow keys, its mouse-down focus loss is won back at mouse-up")
     check(inBandSlider(".accessibilityRepresentation {") == 1 && inBandSlider("Slider(value:") == 1,
           "equalizer band: the accessibility API sees a slider, not an unknown element")
 }
@@ -19213,8 +19131,8 @@ do {
           "art hold: a song known to have no cover shows its placeholder at once")
     check(ArtHold.decide(shown: shownSong, next: otherApp, heldFor: 0) == .show,
           "art hold: another player taking over shows at once")
-    check(ArtHold.decide(shown: shownSong, next: loading, heldFor: 1.5) == .show && ArtHold.limit == 1.5,
-          "art hold: a cover still loading after 1.5 s gives way to the placeholder")
+    check(ArtHold.decide(shown: shownSong, next: loading, heldFor: ArtHold.limit) == .show && ArtHold.limit == 4,
+          "art hold: a cover still loading after the fetch's 4 s timeout gives way to the placeholder")
     check(ArtHold.decide(shown: shownSong, next: arrived, heldFor: 0.3) == .show,
           "art hold: the new cover's arrival lets the new song in with it")
     var stale = shownSong
@@ -19222,6 +19140,42 @@ do {
     check(ArtHold.keepingArt(of: shownSong, in: stale).artwork === cover
             && ArtHold.keepingArt(of: shownSong, in: bare).artwork == nil,
           "art hold: a late reading of the same song without its cover keeps the cover; another song never inherits it")
+}
+
+// MARK: A slow cover holds the pressed card until it comes, and a failed fetch slides at once (ArtHold, ArtFetches)
+// covers: S459
+do {
+    let waitCover = NSImage(size: NSSize(width: 1, height: 1))
+    let waitShown = NowPlayingMonitor.Track(bundleID: "com.spotify.client", appName: "Spotify", title: "One",
+                                            artist: "A", album: "B", isPlaying: true, artwork: waitCover)
+    var waitLoading = NowPlayingMonitor.Track(bundleID: "com.spotify.client", appName: "Spotify", title: "Two",
+                                              artist: "A", album: "B", isPlaying: true, artwork: nil)
+    waitLoading.artPending = true
+    var waitArrived = waitLoading
+    waitArrived.artwork = waitCover
+    waitArrived.artPending = false
+    let waitAtCover = TrackSlide.waited(heldFor: 2.0, sincePress: 2.3)
+    check(ArtHold.decide(shown: waitShown, next: waitLoading, heldFor: waitAtCover - 0.01) == .hold
+            && ArtHold.decide(shown: waitShown, next: waitArrived, heldFor: waitAtCover) == .show
+            && TrackSlide.cap > 2.3 && TrackSlide.cap == ArtFetches.timeout && ArtHold.limit == ArtFetches.timeout,
+          "cover wait: a cover arriving 2.3 s after a press holds the old card until it comes, with no placeholder slide")
+    let waitLate = TrackSlide.waited(heldFor: 3.0, sincePress: 3.5)
+    check(waitLate == 3.5 && ArtHold.decide(shown: waitShown, next: waitLoading, heldFor: waitLate) == .hold
+            && TrackSlide.direction(pressed: .previous, secondsSincePress: 3.5) == .previous
+            && ArtHold.decide(shown: waitShown, next: waitLoading,
+                              heldFor: TrackSlide.waited(heldFor: 2.0, sincePress: TrackSlide.cap + 0.05)) == .show
+            && TrackSlide.direction(pressed: .previous, secondsSincePress: TrackSlide.cap + 0.05) == .previous,
+          "cover wait: a cover 3.5 s after Previous still counts as the press's, and the hold ends at the cap however slow the fetch")
+    let waitGaveUp = ArtHold.gaveUp(waitLoading, on: waitLoading)
+    check(waitGaveUp?.artPending == false && waitGaveUp?.artwork == nil
+            && waitGaveUp.map { ArtHold.decide(shown: waitShown, next: $0, heldFor: 0.3) } == .show
+            && ArtHold.gaveUp(waitShown, on: waitLoading) == nil,
+          "cover wait: a failed cover fetch lets the new song slide in with the placeholder at once")
+    let waitSource = (try? String(contentsOfFile: "Sources/AudioSync/NowPlaying.swift", encoding: .utf8)) ?? ""
+    let waitFailBranch = waitSource.components(separatedBy: "fetch gave no picture").last?
+        .components(separatedBy: "DebugTrace.log(\"Now Playing art: \\(song) fetched").first ?? ""
+    check(waitFailBranch.contains("ArtHold.gaveUp(") && waitSource.contains("timeoutInterval: ArtFetches.timeout"),
+          "cover wait: the monitor hands a failed fetch's song on without its cover at once")
 }
 
 // MARK: A cover already loaded is found by its address (ArtCache in NowPlaying.swift)
@@ -19326,7 +19280,7 @@ do {
     let slimCast = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+Cast.swift", encoding: .utf8)) ?? ""
     let slimNowPlaying = (try? String(contentsOfFile: "Sources/AudioSync/NowPlaying.swift", encoding: .utf8)) ?? ""
     check(slimAirPlay.contains("ArtPushDelay.wait(") && slimAirPlay.contains("if nowPlayingOnScreen, let before") && slimCast.contains("castArtDelay.isCurrent(")
-            && slimNowPlaying.contains("artFetches.start(") && slimNowPlaying.contains("timeoutInterval: 4") && slimNowPlaying.contains("self.runningPlayers.runs($0.bundleID)"),
+            && slimNowPlaying.contains("artFetches.start(") && slimNowPlaying.contains("timeoutInterval: ArtFetches.timeout") && slimNowPlaying.contains("self.runningPlayers.runs($0.bundleID)"),
           "song change: the AirPlay and Cast covers wait for the slide, Spotify covers are fetched once, "
             + "and a reading's main-thread turn asks no running-app list")
 }
@@ -19471,8 +19425,8 @@ do {
             && TrackSlide.direction(pressed: .previous, secondsSincePress: 1) == .previous
             && TrackSlide.direction(pressed: nil, secondsSincePress: 0.5) == nil
             && TrackSlide.direction(pressed: .next, secondsSincePress: TrackSlide.pressWindow + 1) == nil
-            && TrackSlide.direction(pressed: .next, secondsSincePress: -1) == nil && TrackSlide.pressWindow == 3,
-          "track slide: a change within 3 s of Next or Previous slides that way")
+            && TrackSlide.direction(pressed: .next, secondsSincePress: -1) == nil && TrackSlide.pressWindow > TrackSlide.cap,
+          "track slide: a change within 5 s of Next or Previous, past the 4 s wait, slides that way")
     let one = NowPlayingMonitor.Track(bundleID: "com.apple.Music", appName: "Music", title: "One", artist: "A",
                                       album: "B", isPlaying: true, artwork: nil)
     let onePaused = NowPlayingMonitor.Track(bundleID: "com.apple.Music", appName: "Music", title: "One", artist: "A",
@@ -19492,13 +19446,13 @@ do {
     shown.artwork = cover
     var loading = one
     loading.artPending = true
-    check(TrackSlide.cap == 1.5 && ArtHold.limit == TrackSlide.cap
+    check(TrackSlide.recede == 1.5 && ArtHold.limit == TrackSlide.cap
             && TrackSlide.waited(heldFor: 0.2, sincePress: 1.4) == 1.4
             && TrackSlide.waited(heldFor: 0.2, sincePress: nil) == 0.2
             && TrackSlide.waited(heldFor: 0.2, sincePress: TrackSlide.pressWindow + 1) == 0.2
             && ArtHold.decide(shown: shown, next: loading, heldFor: TrackSlide.waited(heldFor: 0.1, sincePress: 1.0)) == .hold
-            && ArtHold.decide(shown: shown, next: loading, heldFor: TrackSlide.waited(heldFor: 0.1, sincePress: 1.5)) == .show,
-          "track slide: the wait for the new song and its cover ends 1.5 s after the press at most")
+            && ArtHold.decide(shown: shown, next: loading, heldFor: TrackSlide.waited(heldFor: 0.1, sincePress: TrackSlide.cap)) == .show,
+          "track slide: the wait for the new song and its cover ends 4 s after the press at most")
     let rest = TrackSlide.oldCover(waited: 0, slid: 0, reduceMotion: false)
     let waitedOut = TrackSlide.oldCover(waited: 1, slid: 0, reduceMotion: false)
     let gone = TrackSlide.oldCover(waited: 1, slid: 1, reduceMotion: false)
@@ -19567,7 +19521,7 @@ do {
     let pressBody = slideWindow.components(separatedBy: "func press(_ press: TrackSlide.Press").last?
         .components(separatedBy: "private func settle()").first ?? ""
     check(pressBody.contains("deadline: .now() + TrackSlide.cap)") && !pressBody.contains("TrackSlide.pressWindow"),
-          "track slide: a press that changes nothing lets the old cover ease back after 1.5 s, not 3 s")
+          "track slide: a press that changes nothing lets the old cover ease back after the 4 s wait, not 3 s")
     check(pressBody.components(separatedBy: "pressed = press").first?.contains("guard press.direction != nil") == true,
           "track slide: Play/Pause during the wait ends the recede and keeps the Next or Previous it followed")
     check(slideWindow.contains("let arrived = TrackSlide.coverArrived(shown, track)")
@@ -19580,11 +19534,14 @@ do {
           "track slide: no frame clock re-renders the covers or the lines while they slide")
     check(slideViews.contains("CAAnimationGroup") && slideViews.contains("TrackSlide.slideCurve")
             && slideViews.contains("TrackSlide.waitCurve") && slideViews.contains("TrackSlide.settleCurve")
-            && slideViews.contains("TrackSlide.cap") && slideViews.contains("TrackSlide.fadeDuration")
+            && slideViews.contains("TrackSlide.recede") && slideViews.contains("TrackSlide.fadeDuration")
             && slideViews.contains("TrackSlide.oldCover(") && slideViews.contains("TrackSlide.incomingOffset(")
             && slideViews.contains("TrackSlide.textAway") && slideViews.contains("TrackSlide.textFrom")
             && slideViews.contains("beginTime") && slideViews.contains("CATransaction.setDisableActions(true)"),
           "track slide: Core Animation plays the slide on the render server, with TrackSlide's curves and values")
+    check(slideViews.contains("TrackSlide.breatheAfter") && slideViews.contains("pulse.isAdditive = true")
+            && slideViews.contains("removeAnimation(forKey: \"breathe\")"),
+          "track slide: a long wait breathes on the render server, and the next step starts from the breath it stops")
     let slideTint = "AmbientTint(tide: SoundTide.shared, color: CoverColors.of((slide.outgoing ?? track).artwork)[0]"
     check(slideWindow.contains(slideTint) && slidePanel.contains(slideTint),
           "track slide: the hero's tint keeps the old cover's colour until the slide ends")
