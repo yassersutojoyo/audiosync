@@ -1558,7 +1558,8 @@ export global Strings {
     }
 
     // The name field's accessible label; its placeholder is the device's
-    // own name, which an empty field brings back.
+    // own name, which an empty field brings back. A zone's field is named
+    // after the zone's current name, which an empty field keeps.
     public pure function speaker-name-field(system: string) -> string {
         return @tr("Name for {}", system);
     }

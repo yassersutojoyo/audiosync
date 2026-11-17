@@ -5144,7 +5144,7 @@ export component ZoneHeader inherits Rectangle {
                                     horizontal-stretch: 1;
                                     text: root.item.name-text;
                                     placeholder: root.item.name;
-                                    label: Strings.new-zone-field-label;
+                                    label: Strings.speaker-name-field(root.item.name);
                                     description: Strings.zone-name-field-hint;
                                     focus-wanted: root.pending-focus == RowPart.name;
                                     focus-taken => {
