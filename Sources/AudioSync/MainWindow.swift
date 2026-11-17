@@ -261,7 +261,9 @@ struct MainView: View {
                         .padding(.horizontal, MainColumns.rowInset)
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { leftTop.height = $0 }
                     }
-                    .frame(maxHeight: leftTop.height ?? .infinity)
+                    // Rounded up: the scroll view snaps to whole points and would scroll by a fraction.
+                    .frame(minHeight: 0, maxHeight: leftTop.height.map { $0.rounded(.up) } ?? .infinity)
+                    // Above the spacer, so the hero takes the room before any gap opens under the rows.
                     .layoutPriority(1)
                     VStack(alignment: .leading, spacing: 0) {
                         Divider().padding(.top, MainColumns.separatorPadding.top)
@@ -273,11 +275,11 @@ struct MainView: View {
                             CalibrateAllButton(model: model)
                         }
                         .padding(.horizontal, -MainColumns.rowInset)
-                        Spacer(minLength: 0)
                     }
                     .padding(.horizontal, MainColumns.rowInset)
-                    .contentShape(Rectangle())
-                    .onTapGesture(perform: blankTap)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .layoutPriority(1)
+                    Spacer(minLength: 0)
                 }
                 // Wider by the rows' fill on each side, so the scroll view doesn't clip it.
                 .frame(width: MainColumns.left(window: windowWidth.points) + 2 * MainColumns.rowInset)
@@ -2326,6 +2328,8 @@ struct SpeakerRow: View {
     @FocusState private var optionsFocused: Bool
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
 
+    private static let lineGap: CGFloat = 5
+
     var body: some View {
         let t = model.text
         VStack(alignment: .leading, spacing: 0) {
@@ -2342,7 +2346,7 @@ struct SpeakerRow: View {
                 .help(t.help(state))
                 .focused($switchFocused)
 
-                VStack(alignment: .leading, spacing: 5) {
+                VStack(alignment: .leading, spacing: Self.lineGap) {
                     HStack(spacing: 6) {
                         if model.isRenaming(speaker, in: .row) {
                             InlineNameField(model: model, id: speaker.id, placeholder: speaker.systemName,
@@ -2431,8 +2435,8 @@ struct SpeakerRow: View {
                             .frame(width: 34, alignment: .trailing)
                             .accessibilityHidden(true)
                     }
-                    // Half the 5 pt line gap: the badge centres between the name and the slider.
-                    .alignmentGuide(.badgePin) { $0[.top] - 2.5 }
+                    // The badge centres between the name and the slider.
+                    .alignmentGuide(.badgePin) { $0[.top] - Self.lineGap / 2 }
                     // macOS's own volume of this output, when it is low or muted (S198).
                     if let hint = model.deviceVolume(of: speaker) {
                         DeviceVolumeLine(shown: DeviceVolumePresentation(hint, name: speaker.name, text: t),
