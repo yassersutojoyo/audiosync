@@ -279,7 +279,9 @@ impl SessionList for Players {
     }
 
     fn card_artwork(&self, image: &[u8]) -> Result<Option<CardArtwork>, String> {
-        self.with_decoded(image, artwork::card_decoded)
+        self.with_decoded(image, |decoded| {
+            artwork::card_decoded(decoded, crate::now_playing_card::card_side())
+        })
     }
 
     fn icon(&self, log: &DebugLog) -> Option<FittedArtwork> {

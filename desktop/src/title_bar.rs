@@ -1,6 +1,6 @@
 //! The main window's own top row, which replaces the system title bar: where
 //! a point on the window falls (the Windows hit test), and the keys that
-//! reach its menus.
+//! put the focus on the header's gear.
 
 /// The top row's height and each window button's width, in logical pixels;
 /// the `TitleBar` in ui/main.slint draws them at these sizes. The hit test
@@ -45,8 +45,6 @@ pub enum Region {
 pub struct Layout {
     pub width: f32,
     pub height: f32,
-    /// Where the menus end and the draggable part of the top row begins.
-    pub caption_start: f32,
     pub maximized: bool,
 }
 
@@ -79,28 +77,19 @@ pub fn hit_test(x: f32, y: f32, layout: Layout) -> Region {
     let maximize = layout.width - 2.0 * BUTTON_WIDTH;
     if x >= maximize && x < maximize + BUTTON_WIDTH {
         Region::Maximize
-    } else if x >= layout.caption_start && x < buttons {
+    } else if x < buttons {
         Region::Caption
     } else {
         Region::Client
     }
 }
 
-/// A key as the menu row reads it.
+/// A key as the gear's Alt and F10 read it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuKeyInput {
     Alt,
     F10,
-    Char(char),
     Other,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MenuKey {
-    /// Alt pressed and released alone, or F10: the first menu takes the focus.
-    FocusRow,
-    /// Alt and a menu's first letter: that menu opens.
-    Open(usize),
 }
 
 /// The modifiers held with a key; AltGr reads as Ctrl and Alt.
@@ -112,7 +101,7 @@ pub struct Mods {
 }
 
 /// Remembers whether Alt went down with no other key since, so its release
-/// focuses the menu row as a Windows menu bar does.
+/// focuses the gear, where a Windows menu bar would take the focus.
 #[derive(Debug, Default)]
 pub struct MenuKeys {
     alt_alone: bool,
@@ -124,37 +113,18 @@ impl MenuKeys {
         self.alt_alone = false;
     }
 
-    pub fn key(
-        &mut self,
-        key: MenuKeyInput,
-        pressed: bool,
-        mods: Mods,
-        titles: &[&str],
-    ) -> Option<MenuKey> {
+    /// True when the key puts the focus on the gear: Alt pressed and
+    /// released alone, or F10.
+    pub fn key(&mut self, key: MenuKeyInput, pressed: bool, mods: Mods) -> bool {
         let alt_alone = std::mem::take(&mut self.alt_alone);
         match (key, pressed) {
             (MenuKeyInput::Alt, true) => {
                 self.alt_alone = true;
-                None
+                false
             }
-            (MenuKeyInput::Alt, false) => alt_alone.then_some(MenuKey::FocusRow),
-            (MenuKeyInput::F10, true) if !mods.alt && !mods.ctrl && !mods.shift => {
-                Some(MenuKey::FocusRow)
-            }
-            (MenuKeyInput::Char(c), true) if mods.alt && !mods.ctrl => {
-                let c = c.to_lowercase().next()?;
-                titles
-                    .iter()
-                    .position(|title| {
-                        title
-                            .chars()
-                            .next()
-                            .and_then(|first| first.to_lowercase().next())
-                            == Some(c)
-                    })
-                    .map(MenuKey::Open)
-            }
-            _ => None,
+            (MenuKeyInput::Alt, false) => alt_alone,
+            (MenuKeyInput::F10, true) => !mods.alt && !mods.ctrl && !mods.shift,
+            _ => false,
         }
     }
 }
@@ -166,7 +136,6 @@ mod tests {
     const WIDE: Layout = Layout {
         width: 800.0,
         height: 600.0,
-        caption_start: 220.0,
         maximized: false,
     };
 
@@ -187,9 +156,8 @@ mod tests {
     }
 
     #[test]
-    fn the_top_row_drags_after_the_menus_and_before_the_buttons() {
-        assert_eq!(hit_test(100.0, 16.0, WIDE), Region::Client);
-        assert_eq!(hit_test(220.0, 16.0, WIDE), Region::Caption);
+    fn the_top_row_drags_up_to_the_buttons() {
+        assert_eq!(hit_test(100.0, 16.0, WIDE), Region::Caption);
         assert_eq!(hit_test(500.0, 31.0, WIDE), Region::Caption);
         assert_eq!(hit_test(500.0, 32.0, WIDE), Region::Client);
         let buttons = 800.0 - 3.0 * BUTTON_WIDTH;
@@ -223,24 +191,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn menus_running_into_the_buttons_leave_no_caption() {
-        let narrow = Layout {
-            caption_start: 700.0,
-            ..WIDE
-        };
-        assert_eq!(hit_test(680.0, 16.0, narrow), Region::Client);
-    }
-
-    const TITLES: [&str; 4] = ["File", "Speakers", "View", "Help"];
-
-    const ALT: Mods = Mods {
-        alt: true,
-        ctrl: false,
-        shift: false,
-    };
-
-    fn press(keys: &mut MenuKeys, key: MenuKeyInput) -> Option<MenuKey> {
+    fn press(keys: &mut MenuKeys, key: MenuKeyInput) -> bool {
         let alt = key == MenuKeyInput::Alt;
         keys.key(
             key,
@@ -249,35 +200,29 @@ mod tests {
                 alt,
                 ..Mods::default()
             },
-            &TITLES,
         )
     }
 
-    fn release(keys: &mut MenuKeys, key: MenuKeyInput) -> Option<MenuKey> {
-        keys.key(key, false, Mods::default(), &TITLES)
+    fn release(keys: &mut MenuKeys, key: MenuKeyInput) -> bool {
+        keys.key(key, false, Mods::default())
     }
 
     #[test]
-    fn alt_alone_or_f10_focuses_the_menu_row() {
+    fn alt_alone_or_f10_focuses_the_gear() {
         let mut keys = MenuKeys::default();
-        assert_eq!(press(&mut keys, MenuKeyInput::Alt), None);
-        assert_eq!(
-            release(&mut keys, MenuKeyInput::Alt),
-            Some(MenuKey::FocusRow)
-        );
-        assert_eq!(press(&mut keys, MenuKeyInput::F10), Some(MenuKey::FocusRow));
-        assert_eq!(release(&mut keys, MenuKeyInput::F10), None);
-        assert_eq!(
-            keys.key(
+        assert!(!press(&mut keys, MenuKeyInput::Alt));
+        assert!(release(&mut keys, MenuKeyInput::Alt));
+        assert!(press(&mut keys, MenuKeyInput::F10));
+        assert!(!release(&mut keys, MenuKeyInput::F10));
+        assert!(
+            !keys.key(
                 MenuKeyInput::F10,
                 true,
                 Mods {
                     shift: true,
                     ..Mods::default()
                 },
-                &TITLES
             ),
-            None,
             "Shift+F10 opens a context menu instead"
         );
     }
@@ -287,10 +232,7 @@ mod tests {
         let mut keys = MenuKeys::default();
         press(&mut keys, MenuKeyInput::Alt);
         press(&mut keys, MenuKeyInput::Other);
-        assert_eq!(release(&mut keys, MenuKeyInput::Alt), None);
-        press(&mut keys, MenuKeyInput::Alt);
-        press(&mut keys, MenuKeyInput::Char('v'));
-        assert_eq!(release(&mut keys, MenuKeyInput::Alt), None);
+        assert!(!release(&mut keys, MenuKeyInput::Alt));
     }
 
     #[test]
@@ -298,27 +240,6 @@ mod tests {
         let mut keys = MenuKeys::default();
         press(&mut keys, MenuKeyInput::Alt);
         keys.focus_changed();
-        assert_eq!(release(&mut keys, MenuKeyInput::Alt), None, "Alt+Tab");
-    }
-
-    #[test]
-    fn alt_and_a_first_letter_opens_that_menu() {
-        let mut keys = MenuKeys::default();
-        press(&mut keys, MenuKeyInput::Alt);
-        let alt = |keys: &mut MenuKeys, c| keys.key(MenuKeyInput::Char(c), true, ALT, &TITLES);
-        assert_eq!(alt(&mut keys, 's'), Some(MenuKey::Open(1)));
-        assert_eq!(alt(&mut keys, 'H'), Some(MenuKey::Open(3)));
-        assert_eq!(alt(&mut keys, 'x'), None);
-        let alt_gr = Mods { ctrl: true, ..ALT };
-        assert_eq!(
-            keys.key(MenuKeyInput::Char('f'), true, alt_gr, &TITLES),
-            None,
-            "AltGr types instead"
-        );
-        assert_eq!(
-            press(&mut keys, MenuKeyInput::Char('s')),
-            None,
-            "s alone types"
-        );
+        assert!(!release(&mut keys, MenuKeyInput::Alt), "Alt+Tab");
     }
 }

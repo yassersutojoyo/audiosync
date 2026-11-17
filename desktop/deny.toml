@@ -43,6 +43,7 @@ exceptions = [
     { crate = "i-slint-core", allow = ["GPL-3.0-only"] },
     { crate = "i-slint-core-macros", allow = ["GPL-3.0-only"] },
     { crate = "i-slint-renderer-femtovg", allow = ["GPL-3.0-only"] },
+    { crate = "i-slint-renderer-skia", allow = ["GPL-3.0-only"] },
     { crate = "i-slint-renderer-software", allow = ["GPL-3.0-only"] },
     { crate = "slint", allow = ["GPL-3.0-only"] },
     { crate = "slint-build", allow = ["GPL-3.0-only"] },

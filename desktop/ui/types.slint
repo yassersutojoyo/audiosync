@@ -57,6 +57,15 @@ export enum SetupNetwork { unknown, private, public, offline }
 // Check Setup's Microphone row (setup_check.rs).
 export enum SetupMicrophone { not-used, working, blocked }
 
+// What a source menu row lists, which decides its section and its icon.
+export enum SourceRowKind { system, app, input }
+
+// A source menu row's kind, and an app's own icon (empty when it has none).
+export struct SourceLook {
+    kind: SourceRowKind,
+    icon: image,
+}
+
 // An app of the several-apps list under the source menu.
 export struct MixAppItem {
     name: string,
@@ -182,6 +191,13 @@ export struct SpeakerItem {
     // whole percent.
     device-volume: DeviceVolumeHint,
     device-volume-percent: int,
+    // The reference's own volume in Windows as a whole percent, -1 while it
+    // isn't known; whether it is muted; whether its panel is open (S197).
+    system-volume: int,
+    system-muted: bool,
+    system-open: bool,
+    // Windows refused the System slider's last write.
+    system-refused: bool,
     // A Google Cast speaker: its delay is the offset the user measured, and
     // while it connects or plays it offers Mute and Resync.
     cast: bool,
@@ -221,6 +237,10 @@ export struct SpeakerItem {
     zone-dimmed: bool,
     // A zone member that isn't listed: only its menu does anything.
     missing: bool,
+    // A row that came into the main window's list since the last refresh,
+    // and one that left it and stays while its room shuts.
+    fresh: bool,
+    leaving: bool,
 }
 
 // A zone member that plays as part of a stereo pair or home theater: the
@@ -256,6 +276,10 @@ export struct ZoneItem {
     // Its name is being edited in the header, with `name-text` typed so far.
     renaming: bool,
     name-text: string,
+    // A zone that came into the main window's list since the last refresh,
+    // and one that left it and stays while its room shuts.
+    fresh: bool,
+    leaving: bool,
 }
 
 // What a notice is about, for its short name (Strings.notice-title).
@@ -271,6 +295,9 @@ export struct NoticeItem {
     // A few words that name the notice, for its dismiss button ("double
     // audio", "Kitchen reconnecting").
     title: string,
+    // A few words drawn over the text, for an AirPlay speaker that waits or
+    // reconnects, as on the Mac; empty for none.
+    heading: string,
     // The notice offers Show How, which opens its guide.
     has-guide: bool,
     // The notice offers Retry, which starts AirPlay again.

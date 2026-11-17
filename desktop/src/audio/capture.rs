@@ -207,7 +207,7 @@ fn session_apps(
     own_pid: u32,
     keep: impl Fn(&str) -> bool,
 ) -> Vec<u32> {
-    source_list(processes, session_pids, own_pid)
+    source_list(processes, session_pids, &[], own_pid)
         .into_iter()
         .filter_map(|source| match source.id {
             SourceId::App { root_pid } if keep(&source.executable) => Some(root_pid),
@@ -295,8 +295,22 @@ pub fn display_name(executable: &str) -> String {
     }
 }
 
+/// Executables whose windows belong to the system shell, to another app they
+/// host, or to a vendor's background helper, so they are never offered for a
+/// window alone.
+const WINDOW_HOSTS: [&str; 7] = [
+    "ApplicationFrameHost.exe",
+    "TextInputHost.exe",
+    "msedgewebview2.exe",
+    "SystemSettings.exe",
+    "ShellExperienceHost.exe",
+    "StartMenuExperienceHost.exe",
+    "RazerAppEngine.exe",
+];
+
 /// The sources to offer: the whole system, then one entry per app that owns
-/// one of the audio sessions `session_pids`, by name.
+/// one of the audio sessions `session_pids`, and one per executable among
+/// the other apps that show a window (`window_pids`), by name.
 ///
 /// Each session's process leads to its app's top process
 /// ([`ProcessTable::app_root`]), so an app with several audio processes is
@@ -306,10 +320,12 @@ pub fn display_name(executable: &str) -> String {
 pub fn source_list(
     processes: &ProcessTable,
     session_pids: &[u32],
+    window_pids: &[u32],
     own_pid: u32,
 ) -> Vec<SourceInfo> {
     let mut apps: Vec<SourceInfo> = Vec::new();
-    for &pid in session_pids {
+    let windowed = window_pids.iter().map(|&pid| (pid, false));
+    for (pid, has_session) in session_pids.iter().map(|&pid| (pid, true)).chain(windowed) {
         if !processes.contains(pid) {
             continue;
         }
@@ -324,6 +340,16 @@ pub fn source_list(
             .get(root_pid)
             .map(|entry| entry.executable.clone())
             .unwrap_or_default();
+        if !has_session
+            && (apps
+                .iter()
+                .any(|app| app.executable.eq_ignore_ascii_case(&executable))
+                || WINDOW_HOSTS
+                    .iter()
+                    .any(|host| host.eq_ignore_ascii_case(&executable)))
+        {
+            continue;
+        }
         apps.push(SourceInfo {
             id: source,
             name: display_name(&executable),
@@ -1624,7 +1650,7 @@ mod tests {
                 target_pid: 90,
             })
         );
-        let sources = source_list(&table, &[90], OWN_PID);
+        let sources = source_list(&table, &[90], &[], OWN_PID);
         assert_eq!(sources.len(), 2, "offered: {sources:?}");
         assert_eq!(sources[1].id, app(90));
     }
@@ -1657,7 +1683,7 @@ mod tests {
             decide_activation(&app(90), OWN_PID, &table),
             Err(BackendError::ContainsAudioSync)
         );
-        assert_eq!(source_list(&table, &[90], OWN_PID).len(), 1);
+        assert_eq!(source_list(&table, &[90], &[], OWN_PID).len(), 1);
     }
 
     // covers: S380
@@ -1687,7 +1713,7 @@ mod tests {
             decide_activation(&app(200), OWN_PID, &table),
             Err(BackendError::ContainsAudioSync)
         );
-        assert_eq!(source_list(&table, &[200], OWN_PID).len(), 1);
+        assert_eq!(source_list(&table, &[200], &[], OWN_PID).len(), 1);
         assert!(decide_activation(&SourceId::WholeSystem, OWN_PID, &table).is_ok());
     }
 
@@ -1705,7 +1731,7 @@ mod tests {
     // covers: S211 (the whole system's entry)
     #[test]
     fn the_source_list_starts_with_the_whole_system() {
-        let sources = source_list(&desktop(), &[], OWN_PID);
+        let sources = source_list(&desktop(), &[], &[], OWN_PID);
         assert_eq!(
             sources,
             vec![SourceInfo {
@@ -1721,7 +1747,7 @@ mod tests {
     // covers: S380
     #[test]
     fn an_app_with_several_audio_processes_is_listed_once_by_its_top_process() {
-        let sources = source_list(&desktop(), &[202, 201, 200], OWN_PID);
+        let sources = source_list(&desktop(), &[202, 201, 200], &[], OWN_PID);
         assert_eq!(sources.len(), 2);
         assert_eq!(sources[1].id, app(200));
         assert_eq!(sources[1].name, "Browser");
@@ -1731,14 +1757,14 @@ mod tests {
     // covers: S380
     #[test]
     fn audiosync_its_helpers_and_its_ancestors_are_not_offered() {
-        let sources = source_list(&desktop(), &[OWN_PID, 401, 300, 100], OWN_PID);
+        let sources = source_list(&desktop(), &[OWN_PID, 401, 300, 100], &[], OWN_PID);
         assert_eq!(sources.len(), 1, "{sources:?}");
     }
 
     // covers: S380
     #[test]
     fn sessions_of_processes_that_quit_are_skipped() {
-        let sources = source_list(&desktop(), &[9999, 0], OWN_PID);
+        let sources = source_list(&desktop(), &[9999, 0], &[], OWN_PID);
         assert_eq!(sources.len(), 1);
     }
 
@@ -1868,7 +1894,7 @@ mod tests {
             entry(30, 1, None, "mid.exe"),
             entry(99, 1, None, "audiosync.exe"),
         ]);
-        let names: Vec<String> = source_list(&table, &[10, 20, 30], 99)
+        let names: Vec<String> = source_list(&table, &[10, 20, 30], &[], 99)
             .into_iter()
             .map(|source| source.name)
             .collect();

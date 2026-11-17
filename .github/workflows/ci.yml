@@ -212,7 +212,7 @@ jobs:
           rm -f AudioSync.dmg
 
       - name: Python syntax
-        run: python3 -I -m py_compile scripts/brand/compose.py scripts/brand/tidy-svg.py scripts/brand/tokens.py scripts/brand/ico.py scripts/brand/guide_art.py scripts/windows_notices.py scripts/core_notices.py scripts/privacy_check.py scripts/text_check.py scripts/spec_markers.py scripts/swift_macros.py scripts/check_appcast.py
+        run: python3 -I -m py_compile scripts/brand/compose.py scripts/brand/tidy-svg.py scripts/brand/tokens.py scripts/brand/ico.py scripts/brand/app_tile.py scripts/brand/guide_art.py scripts/windows_notices.py scripts/core_notices.py scripts/privacy_check.py scripts/text_check.py scripts/spec_markers.py scripts/swift_macros.py scripts/check_appcast.py
 
       - name: Generated brand files are up to date (SVGs, the SwiftUI mark, the Guide art and the design tokens)
         run: |
