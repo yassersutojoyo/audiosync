@@ -9951,6 +9951,37 @@ mod tests {
         assert_eq!(flash(), 0.0, "the flash is gone after a second");
     }
 
+    /// A row switched off dims its volume knob over 250 ms, as the Mac's
+    /// row does, instead of at once.
+    #[test]
+    fn a_row_switched_off_dims_its_slider_over_250_ms() {
+        use i_slint_backend_testing::ElementHandle;
+        hold_clock();
+        let mut backend = MockBackend::new();
+        backend.set_running(true);
+        let app = app_over(backend);
+        app.main.show().expect("the main window shows");
+        app.main.invoke_appearance_chosen(crate::Appearance::Dark);
+        draw_frames();
+        advance_clock(Duration::from_millis(500));
+        draw_frames();
+        let dimming = || {
+            ElementHandle::find_by_element_id(&app.main, "LevelSlider::thumb")
+                .map(|knob| knob.computed_opacity())
+                .filter(|opacity| (0.3..0.95).contains(opacity))
+                .count()
+        };
+        assert_eq!(dimming(), 0);
+        app.main.invoke_speaker_toggled("local:speakers".into());
+        draw_frames();
+        advance_clock(Duration::from_millis(100));
+        draw_frames();
+        assert_eq!(dimming(), 1, "its knob dims over time");
+        advance_clock(Duration::from_millis(300));
+        draw_frames();
+        assert_eq!(dimming(), 0, "dimmed after 250 ms");
+    }
+
     /// Settings fades in over 250 ms as it opens, as the Mac's window does;
     /// with animation effects off it shows at once.
     #[test]

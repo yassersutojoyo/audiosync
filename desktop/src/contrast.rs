@@ -2261,7 +2261,7 @@ fn device_icons_sit_on_whole_pixels() {
     assert!(badge.contains(
         "if !root.bare: Image {\n        x: (root.size - self.width) / 2;\n        y: self.x;\n        width: root.size == 32px ? 18px : 14px;\n        height: self.width;"
     ));
-    assert!(badge.contains("root.waits ? (root.size == 32px ? 2px :"));
+    assert!(badge.contains("border-width: root.size == 32px ? 2px :"));
     let disc = component_body(&flyout, "RowDisc");
     assert!(disc.contains("width: 26px;\n    height: 26px;"), "{disc}");
     assert!(disc.contains("x: 5px;\n        y: 5px;\n        width: 16px;\n        height: 16px;"));

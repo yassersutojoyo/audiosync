@@ -1337,8 +1337,6 @@ export component SpeakerBadge inherits Rectangle {
     }
     background: root.bare || root.plays ? transparent : root.waits ? Tokens.teal.with-alpha(0.14) : root.hovered ? #80808042 : #8080802e;
     animate background { duration: Motion.on ? 250ms : 150ms; }
-    border-width: !root.bare && root.waits ? (root.size == 32px ? 2px : max(1.5px, root.size / 18)) : 0px;
-    border-color: Tokens.teal-text;
     opacity: root.enabled ? 1 : Tokens.disabled-opacity;
     forward-focus: focus;
     // A toggle button, not a switch: see ToggleSwitch.
@@ -1401,6 +1399,18 @@ export component SpeakerBadge inherits Rectangle {
         }
     }
 
+    // The waiting ring fades with the disc, as the Mac's does.
+    if !root.bare: Rectangle {
+        border-radius: root.size / 2;
+        border-width: root.size == 32px ? 2px : max(1.5px, root.size / 18);
+        border-color: Tokens.teal-text;
+        opacity: root.waits ? 1 : 0;
+        animate opacity {
+            duration: Motion.on ? 250ms : 150ms;
+            easing: Motion.on ? ease-in-out : linear;
+        }
+    }
+
     if !root.bare: Rectangle {
         width: root.width * (Motion.on ? 0.6 + 0.4 * root.fill : 1);
         height: self.width;
@@ -1410,6 +1420,10 @@ export component SpeakerBadge inherits Rectangle {
     }
 
     property <color> ink: root.plays ? #ffffff : root.state == RowState.off ? (Tokens.dark ? #e8eaea : #3a3f3f) : Tokens.teal-text;
+    animate ink {
+        duration: Motion.on ? 250ms : 150ms;
+        easing: Motion.on ? ease-in-out : linear;
+    }
 
     // Centred on whole pixels: 7 px in the 32 px circle, 5 px in the 24 px one.
     if !root.bare: Image {
@@ -1818,6 +1832,10 @@ export component LevelSlider inherits Rectangle {
         height: root.vertical ? root.span : root.thickness;
         border-radius: root.thickness / 2;
         background: root.idle ? Tokens.text.with-alpha(0.07) : root.track;
+        animate background {
+            duration: Motion.on ? 250ms : 150ms;
+            easing: Motion.on ? ease-in-out : linear;
+        }
     }
 
     Rectangle {
@@ -1828,6 +1846,10 @@ export component LevelSlider inherits Rectangle {
         border-radius: root.thickness / 2;
         // The Mac's disabled small slider shows no fill; on dark its fill is grey, not white.
         background: root.idle ? Tokens.text.with-alpha(0.07) : root.small && Tokens.dark ? Tokens.text.with-alpha(0.26) : Tokens.text;
+        animate background {
+            duration: Motion.on ? 250ms : 150ms;
+            easing: Motion.on ? ease-in-out : linear;
+        }
     }
 
     thumb := Rectangle {
@@ -1839,6 +1861,11 @@ export component LevelSlider inherits Rectangle {
         // The Mac's small knob on dark is grey (#959595 on its window), faint while disabled.
         background: root.small && Tokens.dark ? #959595 : root.small && touch.pressed ? #ebebeb : #ffffff;
         opacity: root.idle && Tokens.dark ? 0.25 : 1;
+        // As the Mac's row, which dims over its switch's 250 ms.
+        animate opacity {
+            duration: Motion.on ? 250ms : 150ms;
+            easing: Motion.on ? ease-in-out : linear;
+        }
         // The Mac's small knob: on light a faint ring and a soft shadow keep it
         // off a white window at 100; on dark the shadow alone.
         border-width: root.small && Tokens.dark ? 0px : 1px;
