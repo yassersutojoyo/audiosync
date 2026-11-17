@@ -229,6 +229,7 @@ struct MainView: View {
     @StateObject private var sheetRoom = SheetRoom()
     @StateObject private var zoneDisclosure = ZoneDisclosure()
     @StateObject private var windowWidth = WindowWidth()
+    @StateObject private var leftTop = LeftColumnTop()
     @StateObject private var heroHover = HoverState()
     @StateObject private var slide = TrackSlideState()
     @Environment(\.displayScale) private var displayScale
@@ -249,11 +250,20 @@ struct MainView: View {
             header(t)
             NoticeStack(model: model)
             HStack(alignment: .top, spacing: BrandTokens.Spacing.columnGap) {
-                FadingScroll(onBlankTap: blankTap) {
-                    // One hero, then plain rows split by a hairline instead of a card each.
+                // One hero, then plain rows split by a hairline instead of a card each. The rows
+                // stay right under the hero; in a short window the hero scrolls above them instead.
+                VStack(alignment: .leading, spacing: 0) {
+                    FadingScroll(onBlankTap: blankTap) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            hero(t)
+                            masterVolume(t).padding(.top, 16)
+                        }
+                        .padding(.horizontal, MainColumns.rowInset)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { leftTop.height = $0 }
+                    }
+                    .frame(maxHeight: leftTop.height ?? .infinity)
+                    .layoutPriority(1)
                     VStack(alignment: .leading, spacing: 0) {
-                        hero(t)
-                        masterVolume(t).padding(.top, 16)
                         Divider().padding(.top, MainColumns.separatorPadding.top)
                             .padding(.bottom, MainColumns.separatorPadding.bottom)
                         // Icons on the master volume icon's column; the hover fill reaches past it.
@@ -263,8 +273,11 @@ struct MainView: View {
                             CalibrateAllButton(model: model)
                         }
                         .padding(.horizontal, -MainColumns.rowInset)
+                        Spacer(minLength: 0)
                     }
                     .padding(.horizontal, MainColumns.rowInset)
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: blankTap)
                 }
                 // Wider by the rows' fill on each side, so the scroll view doesn't clip it.
                 .frame(width: MainColumns.left(window: windowWidth.points) + 2 * MainColumns.rowInset)
@@ -636,7 +649,8 @@ struct MainView: View {
                               under: zoned.isEmpty ? speakers : [])
                 }
                 if connected && model.castCanAdd {
-                    if lines.castAdd { Divider() }
+                    // Under a note the line keeps to the note's 10 pt text inset.
+                    if lines.castAdd { Divider().padding(.horizontal, note != nil || listsNone ? 10 : 0) }
                     Button(model.text.castAddByAddress) { model.castAddShown = true }
                         .buttonStyle(HouseButtonStyle(small: true))
                         .help(model.text.castAddBody)
@@ -644,7 +658,9 @@ struct MainView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         // On the speaker rows' badge column (rowPaddingX).
                         .padding(.horizontal, BrandTokens.Spacing.rowPaddingX - MainColumns.rowInset)
-                        .padding(.vertical, 6)
+                        // 10 pt under the line, as the note has above it.
+                        .padding(.top, 10)
+                        .padding(.bottom, 6)
                 }
             }
         }
@@ -745,6 +761,11 @@ private struct LocalNetworkHintView: View {
 /// The main window's width, which sets its left column's (`MainColumns`).
 private final class WindowWidth: ObservableObject {
     @Published var points: CGFloat = 0
+}
+
+/// The height of the left column's hero and master volume, nil until laid out.
+private final class LeftColumnTop: ObservableObject {
+    @Published var height: CGFloat?
 }
 
 /// A title or name on one line. One too long for it scrolls to its end and
@@ -2256,6 +2277,14 @@ private struct ZoneMemberPlaceholder: View {
     }
 }
 
+private extension VerticalAlignment {
+    /// A speaker row's badge stays beside the name and slider while a hint line below makes the row taller.
+    enum BadgePin: AlignmentID {
+        static func defaultValue(in d: ViewDimensions) -> CGFloat { d[VerticalAlignment.center] }
+    }
+    static let badgePin = VerticalAlignment(BadgePin.self)
+}
+
 struct SpeakerRow: View {
     @ObservedObject var model: AppModel
     let speaker: AppModel.Speaker
@@ -2300,7 +2329,7 @@ struct SpeakerRow: View {
     var body: some View {
         let t = model.text
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 12) {
+            HStack(alignment: .badgePin, spacing: 12) {
                 Button { toggle(state.clickTurnsOn) } label: {
                     SpeakerBadge(symbol: speaker.symbol, state: state, size: 32)
                 }
@@ -2398,9 +2427,12 @@ struct SpeakerRow: View {
                         Text(t.volumeValue(speaker.volume))
                             .font(.subheadline.monospacedDigit())
                             .foregroundStyle(volumeDrag.held ? Color.primary : Brand.secondaryText)
-                            .frame(width: 26, alignment: .trailing)
+                            // The system volume panel's column, so both sliders end together.
+                            .frame(width: 34, alignment: .trailing)
                             .accessibilityHidden(true)
                     }
+                    // Half the 5 pt line gap: the badge centres between the name and the slider.
+                    .alignmentGuide(.badgePin) { $0[.top] - 2.5 }
                     // macOS's own volume of this output, when it is low or muted (S198).
                     if let hint = model.deviceVolume(of: speaker) {
                         DeviceVolumeLine(shown: DeviceVolumePresentation(hint, name: speaker.name, text: t),
