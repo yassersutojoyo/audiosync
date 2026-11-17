@@ -13610,6 +13610,66 @@ pub(crate) mod tests {
         assert_eq!((options.size().width, options.size().height), (21.0, 15.0));
     }
 
+    /// The columns start the Mac's windowGap, 14 px, under the header
+    /// (MenuBar.swift:2668, MainWindow.swift:330).
+    #[test]
+    fn the_columns_start_the_macs_window_gap_under_the_header() {
+        let app = narrow_app(MockBackend::new());
+        draw_frames_at(776, 680);
+        let by_type = |name: &str| {
+            i_slint_backend_testing::ElementHandle::find_by_element_type_name(&app.main, name)
+                .collect::<Vec<_>>()
+        };
+        let bottom =
+            |e: &i_slint_backend_testing::ElementHandle| e.absolute_position().y + e.size().height;
+        // The header's parts are centred in it, at least 36 high: its bottom is
+        // the lowest part's, or 18 under the mark's centre.
+        let mark = by_type("BrandMark").remove(0);
+        let status = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+            &app.main,
+            app.main.get_status().as_str(),
+        )
+        .next()
+        .expect("the status line");
+        let power = by_type("PowerSwitch").remove(0);
+        let header = [
+            mark.absolute_position().y + mark.size().height / 2.0 + 18.0,
+            bottom(&status),
+            bottom(&power),
+        ]
+        .into_iter()
+        .fold(f32::MIN, f32::max);
+        let left = by_type("FadeScrollView")
+            .into_iter()
+            .min_by(|a, b| a.absolute_position().x.total_cmp(&b.absolute_position().x))
+            .expect("the left column");
+        assert_eq!(left.absolute_position().y - header, 14.0);
+    }
+
+    /// The master volume row is the Mac's 18 high (MasterMuteButton and
+    /// MasterSlider, MenuBar.swift:2958 and :2976), so the rows under it sit
+    /// where the Mac's do; the mute button keeps its 24 px target over it.
+    #[test]
+    fn the_master_volume_row_is_the_macs_height() {
+        let app = narrow_app(MockBackend::new());
+        draw_frames_at(776, 680);
+        let row = i_slint_backend_testing::ElementHandle::find_by_element_type_name(
+            &app.main,
+            "MasterVolume",
+        )
+        .min_by(|a, b| a.absolute_position().x.total_cmp(&b.absolute_position().x))
+        .expect("the main window's master volume");
+        assert_eq!(row.size().height, 18.0);
+        let mute = ["Mute Master Volume", "Unmute Master Volume"]
+            .into_iter()
+            .find_map(|label| {
+                i_slint_backend_testing::ElementHandle::find_by_accessible_label(&app.main, label)
+                    .next()
+            })
+            .expect("the master mute button");
+        assert_eq!(mute.size().height, 24.0);
+    }
+
     /// A zone's speakers are set apart by a 1 px rule down their leading
     /// edge, under the zone header's edge, not by a tinted box, as on the Mac.
     #[test]
