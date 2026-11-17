@@ -19,6 +19,7 @@ Usage: python -I scripts/screen_compare.py <mac-dir> <other-dir>
 Exits 1 when it printed a row.
 """
 
+import io
 import json
 import os
 import sys
@@ -105,6 +106,7 @@ def self_test():
         "MAIN-IDLE-terang\tKitchen#2\tfg #1d1d1f vs #3a3a3c",
         "MAIN-IDLE-terang\tSpeakers\tonly in mac",
         "MAIN-IDLE-terang\tStreaming to\tfont SF Pro 13 vs Segoe UI 13",
+        "MAIN-IDLE-terang\t−170\tonly in mac",
         "TRAY-IDLE-gelap\t-\tonly in other",
     ]
     if got != want:
@@ -116,6 +118,20 @@ def self_test():
         return 1
     if compare(mac, mac):
         print("FAIL screen_compare: a folder differs from itself")
+        return 1
+    # A Windows console's stdout is cp1252, which has no U+2212 minus sign.
+    console = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+    shown, sys.stdout = sys.stdout, console
+    try:
+        main([mac, other])
+        console.flush()
+        failed = "−170".encode() not in console.buffer.getvalue()
+    except UnicodeEncodeError as error:
+        failed = error
+    finally:
+        sys.stdout = shown
+    if failed:
+        print(f"FAIL screen_compare: rows are not written as UTF-8 on a cp1252 console ({failed})")
         return 1
     print("ok screen_compare self-test")
     return 0
