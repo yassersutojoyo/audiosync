@@ -1,4 +1,4 @@
-//! File > Check Setup… (S435): what the window's network and microphone
+//! Settings > Check Setup… (S435): what the window's network and microphone
 //! rows say, and which of them the line under its heading names. Windows
 //! asks no permission to capture sound or to find speakers, so only these
 //! two rows can need the user.

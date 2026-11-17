@@ -356,6 +356,7 @@ impl RendererHandle for MockRenderer {
 pub struct MockDriver {
     processes: Vec<ProcessEntry>,
     session_pids: Vec<u32>,
+    window_pids: Vec<u32>,
     outputs: Vec<Endpoint>,
     /// The active capture endpoints, as Windows would describe them.
     inputs: Vec<EndpointReading>,
@@ -400,6 +401,8 @@ pub struct MockDriver {
     /// The listeners, notifications and writes of the outputs' own volumes.
     device_volumes: DeviceVolumes,
     endpoint_audio_error: Option<BackendError>,
+    /// An audio session was created since the controller last asked.
+    new_sessions: bool,
     faded: Arc<AtomicUsize>,
     hold_fades: Arc<AtomicBool>,
     captures_started: Vec<CaptureTarget>,
@@ -417,6 +420,8 @@ pub struct MockDriver {
     /// How far the system clock moves while an output start that doesn't
     /// answer holds the caller.
     hang_cost: Duration,
+    /// How long each capture start holds the caller, as Windows' does.
+    capture_wait: Duration,
     /// The endpoint ID of every output start asked for, refused ones
     /// included.
     renderer_attempts: Vec<String>,
@@ -448,6 +453,7 @@ impl MockDriver {
                 },
             ],
             session_pids: Vec::new(),
+            window_pids: Vec::new(),
             outputs: Vec::new(),
             inputs: Vec::new(),
             inputs_error: None,
@@ -472,6 +478,7 @@ impl MockDriver {
             volumes: BTreeMap::new(),
             device_volumes: DeviceVolumes::default(),
             endpoint_audio_error: None,
+            new_sessions: false,
             faded: Arc::new(AtomicUsize::new(0)),
             hold_fades: Arc::new(AtomicBool::new(false)),
             captures_started: Vec::new(),
@@ -483,6 +490,7 @@ impl MockDriver {
             wall_clock: SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000),
             awake_clock: Duration::ZERO,
             hang_cost: Duration::ZERO,
+            capture_wait: Duration::ZERO,
         }
     }
 
@@ -682,6 +690,10 @@ impl Driver for MockDriver {
         Ok(self.session_pids.clone())
     }
 
+    fn window_pids(&mut self) -> Vec<u32> {
+        self.window_pids.clone()
+    }
+
     fn outputs(&mut self) -> Result<Listing, BackendError> {
         if let Some(error) = &self.listing_error {
             return Err(error.clone());
@@ -755,6 +767,7 @@ impl Driver for MockDriver {
                     virtual_device: output.kind == OutputKind::Virtual,
                     volume: self.volume_of(&output.id),
                     active_pids,
+                    silent_pids: Vec::new(),
                 }
             })
             .collect())
@@ -779,6 +792,10 @@ impl Driver for MockDriver {
         self.device_volumes.record.lock().watched.remove(id);
         self.device_volumes.changed.remove(id);
         self.device_volumes.held.remove(id);
+    }
+
+    fn new_audio_sessions(&mut self) -> bool {
+        std::mem::take(&mut self.new_sessions)
     }
 
     fn endpoint_volume_changes(&mut self) -> Vec<String> {
@@ -827,6 +844,7 @@ impl Driver for MockDriver {
         equalizer: EqProcessor,
         feeds: Feeds,
     ) -> Result<MockCapture, BackendError> {
+        thread::sleep(self.capture_wait);
         self.capture_attempts += 1;
         if let Some(error) = self.next_capture_error.take() {
             return Err(error);
@@ -972,6 +990,13 @@ impl Controller<MockDriver> {
     /// stream yet.
     pub fn add_silent_app(&mut self, pid: u32, executable: &str) {
         self.add_process(pid, EXPLORER_PID, executable, false);
+    }
+
+    /// Starts an app, started by Explorer, that shows a window but hasn't
+    /// opened an audio stream yet.
+    pub fn add_windowed_app(&mut self, pid: u32, executable: &str) {
+        self.add_process(pid, EXPLORER_PID, executable, false);
+        self.driver_mut().window_pids.push(pid);
     }
 
     /// Ends the audio session of process `pid`, which keeps running (as an
@@ -1390,6 +1415,11 @@ impl Controller<MockDriver> {
         self.driver_mut().hang_cost = span;
     }
 
+    /// Makes each capture start hold the caller for `span`.
+    pub fn slow_capture_starts(&mut self, span: Duration) {
+        self.driver_mut().capture_wait = span;
+    }
+
     /// Makes the running capture fail with `error`.
     pub fn fail_capture(&mut self, error: BackendError) {
         if let Some(link) = &self.driver().capture {
@@ -1419,6 +1449,13 @@ impl Controller<MockDriver> {
         if let Some(pids) = self.driver_mut().active_sessions.get_mut(id) {
             pids.retain(|&active| active != pid);
         }
+    }
+
+    /// Gives process `pid` a new active audio session on output `id`, and
+    /// raises Windows' notice of a new session.
+    pub fn open_session(&mut self, pid: u32, id: &str) {
+        self.play_on(pid, id);
+        self.driver_mut().new_sessions = true;
     }
 
     /// Moves the active session of process `pid` from output `from` to
