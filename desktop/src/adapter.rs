@@ -4607,7 +4607,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 );
             }
             // The next snapshot shows it; no notice, no focus change (S198).
-            BackendEvent::DeviceVolumeChanged { .. } => {}
+            BackendEvent::DeviceVolumeChanged { .. } | BackendEvent::HeldOutChanged => {}
             // Told once while the writes keep failing (the backend reports
             // only the changes); a write that works clears it.
             BackendEvent::PairingStore { saved: false } => {

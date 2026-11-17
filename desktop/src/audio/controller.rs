@@ -876,6 +876,8 @@ pub struct Controller<D: Driver> {
     input_pairs: BTreeMap<String, u16>,
     /// Events for the next poll.
     pending: Vec<BackendEvent>,
+    /// What [`Self::held_out`] answered at the last poll.
+    held_out_shown: Vec<String>,
     /// The debug log; it writes nothing unless `AUDIOSYNC_DEBUG=1`.
     log: DebugLog,
     /// The last name of every output listed, so the log names outputs
@@ -1044,6 +1046,7 @@ impl<D: Driver> Controller<D> {
             equalizer: EqSettings::default(),
             input_pairs: BTreeMap::new(),
             pending: Vec::new(),
+            held_out_shown: Vec::new(),
             log: DebugLog::default(),
             names: BTreeMap::new(),
             setups: BTreeMap::new(),
@@ -5800,6 +5803,12 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.log_levels_if_due(now);
         self.log_drift(now);
         self.power.awake = Some((self.driver.wall_clock(), self.driver.awake_clock()));
+        let mut held_out = self.held_out();
+        held_out.sort();
+        if held_out != self.held_out_shown {
+            self.held_out_shown = held_out;
+            self.pending.push(BackendEvent::HeldOutChanged);
+        }
         let events = std::mem::take(&mut self.pending);
         // A device volume that changed is logged when its decision changes
         // (S201), so its event isn't.
@@ -6501,6 +6510,7 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
         BackendEvent::DeviceVolumeChanged { id } => {
             format!("output {}: its own volume changed", label(names, id))
         }
+        BackendEvent::HeldOutChanged => "the outputs held out changed".to_owned(),
         BackendEvent::CastChanged => "the Google Cast speakers changed".to_owned(),
         BackendEvent::CastIdentified { from, to } => {
             format!("Google Cast speaker {from}, added by address, is {to}")
@@ -6824,6 +6834,45 @@ mod tests {
         backend.check_routing_now();
         backend.poll();
         assert_eq!(playing(&backend), [SPEAKERS]);
+    }
+
+    // The adapter redraws only on a poll with events, so each flip of a
+    // row's held-out state must come with one.
+    // covers: S470
+    #[test]
+    fn a_held_out_output_that_changes_raises_an_event() {
+        fn headphones_held(backend: &MockBackend) -> bool {
+            backend
+                .outputs()
+                .into_iter()
+                .any(|output| output.id == HEADPHONES && output.plays_original)
+        }
+        let mut backend = backend();
+        with_switch(&mut backend);
+        backend.set_default_output(SPEAKERS);
+        backend.list_outputs().unwrap();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.poll();
+        backend.play_on(PLAYER_PID, HEADPHONES);
+        backend.check_routing_now();
+        let held = backend.poll();
+        assert!(headphones_held(&backend));
+        assert!(!held.is_empty(), "held out without an event");
+        backend.pause_on(PLAYER_PID, HEADPHONES);
+        backend.play_on(PLAYER_PID, SPEAKERS);
+        for _ in 0..=routing::HOLD_CHECKS + 1 {
+            backend.check_routing_now();
+            let events = backend.poll();
+            if !headphones_held(&backend) {
+                assert!(!events.is_empty(), "cleared without an event");
+                return;
+            }
+        }
+        panic!("the headphones stayed held out");
     }
 
     // covers: S470
