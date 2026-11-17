@@ -29,6 +29,11 @@ FRAME_SLACK = 1.0
 # One step of 8-bit colour sampled from anti-aliased pixels: below this the
 # two renderers' rounding differs, not the colour.
 COLOUR_STEP = 8
+# Caption buttons Windows draws in the window's own top row; the Mac's sit in
+# a title bar outside the content the renderer photographs.
+WINDOW_CHROME = {"Minimize", "Maximize", "Close"}
+# Words the other platform's labels use where the Mac's say the Mac's own.
+PLATFORM_WORDS = [("Windows", "macOS"), ("PipeWire", "macOS"), ("Exit AudioSync", "Quit AudioSync")]
 
 
 def load(folder):
@@ -58,6 +63,19 @@ def missing(state, present, absent):
     reasons = not_set_up(absent)
     reason = reasons.get(f"{base} {theme}") or reasons.get(base)
     return f"not set up in {absent}: {reason}" if reason else f"only in {present}"
+
+
+def as_mac(elements):
+    """The other platform's elements under the Mac's keys, without its caption buttons."""
+    out = []
+    for element in elements:
+        if element["key"] in WINDOW_CHROME:
+            continue
+        key = element["key"]
+        for word, mac in PLATFORM_WORDS:
+            key = key.replace(word, mac)
+        out.append(dict(element, key=key))
+    return out
 
 
 def keyed(elements):
@@ -103,7 +121,7 @@ def compare(left_dir, right_dir):
         if state not in left:
             rows.append(f"{state}\t-\t{missing(state, right_dir, left_dir)}")
             continue
-        a, b = keyed(left[state]["elements"]), keyed(right[state]["elements"])
+        a, b = keyed(left[state]["elements"]), keyed(as_mac(right[state]["elements"]))
         for key in sorted(set(a) | set(b)):
             if key not in b:
                 rows.append(f"{state}\t{key}\tonly in {left_dir}")

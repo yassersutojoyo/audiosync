@@ -25,6 +25,7 @@ struct DeviceVolumeLine: View {
                 .lineLimit(1)
                 .help(shown.help)
                 .accessibilityLabel(shown.label)
+                .layarKey(shown.label)
             Button(action: fix) {
                 Text(shown.fixTitle)
                     .font(.caption.weight(.semibold))
@@ -36,6 +37,7 @@ struct DeviceVolumeLine: View {
             .fixedSize()
             .focused(fixFocused)
             .accessibilityLabel(shown.fixLabel)
+            .layarKey(shown.fixLabel)
         }
         .font(.caption)
         // The secondary text style, at least 4.5:1 in light and dark (Brand.swift).

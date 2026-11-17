@@ -333,6 +333,12 @@ fn elements_json(elements: &[ElementHandle], shot: &Snapshot, scale: f32) -> Str
             let label = element
                 .accessible_label()
                 .filter(|label| !label.trim().is_empty())?;
+            // A labelled group (This PC, AirPlay Delay) is a Narrator heading the
+            // Mac has no layarKey for; its controls are listed on their own.
+            if element.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Groupbox)
+            {
+                return None;
+            }
             let (at, size) = (element.absolute_position(), element.size());
             let shown = size.width > 0.0
                 && size.height > 0.0
