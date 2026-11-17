@@ -23,11 +23,30 @@ const DIRECTIONS: [ResizeDirection; 8] = [
     ResizeDirection::SouthWest,
 ];
 
+thread_local! {
+    static DRAG_FROM: std::cell::Cell<Option<slint::PhysicalPosition>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// True when the window moved since the last press that asked to drag it:
+/// that press's release is the end of a drag, not a click.
+pub fn dragged_since_press(main: &MainWindow) -> bool {
+    ends_a_drag(
+        DRAG_FROM.with(std::cell::Cell::take),
+        main.window().position(),
+    )
+}
+
+fn ends_a_drag(from: Option<slint::PhysicalPosition>, now: slint::PhysicalPosition) -> bool {
+    from.is_some_and(|from| from != now)
+}
+
 /// Lets the top row's drag area, right click and edges reach the native window.
 pub fn connect(main: &MainWindow) {
     let weak = main.as_weak();
     main.on_drag_requested(move || {
         if let Some(main) = weak.upgrade() {
+            DRAG_FROM.with(|from| from.set(Some(main.window().position())));
             main.window().with_winit_window(|window| {
                 let _ = window.drag_window();
             });
@@ -314,5 +333,21 @@ mod native {
         }
         // SAFETY: passes the message on unchanged, as a subclass must.
         unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ends_a_drag;
+    use slint::PhysicalPosition;
+
+    /// A press on the header that moved the window ends a drag, which keeps
+    /// open delay controls open; a still press is a click on blank space.
+    #[test]
+    fn only_a_press_that_moved_the_window_ends_a_drag() {
+        let at = PhysicalPosition::new(100, 80);
+        assert!(ends_a_drag(Some(at), PhysicalPosition::new(140, 110)));
+        assert!(!ends_a_drag(Some(at), at));
+        assert!(!ends_a_drag(None, PhysicalPosition::new(140, 110)));
     }
 }

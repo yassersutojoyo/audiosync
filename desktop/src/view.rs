@@ -3342,7 +3342,13 @@ impl App {
         let w = weak.clone();
         main.on_airplay_delay_cancelled(move || with_app(&w, |app| app.end_delay_typing(false)));
         let w = weak.clone();
-        main.on_blank_clicked(move || with_app(&w, App::blank_click));
+        main.on_blank_clicked(move || {
+            with_app(&w, |app| {
+                if !crate::frameless::dragged_since_press(&app.main) {
+                    app.blank_click();
+                }
+            });
+        });
         main.global::<NameField>()
             .on_fit(|text| speaker_names::fitting(&text).into());
         main.global::<NameField>()
@@ -9864,12 +9870,9 @@ mod tests {
         hold_clock();
         draw_frames();
         let leaving = || {
-            i_slint_backend_testing::ElementHandle::find_by_element_id(
-                &app.main,
-                "DelayDigit::old",
-            )
-            .map(|text| text.computed_opacity())
-            .fold(0.0, f32::max)
+            i_slint_backend_testing::ElementHandle::find_by_element_id(&app.main, "DelayDigit::old")
+                .map(|text| text.computed_opacity())
+                .fold(0.0, f32::max)
         };
         app.main.invoke_delay_stepped("local:desk".into(), 10);
         // The row takes the new value as a frame is drawn.
