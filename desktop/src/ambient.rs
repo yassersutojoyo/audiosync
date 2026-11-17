@@ -193,6 +193,15 @@ mod tests {
     }
 
     #[test]
+    fn a_stalled_frame_moves_the_art_on_a_tenth_of_a_second_as_the_macs_clock_does() {
+        let mut driver = Driver::default();
+        driver.advance(0.5, || None);
+        assert!((driver.time - 0.1).abs() < 1e-9, "{}", driver.time);
+        driver.advance(1.0 / 60.0, || None);
+        assert!((driver.time - (0.1 + 1.0 / 60.0)).abs() < 1e-9);
+    }
+
+    #[test]
     fn held_sound_turns_the_art_live_and_quiet_turns_it_back() {
         let mut driver = Driver::default();
         let frame = 1.0 / 60.0;
@@ -208,7 +217,7 @@ mod tests {
         assert_eq!(driver.mode.live(), 0.0, "back to the breath");
         assert_eq!(
             driver.interval(true, false),
-            Some(Duration::from_secs_f64(1.0 / 15.0))
+            Some(Duration::from_secs_f64(1.0 / 30.0))
         );
     }
 

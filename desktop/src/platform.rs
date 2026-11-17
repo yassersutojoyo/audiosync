@@ -688,7 +688,7 @@ pub fn bring_to_front(window: &slint::Window) {
 /// muda 0.19.3's private `MENU_UPDATE_THEME`: draws a window's menu bar dark
 /// (0) or light (1) and repaints its frame. Slint asks for muda ^0.19, so only
 /// Cargo.lock holds the version (a test checks it). Slint sends it only when
-/// Windows changes theme, so View > Appearance sends it too.
+/// Windows changes theme, so Settings > Appearance sends it too.
 #[cfg(windows)]
 const MUDA_MENU_BAR_THEME: u32 = 201;
 
@@ -744,6 +744,72 @@ pub fn repaint_frame(window: &slint::Window, menu_bar: bool, dark: bool) {
 
 #[cfg(not(windows))]
 pub fn repaint_frame(_window: &slint::Window, _menu_bar: bool, _dark: bool) {}
+
+#[cfg(test)]
+thread_local! {
+    static CLOAKED: std::cell::RefCell<Vec<usize>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Whether `set_cloaked` last hid `window`, for headless tests, where no
+/// native window exists to cloak.
+#[cfg(test)]
+pub fn is_cloaked(window: &slint::Window) -> bool {
+    let id = std::ptr::from_ref(window) as usize;
+    CLOAKED.with(|cloaked| cloaked.borrow().contains(&id))
+}
+
+#[cfg(test)]
+fn note_cloaked(window: &slint::Window, cloaked: bool) {
+    let id = std::ptr::from_ref(window) as usize;
+    CLOAKED.with(|all| {
+        let mut all = all.borrow_mut();
+        all.retain(|other| *other != id);
+        if cloaked {
+            all.push(id);
+        }
+    });
+}
+
+/// Hides a window from the screen while it stays shown and draws, or lets it
+/// be seen again. A reopened window is cloaked until its first new frame:
+/// DWM otherwise composes the frame it kept from before it was hidden.
+#[cfg(windows)]
+pub fn set_cloaked(window: &slint::Window, cloaked: bool) {
+    #[cfg(test)]
+    note_cloaked(window, cloaked);
+    use slint::winit_030::WinitWindowAccessor;
+    use slint::winit_030::winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Dwm::{DWMWA_CLOAK, DwmSetWindowAttribute};
+    use windows::core::BOOL;
+
+    window.with_winit_window(|window| {
+        let Ok(handle) = window.window_handle() else {
+            return;
+        };
+        let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+            return;
+        };
+        let hwnd = HWND(handle.hwnd.get() as *mut core::ffi::c_void);
+        let value = BOOL::from(cloaked);
+        // SAFETY: `hwnd` is this thread's live window, and `value` is a
+        // 4-byte BOOL that lives through the call.
+        let _ = unsafe {
+            DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_CLOAK,
+                (&raw const value).cast(),
+                size_of::<BOOL>() as u32,
+            )
+        };
+    });
+}
+
+#[cfg(not(windows))]
+pub fn set_cloaked(_window: &slint::Window, _cloaked: bool) {
+    #[cfg(test)]
+    note_cloaked(_window, _cloaked);
+}
 
 /// Whether a WM_SETTINGCHANGE names `area` "ImmersiveColorSet", the one
 /// Windows sends when it switches between light and dark.
@@ -884,9 +950,18 @@ pub fn on_session_end(ending: Box<dyn Fn()>) -> Option<isize> {
     Some(hwnd.0 as isize)
 }
 
+/// Runs `query` on this thread each time Windows asks whether the session
+/// may end, before the window [`on_session_end`] made answers that it may.
+#[cfg(windows)]
+pub fn on_session_query(query: Box<dyn Fn()>) {
+    SESSION_QUERY.with(|slot| *slot.borrow_mut() = Some(query));
+}
+
 #[cfg(windows)]
 thread_local! {
     static SESSION_ENDING: std::cell::RefCell<Option<Box<dyn Fn()>>> =
+        const { std::cell::RefCell::new(None) };
+    static SESSION_QUERY: std::cell::RefCell<Option<Box<dyn Fn()>>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -898,8 +973,17 @@ unsafe extern "system" fn session_end_procedure(
     lparam: windows::Win32::Foundation::LPARAM,
 ) -> windows::Win32::Foundation::LRESULT {
     use windows::Win32::Foundation::LRESULT;
-    use windows::Win32::UI::WindowsAndMessaging::{DefWindowProcW, WM_ENDSESSION};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DefWindowProcW, WM_ENDSESSION, WM_QUERYENDSESSION,
+    };
 
+    if message == WM_QUERYENDSESSION {
+        SESSION_QUERY.with(|slot| {
+            if let Some(query) = slot.borrow().as_ref() {
+                query();
+            }
+        });
+    }
     // A zero `wparam` means the end was called off.
     if message == WM_ENDSESSION && wparam.0 != 0 {
         let ending = SESSION_ENDING.with(|slot| slot.borrow_mut().take());

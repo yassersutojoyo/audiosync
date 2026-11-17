@@ -1,7 +1,10 @@
 //! The running processes, the audio sessions they own, and watching a process
 //! for its exit.
 
-use windows::Win32::Foundation::{ERROR_INVALID_PARAMETER, FILETIME, S_OK, WAIT_OBJECT_0};
+use windows::Win32::Foundation::{
+    ERROR_INVALID_PARAMETER, FILETIME, HWND, LPARAM, S_OK, WAIT_OBJECT_0,
+};
+use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
 use windows::Win32::Media::Audio::{
     AudioSessionStateExpired, DEVICE_STATE_ACTIVE, IAudioSessionControl2, IAudioSessionManager2,
     eRender,
@@ -14,7 +17,11 @@ use windows::Win32::System::Threading::{
     GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
     WaitForSingleObject,
 };
-use windows::core::{HRESULT, Interface};
+use windows::Win32::UI::WindowsAndMessaging::{
+    EnumWindows, GW_OWNER, GWL_EXSTYLE, GetWindow, GetWindowLongPtrW, GetWindowTextLengthW,
+    GetWindowThreadProcessId, IsWindowVisible, WS_EX_TOOLWINDOW,
+};
+use windows::core::{BOOL, HRESULT, Interface};
 
 use super::com::{Apartment, Handle, system_error};
 use super::devices::enumerator;
@@ -85,6 +92,51 @@ fn creation_time(pid: u32) -> Option<u64> {
     .ok()?;
     let created = (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime);
     (created != 0).then_some(created)
+}
+
+/// The IDs of the processes that own a visible, unowned top-level window
+/// that has a title and is neither a tool window nor cloaked: the windows the
+/// taskbar shows.
+pub(super) fn window_pids() -> Vec<u32> {
+    let mut pids: Vec<u32> = Vec::new();
+    // SAFETY: the callback runs only during this call, while `pids` lives.
+    let _ = unsafe { EnumWindows(Some(collect_window_pid), LPARAM(&raw mut pids as isize)) };
+    pids.sort_unstable();
+    pids.dedup();
+    pids
+}
+
+unsafe extern "system" fn collect_window_pid(window: HWND, pids: LPARAM) -> BOOL {
+    // SAFETY: queries on a window EnumWindows handed over; `pids` is the
+    // vector `window_pids` passed, alive for the whole enumeration.
+    unsafe {
+        if !IsWindowVisible(window).as_bool()
+            || GetWindow(window, GW_OWNER).is_ok()
+            || GetWindowTextLengthW(window) == 0
+            || GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_TOOLWINDOW.0 as isize != 0
+        {
+            return true.into();
+        }
+        let mut cloaked = 0u32;
+        // Windows keeps suspended Store apps' windows visible but cloaked.
+        if DwmGetWindowAttribute(
+            window,
+            DWMWA_CLOAKED,
+            (&raw mut cloaked).cast(),
+            size_of::<u32>() as u32,
+        )
+        .is_ok()
+            && cloaked != 0
+        {
+            return true.into();
+        }
+        let mut pid = 0;
+        GetWindowThreadProcessId(window, Some(&raw mut pid));
+        if pid != 0 {
+            (*(pids.0 as *mut Vec<u32>)).push(pid);
+        }
+    }
+    true.into()
 }
 
 /// The IDs of the processes that own an audio session on an active render

@@ -159,8 +159,12 @@ def slint(tokens):
     out.append(f'    out property <int> brand-font-weight: {brand["weight"]};')
     out.append('    // Letter spacing of the wordmark, in em.')
     out.append(f'    out property <float> brand-tracking: {number(brand["tracking"])};')
+    segoe = tokens['typography']['segoeSize']
     for name, value in entries(tokens['typography']['size']):
-        out.append(f'    out property <length> font-size-{kebab(name)}: {number(value)}px;')
+        size = f'{number(value)}px'
+        if name in segoe:
+            size = f'Platform.os == OperatingSystemType.windows ? {number(segoe[name])}px : {size}'
+        out.append(f'    out property <length> font-size-{kebab(name)}: {size};')
     for group in ('spacing', 'radius'):
         out.append('')
         out += doc_lines(tokens[group]['$description'], '    ', '// ')
