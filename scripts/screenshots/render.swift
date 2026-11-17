@@ -448,17 +448,24 @@ let layarRows: [(id: String, draw: (Look) -> (NSWindow, NSView))] = [
     ("EQ-WINDOW", { layarEqualizer(look: $0) }),
 ]
 
+/// The fewest keyed elements MAIN-PLAYING may list: its header, source,
+/// Now Playing card, sidebar buttons and speaker rows come to well over this.
+let layarPlayingFloor = 30
+
 /// Writes `<ID>-terang|gelap.png` and `.json` per row, unframed, at `scale`.
 func writeLayar() {
+    var playingCount = 0
     for (id, draw) in layarRows {
         for (look, theme) in [(Look.light, "terang"), (Look.dark, "gelap")] {
             NSApp.appearance = look.appearance
             let (window, view) = draw(look)
             let rep = capture(view)
             write(rep, "\(id)-\(theme).png")
+            let elements = layarElements(in: view, rep: rep)
+            if id == "MAIN-PLAYING", look == .light { playingCount = elements.count }
             let listed: [String: Any] = [
                 "window": [Double(view.bounds.width), Double(view.bounds.height)],
-                "elements": layarElements(in: view, rep: rep),
+                "elements": elements,
             ]
             let url = outputDirectory.appendingPathComponent("\(id)-\(theme).json")
             do {
@@ -466,6 +473,10 @@ func writeLayar() {
             } catch { fatalError("Could not write \(url.path): \(error)") }
             withExtendedLifetime(window) {}
         }
+    }
+    guard playingCount >= layarPlayingFloor else {
+        FileHandle.standardError.write(Data("MAIN-PLAYING lists \(playingCount) keyed elements, fewer than \(layarPlayingFloor)\n".utf8))
+        exit(1)
     }
 }
 
