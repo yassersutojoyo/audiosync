@@ -1684,6 +1684,17 @@ export global Strings {
         return @tr("{} {}", ms, root.milliseconds-unit);
     }
 
+    // The sign before an offset's digits, as delay-value writes it.
+    public pure function delay-sign(ms: int) -> string {
+        if ms > 0 {
+            return "+";
+        }
+        if ms < 0 {
+            return "−";
+        }
+        return "";
+    }
+
     // A switched-on output's own volume in Windows, under its volume slider
     // when it is low or muted (spec S199); `percent` is its whole percent.
     // The fix sets this volume, which the core decides (FIX_VOLUME).

@@ -9866,7 +9866,7 @@ mod tests {
         let leaving = || {
             i_slint_backend_testing::ElementHandle::find_by_element_id(
                 &app.main,
-                "SpeakerRow::delay-old",
+                "DelayDigit::old",
             )
             .map(|text| text.computed_opacity())
             .fold(0.0, f32::max)
@@ -9908,6 +9908,70 @@ mod tests {
         advance_clock(Duration::from_millis(100));
         draw_frames();
         assert_eq!(leaving(), 0.0, "a moved row doesn't roll");
+    }
+
+    /// As the Mac's numeric text, only the digits that change roll, and a
+    /// teal tint flashes behind the value: up in 120 ms, gone 900 ms later.
+    // covers: S450
+    #[test]
+    fn a_changed_delay_rolls_only_its_changed_digits_under_a_teal_flash() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        hold_clock();
+        draw_frames();
+        let widest_leaving = || {
+            ElementHandle::find_by_element_id(&app.main, "SpeakerRow::delay-old")
+                .chain(ElementHandle::find_by_element_id(
+                    &app.main,
+                    "DelayDigit::old",
+                ))
+                .filter(|part| (0.01..0.99).contains(&part.computed_opacity()))
+                .map(|part| part.size().width)
+                .fold(0.0, f32::max)
+        };
+        let flash = || {
+            ElementHandle::find_by_element_id(&app.main, "SpeakerRow::delay-flash")
+                .map(|tint| tint.computed_opacity())
+                .fold(0.0, f32::max)
+        };
+        // 120 ms to 130 ms: only the tens digit changes.
+        app.main.invoke_delay_stepped("local:desk".into(), 10);
+        draw_frames();
+        advance_clock(Duration::from_millis(100));
+        draw_frames();
+        let width = widest_leaving();
+        assert!(
+            0.0 < width && width < 12.0,
+            "one digit rolls, not the whole value: {width} px"
+        );
+        assert!(flash() > 0.0, "the value flashes teal");
+        advance_clock(Duration::from_millis(1100));
+        draw_frames();
+        assert_eq!(flash(), 0.0, "the flash is gone after a second");
+    }
+
+    /// A Cast speaker's delay is a wait, never below 0, so its row shows it
+    /// with no sign, as the Mac's does.
+    // covers: S450
+    #[test]
+    fn a_cast_rows_delay_has_no_sign() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        draw_frames();
+        let connected = app.main.get_connected();
+        let mut item = connected.row_data(0).expect("a connected speaker");
+        item.cast = true;
+        item.has_delay = true;
+        item.delay_ms = 10;
+        let label = app.strings().invoke_delay_of(item.name.clone());
+        connected.set_row_data(0, item);
+        draw_frames();
+        let value = ElementHandle::find_by_accessible_label(&app.main, &label)
+            .find_map(|button| button.accessible_value())
+            .expect("the delay value");
+        assert_eq!(value.as_str(), "10 ms");
     }
 
     /// The delay panel holds the Mac's small steps, 20 px high and 4 px

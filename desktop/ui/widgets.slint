@@ -3306,6 +3306,42 @@ export component SourceMenuRow inherits VerticalLayout {
     }
 }
 
+// One character of a row's delay, as the Mac's numeric text rolls it: when
+// it changes, the old one leaves as the new one comes in, up as the delay
+// grows; with Motion off the two only cross-fade.
+component DelayDigit inherits Rectangle {
+    in property <string> now;
+    in property <string> was;
+    in property <float> roll: 1;
+    in property <length> rise;
+    in property <color> ink;
+    property <bool> rolling: root.roll < 1 && root.was != root.now;
+    preferred-width: max(new.preferred-width, root.rolling ? old.preferred-width : 0px);
+    clip: true;
+
+    new := Text {
+        y: root.rolling ? (1 - root.roll) * root.rise : 0px;
+        height: parent.height;
+        opacity: root.rolling ? root.roll : 1;
+        text: root.now;
+        font-size: Tokens.font-size-subheadline;
+        color: root.ink;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+
+    old := Text {
+        y: -root.roll * root.rise;
+        height: parent.height;
+        opacity: root.rolling ? 1 - root.roll : 0;
+        text: root.was;
+        font-size: Tokens.font-size-subheadline;
+        color: root.ink;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+}
+
 // One speaker: its toggle, then its name with its kind and note, the sync
 // delay and its options on one line, and its volume under them. The sync
 // controls open underneath.
@@ -3838,7 +3874,7 @@ export component SpeakerRow inherits Rectangle {
                                     }
                                     accessible-role: button;
                                     accessible-label: Strings.delay-of(root.item.name);
-                                    accessible-value: Strings.delay-value(root.item.delay-ms);
+                                    accessible-value: root.item.cast ? Strings.airplay-delay-value(root.item.delay-ms) : Strings.delay-value(root.item.delay-ms);
                                     accessible-description: Strings.sync-adjust;
                                     accessible-expandable: true;
                                     accessible-expanded: root.item.sync-open;
@@ -3869,6 +3905,18 @@ export component SpeakerRow inherits Rectangle {
                                         }
                                     }
 
+                                    // At its 12% peak the tint keeps the readable teal
+                                    // at 4.5:1 or better, as on the Mac.
+                                    delay-flash := Rectangle {
+                                        x: (parent.width - self.width) / 2;
+                                        y: -3px;
+                                        width: delay-row.preferred-width + 6px;
+                                        height: parent.height + 6px;
+                                        border-radius: 4px;
+                                        background: Tokens.teal;
+                                        opacity: 0.12 * delay-roll.tint;
+                                    }
+
                                     delay-row := HorizontalLayout {
                                         spacing: 4px;
                                         alignment: center;
@@ -3879,13 +3927,10 @@ export component SpeakerRow inherits Rectangle {
                                             color: root.item.sync-open ? Tokens.teal-text : Tokens.secondary-text;
                                         }
 
-                                        // The Mac's numeric text: a new value rolls in over
-                                        // 300 ms, up as the delay grows and down as it
-                                        // shrinks; with Motion off the two only cross-fade.
-                                        delay-roll := Rectangle {
-                                            // Wide enough for the leaving value until it is gone.
-                                            preferred-width: max(delay-new.preferred-width, self.roll < 1 ? delay-old.preferred-width : 0px);
-                                            clip: true;
+                                        // The Mac's numeric text: the changed characters of a
+                                        // new value roll in over 300 ms, up as the delay grows
+                                        // and down as it shrinks.
+                                        delay-roll := HorizontalLayout {
                                             property <int> delay: root.item.delay-ms;
                                             property <int> last;
                                             // A slot the list reuses for another speaker
@@ -3900,7 +3945,25 @@ export component SpeakerRow inherits Rectangle {
                                                 easing: ease-out;
                                             }
                                             property <float> roll: clamp(1 - (self.rolls - self.rolled), 0, 1);
-                                            property <length> rise: !Motion.on ? 0px : self.delay > self.from ? self.height : -self.height;
+                                            property <length> rise: !Motion.on ? 0px : self.delay > self.from ? 16px : -16px;
+                                            // The Mac's flash after a change: a teal tint up in
+                                            // 120 ms, then gone over 900 ms.
+                                            property <float> flashed: self.rolls;
+                                            animate flashed { duration: 1020ms; }
+                                            property <float> flash-at: clamp(1 - (self.rolls - self.flashed), 0, 1);
+                                            property <float> fall: clamp((self.flash-at - 0.1176) / 0.8824, 0, 1);
+                                            out property <float> tint: self.flash-at < 0.1176 ? self.flash-at / 0.1176 : 1 - self.fall * self.fall * (3 - 2 * self.fall);
+                                            // A Cast offset is a wait, never below 0, so it has no sign.
+                                            property <bool> signed: !root.item.cast;
+                                            property <int> places: max(self.count(self.delay), self.roll < 1 ? self.count(self.from) : 0);
+                                            property <color> color: root.item.sync-open ? Tokens.teal-text : Tokens.secondary-text;
+                                            pure function count(ms: int) -> int {
+                                                return abs(ms) >= 10000 ? 5 : abs(ms) >= 1000 ? 4 : abs(ms) >= 100 ? 3 : abs(ms) >= 10 ? 2 : 1;
+                                            }
+                                            // The digit for 10^place, empty past the number's first.
+                                            pure function digit(ms: int, place: int) -> string {
+                                                return place < self.count(ms) ? "\{Math.mod(floor(abs(ms) / pow(10, place)), 10)}" : "";
+                                            }
                                             init => {
                                                 self.last = self.delay;
                                                 self.last-id = self.id;
@@ -3917,24 +3980,26 @@ export component SpeakerRow inherits Rectangle {
                                                 self.last = self.delay;
                                             }
 
-                                            delay-new := Text {
-                                                y: (1 - delay-roll.roll) * delay-roll.rise;
-                                                height: parent.height;
-                                                opacity: delay-roll.roll;
-                                                text: Strings.delay-value(root.item.delay-ms);
-                                                font-size: Tokens.font-size-subheadline;
-                                                color: root.item.sync-open ? Tokens.teal-text : Tokens.secondary-text;
-                                                vertical-alignment: center;
-                                                accessible-role: none;
+                                            DelayDigit {
+                                                now: delay-roll.signed ? Strings.delay-sign(delay-roll.delay) : "";
+                                                was: delay-roll.signed ? Strings.delay-sign(delay-roll.from) : "";
+                                                roll: delay-roll.roll;
+                                                rise: delay-roll.rise;
+                                                ink: delay-roll.color;
                                             }
 
-                                            delay-old := Text {
-                                                y: -delay-roll.roll * delay-roll.rise;
-                                                height: parent.height;
-                                                opacity: 1 - delay-roll.roll;
-                                                text: Strings.delay-value(delay-roll.from);
+                                            for place in delay-roll.places: DelayDigit {
+                                                now: delay-roll.digit(delay-roll.delay, delay-roll.places - 1 - place);
+                                                was: delay-roll.digit(delay-roll.from, delay-roll.places - 1 - place);
+                                                roll: delay-roll.roll;
+                                                rise: delay-roll.rise;
+                                                ink: delay-roll.color;
+                                            }
+
+                                            Text {
+                                                text: " " + Strings.milliseconds-unit;
                                                 font-size: Tokens.font-size-subheadline;
-                                                color: root.item.sync-open ? Tokens.teal-text : Tokens.secondary-text;
+                                                color: delay-roll.color;
                                                 vertical-alignment: center;
                                                 accessible-role: none;
                                             }
