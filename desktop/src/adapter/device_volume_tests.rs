@@ -417,3 +417,33 @@ fn the_reference_shows_its_system_volume_while_off_and_writes_nothing() {
     );
     assert!(record.writes().is_empty(), "{:?}", record.writes());
 }
+
+/// Headphones and in-ears get no low-volume hint: 18 % is already loud in
+/// the ears. Speakers keep it.
+#[test]
+fn headphones_show_no_device_volume_hint_and_speakers_still_do() {
+    let in_ears = || crate::audio::outputs::DeviceTraits {
+        form_factor: Some(crate::audio::outputs::form_factor::HEADPHONES),
+        enumerator: Some("USB".to_owned()),
+    };
+    let mut audio = MockBackend::empty();
+    audio.connect_output_as(SPEAKERS, "Speakers", OutputKind::BuiltIn);
+    audio.connect_output(HEADPHONES, "IEM");
+    audio.connect_output("edifier", "Edifier");
+    audio.set_output_traits(SPEAKERS, in_ears());
+    audio.set_output_traits(HEADPHONES, in_ears());
+    for id in [SPEAKERS, HEADPHONES, "edifier"] {
+        audio.set_output_level(id, 0.18);
+    }
+    let mut adapter = adapter(audio);
+    for id in [SPEAKERS, HEADPHONES, "edifier"] {
+        adapter.set_speaker_enabled(&key(id), true);
+    }
+    assert_eq!(row(&adapter, HEADPHONES).0, DeviceVolumeHint::None);
+    assert_eq!(row(&adapter, "edifier"), (DeviceVolumeHint::Low, 18));
+    assert_eq!(
+        calibrate_all_volume(&adapter.snapshot()).0,
+        DeviceVolumeHint::None,
+        "a reference in the ears"
+    );
+}

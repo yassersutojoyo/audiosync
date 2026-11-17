@@ -509,7 +509,8 @@ final class AppModel: ObservableObject {
     /// The device volume hint `speaker`'s row shows: none on an AirPlay row
     /// or a row switched off (S198).
     func deviceVolume(of speaker: Speaker) -> DeviceVolumeHint? {
-        DeviceVolumes.hint(for: speaker.id, airPlay: speaker.isAirPlay || speaker.isCast, enabled: speaker.enabled,
+        DeviceVolumes.hint(for: speaker.id, airPlay: speaker.isAirPlay || speaker.isCast,
+                           headphones: speaker.calibrationLeftOut == .headphones, enabled: speaker.enabled,
                            in: deviceVolumes)
     }
 

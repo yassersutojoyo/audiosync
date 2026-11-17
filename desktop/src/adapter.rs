@@ -4921,10 +4921,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
             refused_for_code: false,
             // Read only while the output is on (S192).
             own_volume: None,
-            // The reference is read while off too, but hints only while on.
+            // The reference is read while off too, but hints only while on;
+            // never in the ears, where a low level is already loud.
             device_volume: output
                 .device_volume
-                .filter(|_| output.enabled)
+                .filter(|_| output.enabled && output.traits.mic_kind() != MicKind::Headphones)
                 .and_then(|device_volume| device_volume.hint()),
             system_volume: output.device_volume,
             waiting: (output.enabled && self.busy.contains(&output.id))

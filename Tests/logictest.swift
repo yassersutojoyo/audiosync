@@ -1995,6 +1995,14 @@ do {
     }
 
     do {
+        let iemHints: [String: DeviceVolumeHint] = ["iem": .low(percent: 18), "edifier": .low(percent: 18)]
+        check(DeviceVolumes.hint(for: "iem", airPlay: false, headphones: true, enabled: true, in: iemHints) == nil
+                && DeviceVolumes.hint(for: "edifier", airPlay: false, headphones: false, enabled: true,
+                                      in: iemHints) == .low(percent: 18),
+              "device volume: headphones and in-ears show no low-volume hint; speakers keep it")
+    }
+
+    do {
         let host = Host()
         host.access.set(builtIn, .volume, 0.8)
         host.access.set(builtIn, .mute, 0)
