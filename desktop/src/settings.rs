@@ -55,7 +55,9 @@ use audiosync_core::volume::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::audio::app_output::{AppRecord, AppRecordStore};
+use crate::audio::app_output::AppRecord;
+#[cfg(windows)]
+use crate::audio::app_output::AppRecordStore;
 use crate::audio::backend::OutputKind;
 use crate::audio::cast_address;
 use crate::audio::default_output::Record as DefaultRecord;
@@ -1921,10 +1923,10 @@ impl RecordStore for DefaultRecordFile {
 
 /// The settings file as the store of S471's restore record, as
 /// [`DefaultRecordFile`] keeps S469's.
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 pub struct AppRecordFile(pub Option<PathBuf>);
 
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 impl AppRecordStore for AppRecordFile {
     fn load(&mut self) -> Result<Option<AppRecord>, String> {
         let Some(path) = &self.0 else {
