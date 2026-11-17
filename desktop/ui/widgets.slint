@@ -2192,9 +2192,9 @@ export component VolumeSlider inherits HorizontalLayout {
         height: 14px;
 
         QuietText {
-            // Skia draws Segoe's digits 1 px under the box's middle (measured
-            // at 1x); the Mac centres their ink on the track.
-            y: -Fluent.digit-lift;
+            // Skia draws the digits under the box's middle, Segoe's 1 px and
+            // Inter's half that (measured at 1x and 1.5x); the Mac centres their ink on the track.
+            y: Platform.os == OperatingSystemType.windows ? -1px : -0.5px;
             width: parent.width;
             height: parent.height;
             text: root.percent ? Strings.system-volume-percent(round(slider.value)) : Strings.volume-value(slider.value);
@@ -4212,8 +4212,8 @@ export component SpeakerRow inherits Rectangle {
 
                                     // The Mac's 5 px ink gap: the timer's drawing is inset in its box.
                                     delay-row := HorizontalLayout {
-                                        // Skia sets the 11 px Segoe number 1 px under the box's middle.
-                                        y: -Fluent.digit-lift;
+                                        // Skia sets the 11 px number 1 px under the box's middle.
+                                        y: -1px;
                                         spacing: 2px;
                                         padding-left: 3px;
                                         padding-right: 3px;
