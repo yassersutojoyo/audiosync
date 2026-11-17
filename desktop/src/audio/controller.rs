@@ -831,6 +831,9 @@ struct RoutingState {
     last_check: Option<Instant>,
     /// The endpoints the source played on at the last check.
     played_on: Vec<PlayedOn>,
+    /// The endpoints an app source played on as it started, which the app
+    /// may be leaving for its move (S471): each drops at its first idle check.
+    at_start: Vec<String>,
     /// What was last reported: empty while the source is heard only through
     /// AudioSync.
     reported: Vec<DirectPath>,
@@ -4197,11 +4200,13 @@ impl<D: Driver> Controller<D> {
         if self.default_output.is_some() && !matches!(source, SourceId::WholeSystem) {
             self.sync_app_output(true);
             self.check_routing(Instant::now());
-            // The app may still be following the move: what this check saw
-            // drops at its first idle check, and the first poll checks again.
-            for played in &mut self.routing.played_on {
-                played.idle_checks = routing::HOLD_CHECKS;
-            }
+            self.routing.at_start = self
+                .routing
+                .played_on
+                .iter()
+                .map(|played| played.endpoint_id.clone())
+                .collect();
+            self.hold_at_start_briefly();
             self.routing.last_check = None;
         }
         let failures = self.sync_outputs();
@@ -4599,6 +4604,24 @@ impl<D: Driver> Controller<D> {
             }
         }
         self.routing.played_on = answer.played_on;
+        self.hold_at_start_briefly();
+    }
+
+    /// Keeps the endpoints of [`RoutingState::at_start`] one idle check from
+    /// dropping, while the app still plays there.
+    fn hold_at_start_briefly(&mut self) {
+        let state = &mut self.routing;
+        state.at_start.retain(|id| {
+            state
+                .played_on
+                .iter()
+                .any(|played| played.endpoint_id == *id)
+        });
+        for played in &mut state.played_on {
+            if state.at_start.contains(&played.endpoint_id) {
+                played.idle_checks = routing::HOLD_CHECKS;
+            }
+        }
     }
 
     /// The sources to offer, from the processes and audio sessions now.
@@ -6729,6 +6752,10 @@ mod tests {
             })
             .unwrap();
         assert_eq!(playing(&backend), [SPEAKERS]);
+        backend.poll();
+        backend.check_routing_now();
+        backend.poll();
+        assert_eq!(playing(&backend), [SPEAKERS], "an app that stays is held");
     }
 
     /// The per-app output seam's fakes, shared with the test.
@@ -6791,6 +6818,58 @@ mod tests {
         backend.poll();
         assert_eq!(player_output(&apps), render_interface(switch_fakes::CABLE));
         assert_eq!(playing(&backend), [HEADPHONES]);
+    }
+
+    /// The backend of [`backend`] moving the default and apps' outputs, with
+    /// the cable listed, Speakers the default, and the player playing there.
+    fn player_on_speakers() -> (MockBackend, AppFakes) {
+        let mut backend = backend();
+        with_switch(&mut backend);
+        backend.set_default_output(SPEAKERS);
+        backend.connect_output_as(CABLE, "Cable Input", OutputKind::Virtual);
+        backend.list_outputs().unwrap();
+        let fakes = with_app_outputs(&mut backend, None);
+        backend.play_on(PLAYER_PID, SPEAKERS);
+        (backend, fakes)
+    }
+
+    // covers: S470, S471
+    #[test]
+    fn an_app_still_on_its_output_at_the_first_poll_gives_it_back_at_the_next_check() {
+        let (mut backend, (apps, _)) = player_on_speakers();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        assert_eq!(player_output(&apps), render_interface(switch_fakes::CABLE));
+        backend.poll();
+        assert_eq!(playing(&backend), [HEADPHONES]);
+        backend.move_session(PLAYER_PID, SPEAKERS, CABLE);
+        backend.check_routing_now();
+        backend.poll();
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    // covers: S470, S471
+    #[test]
+    fn an_app_started_after_a_fade_gives_its_output_back_at_the_next_check() {
+        let (mut backend, (apps, _)) = player_on_speakers();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.driver().hold_fades(true);
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.driver().hold_fades(false);
+        backend.poll();
+        assert_eq!(player_output(&apps), render_interface(switch_fakes::CABLE));
+        assert_eq!(playing(&backend), [HEADPHONES]);
+        backend.move_session(PLAYER_PID, SPEAKERS, CABLE);
+        backend.check_routing_now();
+        backend.poll();
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
     }
 
     // covers: S470, S471
