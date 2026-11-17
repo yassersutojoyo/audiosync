@@ -85,6 +85,13 @@ impl Engine {
         Some(RefMut::map(held, present_mut))
     }
 
+    /// Swaps in another backend, as a test's unplugged speaker does.
+    #[cfg(test)]
+    pub fn replace(&self, backend: Box<dyn Backend>) {
+        self.come_back(true);
+        *self.held.borrow_mut() = Held::Here(backend);
+    }
+
     /// Whether the backend is here, not away starting.
     pub fn is_here(&self) -> bool {
         self.come_back(false)

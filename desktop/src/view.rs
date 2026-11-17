@@ -12011,11 +12011,11 @@ mod tests {
             .invoke_speaker_rename_edited("local:desk".into(), "Desk".into());
         let mut unplugged = MockBackend::new();
         unplugged.retain_speakers(|s| s.id != "local:desk");
-        *app.backend.borrow_mut() = Box::new(unplugged);
+        app.backend.replace(Box::new(unplugged));
         app.refresh();
         assert!(app.ui.borrow().rename.is_none());
 
-        *app.backend.borrow_mut() = Box::new(MockBackend::new());
+        app.backend.replace(Box::new(MockBackend::new()));
         app.refresh();
         assert!(
             !row_of(&app, "local:desk").renaming,
@@ -12139,7 +12139,7 @@ mod tests {
                 let hit = found(app);
                 let _ = app.zone_dialog.hide();
                 app.blank_click();
-                *app.backend.borrow_mut() = Box::new(MockBackend::zones_preview());
+                app.backend.replace(Box::new(MockBackend::zones_preview()));
                 {
                     let mut ui = app.ui.borrow_mut();
                     ui.sync_open.clear();
@@ -13017,7 +13017,7 @@ mod tests {
         // The desk is unplugged: its draft goes with it.
         let mut unplugged = MockBackend::new();
         unplugged.retain_speakers(|s| s.id != "local:desk");
-        *app.backend.borrow_mut() = Box::new(unplugged);
+        app.backend.replace(Box::new(unplugged));
         app.refresh();
         assert!(
             !app.ui.borrow().delay_drafts.contains_key("local:desk"),
@@ -13025,7 +13025,7 @@ mod tests {
         );
 
         // Plugged back in, it shows its saved delay.
-        *app.backend.borrow_mut() = Box::new(MockBackend::new());
+        app.backend.replace(Box::new(MockBackend::new()));
         app.refresh();
         assert_eq!(desk_delay_text(&app), "+120");
     }
@@ -17748,7 +17748,7 @@ mod tests {
         focus_speaker_volume(&app, "cc:attic");
         let fixed = cast_backend(true);
         let editing = fixed.volume_editing.clone();
-        *app.backend.borrow_mut() = Box::new(fixed);
+        app.backend.replace(Box::new(fixed));
         app.refresh();
         draw_frames();
         let window = app.main.window();
