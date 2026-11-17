@@ -9225,6 +9225,46 @@ mod tests {
         assert_eq!(delay_frames(&backend, BUDS), 0);
     }
 
+    // covers: S325, S328, S177
+    #[test]
+    fn every_output_plays_its_hold_back_through_a_bluetooth_drop_past_10_s_and_its_return() {
+        let mut backend = MockBackend::empty();
+        backend.connect_output_as(BUILT_IN, "Speakers", OutputKind::BuiltIn);
+        backend.connect_output_as(USB, "USB Speaker", OutputKind::Usb);
+        backend.connect_output_as(BUDS, "Buds", OutputKind::Bluetooth);
+        for id in [BUILT_IN, USB, BUDS] {
+            backend.set_output_enabled(id, true).unwrap();
+        }
+        backend.set_output_delay(USB, 150.0);
+        backend.set_output_delay(BUDS, -250.0);
+        backend.list_outputs().unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let off = |backend: &MockBackend, when: &str| {
+            for id in playing(backend) {
+                let wanted = backend.policy().hold_back_ms(&id);
+                let real = delay_frames(backend, &id);
+                assert!(
+                    (real - (wanted * 48.0) as i64).abs() <= 1,
+                    "{when}: {id} plays {real} frames, its hold-back is {wanted} ms"
+                );
+            }
+        };
+        run_polls(&mut backend, 10);
+        off(&backend, "before the drop");
+        backend.disconnect_output(BUDS);
+        for _ in 0..24 {
+            backend.poll();
+            off(&backend, "lost");
+        }
+        backend.connect_output_as(BUDS, "Buds", OutputKind::Bluetooth);
+        for _ in 0..40 {
+            backend.poll();
+            off(&backend, "back");
+        }
+        assert!(playing(&backend).contains(&BUDS.to_owned()));
+        assert_eq!(delay_frames(&backend, BUILT_IN) / 48, 250);
+    }
+
     // covers: S325
     #[test]
     fn switching_it_off_or_ending_the_session_cancels_the_restart() {

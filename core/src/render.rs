@@ -2695,49 +2695,71 @@ mod tests {
             self.built_in.1.counters().resyncs
         }
 
-        /// Stops the Bluetooth output after its fade, rests `rest` callbacks
-        /// and starts it again; returns the built-in's re-anchors from the
-        /// new start on. `quiet` is S325's restart: its start lead held
-        /// meanwhile, the built-in's hold-back left alone. Otherwise it is a
-        /// switch-off and on, which re-times the built-in to 0 and back.
-        fn restart_bluetooth(&mut self, quiet: bool, rest: usize) -> u64 {
+        /// S325's quiet restart of the Bluetooth output: its start lead held
+        /// while it fades, rests 1 s and starts again, the built-in's
+        /// hold-back left alone, the held lead let go once the new start
+        /// published its own. The new start's device asks for `period`
+        /// frames a callback when given. Returns the built-in's re-anchors
+        /// from the new start on.
+        fn quiet_restart(&mut self, period: Option<usize>) -> u64 {
             let (_, control) = self.bluetooth.as_ref().unwrap();
-            let held = quiet.then(|| control.hold_lead().expect("its lead was published"));
-            if !quiet {
-                self.built_in.1.set_delay_frames(0);
-            }
+            let held = control.hold_lead().expect("its lead was published");
             control.request_fade_out();
             self.step(10);
             self.bluetooth = None;
-            self.step(rest);
+            self.step(108);
             let before = self.built_in_resyncs();
-            self.bluetooth = Some(Self::output(&self.ring, true, 0));
-            if !quiet {
-                self.built_in.1.set_delay_frames(HELD_211_MS);
+            let (mut renderer, control) = Self::output(&self.ring, true, 0);
+            if let Some(frames) = period {
+                renderer.set_period_frames(frames);
             }
+            self.bluetooth = Some((renderer, control));
             self.step(1);
             drop(held);
             self.step(100);
             self.built_in_resyncs() - before
         }
+
+        /// How far the built-in's reader sits from its hold-back plus the
+        /// session lead, less its converter's latency, in frames.
+        fn built_in_off(&self) -> i64 {
+            let lead = self.ring.session_leads().session_lead();
+            let wanted = (HELD_211_MS + lead - self.built_in.0.latency).max(0);
+            self.built_in.0.reader_delay - wanted
+        }
     }
 
     // covers: S325
     #[test]
-    fn a_quiet_bluetooth_restart_reanchors_the_other_outputs_as_a_switch_off_and_on_does() {
-        let mut toggled = BuiltInAndBluetooth::new();
-        toggled.step(300);
-        let toggle = toggled.restart_bluetooth(false, 24);
-        assert!(toggle >= 1, "a switch-off and on re-anchors the built-in");
+    fn after_a_quiet_bluetooth_restart_with_a_new_lead_the_built_in_sits_on_it() {
+        for period in [4096, 64] {
+            let mut s = BuiltInAndBluetooth::new();
+            s.step(300);
+            let old = s.ring.session_leads().session_lead();
+            let reanchors = s.quiet_restart(Some(period));
+            assert_ne!(
+                s.ring.session_leads().session_lead(),
+                old,
+                "{period}: a new lead"
+            );
+            assert!(reanchors >= 1, "{period}");
+            assert!(
+                s.built_in_off().abs() <= 1,
+                "{period}: the built-in sits {} frames off its target",
+                s.built_in_off()
+            );
+        }
+    }
 
-        let mut restarted = BuiltInAndBluetooth::new();
-        restarted.step(300);
-        let quiet = restarted.restart_bluetooth(true, 118);
-        assert!(
-            quiet >= 1,
-            "the quiet restart leaves the built-in on its old anchor: {quiet} re-anchors, \
-             the switch-off and on {toggle}"
-        );
+    // covers: S325
+    #[test]
+    fn after_a_quiet_bluetooth_restart_with_the_same_lead_nothing_re_anchors() {
+        let mut s = BuiltInAndBluetooth::new();
+        s.step(300);
+        let old = s.ring.session_leads().session_lead();
+        assert_eq!(s.quiet_restart(None), 0);
+        assert_eq!(s.ring.session_leads().session_lead(), old);
+        assert!(s.built_in_off().abs() <= 1, "{}", s.built_in_off());
     }
 
     #[test]
