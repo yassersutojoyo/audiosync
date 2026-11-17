@@ -6366,6 +6366,38 @@ do {
         check(!links.begin(uid: "bt", ticket: calmTicket, session: 1) && links.held.isEmpty,
               "EC2 Bluetooth fresh link: the second restart runs only once")
     }
+    // covers: S325 (a link back mid-session re-seats the other outputs at its first start and its calm restart only)
+    do {
+        let reseatLinks = FreshLinkWatch()
+        reseatLinks.noteListing(["bt", "builtin", "usb"], now: 0, session: 1)
+        _ = reseatLinks.decide(uid: "bt", bluetooth: true, now: 0.5, session: 1)
+        let atSessionStart = reseatLinks.takeReseat(uid: "bt", session: 1)
+        reseatLinks.noteListing(["builtin", "usb"], now: 10, session: 1)
+        let reseatArmed = reseatLinks.noteListing(["bt", "builtin", "usb"], now: 20, session: 1)
+        _ = reseatLinks.decide(uid: "bt", bluetooth: true, now: 20.5, session: 1)
+        let atReturn = reseatLinks.takeReseat(uid: "bt", session: 1)
+        let atReturnAgain = reseatLinks.takeReseat(uid: "bt", session: 1)
+        _ = reseatLinks.begin(uid: "bt", ticket: reseatLinks.pendingTicket(uid: "bt") ?? -1, session: 1)
+        reseatLinks.release(uid: "bt")
+        _ = reseatLinks.decide(uid: "bt", bluetooth: true, now: 23.5, session: 1)
+        let atQuickRestart = reseatLinks.takeReseat(uid: "bt", session: 1)
+        _ = reseatLinks.begin(uid: "bt", ticket: reseatArmed["bt"] ?? -1, session: 1)
+        reseatLinks.release(uid: "bt")
+        _ = reseatLinks.decide(uid: "bt", bluetooth: true, now: 326.5, session: 1)
+        let atCalmRestart = reseatLinks.takeReseat(uid: "bt", session: 1)
+        let atCalmAgain = reseatLinks.takeReseat(uid: "bt", session: 1)
+        reseatLinks.noteListing(["builtin", "usb"], now: 400, session: 1)
+        reseatLinks.noteListing(["bt", "builtin", "usb"], now: 410, session: 1)
+        let reseatNextSession = reseatLinks.takeReseat(uid: "bt", session: 2)
+        let reseatCalls = FreshLinkWatch.reseats(of: "bt", running: ["bt", "builtin", "usb"],
+                                                 holdBacks: ["bt": 0, "builtin": 211, "usb": 361])
+        check(!atSessionStart && atReturn && !atReturnAgain && !atQuickRestart && atCalmRestart && !atCalmAgain
+                && !reseatNextSession && reseatCalls == ["builtin": 211, "usb": 361],
+              "EC2 Bluetooth fresh link: a link back mid-session gives every other output one call at its current "
+                + "hold-back at its first start and at its calm restart, none at an ordinary start",
+              "\(atSessionStart) \(atReturn) \(atReturnAgain) \(atQuickRestart) \(atCalmRestart) \(atCalmAgain) "
+                + "\(reseatNextSession) \(reseatCalls)")
+    }
     do {
         var defaultLog = DefaultDeviceLog()
         let launchLine = defaultLog.note("output", uid: "builtin")
