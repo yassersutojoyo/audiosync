@@ -380,3 +380,40 @@ fn calibrate_all_logs_the_reference_volume_and_mute_at_its_start() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// The This PC row shows "System 13%" while it is off too, as the Mac's
+/// built-in speakers do, with no low-volume hint: its level is read only.
+/// Nothing is written at launch, at a start or stop, or as its panel
+/// opens; only another output that is off stays unread.
+// covers: S192, S197
+#[test]
+fn the_reference_shows_its_system_volume_while_off_and_writes_nothing() {
+    let mut audio = audio();
+    audio.connect_output_as(SPEAKERS, "Speakers", OutputKind::BuiltIn);
+    audio.set_output_level(SPEAKERS, 0.13);
+    audio.set_output_level(HEADPHONES, 0.13);
+    let record = audio.volume_record();
+    let mut adapter = adapter(audio);
+    adapter.set_running(true);
+    adapter.poll();
+    adapter.set_running(false);
+    adapter.poll();
+
+    let state = adapter.snapshot();
+    let speaker = state.speaker(&key(SPEAKERS)).expect("listed");
+    assert!(!speaker.enabled);
+    let item = speaker_item(&state, speaker, false, true, None);
+    assert_eq!(item.system_volume, 13, "System 13% while off");
+    assert!(item.system_open, "its panel opens");
+    assert_eq!(
+        item.device_volume,
+        DeviceVolumeHint::None,
+        "no hint while off"
+    );
+    assert_eq!(
+        hint(&adapter, HEADPHONES),
+        None,
+        "another output off: unread"
+    );
+    assert!(record.writes().is_empty(), "{:?}", record.writes());
+}

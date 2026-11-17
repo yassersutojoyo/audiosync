@@ -2464,8 +2464,8 @@ impl App {
                 .retain(|id| state.zones.iter().any(|zone| zone.id == *id));
             ui.flyout_collapsed
                 .retain(|id| state.zones.iter().any(|zone| zone.id == *id));
-            // A panel that folds or goes, its row or reading gone, lets go
-            // of its slider and its refusal, as the Mac's as it disappears.
+            // A panel that folds, or goes with its row or reading, releases
+            // its slider and clears its refusal, as the Mac's panel does.
             let panel = state
                 .speakers
                 .iter()

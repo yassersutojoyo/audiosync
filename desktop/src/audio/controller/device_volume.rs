@@ -89,16 +89,22 @@ pub(super) fn outcome(result: &Result<(), BackendError>) -> String {
 
 impl<D: Driver> Controller<D> {
     /// Follows the own volume of every output that is on and connected, and
-    /// of no other (S192, S195): an output newly on, or whose device came
+    /// of the reference output while off (S192, S195): an output newly on, or whose device came
     /// back, is registered with Windows and read once, with a line in the
     /// log (S201); one switched off or gone is let go. Called whenever the
     /// outputs that are on, or the connected ones, may have changed.
     pub(super) fn follow_device_volumes(&mut self) {
         self.put_back_local_volumes();
+        // The reference is followed while off too, for its System value
+        // only (S192, S197).
+        let reference = self.policy.reference();
         let wanted: Vec<String> = self
             .present
             .iter()
-            .filter(|endpoint| self.policy.settings(&endpoint.id).enabled)
+            .filter(|endpoint| {
+                self.policy.settings(&endpoint.id).enabled
+                    || reference == Some(endpoint.id.as_str())
+            })
             .map(|endpoint| endpoint.id.clone())
             .collect();
         let dropped: Vec<String> = self
