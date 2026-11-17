@@ -23,17 +23,26 @@ Exits 1 when it printed a row.
 import io
 import json
 import os
+import re
 import sys
 
 FRAME_SLACK = 1.0
 # One step of 8-bit colour sampled from anti-aliased pixels: below this the
 # two renderers' rounding differs, not the colour.
 COLOUR_STEP = 8
-# Caption buttons Windows draws in the window's own top row; the Mac's sit in
-# a title bar outside the content the renderer photographs.
+# Caption buttons Windows draws in the window's own top row, at its right
+# edge; the Mac's sit in a title bar outside the content the renderer photographs.
 WINDOW_CHROME = {"Minimize", "Maximize", "Close"}
-# Words the other platform's labels use where the Mac's say the Mac's own.
-PLATFORM_WORDS = [("Windows", "macOS"), ("PipeWire", "macOS"), ("Exit AudioSync", "Quit AudioSync")]
+CAPTION_HEIGHT = 40
+# Three 46 px Windows 11 caption buttons.
+CAPTION_WIDTH = 3 * 46
+# The other platform's label templates that name its own system where the
+# Mac's name macOS, and its Exit for the Mac's Quit.
+PLATFORM_LABELS = [
+    (re.compile(r"^(.+): (?:Windows|PipeWire) volume is (.+)$"), r"\1: macOS volume is \2"),
+    (re.compile(r"^(?:Windows|PipeWire) volume of (.+)$"), r"macOS volume of \1"),
+    (re.compile(r"^Exit AudioSync$"), "Quit AudioSync"),
+]
 
 
 def load(folder):
@@ -65,15 +74,17 @@ def missing(state, present, absent):
     return f"not set up in {absent}: {reason}" if reason else f"only in {present}"
 
 
-def as_mac(elements):
+def as_mac(state):
     """The other platform's elements under the Mac's keys, without its caption buttons."""
+    width = state["window"][0]
     out = []
-    for element in elements:
-        if element["key"] in WINDOW_CHROME:
+    for element in state["elements"]:
+        x, y, w, h = element["frame"]
+        if element["key"] in WINDOW_CHROME and y + h <= CAPTION_HEIGHT and x >= width - CAPTION_WIDTH - 1:
             continue
         key = element["key"]
-        for word, mac in PLATFORM_WORDS:
-            key = key.replace(word, mac)
+        for template, mac in PLATFORM_LABELS:
+            key = template.sub(mac, key)
         out.append(dict(element, key=key))
     return out
 
@@ -121,7 +132,7 @@ def compare(left_dir, right_dir):
         if state not in left:
             rows.append(f"{state}\t-\t{missing(state, right_dir, left_dir)}")
             continue
-        a, b = keyed(left[state]["elements"]), keyed(as_mac(right[state]["elements"]))
+        a, b = keyed(left[state]["elements"]), keyed(as_mac(right[state]))
         for key in sorted(set(a) | set(b)):
             if key not in b:
                 rows.append(f"{state}\t{key}\tonly in {left_dir}")
@@ -145,7 +156,7 @@ def self_test():
         "MAIN-IDLE-terang\tKitchen#2\tfg #1d1d1f vs #3a3a3c",
         "MAIN-IDLE-terang\tSpeakers\tonly in mac",
         "MAIN-IDLE-terang\tStreaming to\tfont SF Pro 13 vs Segoe UI 13",
-        "MAIN-IDLE-terang	Windows Laptop	only in other",
+        "MAIN-IDLE-terang\tWindows Laptop\tonly in other",
         "MAIN-IDLE-terang\t−170\tonly in mac",
         "TRAY-IDLE-gelap\t-\tnot set up in mac: the panel is not drawn here",
     ]
