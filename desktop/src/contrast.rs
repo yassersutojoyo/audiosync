@@ -379,7 +379,9 @@ fn the_master_volume_draws_its_levels_waves_and_a_3_to_1_track() {
     assert!(master.contains("font-size: Tokens.font-size-body;"));
     assert!(master.contains("color: Tokens.text;"));
     let slider = component_body(&widgets, "LevelSlider");
-    assert!(slider.contains("background: root.track;"));
+    assert!(
+        slider.contains("background: root.idle ? (Tokens.dark ? #363533 : #f7f7f7) : root.track;")
+    );
     assert!(slider.contains("border-width: root.small && Tokens.dark ? 0px : 1px;"));
 }
 
@@ -2168,15 +2170,23 @@ fn the_line_above_add_by_address_keeps_to_the_note() {
     assert!(section.contains("padding-top: 10px;\n                padding-bottom: 6px;"));
 }
 
-/// An off speaker's slider is drawn as an on speaker's (the mockup's item 2,
-/// OK'd 17 Nov): no pale track or fill and no see-through knob, while it
-/// still takes no drag, as the Mac's .disabled slider (MainWindow.swift:2424).
+/// An off speaker's slider is drawn dimmed as the Mac's, measured on its
+/// window at 2x (17 Nov 21.24, sRGB): no fill, the whole track #363533 on
+/// dark and #f7f7f7 on light, an opaque knob #464543 on dark and white on
+/// light, so the track never shows through it. It still takes no drag, as
+/// the Mac's .disabled slider (MainWindow.swift:2424).
 #[test]
-fn an_off_speakers_slider_keeps_its_solid_look() {
+fn an_off_speakers_slider_is_dimmed_as_the_macs() {
     let widgets = include_str!("../ui/widgets.slint").replace("\r\n", "\n");
     let slider = component_body(&widgets, "LevelSlider");
-    assert!(!slider.contains("root.idle ? Tokens.text.with-alpha(0.07)"));
-    assert!(!slider.contains("opacity: root.idle && Tokens.dark"));
+    for look in [
+        "background: root.idle ? (Tokens.dark ? #363533 : #f7f7f7) : root.track;",
+        "background: root.idle ? transparent : root.small && Tokens.dark ? Tokens.text.with-alpha(0.26) : Tokens.text;",
+        "background: #464543;\n            opacity: root.idle && Tokens.dark ? 1 : 0;",
+    ] {
+        assert!(slider.contains(look), "{look}");
+    }
+    assert!(!slider.contains("opacity: root.idle && Tokens.dark ? 0.25"));
     assert!(slider.contains("enabled: root.enabled;"));
 }
 

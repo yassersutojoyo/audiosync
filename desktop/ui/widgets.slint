@@ -1764,8 +1764,8 @@ export component LevelSlider inherits Rectangle {
     property <length> thickness: 4px;
     property <length> span: (root.vertical ? root.height : root.width) - root.knob;
     property <float> ratio: root.maximum > root.minimum ? (root.value - root.minimum) / (root.maximum - root.minimum) : 0;
-    // A small slider that takes no drag (a speaker that is off) keeps its full
-    // look, as the main window mockup OK'd on 17 Nov: the badge says it is off.
+    // The Mac's disabled small slider (a speaker that is off), measured on its
+    // window at 2x on 17 Nov: no fill, a pale whole track, an opaque knob.
     property <bool> idle: root.small && !root.enabled;
 
     min-width: root.vertical ? root.knob : 48px;
@@ -1838,7 +1838,7 @@ export component LevelSlider inherits Rectangle {
         width: root.vertical ? root.thickness : root.span;
         height: root.vertical ? root.span : root.thickness;
         border-radius: root.thickness / 2;
-        background: root.track;
+        background: root.idle ? (Tokens.dark ? #363533 : #f7f7f7) : root.track;
         animate background {
             duration: Motion.on ? 250ms : 150ms;
             easing: Motion.on ? ease-in-out : linear;
@@ -1852,7 +1852,7 @@ export component LevelSlider inherits Rectangle {
         height: root.vertical ? root.span * root.ratio : root.thickness;
         border-radius: root.thickness / 2;
         // On dark the Mac's small slider fill is grey, not white.
-        background: root.small && Tokens.dark ? Tokens.text.with-alpha(0.26) : Tokens.text;
+        background: root.idle ? transparent : root.small && Tokens.dark ? Tokens.text.with-alpha(0.26) : Tokens.text;
         animate background {
             duration: Motion.on ? 250ms : 150ms;
             easing: Motion.on ? ease-in-out : linear;
@@ -1874,6 +1874,18 @@ export component LevelSlider inherits Rectangle {
         drop-shadow-blur: root.small && !Tokens.dark ? 3px : 1.5px;
         drop-shadow-offset-y: root.small && !Tokens.dark ? 1px : 0.5px;
         drop-shadow-color: root.small && !Tokens.dark ? #00000033 : #0000004d;
+
+        // Disabled on dark the Mac's knob darkens to #464543, over its row's 250 ms;
+        // on light it stays white.
+        off-knob := Rectangle {
+            border-radius: parent.border-radius;
+            background: #464543;
+            opacity: root.idle && Tokens.dark ? 1 : 0;
+            animate opacity {
+                duration: Motion.on ? 250ms : 150ms;
+                easing: Motion.on ? ease-in-out : linear;
+            }
+        }
     }
 
     touch := TouchArea {

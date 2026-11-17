@@ -10046,7 +10046,7 @@ mod tests {
         assert_eq!(flash(), 0.0, "the flash is gone after a second");
     }
 
-    /// A row switched off dims its volume knob over 250 ms, as the Mac's
+    /// A row switched off darkens its volume knob over 250 ms, as the Mac's
     /// row does, instead of at once.
     #[test]
     fn a_row_switched_off_dims_its_slider_over_250_ms() {
@@ -10061,7 +10061,7 @@ mod tests {
         advance_clock(Duration::from_millis(500));
         draw_frames();
         let dimming = || {
-            ElementHandle::find_by_element_id(&app.main, "LevelSlider::thumb")
+            ElementHandle::find_by_element_id(&app.main, "LevelSlider::off-knob")
                 .map(|knob| knob.computed_opacity())
                 .filter(|opacity| (0.3..0.95).contains(opacity))
                 .count()
