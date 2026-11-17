@@ -93,6 +93,7 @@ private struct CurveNameField: View {
     var body: some View {
         TextField(draft.suggested, text: $draft.text)
             .accessibilityLabel(text.curveNameField)
+            .layarKey(text.curveNameField)
             .accessibilityHint(text.zoneNameFieldHint)
             .help(text.saveCurveMessage)
             .focused($focused)
@@ -209,9 +210,11 @@ struct EqualizerView: View {
             Text(shown)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(text.equalizerCurve)
+                .layarKey(text.equalizerCurve)
                 .accessibilityValue(shown)
         }
         .accessibilityLabel(text.equalizerCurve)
+        .layarKey(text.equalizerCurve)
         .accessibilityValue(shown)
     }
 
@@ -246,6 +249,7 @@ struct EqualizerView: View {
                 // Only the slider dims with the EQ off, so the gains and bands stay readable.
                 .opacity(model.settings.enabled ? 1 : 0.45)
                 .accessibilityLabel(name)
+                .layarKey(name)
                 .accessibilityValue(text.equalizerGainValue(value))
             Text(label).font(.caption2).foregroundStyle(Brand.secondaryText)
                 .accessibilityHidden(true)

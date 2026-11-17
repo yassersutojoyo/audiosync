@@ -1768,6 +1768,7 @@ struct MenuBarView: View {
                 Spacer(minLength: 8)
                 PanelButton(title: t.quitShort) { model.actions.quit() }
                     .accessibilityLabel(t.quitApp)
+                    .layarKey(t.quitApp)
             }
             .padding(.horizontal, -6)
             .padding(.top, -8)
@@ -2066,6 +2067,8 @@ private struct CompactRow: View {
         .onHover { hover.isHovered = $0 }
         .accessibilityLabel(label ?? text.speakerLabel(name: name, tag: kind.map { text.speakerTag($0, airPlay2: airPlay2) },
                                                        renamedFrom: renamedFrom))
+        .layarKey(label ?? text.speakerLabel(name: name, tag: kind.map { text.speakerTag($0, airPlay2: airPlay2) },
+                                                       renamedFrom: renamedFrom))
         .accessibilityValue(value ?? text.value(state))
         .accessibilityHint(text.rowHint(state, note: hint ?? deviceVolume?.accessibilityNote
                                             ?? text.availability(availability)))
@@ -2122,12 +2125,14 @@ struct AirPlayProblemView: View {
                 Button(action: retry) { Text(text.retry).font(.subheadline).underline() }
                     .buttonStyle(.plain)
                     .accessibilityLabel(text.retry)
+                    .layarKey(text.retry)
                     .accessibilityHint(text.retryAirPlayHelp)
                     .help(text.retryAirPlayHelp)
             } else if canRetry {
                 Button(text.retry, action: retry)
                     .controlSize(.regular)
                     .accessibilityLabel(text.retry)
+                    .layarKey(text.retry)
                     .accessibilityHint(text.retryAirPlayHelp)
                     .help(text.retryAirPlayHelp)
             }
@@ -2321,6 +2326,7 @@ struct AvailabilityNote: View {
             .help(text.availabilityHelp(availability) ?? note)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(note)
+            .layarKey(note)
         }
     }
 }
@@ -2420,6 +2426,7 @@ struct SourcePicker: View {
         .pickerStyle(.menu)
         .padding(.horizontal, 10)
         .accessibilityLabel(t.inputChannelsLabel)
+        .layarKey(t.inputChannelsLabel)
     }
 
     private var sourceMenu: some View {
@@ -2484,6 +2491,7 @@ struct SourcePicker: View {
             // chosen app's name instead of the fixed label.
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(t.sourceLabel)
+            .layarKey(t.sourceLabel)
             .accessibilityValue(model.currentSource?.name ?? t.sourceSystem)
         }
         .modifier(SourceMenuStyle(hero: hero))
@@ -2496,6 +2504,7 @@ struct SourcePicker: View {
         .padding(.vertical, hero ? 0 : large ? 8 : 6)
         .background(RoundedRectangle(cornerRadius: 9).fill(.quaternary.opacity(hero ? 0 : 0.6)))
         .accessibilityLabel(t.sourceLabel)
+        .layarKey(t.sourceLabel)
         .accessibilityValue(model.currentSource?.name ?? t.sourceSystem)
     }
 
@@ -2573,6 +2582,7 @@ struct PresetPicker: View {
                 .contentShape(Rectangle())
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(t.presets)
+                .layarKey(t.presets)
                 .accessibilityValue(line ?? t.choosePreset)
             }
             .menuStyle(.button)
@@ -2583,6 +2593,7 @@ struct PresetPicker: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .help(line ?? t.choosePreset)
             .accessibilityLabel(t.presets)
+            .layarKey(t.presets)
             .accessibilityValue(line ?? t.choosePreset)
             // A wrapped name grows the panel on the zone fold, so the panel doesn't shake.
             ChoiceLineView(line: line, fold: model.foldPanelZone)
@@ -2634,6 +2645,7 @@ struct InputLevelMeter: View {
         .opacity(level.shown ? 1 : 0)
         .accessibilityElement()
         .accessibilityLabel(text.inputLevel)
+        .layarKey(text.inputLevel)
         .accessibilityValue(text.inputLevelValue(level.spokenPercent))
         .accessibilityAddTraits(.updatesFrequently)
         .accessibilityHidden(!level.shown)
@@ -2827,6 +2839,7 @@ struct NoticeBanner<Footer: View>: View {
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
             .accessibilityLabel(notice.dismissLabel(text))
+            .layarKey(notice.dismissLabel(text))
             .help(notice.dismissLabel(text))
         }
         // The panel's notice is text on the panel, without a box.
@@ -2936,6 +2949,7 @@ struct PowerSwitch: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(text.streamingSwitch)
+        .layarKey(text.streamingSwitch)
         .accessibilityValue(on ? text.on : text.off)
         .accessibilityAddTraits(.isToggle)
     }
@@ -2961,6 +2975,7 @@ struct MasterMuteButton: View {
         .buttonStyle(.plain)
         .foregroundStyle(panel ? AnyShapeStyle(Brand.secondaryText) : AnyShapeStyle(.primary))
         .accessibilityLabel(label)
+        .layarKey(label)
         .help(label)
     }
 }
@@ -3033,6 +3048,7 @@ struct MasterSlider: View {
             Slider(value: Binding(get: { model.master }, set: { model.actions.setMaster($0) }), in: 0...100)
         }
         .accessibilityLabel(text.masterVolume)
+        .layarKey(text.masterVolume)
         .accessibilityValue(text.volumeValue(model.master))
     }
 }

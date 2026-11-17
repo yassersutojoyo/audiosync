@@ -321,68 +321,48 @@ func sampledColours(_ rep: NSBitmapImageRep, _ rect: CGRect) -> (String?, String
     return (commonest(far).map(hex), hex(bg))
 }
 
-/// Every accessibility element under `view` with a label, title, text value or
-/// identifier, as scripts/screen_compare.py reads it, in window points from the
-/// top left; the font comes from the element's attributed text where it has one.
-func layarElements(in view: NSView, rep: NSBitmapImageRep) -> [[String: Any]] {
-    // SwiftUI builds its accessibility nodes on the first request and fills them
-    // in on a later update: ask once and let that update run before the walk.
-    _ = view.accessibilityAttributeValue(.children)
-    settle()
-    var found: [[String: Any]] = []
-    let page = CGRect(origin: .zero, size: view.bounds.size)
-    let screenTop = NSScreen.screens.first?.frame.maxY ?? 0
-    func attribute(_ node: NSObject, _ name: String) -> Any? {
-        node.accessibilityAttributeValue(NSAccessibility.Attribute(rawValue: name))
+/// The `layarKey` marks of the view last drawn, in its points from the top left.
+final class LayarSink {
+    var marks: [(key: String, frame: CGRect)] = []
+    func take(_ marks: [LayarMark], _ proxy: GeometryProxy) {
+        self.marks = marks.map { ($0.key, proxy[$0.anchor]) }
     }
-    // SwiftUI's nodes answer AXPosition, from the main screen's top left, but
-    // need not adopt NSAccessibilityElementProtocol.
-    func screenFrame(_ node: NSObject) -> CGRect? {
-        if let position = (attribute(node, "AXPosition") as? NSValue)?.pointValue,
-           let size = (attribute(node, "AXSize") as? NSValue)?.sizeValue {
-            return CGRect(x: position.x, y: screenTop - position.y - size.height, width: size.width, height: size.height)
-        }
-        return (node as? NSAccessibilityElementProtocol)?.accessibilityFrame()
-    }
-    func font(_ node: NSObject) -> Any {
-        guard let count = attribute(node, "AXNumberOfCharacters") as? Int, count > 0,
-              let text = node.accessibilityAttributeValue(
-                  NSAccessibility.ParameterizedAttribute(rawValue: "AXAttributedStringForRange"),
-                  forParameter: NSValue(range: NSRange(location: 0, length: count))) as? NSAttributedString,
-              let described = text.attribute(NSAttributedString.Key(rawValue: "AXFont"), at: 0, effectiveRange: nil)
-                  as? [String: Any],
-              let name = (described["AXFontFamily"] ?? described["AXFontName"]) as? String,
-              let size = (described["AXFontSize"] as? NSNumber)?.doubleValue
-        else { return NSNull() }
-        return ["name": name, "size": size]
-    }
-    func walk(_ node: NSObject, depth: Int) {
-        guard depth < 64 else { return }
-        let text = ["AXDescription", "AXTitle", "AXValue", "AXIdentifier"].lazy
-            .compactMap { attribute(node, $0) as? String }
-            .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        if let text, let window = view.window, let onScreen = screenFrame(node) {
-            var rect = view.convert(window.convertFromScreen(onScreen), from: nil)
-            if !view.isFlipped { rect.origin.y = view.bounds.height - rect.maxY }
-            if rect.width > 0, rect.height > 0, rect.intersects(page) {
-                let (fg, bg) = sampledColours(rep, rect)
-                found.append(["key": text,
-                              "frame": [rect.minX, rect.minY, rect.width, rect.height].map { Double($0) },
-                              "font": font(node), "fg": (fg as Any?) ?? NSNull(), "bg": (bg as Any?) ?? NSNull()])
+}
+
+let layarSink = LayarSink()
+
+extension View {
+    /// Hands the marks of the laid-out view to `layarSink` on every layout,
+    /// so the last one before the photo is what the dump reads.
+    func layarRecorded() -> some View {
+        overlayPreferenceValue(LayarMarks.self) { marks in
+            GeometryReader { proxy in
+                let _ = layarSink.take(marks, proxy)
+                Color.clear
             }
         }
-        for case let child as NSObject in (attribute(node, "AXChildren") as? [Any]) ?? [] {
-            walk(child, depth: depth + 1)
-        }
     }
-    walk(view, depth: 0)
-    return found
+}
+
+/// Every `layarKey` element of the view just captured in `rep`, as
+/// scripts/screen_compare.py reads it. The marks carry no font, so `font` is
+/// null, as on the desktop.
+func layarElements(in view: NSView, rep: NSBitmapImageRep) -> [[String: Any]] {
+    let page = CGRect(origin: .zero, size: view.bounds.size)
+    return layarSink.marks.compactMap { mark in
+        let rect = mark.frame
+        guard rect.width > 0, rect.height > 0, rect.intersects(page) else { return nil }
+        let (fg, bg) = sampledColours(rep, rect)
+        return ["key": mark.key,
+                "frame": [rect.minX, rect.minY, rect.width, rect.height].map { Double($0) },
+                "font": NSNull(), "fg": (fg as Any?) ?? NSNull(), "bg": (bg as Any?) ?? NSNull()]
+    }
 }
 
 /// The main window's content as MainWindowController sets it up
 /// (MainWindow.swift:22-38), at its default 696 x 600 points or at `size`.
 func layarMain(_ model: AppModel, look: Look, size: NSSize = NSSize(width: 696, height: 600)) -> (NSWindow, NSView) {
-    let host = NSHostingController(rootView: MainView(model: model))
+    let host = NSHostingController(rootView: MainView(model: model).layarRecorded())
     host.sizingOptions = [.minSize]
     let window = ShotWindow(contentRect: NSRect(x: 0, y: 0, width: 696, height: 600),
                             styleMask: [.titled, .resizable, .closable, .miniaturizable],
@@ -397,7 +377,7 @@ func layarMain(_ model: AppModel, look: Look, size: NSSize = NSSize(width: 696, 
 }
 
 func layarPanel(_ model: AppModel, look: Look) -> (NSWindow, NSView) {
-    let host = NSHostingView(rootView: MenuBarView(model: model))
+    let host = NSHostingView(rootView: MenuBarView(model: model).layarRecorded())
     host.frame = NSRect(origin: .zero, size: host.fittingSize)
     let window = ShotWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
     window.appearance = look.appearance
@@ -408,7 +388,7 @@ func layarPanel(_ model: AppModel, look: Look) -> (NSWindow, NSView) {
 
 func layarEqualizer(look: Look) -> (NSWindow, NSView) {
     let window = ShotWindow(contentViewController: NSHostingController(rootView: EqualizerView(
-        model: Mock.equalizer(), curveName: CurveNameDraft(), curvesFull: {}, askRename: { _ in })))
+        model: Mock.equalizer(), curveName: CurveNameDraft(), curvesFull: {}, askRename: { _ in }).layarRecorded()))
     window.appearance = look.appearance
     window.styleMask = [.titled, .closable]
     guard let content = window.contentView else { fatalError("The equalizer window has no content view") }
@@ -642,7 +622,7 @@ let layarNotSetUp: [(ids: [String], reason: String)] = [
 
 /// The fewest keyed elements MAIN-PLAYING may list: its header, source,
 /// Now Playing card, sidebar buttons and speaker rows come to well over this.
-let layarPlayingFloor = 30
+let layarPlayingFloor = 20
 
 /// Writes `<ID>-terang|gelap.png` and `.json` per row, unframed, at `scale`.
 func writeLayar() {
@@ -650,6 +630,7 @@ func writeLayar() {
     for (id, draw) in layarRows {
         for (look, theme) in [(Look.light, "terang"), (Look.dark, "gelap")] {
             NSApp.appearance = look.appearance
+            layarSink.marks = []
             let (window, view) = draw(look)
             let rep = capture(view)
             write(rep, "\(id)-\(theme).png")
@@ -680,6 +661,7 @@ func writeLayar() {
 try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
 print("Rendering into \(outputDirectory.path)")
 if arguments.dropFirst(3).contains("--layar") {
+    setenv("AUDIOSYNC_LAYAR", "1", 1)
     writeLayar()
     exit(0)
 }
