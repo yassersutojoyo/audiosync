@@ -12873,7 +12873,22 @@ pub(crate) mod tests {
         app.main
             .invoke_speaker_rename_edited("local:desk".into(), "Desk".into());
         draw_frames();
-        click(app.main.window(), 600.0, 370.0);
+        // Between the name field and the delay value: the row itself, not a
+        // control, wherever the font puts the row.
+        let at = |label: &str| {
+            let element =
+                i_slint_backend_testing::ElementHandle::find_by_accessible_label(&app.main, label)
+                    .next()
+                    .unwrap_or_else(|| panic!("{label}"));
+            (element.absolute_position(), element.size())
+        };
+        let (field, field_size) = at("Name for Desk Speaker");
+        let (delay, delay_size) = at("Show controls for Desk Speaker delay");
+        click(
+            app.main.window(),
+            (field.x + field_size.width + delay.x) / 2.0,
+            delay.y + delay_size.height / 2.0,
+        );
         assert_eq!(name_of(&app, "local:desk"), "Desk");
         assert!(app.ui.borrow().rename.is_none());
         assert!(app.ui.borrow().sync_open.is_empty(), "no delay panel");
