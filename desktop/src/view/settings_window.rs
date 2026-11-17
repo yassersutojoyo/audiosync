@@ -2,11 +2,12 @@
 //! main window's settings and hands each change to the main window's own
 //! callback, the one the old File, Speakers, View and Help menus called.
 
+use std::cell::Cell;
 use std::rc::Rc;
 
 use slint::ComponentHandle;
 
-use super::{App, FLYOUT_FIRST_FRAME, Motion, with_app};
+use super::{App, FLYOUT_FIRST_FRAME, Motion, SETTINGS_OPENING, with_app};
 
 impl App {
     pub(super) fn connect_settings(self: &Rc<Self>) {
@@ -70,9 +71,17 @@ impl App {
             // Cloaked again once shown: a first opening has no native window
             // to cloak before it, and would show a black frame.
             crate::platform::set_cloaked(self.settings.window(), true);
-            // The fade starts only from a drawn frame, as the flyout's does.
+            // The fade starts only from a drawn frame, as the flyout's does,
+            // and only the latest opening's timer acts.
+            let opening = SETTINGS_OPENING.with(|count| {
+                count.set(count.get() + 1);
+                count.get()
+            });
             let settings = self.settings.as_weak();
             slint::Timer::single_shot(FLYOUT_FIRST_FRAME, move || {
+                if SETTINGS_OPENING.with(Cell::get) != opening {
+                    return;
+                }
                 if let Some(settings) = settings.upgrade() {
                     crate::platform::set_cloaked(settings.window(), false);
                     settings.set_revealed(true);

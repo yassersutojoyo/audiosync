@@ -346,6 +346,7 @@ const FLYOUT_FIRST_FRAME: Duration = Duration::from_millis(50);
 
 thread_local! {
     static FLYOUT_OPENING: Cell<u64> = const { Cell::new(0) };
+    static SETTINGS_OPENING: Cell<u64> = const { Cell::new(0) };
 }
 const ANNOUNCEMENT_CLEARS_AFTER: Duration = Duration::from_secs(5);
 
@@ -10073,6 +10074,31 @@ mod tests {
             draw_frames();
             app.settings.hide().expect("Settings hides");
         }
+    }
+
+    /// Settings closed and reopened before its first opening uncloaked it
+    /// waits for its own first frame: the earlier opening's timer leaves it
+    /// alone.
+    #[test]
+    fn a_quick_reopen_uncloaks_settings_only_after_its_own_first_frame() {
+        hold_clock();
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        draw_frames();
+        let cloaked = || crate::platform::is_cloaked(app.settings.window());
+        app.main.invoke_settings_requested();
+        advance_clock(Duration::from_millis(30));
+        draw_frames();
+        app.settings.hide().expect("Settings hides");
+        app.main.invoke_settings_requested();
+        advance_clock(Duration::from_millis(25));
+        draw_frames();
+        assert!(cloaked(), "the first opening's timer");
+        assert!(!app.settings.get_revealed(), "the first opening's timer");
+        advance_clock(Duration::from_millis(30));
+        draw_frames();
+        assert!(!cloaked(), "its own timer");
+        assert!(app.settings.get_revealed(), "its own timer");
     }
 
     /// A Cast speaker's delay is a wait, never below 0, so its row shows it
