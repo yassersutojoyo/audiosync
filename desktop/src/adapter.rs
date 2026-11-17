@@ -8135,7 +8135,29 @@ mod tests {
         let mut adapter = adapter();
         adapter.audio_mut().add_windowed_app(2600, "spotify.exe");
         adapter.audio_mut().add_windowed_app(2700, "Spotify.exe");
+        for (pid, host) in [
+            (2800, "ApplicationFrameHost.exe"),
+            (2810, "TextInputHost.exe"),
+            (2820, "msedgewebview2.exe"),
+            (2830, "SystemSettings.exe"),
+            (2840, "ShellExperienceHost.exe"),
+            (2850, "StartMenuExperienceHost.exe"),
+            (2860, "RazerAppEngine.exe"),
+        ] {
+            adapter.audio_mut().add_windowed_app(pid, host);
+        }
         adapter.refresh_devices();
+        let names: Vec<String> = adapter
+            .snapshot()
+            .sources
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
+        assert_eq!(
+            names,
+            ["All System Audio", "Player", "Spotify"],
+            "hosts and helpers stay out"
+        );
         let offered: Vec<_> = adapter
             .snapshot()
             .sources

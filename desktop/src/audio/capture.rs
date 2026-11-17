@@ -295,6 +295,19 @@ pub fn display_name(executable: &str) -> String {
     }
 }
 
+/// Executables whose windows belong to the system shell, to another app they
+/// host, or to a vendor's background helper, so they are never offered for a
+/// window alone.
+const WINDOW_HOSTS: [&str; 7] = [
+    "ApplicationFrameHost.exe",
+    "TextInputHost.exe",
+    "msedgewebview2.exe",
+    "SystemSettings.exe",
+    "ShellExperienceHost.exe",
+    "StartMenuExperienceHost.exe",
+    "RazerAppEngine.exe",
+];
+
 /// The sources to offer: the whole system, then one entry per app that owns
 /// one of the audio sessions `session_pids`, and one per executable among
 /// the other apps that show a window (`window_pids`), by name.
@@ -328,9 +341,12 @@ pub fn source_list(
             .map(|entry| entry.executable.clone())
             .unwrap_or_default();
         if !has_session
-            && apps
+            && (apps
                 .iter()
                 .any(|app| app.executable.eq_ignore_ascii_case(&executable))
+                || WINDOW_HOSTS
+                    .iter()
+                    .any(|host| host.eq_ignore_ascii_case(&executable)))
         {
             continue;
         }
