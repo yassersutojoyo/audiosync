@@ -44,6 +44,15 @@ enum BrandTokens {
         static let notice = BrandRGB(red: 255 / 255, green: 242 / 255, blue: 224 / 255)
         /// Card borders and dividers (decorative, no contrast requirement).
         static let separator = BrandRGB(red: 217 / 255, green: 222 / 255, blue: 221 / 255)
+        /// The Settings window's neutral grey, as the Mac's.
+        static let settingsWindow = BrandRGB(red: 239 / 255, green: 238 / 255, blue: 237 / 255)
+        /// Settings' boxes: white on light, a step darker than the window on dark, as the Mac's.
+        static let settingsCard = BrandRGB(red: 255 / 255, green: 255 / 255, blue: 255 / 255)
+        /// A chosen segment of a segmented control, as the Mac's tinted one: white text on it is
+        /// 5.85:1.
+        static let segmentChosen = BrandRGB(red: 20 / 255, green: 113 / 255, blue: 103 / 255)
+        /// The text of a chosen segment.
+        static let segmentChosenText = BrandRGB(red: 255 / 255, green: 255 / 255, blue: 255 / 255)
         /// Keyboard focus ring (3:1 against the surface and the background).
         static let focus = BrandRGB(red: 20 / 255, green: 113 / 255, blue: 103 / 255)
         /// A field's out-of-range outline and the small text that explains it: 5.66:1 on white,
@@ -92,6 +101,15 @@ enum BrandTokens {
         static let notice = BrandRGB(red: 68 / 255, green: 57 / 255, blue: 39 / 255)
         /// Card borders and dividers (decorative, no contrast requirement).
         static let separator = BrandRGB(red: 61 / 255, green: 61 / 255, blue: 61 / 255)
+        /// The Settings window's neutral grey, as the Mac's.
+        static let settingsWindow = BrandRGB(red: 42 / 255, green: 42 / 255, blue: 42 / 255)
+        /// Settings' boxes: white on light, a step darker than the window on dark, as the Mac's.
+        static let settingsCard = BrandRGB(red: 31 / 255, green: 31 / 255, blue: 31 / 255)
+        /// A chosen segment of a segmented control, as the Mac's tinted one: white text on it is
+        /// 5.85:1.
+        static let segmentChosen = BrandRGB(red: 20 / 255, green: 113 / 255, blue: 103 / 255)
+        /// The text of a chosen segment.
+        static let segmentChosenText = BrandRGB(red: 255 / 255, green: 255 / 255, blue: 255 / 255)
         /// Keyboard focus ring (3:1 against the surface and the background).
         static let focus = BrandRGB(red: 99 / 255, green: 218 / 255, blue: 194 / 255)
         /// A field's out-of-range outline and the small text that explains it: 5.66:1 on white,

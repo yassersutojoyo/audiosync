@@ -7,6 +7,7 @@
 //! and the data folder's base from `xdg`; `other` is the UI-only build on
 //! hosts without a backend yet.
 
+pub mod app_icon;
 #[cfg(any(windows, target_os = "linux"))]
 mod claim;
 #[cfg(any(target_os = "linux", test))]

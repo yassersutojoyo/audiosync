@@ -1,0 +1,461 @@
+// Settings…, from the main window's gear (Ctrl+,): the Mac's Settings window,
+// titled boxes of switches and buttons 460 wide. Each control calls the main
+// window's callback its old menu item called.
+// Escape or Ctrl+W closes it.
+
+import { Tokens } from "tokens.slint";
+import { Strings } from "strings.slint";
+import { Appearance, HiddenItem } from "types.slint";
+import { Divider, FocusRing, Fluent, Motion, OverlayScrollView, PowerSwitch, SmallButton } from "widgets.slint";
+
+// A row 48 high, as the Mac's SettingsRow: 40 at least, 4 above and below.
+component SettingsRow inherits HorizontalLayout {
+    min-height: 48px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+    spacing: 12px;
+}
+
+component SwitchRow inherits SettingsRow {
+    in property <string> text;
+    in property <bool> checked;
+    callback toggled(bool);
+
+    // A click sets the switch itself; it shows what the app did after.
+    changed checked => {
+        switch.checked = root.checked;
+    }
+
+    Text {
+        text: root.text;
+        color: Tokens.text;
+        wrap: word-wrap;
+        horizontal-stretch: 1;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+
+    VerticalLayout {
+        alignment: center;
+
+        switch := PowerSwitch {
+            text: root.text;
+            checked: root.checked;
+            toggled => {
+                root.toggled(self.checked);
+                self.checked = root.checked;
+            }
+        }
+    }
+}
+
+// A switch row with the Mac's grey caption under it.
+component CaptionedSwitchRow inherits VerticalLayout {
+    in property <string> text;
+    in property <string> caption;
+    in property <bool> checked;
+    callback toggled(bool);
+
+    spacing: 4px;
+    padding-bottom: 10px;
+
+    SwitchRow {
+        text: root.text;
+        checked: root.checked;
+        toggled(on) => {
+            root.toggled(on);
+        }
+    }
+
+    Text {
+        text: root.caption;
+        color: Tokens.secondary-text;
+        font-size: Tokens.font-size-subheadline;
+        wrap: word-wrap;
+    }
+}
+
+// One titled box, drawn like the main window's cards.
+component SettingsBox inherits VerticalLayout {
+    in property <string> title;
+    spacing: 6px;
+
+    HorizontalLayout {
+        padding-left: 2px;
+
+        Text {
+            text: root.title;
+            color: Tokens.secondary-text;
+            font-size: Tokens.font-size-callout;
+            font-weight: Fluent.weight-semibold;
+            accessible-role: text;
+            accessible-label: self.text;
+        }
+    }
+
+    Rectangle {
+        background: Tokens.settings-card;
+        border-radius: Tokens.radius-card;
+        border-width: max(0.5px, 1phx);
+        border-color: Fluent.stroke;
+
+        VerticalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            @children
+        }
+    }
+}
+
+// One choice of the Appearance control; Space or Enter picks it.
+component Segment inherits Rectangle {
+    in property <string> text;
+    in property <bool> chosen;
+    callback picked();
+
+    min-width: label.preferred-width + 20px;
+    height: 24px;
+    border-radius: 5px;
+    background: root.chosen ? Tokens.segment-chosen : touch.has-hover ? Fluent.hover : transparent;
+    border-width: root.chosen ? max(0.5px, 1phx) : 0px;
+    border-color: Fluent.stroke;
+    forward-focus: focus;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-checkable: true;
+    accessible-checked: root.chosen;
+    accessible-action-default => {
+        root.picked();
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.picked();
+        }
+    }
+
+    focus := FocusScope {
+        focus-on-click: false;
+        key-pressed(event) => {
+            if event.text == " " || event.text == Key.Return {
+                root.picked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    label := Text {
+        text: root.text;
+        color: root.chosen ? Tokens.segment-chosen-text : Tokens.text;
+        font-size: Tokens.font-size-callout;
+        font-weight: root.chosen ? Fluent.weight-semibold : Fluent.weight-regular;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+
+    FocusRing {
+        visible-focus: focus.has-focus;
+        border-radius: root.border-radius;
+    }
+}
+
+export component SettingsWindow inherits Window {
+    in property <Appearance> appearance;
+    in property <bool> launch-at-login;
+    in property <bool> resume-after-sleep;
+    in property <bool> switch-source-on-quit;
+    in property <bool> volume-keys-available;
+    in property <bool> volume-keys;
+    in property <bool> show-virtual-devices;
+    in property <[HiddenItem]> hidden-speakers;
+    in property <bool> updater-available;
+    in property <bool> check-updates-automatically;
+    // Set false then true by the app as the window opens: it fades in over
+    // 560 ms, as the Mac's does.
+    in property <bool> revealed: true;
+
+    callback appearance-chosen(Appearance);
+    callback launch-at-login-toggled(bool);
+    callback resume-after-sleep-toggled(bool);
+    callback switch-source-on-quit-toggled(bool);
+    callback volume-keys-toggled(bool);
+    callback show-virtual-devices-toggled(bool);
+    callback speaker-unhide-requested(string);
+    callback check-updates-automatically-toggled(bool);
+    callback check-for-updates-requested();
+    callback setup-requested();
+    callback close-requested();
+    callback exit-requested();
+
+    title: Strings.settings-title;
+    icon: @image-url("../res/audiosync-256.png");
+    background: Tokens.settings-window;
+    width: 460px;
+    // The screen's work area less a margin, in logical pixels; 0 while unknown.
+    in property <length> room;
+    // As high as its boxes, as the Mac's: a window kept at its first height cut
+    // the last boxes' bottom padding once a hidden speaker or a wrapped row came in.
+    height: root.room > 0 ? min(content.preferred-height, root.room) : content.preferred-height;
+    default-font-family: Fluent.font;
+    default-font-weight: Fluent.weight-regular;
+    default-font-size: Tokens.font-size-body;
+    forward-focus: keys;
+
+    // Called each time the window opens, so Escape works before anything
+    // inside is clicked.
+    public function take-focus() {
+        keys.focus();
+    }
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Escape || (event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text.to-lowercase() == "w") {
+                root.close-requested();
+                return accept;
+            }
+            if event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text.to-lowercase() == "q" {
+                root.exit-requested();
+                return accept;
+            }
+            return reject;
+        }
+
+        fade := Rectangle {
+            opacity: root.revealed ? 1 : 0;
+            animate opacity {
+                duration: !root.revealed ? 0ms : Motion.on ? 560ms : 150ms;
+                easing: Motion.on ? cubic-bezier(0.2, 0.9, 0.3, 1) : linear;
+            }
+
+            // Past the screen's room it scrolls, so its last box stays in reach.
+            OverlayScrollView {
+                width: parent.width;
+                height: parent.height;
+                content-height: content.preferred-height;
+
+                content := VerticalLayout {
+                    y: 0px;
+                    height: self.preferred-height;
+                    padding: 20px;
+                    spacing: 16px;
+                    alignment: start;
+
+                    SettingsBox {
+                        title: Strings.settings-general;
+
+                        SettingsRow {
+                            Text {
+                                text: Strings.appearance;
+                                color: Tokens.text;
+                                horizontal-stretch: 1;
+                                vertical-alignment: center;
+                                accessible-role: none;
+                            }
+
+                            VerticalLayout {
+                                alignment: center;
+
+                                Rectangle {
+                                    border-radius: 7px;
+                                    background: Tokens.dark ? Tokens.text.with-alpha(0.06) : Fluent.native-control;
+                                    border-width: Tokens.dark ? 0px : max(0.5px, 1phx);
+                                    border-color: Fluent.stroke;
+                                    drop-shadow-blur: 2px;
+                                    drop-shadow-offset-y: 0.5px;
+                                    drop-shadow-color: Fluent.native-control-shadow;
+                                    accessible-role: groupbox;
+                                    accessible-label: Strings.appearance;
+
+                                    HorizontalLayout {
+                                        padding: 2px;
+                                        spacing: 2px;
+
+                                        Segment {
+                                            text: Strings.appearance-system;
+                                            chosen: root.appearance == Appearance.system;
+                                            picked => {
+                                                root.appearance-chosen(Appearance.system);
+                                            }
+                                        }
+
+                                        Segment {
+                                            text: Strings.appearance-light;
+                                            chosen: root.appearance == Appearance.light;
+                                            picked => {
+                                                root.appearance-chosen(Appearance.light);
+                                            }
+                                        }
+
+                                        Segment {
+                                            text: Strings.appearance-dark;
+                                            chosen: root.appearance == Appearance.dark;
+                                            picked => {
+                                                root.appearance-chosen(Appearance.dark);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Divider { }
+
+                        SwitchRow {
+                            text: Strings.launch-at-login;
+                            checked: root.launch-at-login;
+                            toggled(on) => {
+                                root.launch-at-login-toggled(on);
+                            }
+                        }
+
+                        Divider { }
+
+                        CaptionedSwitchRow {
+                            text: Strings.resume-after-sleep;
+                            caption: Strings.resume-after-sleep-info;
+                            checked: root.resume-after-sleep;
+                            toggled(on) => {
+                                root.resume-after-sleep-toggled(on);
+                            }
+                        }
+
+                        Divider { }
+
+                        SwitchRow {
+                            text: Strings.switch-source-on-quit;
+                            checked: root.switch-source-on-quit;
+                            toggled(on) => {
+                                root.switch-source-on-quit-toggled(on);
+                            }
+                        }
+                    }
+
+                    SettingsBox {
+                        title: Strings.menu-speakers;
+
+                        // Two ifs, not one around both: a wrapped caption nested
+                        // in an if's layout counted one line, and the box cut its last row.
+                        if root.volume-keys-available: CaptionedSwitchRow {
+                            text: Strings.volume-keys;
+                            caption: Strings.volume-keys-info;
+                            checked: root.volume-keys;
+                            toggled(on) => {
+                                root.volume-keys-toggled(on);
+                            }
+                        }
+
+                        if root.volume-keys-available: Divider { }
+
+                        SwitchRow {
+                            text: Strings.show-virtual-devices;
+                            checked: root.show-virtual-devices;
+                            toggled(on) => {
+                                root.show-virtual-devices-toggled(on);
+                            }
+                        }
+
+                        Divider { }
+
+                        // 8 px under the divider and 2 px over the list, as the Mac's.
+                        VerticalLayout {
+                            padding-top: 8px;
+                            padding-bottom: 2px;
+
+                            Text {
+                                text: Strings.hidden-speakers;
+                                color: Tokens.secondary-text;
+                                font-size: Tokens.font-size-subheadline;
+                                accessible-role: text;
+                                accessible-label: self.text;
+                            }
+                        }
+
+                        if root.hidden-speakers.length == 0: SettingsRow {
+                            Text {
+                                text: Strings.no-hidden-speakers;
+                                color: Tokens.secondary-text;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        for hidden[index] in root.hidden-speakers: VerticalLayout {
+                            if index > 0: Divider { }
+
+                            SettingsRow {
+                                Text {
+                                    text: Strings.hidden-speaker-entry(hidden.name, hidden.kind, hidden.present);
+                                    color: Tokens.text;
+                                    wrap: word-wrap;
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+
+                                VerticalLayout {
+                                    alignment: center;
+
+                                    SmallButton {
+                                        text: Strings.unhide;
+                                        tip: Strings.unhide-label(Strings.hidden-speaker-entry(hidden.name, hidden.kind, hidden.present));
+                                        clicked => {
+                                            root.speaker-unhide-requested(hidden.id);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if root.updater-available: SettingsBox {
+                        title: Strings.settings-updates;
+
+                        SwitchRow {
+                            text: Strings.check-updates-automatically;
+                            checked: root.check-updates-automatically;
+                            toggled(on) => {
+                                root.check-updates-automatically-toggled(on);
+                            }
+                        }
+
+                        Divider { }
+
+                        SettingsRow {
+                            alignment: start;
+
+                            VerticalLayout {
+                                alignment: center;
+
+                                SmallButton {
+                                    text: Strings.menu-check-for-updates;
+                                    clicked => {
+                                        root.check-for-updates-requested();
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if Platform.os == OperatingSystemType.windows: SettingsBox {
+                        title: Strings.setup-title;
+
+                        SettingsRow {
+                            alignment: start;
+
+                            VerticalLayout {
+                                alignment: center;
+
+                                SmallButton {
+                                    text: Strings.menu-check-setup;
+                                    clicked => {
+                                        root.setup-requested();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

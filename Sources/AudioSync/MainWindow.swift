@@ -439,7 +439,7 @@ struct MainView: View {
             HStack(spacing: MainColumns.transportSpacing(
                 modes: track.shuffle != nil || track.repeatMode != nil)) {
                 if let shuffle = track.shuffle {
-                    modeButton("shuffle", .shuffle(!shuffle), on: shuffle, label: t.shuffle,
+                    modeButton(.shuffle, .shuffle(!shuffle), on: shuffle, label: t.shuffle,
                                value: shuffle ? t.on : t.off)
                         .focused($modeFocus, equals: .shuffle)
                         .modifier(Reveal(shown: modesShown))
@@ -450,9 +450,9 @@ struct MainView: View {
                     .font(.system(size: 22))
                 transportButton("forward.fill", .next, label: t.nextTrack)
                 if let mode = track.repeatMode {
-                    modeButton("arrow.2.squarepath",
+                    modeButton(mode == .one ? .repeatOne : .repeatAll,
                                .repeatMode(mode.next(withOne: track.bundleID == NowPlayingMonitor.music)),
-                               on: mode != .off, one: mode == .one, label: t.repeatMode,
+                               on: mode != .off, label: t.repeatMode,
                                value: mode == .one ? t.repeatOne : mode == .all ? t.on : t.off)
                         .focused($modeFocus, equals: .repeatMode)
                         .modifier(Reveal(shown: modesShown))
@@ -498,14 +498,11 @@ struct MainView: View {
         .help(label)
     }
 
-    /// `one`: repeat-one, a "1" inside the loop. On shows as the accent with a dot under it.
-    private func modeButton(_ symbol: String, _ command: NowPlayingMonitor.Command, on: Bool, one: Bool = false,
+    /// On shows as the accent with a dot under it.
+    private func modeButton(_ glyph: ModeGlyph.Kind, _ command: NowPlayingMonitor.Command, on: Bool,
                             label: String, value: String) -> some View {
         Button { model.actions.transport(command) } label: {
-            Image(systemName: symbol)
-                .overlay {
-                    if one { Text(verbatim: "1").font(.system(size: 7, weight: .bold)) }
-                }
+            ModeGlyph(kind: glyph)
                 // An overlay, so the dot leaves the row's height and centering as they are.
                 .overlay(alignment: .bottom) {
                     Circle().frame(width: 4, height: 4).offset(y: 7).opacity(on ? 1 : 0)
@@ -931,6 +928,7 @@ private enum PresetListLayout {
 private struct PresetList: View {
     @ObservedObject var model: AppModel
     @ObservedObject var draft: PresetNameDraft
+    @StateObject private var saveHover = HoverState()
 
     var body: some View {
         let t = model.text
@@ -986,6 +984,9 @@ private struct PresetList: View {
             .buttonStyle(.plain)
             .contentShape(.focusEffect, RoundedRectangle(cornerRadius: 6))
             .padding(.leading, PresetListLayout.nameColumn)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(saveHover.isHovered ? 0.05 : 0)))
+            .animation(saveHover.isHovered ? .linear(duration: 0.08) : nil, value: saveHover.isHovered)
+            .onHover { saveHover.isHovered = $0 }
             .id(PresetListLayout.saveRowID)
         }
         if draft.needsSpeakers && !model.presetsCanSave {
@@ -1051,8 +1052,8 @@ private struct PresetListRow: View {
                 .tint(Brand.secondaryText)   // grey: teal is kept for state
                 .menuIndicator(.hidden)
                 .fixedSize()
-                .accessibilityLabel(t.speakerOptions(name: row.name))
-                .help(t.speakerOptions(name: row.name))
+                .accessibilityLabel(t.presetOptions(name: row.name))
+                .help(t.presetOptions(name: row.name))
                 .focused($optionsFocused)
                 .modifier(Reveal(shown: hover.isHovered || optionsFocused || voiceOver))
             }
@@ -1062,6 +1063,7 @@ private struct PresetListRow: View {
         .padding(.trailing, 4)
         .frame(minHeight: PresetListLayout.rowHeight)
         .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(hover.isHovered ? 0.05 : 0)))
+        .animation(hover.isHovered ? .linear(duration: 0.08) : nil, value: hover.isHovered)
         .onHover { hover.isHovered = $0 }
         .contextMenu { menuItems(t) }
     }
@@ -1530,14 +1532,14 @@ final class CoverLayerView: NSView {
         case (.wait(let since), .slot):
             let look = TrackSlide.oldCover(waited: 1, slid: 0, reduceMotion: reduceMotion)
             let timing = SlideMotion.timing(TrackSlide.waitCurve)
-            SlideMotion.run(card, to: ["transform.scale": CGFloat(look.scale)], seconds: TrackSlide.cap, timing: timing,
+            SlideMotion.run(card, to: ["transform.scale": CGFloat(look.scale)], seconds: TrackSlide.recede, timing: timing,
                             startedAgo: -since.timeIntervalSinceNow)
-            SlideMotion.run(dim, to: ["opacity": CGFloat(look.dim)], seconds: TrackSlide.cap, timing: timing,
+            SlideMotion.run(dim, to: ["opacity": CGFloat(look.dim)], seconds: TrackSlide.recede, timing: timing,
                             startedAgo: -since.timeIntervalSinceNow)
         case (.settle(let since), .slot):
             let timing = SlideMotion.timing(TrackSlide.settleCurve)
-            SlideMotion.run(card, to: ["transform.scale": CGFloat(rest.scale)], seconds: TrackSlide.fadeDuration, timing: timing,
-                            startedAgo: -since.timeIntervalSinceNow)
+            SlideMotion.run(card, to: ["transform.scale": CGFloat(rest.scale), "opacity": CGFloat(rest.opacity)],
+                            seconds: TrackSlide.fadeDuration, timing: timing, startedAgo: -since.timeIntervalSinceNow)
             SlideMotion.run(dim, to: ["opacity": CGFloat(rest.dim)], seconds: TrackSlide.fadeDuration, timing: timing,
                             startedAgo: -since.timeIntervalSinceNow)
         case (.slide(let since), .slot):
@@ -1558,6 +1560,25 @@ final class CoverLayerView: NSView {
             SlideMotion.stop([card], at: ["transform.scale": CGFloat(rest.scale), "transform.translation.x": 0,
                                          "opacity": CGFloat(rest.opacity)])
             SlideMotion.stop([dim], at: ["opacity": CGFloat(rest.dim)])
+        }
+        // Removed after the step above read the breath into its start, so the next motion picks up where it is.
+        guard case .wait(let since) = phase.step, role == .slot, !reduceMotion else {
+            card.removeAnimation(forKey: "breathe")
+            dim.removeAnimation(forKey: "breathe")
+            return
+        }
+        for (target, depth) in [(card, -TrackSlide.breatheDepth), (dim, TrackSlide.breatheDepth)] {
+            let pulse = CABasicAnimation(keyPath: "opacity")
+            pulse.fromValue = 0
+            pulse.toValue = CGFloat(depth)
+            pulse.isAdditive = true
+            pulse.duration = TrackSlide.breathePeriod / 2
+            pulse.autoreverses = true
+            pulse.repeatCount = .infinity
+            pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            pulse.beginTime = target.convertTime(CACurrentMediaTime(), from: nil) + TrackSlide.breatheAfter
+                + since.timeIntervalSinceNow
+            target.add(pulse, forKey: "breathe")
         }
     }
 }
@@ -1635,7 +1656,7 @@ final class LineStage: NSView {
         step = phase.step
         switch phase.step {
         case .wait(let since):
-            SlideMotion.run(current.layer, to: ["opacity": CGFloat(TrackSlide.textOpacity(waited: 1))], seconds: TrackSlide.cap,
+            SlideMotion.run(current.layer, to: ["opacity": CGFloat(TrackSlide.textOpacity(waited: 1))], seconds: TrackSlide.recede,
                             timing: SlideMotion.timing(TrackSlide.waitCurve), startedAgo: -since.timeIntervalSinceNow,
                             model: false)
         case .settle(let since):
@@ -2834,6 +2855,67 @@ private struct DelayFieldRing: View {
                           lineWidth: width)
             .padding(-outset)
             .opacity(rings.focusRing || rings.redOutlines > 0 ? 1 : 0)
+    }
+}
+
+/// Shuffle and Repeat at 21 pt: the same drawings on a 20-unit box as the
+/// Windows and Linux app's (Glyphs in desktop/ui/widgets.slint).
+struct ModeGlyph: View {
+    enum Kind { case shuffle, repeatAll, repeatOne }
+    static let shuffleLines = "M2 14 H4.5 C5.52 14 6.38 13.48 7.16 12.7 M11.34 7.3 C12.12 6.52 12.98 6 14 6 H15.5 M2 6 H4.5 C8.5 6 10 14 14 14 H15.5"
+    static let shuffleHeads = "M15 2.6 L19 6 L15 9.4 Z M15 10.6 L19 14 L15 17.4 Z"
+    static let repeatLines = "M3 10 V8.5 C3 6.6 4.6 5 6.5 5 H15 M17 10 V11.5 C17 13.4 15.4 15 13.5 15 H5"
+    static let repeatHeads = "M14.6 1.6 L18.4 5 L14.6 8.4 Z M5.4 11.6 L1.6 15 L5.4 18.4 Z"
+    static let repeatOneDigit = "M8.9 8.6 L10.4 7.6 V12.4"
+    static let side: CGFloat = 21
+
+    let kind: Kind
+
+    var body: some View {
+        let unit = Self.side / 20
+        let heads = SVGPath(d: kind == .shuffle ? Self.shuffleHeads : Self.repeatHeads)
+        ZStack {
+            SVGPath(d: kind == .shuffle ? Self.shuffleLines : Self.repeatLines)
+                .stroke(style: StrokeStyle(lineWidth: 2 * unit, lineCap: .round, lineJoin: .round))
+            heads.fill()
+            heads.stroke(style: StrokeStyle(lineWidth: 0.8 * unit, lineJoin: .round))
+            if kind == .repeatOne {
+                SVGPath(d: Self.repeatOneDigit)
+                    .stroke(style: StrokeStyle(lineWidth: 1.7 * unit, lineCap: .round, lineJoin: .round))
+            }
+        }
+        .frame(width: Self.side, height: Self.side)
+    }
+}
+
+/// An absolute SVG path of M, L, H, V, C and Z on a 20-unit box, scaled to the rect.
+struct SVGPath: Shape {
+    let d: String
+
+    func path(in rect: CGRect) -> Path {
+        let tokens = d.map { $0.isLetter ? " \($0) " : String($0) }.joined().split(separator: " ")
+        let scale = rect.width / 20
+        var path = Path(), at = 0, point = CGPoint.zero
+        func number() -> CGFloat {
+            at += 1
+            return CGFloat(Double(tokens[at - 1]) ?? 0) * scale
+        }
+        func next() -> CGPoint { CGPoint(x: rect.minX + number(), y: rect.minY + number()) }
+        while at < tokens.count {
+            at += 1
+            switch tokens[at - 1] {
+            case "M": point = next(); path.move(to: point)
+            case "L": point = next(); path.addLine(to: point)
+            case "H": point.x = rect.minX + number(); path.addLine(to: point)
+            case "V": point.y = rect.minY + number(); path.addLine(to: point)
+            case "C":
+                let first = next(), second = next()
+                point = next()
+                path.addCurve(to: point, control1: first, control2: second)
+            default: path.closeSubpath()
+            }
+        }
+        return path
     }
 }
 

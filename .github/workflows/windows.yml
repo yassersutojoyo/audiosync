@@ -18,6 +18,9 @@ permissions:
 env:
   # A warning in a .slint file fails the build, like a Rust warning in clippy.
   SLINT_COMPILER_DENY_WARNINGS: '1'
+  # Skia built with the static C runtime, restored from the cache skia.yml
+  # fills; the app builds skia-bindings with no-compile, so it never compiles Skia.
+  SKIA_BINARIES_URL: file://${{ github.workspace }}/skia-cache/{tag}/skia-binaries-{key}.tar.gz
   # Debug test builds bind every address only with this, as the app does;
   # without it (a plain run on a desktop) they keep to loopback.
   AUDIOSYNC_LAN_TESTS: '1'
@@ -52,10 +55,17 @@ jobs:
           fi
           echo "skip=$skip" >> "$GITHUB_OUTPUT"
 
+  skia:
+    name: Skia
+    # Builds and caches Skia only when the cache misses.
+    needs: proven
+    if: needs.proven.outputs.skip != 'true' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/integ/') || startsWith(github.ref, 'refs/heads/release/'))
+    uses: ./.github/workflows/skia.yml
+
   test:
     name: Format, clippy and tests
     # Windows runs on main, integ/* trains and release/ branches; other pushes test on Linux only.
-    needs: proven
+    needs: [proven, skia]
     if: needs.proven.outputs.skip != 'true' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/integ/') || startsWith(github.ref, 'refs/heads/release/'))
     runs-on: windows-latest
     timeout-minutes: 45
@@ -73,6 +83,17 @@ jobs:
           rustup toolchain install 1.99.1 --profile minimal --component rustfmt,clippy
           rustup default 1.99.1
           rustc --version
+
+      - name: Skia cache key
+        id: skia
+        run: echo "key=$(bash ../scripts/skia_cache_key.sh x86_64-pc-windows-msvc)" >> "$GITHUB_OUTPUT"
+
+      - name: Skia (stored by skia.yml)
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: skia-cache
+          key: ${{ steps.skia.outputs.key }}
+          fail-on-cache-miss: true
 
       - name: Format
         run: cargo fmt --check
@@ -235,7 +256,7 @@ jobs:
   build:
     name: Release build (${{ matrix.arch }})
     # No artifact from a run whose tests or license check failed.
-    needs: [proven, test, licenses]
+    needs: [proven, skia, test, licenses]
     if: needs.proven.outputs.skip != 'true' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/integ/') || startsWith(github.ref, 'refs/heads/release/'))
     strategy:
       fail-fast: false
@@ -262,6 +283,17 @@ jobs:
           rustup default 1.99.1
           rustup target add ${{ matrix.target }}
           rustc --version
+
+      - name: Skia cache key
+        id: skia
+        run: echo "key=$(bash ../scripts/skia_cache_key.sh ${{ matrix.target }})" >> "$GITHUB_OUTPUT"
+
+      - name: Skia (stored by skia.yml)
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: skia-cache
+          key: ${{ steps.skia.outputs.key }}
+          fail-on-cache-miss: true
 
       - name: Build
         # Only a push to main or to a release/ branch marks the exe as a release
