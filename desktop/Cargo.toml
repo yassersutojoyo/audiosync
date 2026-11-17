@@ -1,6 +1,6 @@
 [package]
 name = "audiosync-desktop"
-version = "0.9.2"
+version = "0.9.3"
 edition = "2024"
 rust-version = "1.99"
 license = "GPL-3.0-or-later"
@@ -42,7 +42,6 @@ qrcode = { version = "0.14.1", default-features = false }
 slint = { version = "=1.18.1", default-features = false, features = [
     "std",
     "backend-default",
-    "renderer-femtovg",
     "renderer-software",
     "accessibility",
     "compat-1-2",
@@ -60,6 +59,11 @@ icu_normalizer = { version = "2.3.0", default-features = false, features = ["com
 zeroize = "1.8.1"
 
 [target.'cfg(windows)'.dependencies]
+# Skia draws Windows text through DirectWrite, crisper than FemtoVG; its
+# static-runtime binaries come from the Actions cache skia.yml fills (docs/DEVELOPMENT.md).
+slint = { version = "=1.18.1", default-features = false, features = ["renderer-skia"] }
+# Fails the build instead of compiling Skia when the stored archive is missing.
+skia-bindings = { version = "=0.153.3", default-features = false, features = ["no-compile"] }
 windows = { version = "0.62", features = [
     # StartupTask: Launch at Sign-In in an MSIX install (src/launch_at_login.rs).
     "ApplicationModel",
@@ -113,6 +117,8 @@ windows = { version = "0.62", features = [
     # QueryPerformanceCounter: the capture loop's clock while loopback
     # delivers nothing, in the time base of the packets' positions.
     "Win32_System_Performance",
+    # uxtheme's SetPreferredAppMode by ordinal: the tray menu follows the app's theme.
+    "Win32_System_LibraryLoader",
     # PowerRegisterSuspendResumeNotification: a sleep and wake while
     # streaming (src/audio/wasapi/power.rs).
     "Win32_System_Power",
@@ -120,6 +126,8 @@ windows = { version = "0.62", features = [
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_System_Variant",
+    # RoGetActivationFactory: the per-app output policy (src/audio/wasapi/app_output.rs).
+    "Win32_System_WinRT",
     # QueryUnbiasedInterruptTime: a clock that stops while the PC sleeps.
     "Win32_System_WindowsProgramming",
     # UIA's notification: Narrator reads the volume-key pop-up's level
@@ -153,6 +161,9 @@ roxmltree = "0.21.1"
 ed25519-dalek = { version = "3.0.0", default-features = false, features = ["fast"] }
 base64 = "0.23.1"
 zip = { version = "9.1.2", default-features = false, features = ["deflate-flate2"] }
+
+[target.'cfg(not(windows))'.dependencies]
+slint = { version = "=1.18.1", default-features = false, features = ["renderer-femtovg"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # The tray icon as a StatusNotifier item over D-Bus (ksni), with no GTK.

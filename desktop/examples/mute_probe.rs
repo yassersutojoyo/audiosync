@@ -7,18 +7,23 @@
 //! whole-system rows.
 //!
 //! The probe stays silent. Before any tone plays it mutes every active render
-//! endpoint through `IAudioEndpointVolume`, reads each mute back and stops if
-//! one isn't muted. When it ends, on error paths too, it puts back each
+//! endpoint through `IAudioEndpointVolume`, so it silences the whole PC while
+//! it runs; never run it while someone listens. It reads each mute back and
+//! stops if one isn't muted. When it ends, on error paths too, it puts back each
 //! endpoint's mute and volume and the tone player's session. The tone is a
 //! 1 kHz sine at peak 0.05, about -26 dBFS.
 //!
-//! One binary, three roles:
+//! One binary, several roles:
 //! - no argument: the controller. It mutes the endpoints, starts the player,
 //!   sets the player's session through `ISimpleAudioVolume` (found with
 //!   `IAudioSessionManager2` and `IAudioSessionControl2::GetProcessId`, the
 //!   way the volume mixer finds it) and measures each condition;
-//! - `play`: plays the tone on the default render endpoint in shared mode
-//!   until its standard input closes;
+//! - `on <id>`: hardware test 2's core. The player renders on the endpoint
+//!   `id` instead of the default, as an app moved there would, and only the
+//!   unmuted session is measured with process loopback. It mutes nothing,
+//!   so it is only as silent as that endpoint;
+//! - `play [id]`: plays the tone on the endpoint `id`, or the default render
+//!   endpoint, in shared mode until its standard input closes;
 //! - `system <ms>`: captures everything except its own process tree and
 //!   prints the levels. The controller starts it, so the player is its
 //!   sibling and isn't excluded;
@@ -150,7 +155,11 @@ mod probe {
         let args: Vec<String> = std::env::args().skip(1).collect();
         let result = match args.first().map(String::as_str) {
             None => control(),
-            Some("play") => play(),
+            Some("play") => play(args.get(1).map(String::as_str)),
+            Some("on") => match args.get(1) {
+                Some(id) => control_on(id),
+                None => Err("`on` needs an endpoint ID (see `mute_probe status`)".into()),
+            },
             Some("system") => {
                 let ms = args.get(1).and_then(|value| value.parse().ok());
                 system(ms.map_or(MEASURE, Duration::from_millis))
@@ -173,6 +182,35 @@ mod probe {
     /// Mutes every endpoint, measures every condition and puts everything
     /// back, in that order.
     fn control() -> Fallible<()> {
+        muted_run(measure_all)
+    }
+
+    /// Hardware test 2's core: the player renders on the endpoint `id`
+    /// rather than the default, as an app moved there would, and process
+    /// loopback measures its tree.
+    /// Nothing is muted: the run is only as silent as that endpoint.
+    fn control_on(id: &str) -> Fallible<()> {
+        init_com()?;
+        println!("Windows {}", windows_build());
+        {
+            let mut player = start_player(Some(id))?;
+            let pid = player.child.id();
+            println!("player (pid {pid}) renders on {id}");
+            for run in 1..=RUNS {
+                thread::sleep(SETTLE);
+                let levels = capture(
+                    PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
+                    pid,
+                    MEASURE,
+                )?;
+                levels.print("process (include tree)", "on that endpoint", run);
+            }
+            player.stop();
+            Ok(())
+        }
+    }
+
+    fn muted_run(measure: impl FnOnce(&IMMDeviceEnumerator) -> Fallible<()>) -> Fallible<()> {
         init_com()?;
         println!("Windows {}", windows_build());
         let enumerator = enumerator()?;
@@ -186,7 +224,7 @@ mod probe {
             ));
         }
         let mut endpoints = MutedEndpoints::mute_all(&enumerator)?;
-        let result = measure_all(&enumerator);
+        let result = measure(&enumerator);
         endpoints.restore();
         result
     }
@@ -194,7 +232,7 @@ mod probe {
     /// Starts the player, measures every condition, then puts the player's
     /// session back and stops the player.
     fn measure_all(enumerator: &IMMDeviceEnumerator) -> Fallible<()> {
-        let mut player = start_player()?;
+        let mut player = start_player(None)?;
         let pid = player.child.id();
         let mut session = PlayerSession::find(enumerator, pid)?;
         let result = measure_conditions(&session, pid);
@@ -684,10 +722,12 @@ mod probe {
         std::env::current_exe().map_err(|error| format!("current_exe failed: {error}"))
     }
 
-    /// Starts the tone player and waits until it plays.
-    fn start_player() -> Fallible<Spawned> {
+    /// Starts the tone player, on the endpoint `on` or the default, and waits
+    /// until it plays.
+    fn start_player(on: Option<&str>) -> Fallible<Spawned> {
         let mut child = Command::new(own_path()?)
             .arg("play")
+            .args(on)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
@@ -753,9 +793,10 @@ mod probe {
 
     // MARK: Player
 
-    /// Plays the tone on the default render endpoint until standard input
-    /// closes (the controller ended) or [`PLAYER_LIMIT`] passed.
-    fn play() -> Fallible<()> {
+    /// Plays the tone on the endpoint `on`, or the default render endpoint,
+    /// until standard input closes (the controller ended) or
+    /// [`PLAYER_LIMIT`] passed.
+    fn play(on: Option<&str>) -> Fallible<()> {
         init_com()?;
         let open = Arc::new(AtomicBool::new(true));
         let watch = Arc::clone(&open);
@@ -769,9 +810,14 @@ mod probe {
         // SAFETY: calls on live COM objects this function owns; `format`
         // lives through Initialize, which copies it.
         let (client, render, buffer) = unsafe {
-            let device = enumerator
-                .GetDefaultAudioEndpoint(eRender, eConsole)
-                .map_err(|e| failed("IMMDeviceEnumerator::GetDefaultAudioEndpoint", &e))?;
+            let device = match on {
+                Some(id) => enumerator
+                    .GetDevice(&HSTRING::from(id))
+                    .map_err(|e| failed("IMMDeviceEnumerator::GetDevice", &e))?,
+                None => enumerator
+                    .GetDefaultAudioEndpoint(eRender, eConsole)
+                    .map_err(|e| failed("IMMDeviceEnumerator::GetDefaultAudioEndpoint", &e))?,
+            };
             let client = device
                 .Activate::<IAudioClient>(CLSCTX_ALL, None)
                 .map_err(|e| failed("IMMDevice::Activate(IAudioClient)", &e))?;

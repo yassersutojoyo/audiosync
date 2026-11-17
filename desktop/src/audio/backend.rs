@@ -157,6 +157,9 @@ pub struct OutputInfo {
     /// while the output is on, and `None` while it is off. Each part is
     /// `None` when Windows can't tell.
     pub device_volume: Option<DeviceVolume>,
+    /// Whether it is Windows' default output while that gets no copy, since
+    /// the original plays there (S470).
+    pub plays_original: bool,
 }
 
 /// Whether an AirPlay speaker can play from AudioSync.
@@ -621,6 +624,9 @@ pub enum BackendEvent {
     /// `true` once, when a check 3 s after it started heard none; `false`
     /// when sound arrives after that, or the session ends.
     WaitingForAudio { waiting: bool },
+    /// The outputs that get no copy, since the original plays there (S470),
+    /// changed: show the outputs again.
+    HeldOutChanged,
     /// The PC woke from sleep (S332): the 20 s before a speaker list says
     /// none was found start over (S396).
     Woke,
@@ -960,6 +966,11 @@ pub trait AudioBackend {
     /// The output shows the result once Windows reports the change.
     fn fix_device_volume(&mut self, id: &str);
 
+    /// The reference row's System slider moved by the user (spec S197): sets
+    /// output `id`'s own volume in Windows to `level`, 0 to 1, while it is
+    /// followed. Nothing else calls it. Whether Windows took the write.
+    fn set_device_volume(&mut self, id: &str, level: f64) -> bool;
+
     /// Sets the master volume slider position (0 to 100), which scales every
     /// output and AirPlay speaker, live. A value that isn't finite is
     /// ignored.
@@ -1212,6 +1223,32 @@ pub trait AudioBackend {
     /// keeps its pair until started again.
     fn set_input_pair(&mut self, endpoint_id: &str, pair: u16);
 
+    /// The restore record of Windows' default output that the settings file
+    /// holds (S469), which the adapter's own saves keep.
+    fn default_output_record(&self) -> Option<super::default_output::Record> {
+        None
+    }
+
+    /// The restore record of the apps' own outputs that the settings file
+    /// holds (S471), which the adapter's own saves keep.
+    fn app_output_record(&self) -> Option<super::app_output::AppRecord> {
+        None
+    }
+
+    /// The local outputs' remembered and found Windows levels (S472), which
+    /// the adapter's own saves keep.
+    fn local_volumes(&self) -> super::local_volume::LocalVolumes {
+        super::local_volume::LocalVolumes::default()
+    }
+
+    /// The stored levels of [`AudioBackend::local_volumes`], at launch.
+    fn set_local_volumes(&mut self, _stored: super::local_volume::LocalVolumes) {}
+
+    /// Puts Windows' default output back as Windows asks to end the
+    /// session; a stream of the whole system runs on without the switch
+    /// (S469, S470).
+    fn restore_default_output(&mut self) {}
+
     /// What a microphone calibration depends on: the session, the outputs
     /// that play, the reference and their hold-backs.
     fn calibration_engine(&self) -> Engine;
@@ -1234,6 +1271,11 @@ pub trait AudioBackend {
     /// AirPlay sender reports, and returns what the UI should know. Call it
     /// about twice a second.
     fn poll(&mut self) -> Vec<BackendEvent>;
+
+    /// Runs what [`AudioBackend::poll`] does for an audio session created or
+    /// changing state since the last call, at once instead of at the next poll
+    /// (S470, S471); the UI calls it when Windows reports one.
+    fn follow_new_sessions(&mut self) {}
 
     /// Quit's teardown: the outputs fade out, the AirPlay and Cast senders
     /// stop. A later call, or the drop, does nothing more.

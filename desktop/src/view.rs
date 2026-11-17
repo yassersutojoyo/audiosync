@@ -47,22 +47,32 @@ use crate::track_slide::{self, Direction, Place, TrackSlide};
 use crate::ui_model::{
     self, AirPlayWait, AllPhase, AllProgress, AppState, Backend, LeftOutRow, MAX_PRESETS,
     MainWindowShows, NoticeMessage, PinPrompt, PresetError, PresetLeftOff, SheetRow, SheetState,
-    SourceKind, SourceName, SpeakerState, SwitchName, ViewSettings, WindowFrame,
+    SourceKind, SourceName, SpeakerState, SwitchName, ViewSettings, WindowFrame, WindowPlace,
 };
 use crate::volume_keys::{self, VolumeKey};
 use crate::window_rules::{Rgb, ambient_breath};
 use crate::{
     AboutDialog, AirPlayProblem, AmbientLook, AmbientStrand, Availability, CalibrationRowItem,
-    CastAddressDialog, CastList, CastProblem, CastState, DeviceVolumeHint, EqualizerWindow, Fold,
+    CastList, CastProblem, CastSheet, CastState, DeviceVolumeHint, EqualizerWindow, Fold,
     GuidePage, GuideStepItem, GuideWindow, HiddenItem, IconLook, KeyboardFocus, LeftOutItem,
     MainControl, MainWindow, MixAppItem, Motion, NameField, NoticeItem, NoticeKind, OutgoingSong,
     Palette, PasswordDialog, PinDialog, PinPhase, PresetItem, RowPart, RowState, ScreenReader,
-    SlideLook, SpeakerGroup, SpeakerItem, SpeakerKind, Strings, Tokens, TrackMotion, TrayFlyout,
-    UpdateButton, ZoneChoice, ZoneItem, ZoneNameDialog, ZoneTarget, speaker_names,
+    SlideLook, SourceLook, SourceRowKind, SpeakerGroup, SpeakerItem, SpeakerKind, Strings, Tokens,
+    TrackMotion, TrayFlyout, UpdateButton, ZoneChoice, ZoneItem, ZoneNameDialog, ZoneTarget,
+    speaker_names,
 };
 
 mod help_window;
+#[cfg(test)]
+mod parity_calibrate;
+#[cfg(test)]
+mod parity_main;
+#[cfg(test)]
+mod parity_rest;
+#[cfg(test)]
+mod parity_screens;
 mod remote_window;
+mod settings_window;
 mod setup_window;
 
 /// The digits the PIN field keeps of what was typed: four at most.
@@ -73,18 +83,8 @@ fn pin_digits(text: &str) -> String {
 /// What the zone name dialog is open for.
 #[derive(Clone, Debug, PartialEq)]
 enum DialogPurpose {
-    /// New Zone from Active Speakers.
-    NewZone,
-    /// New Zone… in a speaker's menu, by speaker ID.
-    NewZoneWith(String),
     /// Only a message (no name field), e.g. why a zone can't be made yet.
     Message,
-    /// Save as Preset….
-    SavePreset,
-    /// Rename… on a preset, by preset ID.
-    RenamePreset(String),
-    /// Save Curve in the equalizer.
-    SaveCurve,
     /// Rename in the equalizer, for the saved curve of this name.
     RenameCurve(String),
 }
@@ -104,6 +104,14 @@ enum RenamePlace {
 #[derive(Default)]
 struct UiState {
     sync_open: HashSet<String>,
+    /// The System slider is held: Windows' reports wait, and the reference
+    /// row shows the level last set, as on the Mac.
+    system_held: bool,
+    system_shown: Option<f64>,
+    /// Windows refused the System slider's last write.
+    system_refused: bool,
+    /// The reference whose System panel is open.
+    system_panel: Option<String>,
     /// What is typed in each speaker's delay field, by speaker ID.
     delay_drafts: HashMap<String, TypedDelay>,
     airplay_delay_draft: TypedDelay,
@@ -112,18 +120,20 @@ struct UiState {
     rename: Option<(String, String)>,
     /// Where the open rename's field shows.
     rename_place: RenamePlace,
+    /// Where the Guide was when it last showed.
+    guide_place: Option<WindowPlace>,
     /// The open rename's field has had the focus; only then does the focus
     /// moving to another control apply the name.
     rename_focused: bool,
-    /// View > Show Virtual Devices; off at launch, like the Mac's default.
+    /// Settings > Show Virtual Devices; off at launch, like the Mac's default.
     show_virtual: bool,
-    /// View > Appearance as chosen, which the theme preview doesn't change.
+    /// Settings > Appearance as chosen, which the theme preview doesn't change.
     appearance: ui_model::Appearance,
-    /// View > Web Remote.
+    /// Web Remote.
     remote: crate::remote::RemoteSettings,
-    /// File > Check for Updates Automatically, as saved.
+    /// Settings > Check for Updates Automatically, as saved.
     check_updates_automatically: bool,
-    /// Speakers > Volume Keys Control AudioSync, as saved (spec S429).
+    /// Settings > Volume Keys Control AudioSync, as saved (spec S429).
     volume_keys: bool,
     /// The last update check that read the appcast, Unix seconds.
     last_update_check: Option<u64>,
@@ -137,8 +147,6 @@ struct UiState {
     collapsed: HashSet<String>,
     /// The same for the flyout, which keeps its own (S359).
     flyout_collapsed: HashSet<String>,
-    /// Whether the source was a mix at the last refresh.
-    source_was_mix: bool,
     /// The equalizer curve last picked or saved, so the picker tells it from
     /// a curve with the same gains (spec S270).
     chosen_curve: Option<CurveMatch>,
@@ -255,7 +263,7 @@ fn is_draft(typed: Option<&str>, applied: &str) -> bool {
 }
 
 /// Whether Connected Speakers lists nothing only because its outputs are
-/// virtual ones that View > Show Virtual Devices hides: its note says so.
+/// virtual ones that Settings > Show Virtual Devices hides: its note says so.
 fn only_virtual_outputs_hidden(
     connected: &[&ui_model::Speaker],
     listed: impl Fn(&ui_model::Speaker) -> bool,
@@ -265,6 +273,10 @@ fn only_virtual_outputs_hidden(
 
 struct Models {
     sources: Rc<VecModel<SharedString>>,
+    source_looks: Rc<VecModel<SourceLook>>,
+    /// Each app source's icon by source ID, and each executable's by path.
+    app_icons: RefCell<HashMap<String, (u32, slint::Image, std::time::Instant)>>,
+    file_icons: RefCell<HashMap<(std::path::PathBuf, u32), slint::Image>>,
     /// The chosen input device's channel pairs; empty up to two channels.
     input_pairs: Rc<VecModel<SharedString>>,
     mix_apps: Rc<VecModel<MixAppItem>>,
@@ -333,6 +345,13 @@ const FLYOUT_NOTICE_LIMIT: usize = 1;
 /// How long a notice's announcement stays in its window's live region at
 /// most (it goes sooner with its notice). Cleared, nothing stray is left for
 /// Narrator's scan mode, and the same words can be announced again later.
+// Time enough for a shown flyout to draw its first frame at any refresh rate.
+const FLYOUT_FIRST_FRAME: Duration = Duration::from_millis(50);
+
+thread_local! {
+    static FLYOUT_OPENING: Cell<u64> = const { Cell::new(0) };
+    static SETTINGS_OPENING: Cell<u64> = const { Cell::new(0) };
+}
 const ANNOUNCEMENT_CLEARS_AFTER: Duration = Duration::from_secs(5);
 
 /// How long a live region stays empty before the words it held come back.
@@ -785,12 +804,14 @@ pub struct App {
     /// The PIN dialog shows a made-up pairing (the PIN preview), which no
     /// refresh closes.
     pin_preview: Cell<bool>,
+    /// Runs once, right before the main window first shows.
+    before_main_shows: RefCell<Option<Box<dyn FnOnce()>>>,
+    /// Runs once, right after the main window first shows without an error.
+    after_main_shows: RefCell<Option<Box<dyn FnOnce()>>>,
     /// The password prompt of a speaker protected by a password.
     password_dialog: PasswordDialog,
     /// The speaker the password dialog is open for, while it is.
     password_for: RefCell<Option<String>>,
-    /// Add by Address…, for a Google Cast speaker discovery can't find.
-    cast_address_dialog: CastAddressDialog,
     /// The answer of the address check Add by Address… is waiting for.
     cast_check: RefCell<Option<std::sync::mpsc::Receiver<cast_address::CheckAnswer>>>,
     /// Looks for that answer while the check runs.
@@ -802,12 +823,14 @@ pub struct App {
     /// The guide is open for the double-audio notice and follows it (not
     /// for a made-up preview notice).
     guide_follows_notice: Cell<bool>,
-    /// The AudioSync Guide (Help > AudioSync Guide), `help_window.rs`.
+    /// The AudioSync Guide (the gear's AudioSync Guide), `help_window.rs`.
     help: crate::HelpWindow,
-    /// View > Web Remote, `remote_window.rs`.
+    /// Web Remote, `remote_window.rs`.
     remote_window: crate::RemoteWindow,
-    /// File > Check Setup…, `setup_window.rs`.
+    /// Settings > Check Setup…, `setup_window.rs`.
     setup: crate::SetupWindow,
+    /// Settings… from the gear, `settings_window.rs`.
+    settings: crate::SettingsWindow,
     setup_check: RefCell<setup_window::SetupCheck>,
     remote: RefCell<remote_window::RemoteHost>,
     log: DebugLog,
@@ -820,7 +843,7 @@ pub struct App {
     models: Models,
     /// With a tray icon, closing the main window keeps the app running there.
     tray_available: Cell<bool>,
-    /// The appearance every window shows: View > Appearance, or the theme
+    /// The appearance every window shows: Settings > Appearance, or the theme
     /// preview's.
     appearance: Cell<ui_model::Appearance>,
     /// False until the first Light or Dark: until then the windows follow
@@ -856,6 +879,9 @@ pub struct App {
     art_hold_timer: Timer,
     window_slide: RefCell<TrackSlide>,
     panel_slide: RefCell<TrackSlide>,
+    /// Slint's animation tick 0 as an Instant: the slides run on the
+    /// frames' clock, so each frame shows the slide at its own time.
+    motion_epoch: std::time::Instant,
     /// Draws the Now Playing cards' slide frames while one moves.
     slide_timer: Timer,
     /// Moves a microphone calibration on while one holds the outputs.
@@ -871,6 +897,8 @@ pub struct App {
     ambient_frame_at: Cell<std::time::Instant>,
     /// The cover's top, middle and bottom colours.
     ambient_cover: Cell<[Rgb; 3]>,
+    /// The image of the cover shown last.
+    cover_image: RefCell<CoverImage>,
     /// The still line is drawn for the cover shown now.
     ambient_still_drawn: Cell<bool>,
     /// Launch at Sign-In and its notice, which the windows own: the
@@ -899,6 +927,22 @@ thread_local! {
     static VOLUME_KEY_APP: RefCell<Weak<App>> = const { RefCell::new(Weak::new()) };
 }
 
+/// Runs on Windows' audio session thread: hands the new session to the UI
+/// thread, which holds out the outputs the app plays on (S470).
+#[cfg(all(windows, not(test)))]
+fn deliver_new_session() {
+    let _ = slint::invoke_from_event_loop(|| {
+        VOLUME_KEY_APP.with(|app| {
+            with_app(&app.borrow(), |app| {
+                // Busy only inside a nested loop; the next poll takes it then.
+                if let Ok(mut backend) = app.backend.try_borrow_mut() {
+                    backend.follow_new_sessions();
+                }
+            });
+        });
+    });
+}
+
 /// Runs on the keyboard hook's thread: hands the key to the UI thread.
 #[cfg(all(windows, not(test)))]
 fn deliver_volume_key(key: VolumeKey) {
@@ -915,16 +959,25 @@ fn unix_now() -> u64 {
         .map_or(0, |since| since.as_secs())
 }
 
-fn card_image(artwork: &CardArtwork) -> slint::Image {
-    let pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-        &artwork.rgba,
-        artwork.side,
-        artwork.side,
-    );
-    slint::Image::from_rgba8_premultiplied(pixels)
+/// The image of the cover shown last, made again only for another cover, so
+/// Play/Pause and the outgoing cover reuse it and the renderer its texture.
+#[derive(Default)]
+struct CoverImage(Option<(slint::SharedPixelBuffer<slint::Rgba8Pixel>, slint::Image)>);
+
+impl CoverImage {
+    fn of(&mut self, artwork: &CardArtwork) -> slint::Image {
+        if let Some((pixels, image)) = &self.0
+            && pixels.as_bytes().as_ptr() == artwork.pixels.as_bytes().as_ptr()
+        {
+            return image.clone();
+        }
+        let image = slint::Image::from_rgba8_premultiplied(artwork.pixels.clone());
+        self.0 = Some((artwork.pixels.clone(), image.clone()));
+        image
+    }
 }
 
-fn outgoing_song(track: Option<&CardTrack>) -> OutgoingSong {
+fn outgoing_song(track: Option<&CardTrack>, covers: &RefCell<CoverImage>) -> OutgoingSong {
     let Some(track) = track else {
         return OutgoingSong::default();
     };
@@ -932,7 +985,11 @@ fn outgoing_song(track: Option<&CardTrack>) -> OutgoingSong {
         title: track.title.as_str().into(),
         subtitle: track.subtitle().as_str().into(),
         has_artwork: track.artwork.is_some(),
-        artwork: track.artwork.as_ref().map(card_image).unwrap_or_default(),
+        artwork: track
+            .artwork
+            .as_ref()
+            .map(|artwork| covers.borrow_mut().of(artwork))
+            .unwrap_or_default(),
     }
 }
 
@@ -999,7 +1056,7 @@ fn close_main_notices(weak: &Weak<App>, ids: Option<u64>) {
     app.refresh();
     // The fade's length in widgets.slint's NoticeStack.
     let fade = if app.main.global::<Motion>().get_on() {
-        300
+        320
     } else {
         150
     };
@@ -1091,13 +1148,14 @@ pub fn focus_input(
     use slint::winit_030::winit::event::{ElementState, WindowEvent};
     use slint::winit_030::winit::keyboard::{Key, NamedKey};
     match event {
-        WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
-            Some(if event.logical_key == Key::Named(NamedKey::Tab) {
-                FocusInput::Tab
-            } else {
-                FocusInput::OtherKey
-            })
-        }
+        WindowEvent::KeyboardInput {
+            event,
+            is_synthetic,
+            ..
+        } if event.state == ElementState::Pressed => crate::window_rules::key_focus_input(
+            event.logical_key == Key::Named(NamedKey::Tab),
+            *is_synthetic,
+        ),
         WindowEvent::MouseInput {
             state: ElementState::Pressed,
             ..
@@ -1150,6 +1208,36 @@ fn place_to_show(
     Some(fitted_main_frame(frame, work_area, scale, false))
 }
 
+/// What the Guide's outer frame adds to its inner size, in logical pixels:
+/// Windows' title bar and resize borders at 96 DPI.
+const GUIDE_CHROME: (f64, f64) = (16.0, 39.0);
+
+/// Where the Guide opens from its saved `place`, with `size` its inner size
+/// in logical pixels: on a monitor, moved as little as needed into the work
+/// area of `monitor` (the one at `place`); off every monitor, centered on
+/// `monitor` (the primary one). `None` leaves it to the system.
+fn guide_place_to_show(
+    place: WindowPlace,
+    size: (f64, f64),
+    on_a_monitor: bool,
+    monitor: Option<(crate::placement::Bounds, f64)>,
+) -> Option<WindowPlace> {
+    let Some((work_area, scale)) = monitor else {
+        return on_a_monitor.then_some(place);
+    };
+    let outer = crate::placement::Bounds {
+        x: f64::from(place.x),
+        y: f64::from(place.y),
+        width: (size.0 + GUIDE_CHROME.0) * scale,
+        height: (size.1 + GUIDE_CHROME.1) * scale,
+    };
+    let fitted = crate::placement::fit_window(outer, work_area, on_a_monitor);
+    Some(WindowPlace {
+        x: fitted.x.round() as i32,
+        y: fitted.y.round() as i32,
+    })
+}
+
 /// The saved main window `frame` as it opens on the monitor with
 /// `work_area` (physical pixels) and `scale`: its inner size (logical
 /// pixels) and outer position (physical pixels), fitted inside the work
@@ -1197,6 +1285,9 @@ impl App {
         crate::platform::set_min_size_log(log.clone());
         let models = Models {
             sources: Rc::new(VecModel::default()),
+            source_looks: Rc::new(VecModel::default()),
+            app_icons: RefCell::default(),
+            file_icons: RefCell::default(),
             input_pairs: Rc::new(VecModel::default()),
             mix_apps: Rc::new(VecModel::default()),
             this_pc: Rc::new(VecModel::default()),
@@ -1226,9 +1317,10 @@ impl App {
             pin_dialog: PinDialog::new()?,
             pin_for: RefCell::new(None),
             pin_preview: Cell::new(false),
+            before_main_shows: RefCell::new(None),
+            after_main_shows: RefCell::new(None),
             password_dialog: PasswordDialog::new()?,
             password_for: RefCell::new(None),
-            cast_address_dialog: CastAddressDialog::new()?,
             cast_check: RefCell::default(),
             cast_check_timer: Timer::default(),
             about: AboutDialog::new()?,
@@ -1238,6 +1330,7 @@ impl App {
             help: crate::HelpWindow::new()?,
             remote_window: crate::RemoteWindow::new()?,
             setup: crate::SetupWindow::new()?,
+            settings: crate::SettingsWindow::new()?,
             setup_check: RefCell::default(),
             remote: RefCell::default(),
             log,
@@ -1263,6 +1356,7 @@ impl App {
             art_hold_timer: Timer::default(),
             window_slide: RefCell::new(TrackSlide::new(Place::Window)),
             panel_slide: RefCell::new(TrackSlide::new(Place::Panel)),
+            motion_epoch: std::time::Instant::now(),
             slide_timer: Timer::default(),
             calibration_timer: Timer::default(),
             meter_timer: Timer::default(),
@@ -1271,6 +1365,7 @@ impl App {
             ambient: RefCell::default(),
             ambient_frame_at: Cell::new(std::time::Instant::now()),
             ambient_cover: Cell::new(ambient::NO_COVER),
+            cover_image: RefCell::default(),
             ambient_still_drawn: Cell::new(false),
             login: RefCell::new(LaunchAtLogin::new(
                 launch_at_login::system_store(),
@@ -1288,6 +1383,8 @@ impl App {
         });
         #[cfg(all(windows, not(test)))]
         VOLUME_KEY_APP.with(|slot| *slot.borrow_mut() = Rc::downgrade(&app));
+        #[cfg(all(windows, not(test)))]
+        crate::audio::wasapi::on_new_session(deliver_new_session);
         let sessions = i32::try_from(audiosync_airplay::sender::AIRPLAY2_SESSIONS);
         app.main
             .global::<Strings>()
@@ -1314,6 +1411,7 @@ impl App {
         app.connect_help();
         app.connect_remote();
         app.connect_setup();
+        app.connect_settings();
         app.restore_view(true);
         app.restore_remote();
         app.launch_update_check();
@@ -1324,6 +1422,18 @@ impl App {
             });
         }
         app.refresh();
+        let weak = Rc::downgrade(&app);
+        app.main.global::<TrackMotion>().on_slide(move |tick| {
+            weak.upgrade().map_or_else(SlideLook::default, |app| {
+                slide_look(app.window_slide.borrow_mut().look(app.frame_time(tick)).0)
+            })
+        });
+        let weak = Rc::downgrade(&app);
+        app.flyout.global::<TrackMotion>().on_slide(move |tick| {
+            weak.upgrade().map_or_else(SlideLook::default, |app| {
+                slide_look(app.panel_slide.borrow_mut().look(app.frame_time(tick)).0)
+            })
+        });
         let weak = Rc::downgrade(&app);
         app.poll_timer
             .start(TimerMode::Repeated, POLL_INTERVAL, move || {
@@ -1685,12 +1795,28 @@ impl App {
     /// what changed in both. Returns whether the track changed.
     fn sync_now_playing(&self) -> bool {
         let window = self.main.window();
+        crate::now_playing_card::set_cover_scale(window.scale_factor());
         let shows = (window.is_visible() && !window.is_minimized())
             || self.flyout.window().is_visible()
             || self.remote_listening();
         let source = self.now_playing_source.borrow().clone();
         let old = self.now_playing.borrow().track().cloned();
+        let gap = self.now_playing.borrow().in_gap();
         let changed = self.now_playing.borrow_mut().sync(source, shows);
+        let card = self.now_playing.borrow();
+        if card.in_gap() != gap {
+            let grace = crate::now_playing_card::GAP_GRACE.as_secs();
+            self.log.log(|| match (card.in_gap(), card.track()) {
+                (true, _) => {
+                    format!("now playing card: no session counts, the card waits {grace} s")
+                }
+                (false, Some(_)) => {
+                    format!("now playing card: a session counts again within {grace} s")
+                }
+                (false, None) => "now playing card: the gap ends without a session".to_owned(),
+            });
+        }
+        drop(card);
         if let Some(left) = self.now_playing.borrow().art_hold_left() {
             let main = self.main.as_weak();
             self.art_hold_timer
@@ -1741,12 +1867,17 @@ impl App {
             Some(Repeat::All) => 1,
             Some(Repeat::One) => 2,
         });
-        self.ambient_cover
-            .set(track.artwork.as_ref().map_or(ambient::NO_COVER, |artwork| {
-                ambient::cover_bands(&artwork.rgba, artwork.side)
-            }));
+        self.ambient_cover.set(
+            track
+                .artwork
+                .as_ref()
+                .map_or(ambient::NO_COVER, |artwork| artwork.bands),
+        );
         self.ambient_still_drawn.set(false);
-        let artwork = track.artwork.as_ref().map(card_image);
+        let artwork = track
+            .artwork
+            .as_ref()
+            .map(|artwork| self.cover_image.borrow_mut().of(artwork));
         self.flyout
             .set_now_playing_title(track.title.as_str().into());
         self.flyout
@@ -1764,21 +1895,23 @@ impl App {
     /// Starts or ends the Now Playing cards' slide for a change of song; a
     /// card that is hidden, or with the system's animations off, swaps at once.
     fn slide_change(&self, old: Option<&CardTrack>, new: Option<&CardTrack>) {
-        let now = std::time::Instant::now();
+        let now = self.frame_now();
         let (window_shows, panel_shows, still) = self.slides_shown();
         if self
             .window_slide
             .borrow_mut()
             .change(old, new, window_shows, still, now)
         {
-            self.main.set_now_playing_outgoing(outgoing_song(old));
+            self.main
+                .set_now_playing_outgoing(outgoing_song(old, &self.cover_image));
         }
         if self
             .panel_slide
             .borrow_mut()
             .change(old, new, panel_shows, still, now)
         {
-            self.flyout.set_now_playing_outgoing(outgoing_song(old));
+            self.flyout
+                .set_now_playing_outgoing(outgoing_song(old, &self.cover_image));
         }
     }
 
@@ -1793,13 +1926,26 @@ impl App {
         )
     }
 
-    /// Shows the slides' frame now; returns whether one still moves.
+    /// The animation tick `tick` as an Instant.
+    fn frame_time(&self, tick: i64) -> std::time::Instant {
+        self.motion_epoch + Duration::from_millis(u64::try_from(tick).unwrap_or_default())
+    }
+
+    /// The frame clock now: the last animation tick.
+    fn frame_now(&self) -> std::time::Instant {
+        self.frame_time(self.main.global::<TrackMotion>().get_tick())
+    }
+
+    /// Hands the slides' frames to the windows' frame clock while one moves,
+    /// and shows the rest look once none does; returns whether one moves.
     fn draw_slides(&self) -> bool {
-        let now = std::time::Instant::now();
+        let now = self.frame_now();
         let (window, window_moving) = self.window_slide.borrow_mut().look(now);
         let (panel, panel_moving) = self.panel_slide.borrow_mut().look(now);
         self.main.set_now_playing_slide(slide_look(window));
         self.flyout.set_now_playing_slide(slide_look(panel));
+        self.main.set_now_playing_moving(window_moving);
+        self.flyout.set_now_playing_moving(panel_moving);
         window_moving || panel_moving
     }
 
@@ -1870,7 +2016,7 @@ impl App {
                 Transport::Next | Transport::Previous | Transport::PlayPause
             )
         {
-            let now = std::time::Instant::now();
+            let now = self.frame_now();
             let (window_shows, panel_shows, still) = self.slides_shown();
             self.window_slide
                 .borrow_mut()
@@ -1880,6 +2026,18 @@ impl App {
                 .press(direction, panel_shows, still, now);
         }
         self.now_playing.borrow_mut().send(command);
+    }
+
+    /// Runs `before` once, right before the main window first shows.
+    #[cfg(windows)]
+    pub fn before_main_shows(&self, before: impl FnOnce() + 'static) {
+        *self.before_main_shows.borrow_mut() = Some(Box::new(before));
+    }
+
+    /// Runs `after` once, right after the main window first shows without an error.
+    #[cfg(windows)]
+    pub fn after_main_shows(&self, after: impl FnOnce() + 'static) {
+        *self.after_main_shows.borrow_mut() = Some(Box::new(after));
     }
 
     /// Shows the main window and brings it to the front.
@@ -1920,9 +2078,15 @@ impl App {
                 window.set_maximized(true);
             }
         }
+        if let Some(before) = self.before_main_shows.take() {
+            before();
+        }
         if let Err(error) = self.main.show() {
             self.show_window_error(&error);
             return;
+        }
+        if let Some(after) = self.after_main_shows.take() {
+            after();
         }
         self.apply_frame(self.main.window(), "main window", Frame::Titled);
         crate::platform::bring_to_front(self.main.window());
@@ -1939,6 +2103,7 @@ impl App {
             Appearance::Light => crate::Appearance::Light,
             Appearance::Dark => crate::Appearance::Dark,
         });
+        self.settings.set_appearance(self.main.get_appearance());
         if appearance == Appearance::System && !self.themed_by_hand.get() {
             return;
         }
@@ -1946,7 +2111,7 @@ impl App {
         self.follow_appearance();
     }
 
-    /// View > Appearance.
+    /// Settings > Appearance.
     fn choose_appearance(&self, choice: crate::Appearance) {
         let appearance = match choice {
             crate::Appearance::Light => ui_model::Appearance::Light,
@@ -1997,9 +2162,6 @@ impl App {
         self.password_dialog
             .global::<Palette>()
             .set_color_scheme(scheme);
-        self.cast_address_dialog
-            .global::<Palette>()
-            .set_color_scheme(scheme);
         self.about.global::<Palette>().set_color_scheme(scheme);
         self.guide.global::<Palette>().set_color_scheme(scheme);
         self.help.global::<Palette>().set_color_scheme(scheme);
@@ -2007,6 +2169,8 @@ impl App {
             .global::<Palette>()
             .set_color_scheme(scheme);
         self.setup.global::<Palette>().set_color_scheme(scheme);
+        self.settings.global::<Palette>().set_color_scheme(scheme);
+        crate::backdrop::set_menu_dark(dark);
         for window in [
             self.main.window(),
             self.flyout.window(),
@@ -2014,14 +2178,17 @@ impl App {
             self.zone_dialog.window(),
             self.pin_dialog.window(),
             self.password_dialog.window(),
-            self.cast_address_dialog.window(),
             self.about.window(),
             self.guide.window(),
             self.help.window(),
             self.remote_window.window(),
             self.setup.window(),
+            self.settings.window(),
         ] {
             self.theme_frame(window);
+            if !std::ptr::eq(window, self.flyout.window()) {
+                crate::backdrop::set_dark(window, dark);
+            }
             crate::platform::repaint_frame(window, false, dark);
         }
     }
@@ -2067,6 +2234,9 @@ impl App {
     pub fn apply_frame(&self, window: &slint::Window, name: &'static str, frame: Frame) -> bool {
         self.use_brand_accent(window);
         self.theme_frame(window);
+        if frame == Frame::Titled {
+            crate::backdrop::set_dark(window, self.shows_dark());
+        }
         crate::platform::follow_color_set(window);
         // Before the event loop runs there is no native window yet; the
         // window's first focus (see `follow_frame`) tries again.
@@ -2156,9 +2326,6 @@ impl App {
                     if outcome == Some(crate::frameless::KeyOutcome::MenuFocused) {
                         app.note_focus_input(crate::window_rules::FocusInput::Tab);
                     }
-                    if matches!(event, WindowEvent::Resized(_)) {
-                        crate::frameless::note_layout(&app.main);
-                    }
                 });
                 if outcome == Some(crate::frameless::KeyOutcome::Taken) {
                     return EventResult::PreventDefault;
@@ -2191,6 +2358,18 @@ impl App {
                     }
                     app.apply_frame(window(app), name, Frame::Titled);
                 }),
+                WindowEvent::MouseInput {
+                    state: slint::winit_030::winit::event::ElementState::Pressed,
+                    ..
+                } if kind == Titled::Main => crate::frameless::forget_drag(),
+                WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. }
+                    if name == "Settings" =>
+                {
+                    let weak = weak.clone();
+                    Timer::single_shot(Duration::ZERO, move || {
+                        with_app(&weak, App::fit_settings_room);
+                    });
+                }
                 // Slint reads the Windows accent and theme after this filter
                 // returns.
                 WindowEvent::ThemeChanged(_) => {
@@ -2210,9 +2389,46 @@ impl App {
         });
     }
 
+    /// The icon of the app source `id` (`app:<pid>:<executable>`), `size`
+    /// pixels square, from its executable; empty for any other source and for
+    /// an app whose icon can't be read, which the menu draws as a glyph.
+    fn app_icon(&self, id: &str, size: u32) -> slint::Image {
+        let m = &self.models;
+        cached_app_icon(&m.app_icons, id, size, std::time::Instant::now(), || {
+            self.read_app_icon(id, size)
+        })
+    }
+
+    fn read_app_icon(&self, id: &str, size: u32) -> slint::Image {
+        let m = &self.models;
+        let path = crate::os::app_icon::source_image(
+            id,
+            crate::os::app_icon::process_image,
+            crate::os::app_icon::pid_named,
+        );
+        path.map(|path| {
+            m.file_icons
+                .borrow_mut()
+                .entry((path, size))
+                .or_insert_with_key(|(path, size)| {
+                    crate::os::app_icon::file_icon(path, *size)
+                        .map(|rgba| {
+                            slint::Image::from_rgba8(slint::SharedPixelBuffer::clone_from_slice(
+                                &rgba, *size, *size,
+                            ))
+                        })
+                        .unwrap_or_default()
+                })
+                .clone()
+        })
+        .unwrap_or_default()
+    }
+
     fn attach_models(&self) {
         let m = &self.models;
         self.main.set_sources(ModelRc::from(m.sources.clone()));
+        self.main
+            .set_source_looks(ModelRc::from(m.source_looks.clone()));
         self.main
             .set_input_pairs(ModelRc::from(m.input_pairs.clone()));
         self.main.set_mix_apps(ModelRc::from(m.mix_apps.clone()));
@@ -2234,6 +2450,8 @@ impl App {
             .set_calibrate_all_left_out(ModelRc::from(m.calibration_left_out.clone()));
         self.flyout.set_sources(ModelRc::from(m.sources.clone()));
         self.flyout
+            .set_source_looks(ModelRc::from(m.source_looks.clone()));
+        self.flyout
             .set_input_pairs(ModelRc::from(m.input_pairs.clone()));
         self.flyout
             .set_this_pc(ModelRc::from(m.flyout_this_pc.clone()));
@@ -2249,6 +2467,7 @@ impl App {
         self.equalizer
             .set_band_hz(ModelRc::new(VecModel::from(band_hz)));
         self.equalizer.set_max_gain(eq::MAX_GAIN_DB as f32);
+        self.equalizer.set_preset_count(count(eq::PRESETS.len()));
         self.guide
             .set_steps(ModelRc::from(self.guide_steps.clone()));
         self.about.set_version(env!("CARGO_PKG_VERSION").into());
@@ -2280,11 +2499,8 @@ impl App {
         // dropped off, so the list doesn't take it for news when it is back.
         let mut state = self.every_notice();
         let strings = self.strings();
-        let became_mix = {
+        {
             let mut ui = self.ui.borrow_mut();
-            let is_mix = state.source_id.starts_with("mix:");
-            let became_mix = is_mix && !ui.source_was_mix;
-            ui.source_was_mix = is_mix;
             let show_virtual = ui.show_virtual;
             ui.listed_virtual.note(&state, show_virtual);
             // A speaker that went takes what was typed for it along: back,
@@ -2295,8 +2511,24 @@ impl App {
                 .retain(|id| state.zones.iter().any(|zone| zone.id == *id));
             ui.flyout_collapsed
                 .retain(|id| state.zones.iter().any(|zone| zone.id == *id));
-            became_mix
-        };
+            // A panel that folds, or goes with its row or reading, releases
+            // its slider and clears its refusal, as the Mac's panel does.
+            let panel = state
+                .speakers
+                .iter()
+                .find(|s| {
+                    s.is_reference()
+                        && s.system_volume.and_then(|v| v.percent()).is_some()
+                        && ui.sync_open.contains(&s.id)
+                })
+                .map(|s| s.id.clone());
+            if panel != ui.system_panel {
+                ui.system_held = false;
+                ui.system_shown = None;
+                ui.system_refused = false;
+                ui.system_panel = panel;
+            }
+        }
         let move_zones = self.sync_move_zones(&state);
         let move_zones_of = |zone_id: &str| move_zones.get(zone_id).cloned().unwrap_or_default();
         let ui = self.ui.borrow();
@@ -2332,6 +2564,12 @@ impl App {
             {
                 row.renaming = true;
                 row.name_text = text.as_str().into();
+            }
+            if row.system_volume >= 0 {
+                if let Some(level) = ui.system_shown.filter(|_| ui.system_held) {
+                    row.system_volume = level.round() as i32;
+                }
+                row.system_refused = ui.system_refused;
             }
             row.calibration_status = calibration_status(&strings, &state, speaker);
             row.calibration_left_out = speaker
@@ -2610,6 +2848,23 @@ impl App {
                 }
             })
             .collect();
+        let icon_size = (16.0 * self.main.window().scale_factor()).round() as u32;
+        let source_looks: Vec<SourceLook> = state
+            .sources
+            .iter()
+            .map(|s| SourceLook {
+                kind: match s.kind {
+                    SourceKind::System => SourceRowKind::System,
+                    SourceKind::Input => SourceRowKind::Input,
+                    SourceKind::App | SourceKind::AppsExcept => SourceRowKind::App,
+                },
+                icon: self.app_icon(&s.id, icon_size),
+            })
+            .collect();
+        self.models
+            .app_icons
+            .borrow_mut()
+            .retain(|id, _| state.sources.iter().any(|s| s.id == *id));
         let source_index = state
             .sources
             .iter()
@@ -2674,6 +2929,7 @@ impl App {
             ..
         } = main_lists;
         sync_model(&m.sources, sources);
+        sync_model(&m.source_looks, source_looks);
         sync_model(&m.input_pairs, input_pairs);
         self.main.set_input_pair_index(input_pair_index);
         self.flyout.set_input_pair_index(input_pair_index);
@@ -2693,11 +2949,6 @@ impl App {
                 .collect(),
         );
         self.main.set_mix_all_except(state.mix_all_except);
-        // The list opens once as the source becomes a mix; folding it is
-        // the user's.
-        if became_mix {
-            self.main.set_mix_open(true);
-        }
         sync_model(&m.flyout_this_pc, this_pc.clone());
         sync_model(&m.flyout_connected, connected.clone());
         sync_model(&m.this_pc, this_pc);
@@ -2748,6 +2999,7 @@ impl App {
             .set_check_updates_automatically(check_updates_automatically);
         self.main.set_volume_keys_available(cfg!(windows));
         self.main.set_volume_keys(keys_switch);
+        self.show_settings_state();
         self.take_volume_keys(volume_keys::keys_taken(
             keys_switch,
             state.running && !state.no_speaker_on,
@@ -2811,7 +3063,7 @@ impl App {
         }
     }
 
-    /// An entry of Speakers > Hidden Speakers.
+    /// An entry of Settings > Hidden Speakers.
     fn unhide_speaker(&self, id: &str) {
         let state = self.snapshot();
         let Some(hidden) = state.hidden.iter().find(|hidden| hidden.id == id) else {
@@ -3173,7 +3425,13 @@ impl App {
         let w = weak.clone();
         main.on_airplay_delay_cancelled(move || with_app(&w, |app| app.end_delay_typing(false)));
         let w = weak.clone();
-        main.on_blank_clicked(move || with_app(&w, App::blank_click));
+        main.on_blank_clicked(move || {
+            with_app(&w, |app| {
+                if !crate::frameless::dragged_since_press(&app.main) {
+                    app.blank_click();
+                }
+            });
+        });
         main.global::<NameField>()
             .on_fit(|text| speaker_names::fitting(&text).into());
         main.global::<NameField>()
@@ -3205,6 +3463,35 @@ impl App {
         let w = weak.clone();
         main.on_forget_pairing_requested(move |id| {
             with_app(&w, |app| app.update(|b| b.forget_pairing(&id)))
+        });
+        let w = weak.clone();
+        main.on_system_volume_requested(move |id, value| {
+            with_app(&w, |app| {
+                let mut taken = true;
+                app.update(|b| taken = b.set_system_volume(&id, f64::from(value) / 100.0));
+                let was_refused = {
+                    let mut ui = app.ui.borrow_mut();
+                    ui.system_shown = Some(f64::from(value));
+                    std::mem::replace(&mut ui.system_refused, !taken)
+                };
+                if !taken && !was_refused {
+                    app.announce(app.strings().get_system_volume_refused());
+                }
+                app.refresh();
+            });
+        });
+        let w = weak.clone();
+        main.on_system_volume_editing_requested(move |_, on| {
+            with_app(&w, |app| {
+                {
+                    let mut ui = app.ui.borrow_mut();
+                    ui.system_held = on;
+                    if !on {
+                        ui.system_shown = None;
+                    }
+                }
+                app.refresh();
+            });
         });
         let w = weak.clone();
         main.on_device_volume_fix_requested(move |id| {
@@ -3344,6 +3631,12 @@ impl App {
         main.on_preset_delete_requested(move |id| with_app(&w, |app| app.delete_preset(&id)));
         let w = weak.clone();
         main.on_save_preset_requested(move || with_app(&w, App::ask_save_preset));
+        let w = weak.clone();
+        main.on_preset_save_named(move |name| with_app(&w, |app| app.save_preset(&name)));
+        let w = weak.clone();
+        main.on_preset_rename_named(move |id, name| {
+            with_app(&w, |app| app.update(|b| b.rename_preset(&id, &name)));
+        });
         let w = weak.clone();
         self.equalizer
             .on_preset_shortcut(move |n| with_app(&w, |app| app.recall_preset_at(n)));
@@ -3527,7 +3820,13 @@ impl App {
             with_app(&w, |app| {
                 app.hide_flyout();
                 app.show_main();
-                app.main.set_mix_open(true);
+                // The menu runs its own modal loop: open it after this event.
+                let main = app.main.as_weak();
+                Timer::single_shot(Duration::ZERO, move || {
+                    if let Some(main) = main.upgrade() {
+                        main.invoke_open_sources();
+                    }
+                });
             })
         });
         let w = weak.clone();
@@ -3640,6 +3939,10 @@ impl App {
         let w = weak.clone();
         eq_window.on_save_curve(move || with_app(&w, App::ask_save_curve));
         let w = weak.clone();
+        eq_window.on_curve_named(move |typed, returned| {
+            with_app(&w, |app| app.finish_curve_name(&typed, returned));
+        });
+        let w = weak.clone();
         eq_window.on_rename_curve(move || with_app(&w, App::ask_rename_curve));
         let w = weak.clone();
         eq_window.on_delete_curve(move || {
@@ -3665,12 +3968,19 @@ impl App {
                 app.change_equalizer(EqSettings::reset);
             })
         });
+        let w = weak.clone();
+        eq_window.on_close_requested(move || with_app(&w, App::hide_equalizer));
         let w = weak;
-        eq_window.on_close_requested(move || {
-            with_app(&w, |app| {
-                let _ = app.equalizer.hide();
-            })
+        eq_window.window().on_close_requested(move || {
+            with_app(&w, App::hide_equalizer);
+            slint::CloseRequestResponse::HideWindow
         });
+    }
+
+    /// Closing the equalizer drops a curve name being typed, as Escape does.
+    fn hide_equalizer(&self) {
+        self.equalizer.set_naming_curve(false);
+        let _ = self.equalizer.hide();
     }
 
     fn connect_dialogs(self: &Rc<Self>) {
@@ -4089,6 +4399,7 @@ impl App {
         self.updater_at_exit();
         // Changes since the last poll, and where the main window is.
         self.save_settings();
+        self.backend.borrow_mut().shut_down();
     }
 
     /// When Windows ends the session or Linux sends an exit signal, which
@@ -4100,6 +4411,17 @@ impl App {
         let saved = self.save_settings();
         self.backend.borrow_mut().shut_down();
         saved
+    }
+
+    /// When Windows asks whether the session may end: Windows' default
+    /// output goes back before any answer (S469).
+    #[cfg(windows)]
+    pub fn at_session_query(&self) {
+        // The query can arrive inside a COM call the backend makes on this
+        // thread; the quit at the session's end restores then.
+        if let Ok(mut backend) = self.backend.try_borrow_mut() {
+            backend.restore_default_output();
+        }
     }
 
     /// Takes the updater worker's news; a check that read the appcast
@@ -4135,7 +4457,7 @@ impl App {
         }
     }
 
-    /// Speakers > Volume Keys Control AudioSync (spec S429).
+    /// Settings > Volume Keys Control AudioSync (spec S429).
     fn set_volume_keys(&self, on: bool) {
         self.ui.borrow_mut().volume_keys = on;
         self.log.log(|| {
@@ -4199,7 +4521,7 @@ impl App {
         self.refresh();
     }
 
-    /// Help > Check for Updates…, whatever the switch and the time say.
+    /// Settings > Check for Updates…, whatever the switch and the time say.
     fn check_for_updates(&self) {
         #[cfg(any(windows, all(target_os = "linux", not(test))))]
         if let Some(updater) = self.updater.borrow_mut().as_mut() {
@@ -4278,7 +4600,7 @@ impl App {
     }
 
     /// Hands the windows' own settings to the backend, which saves them with
-    /// the rest: View > Show Virtual Devices, View > Appearance, and the main
+    /// the rest: Settings > Show Virtual Devices, Settings > Appearance, and the main
     /// window's frame (see [`ui_model::frame_to_keep`]).
     fn remember_view(&self) {
         let mut backend = self.backend.borrow_mut();
@@ -4288,6 +4610,7 @@ impl App {
             presets_list_open: self.main.get_presets_open(),
             appearance: self.ui.borrow().appearance,
             window: ui_model::frame_to_keep(self.main_window_shows(), saved.window),
+            guide: self.guide_place(),
             remote: self.ui.borrow().remote,
             check_updates_automatically: self.ui.borrow().check_updates_automatically,
             volume_keys: self.ui.borrow().volume_keys,
@@ -4299,8 +4622,8 @@ impl App {
         }
     }
 
-    /// Shows the windows with the settings saved last time: View > Show
-    /// Virtual Devices, View > Appearance, and the main window's size and
+    /// Shows the windows with the settings saved last time: Settings > Show
+    /// Virtual Devices, Settings > Appearance, and the main window's size and
     /// place, fitted to the monitor it opens on (the one at its saved place,
     /// else the primary one, where it opens centered), maximized when it was.
     /// Without `with_frame` the main window keeps its size and place.
@@ -4308,6 +4631,7 @@ impl App {
         let saved = self.backend.borrow().view_settings();
         self.ui.borrow_mut().show_virtual = saved.show_virtual_devices;
         self.ui.borrow_mut().appearance = saved.appearance;
+        self.ui.borrow_mut().guide_place = saved.guide;
         self.ui.borrow_mut().remote = saved.remote;
         self.ui.borrow_mut().check_updates_automatically = saved.check_updates_automatically;
         self.ui.borrow_mut().volume_keys = saved.volume_keys;
@@ -4737,53 +5061,58 @@ impl App {
         crate::platform::bring_to_front(self.equalizer.window());
     }
 
-    /// Speakers > New Zone from Active Speakers… (Ctrl+N): a name for a
-    /// zone of the speakers that are on, or why none can be made yet.
+    /// The gear's New Zone from Active Speakers… (Ctrl+N): a numbered zone
+    /// of the speakers that are on, named in its header as on the Mac, or
+    /// why none can be made yet.
     fn ask_new_zone(&self) {
         if self.dialog_already_open() {
             return;
         }
         let strings = self.strings();
-        let dialog = &self.zone_dialog;
         if self.snapshot().active_speakers() == 0 {
+            let dialog = &self.zone_dialog;
             *self.dialog_purpose.borrow_mut() = DialogPurpose::Message;
-            dialog.set_heading(strings.get_new_zone_title());
+            dialog.set_heading(strings.get_app_name());
             dialog.set_message(strings.get_new_zone_needs_speakers());
             dialog.set_show_field(false);
             dialog.set_confirm_label(strings.get_ok());
-        } else {
-            *self.dialog_purpose.borrow_mut() = DialogPurpose::NewZone;
-            dialog.set_heading(strings.get_new_zone_title());
-            dialog.set_message(strings.get_new_zone_message());
-            self.ask_zone_name(&strings);
-        }
-        self.open_dialog();
-    }
-
-    /// New Zone… in a speaker's menu: a name for a zone of that speaker.
-    fn ask_new_zone_with(&self, speaker_id: &str) {
-        if self.dialog_already_open() {
+            self.open_dialog();
             return;
         }
-        let Some(speaker) = self.snapshot().speaker(speaker_id).cloned() else {
+        let name = self.new_zone_name();
+        self.name_new_zone(|b| {
+            let _ = b.new_zone(&name);
+        });
+    }
+
+    /// New Zone… in a speaker's menu: a numbered zone of that speaker,
+    /// named in its header.
+    fn ask_new_zone_with(&self, speaker_id: &str) {
+        if self.dialog_already_open() || self.snapshot().speaker(speaker_id).is_none() {
+            return;
+        }
+        let name = self.new_zone_name();
+        self.name_new_zone(|b| b.new_zone_with(speaker_id, &name));
+    }
+
+    /// Makes a zone with `make`, then opens its header's name field empty,
+    /// so Return on nothing or Escape keeps the numbered name.
+    fn name_new_zone(&self, make: impl FnOnce(&mut dyn Backend)) {
+        let before = self.snapshot().zones;
+        self.update(make);
+        let made = self
+            .snapshot()
+            .zones
+            .into_iter()
+            .find(|zone| before.iter().all(|old| old.id != zone.id));
+        let Some(zone) = made else {
             return;
         };
-        let strings = self.strings();
-        let dialog = &self.zone_dialog;
-        *self.dialog_purpose.borrow_mut() = DialogPurpose::NewZoneWith(speaker_id.to_owned());
-        dialog.set_heading(strings.get_new_zone_title());
-        dialog.set_message(strings.invoke_new_zone_for_speaker(speaker.name.as_str().into()));
-        self.ask_zone_name(&strings);
-        self.open_dialog();
-    }
-
-    fn ask_zone_name(&self, strings: &Strings<'_>) {
-        let dialog = &self.zone_dialog;
-        dialog.set_placeholder(strings.get_new_zone_placeholder());
-        dialog.set_field_label(strings.get_new_zone_field_label());
-        dialog.set_name(SharedString::new());
-        dialog.set_show_field(true);
-        dialog.set_confirm_label(strings.get_create());
+        self.start_rename(&zone.id, RenamePlace::Zone);
+        if let Some((_, typed)) = self.ui.borrow_mut().rename.as_mut() {
+            typed.clear();
+        }
+        self.refresh();
     }
 
     fn ask_save_curve(&self) {
@@ -4792,7 +5121,6 @@ impl App {
         }
         let state = self.snapshot();
         let strings = self.strings();
-        let dialog = &self.zone_dialog;
         let shown = match self.shown_curve(&state) {
             Some(CurveMatch::User(index)) => Some(&state.equalizer_curves[index]),
             _ => None,
@@ -4801,16 +5129,47 @@ impl App {
             || strings.invoke_numbered_curve(count(state.equalizer_curves.len() + 1)),
             |curve| curve.name.as_str().into(),
         );
-        *self.dialog_purpose.borrow_mut() = DialogPurpose::SaveCurve;
         self.ui.borrow_mut().save_curve_gains = state.equalizer.gains_db;
-        dialog.set_heading(strings.get_save_curve_title());
-        dialog.set_message(strings.get_save_curve_message());
-        dialog.set_placeholder(strings.get_curve_name_field_label());
-        dialog.set_field_label(strings.get_curve_name_field_label());
-        dialog.set_name(name);
-        dialog.set_show_field(true);
-        dialog.set_confirm_label(strings.get_save());
-        self.open_dialog();
+        self.equalizer.set_curve_suggestion(name);
+        self.equalizer.set_naming_curve(true);
+    }
+
+    /// Saves the curve named in the equalizer's field: what was typed, else
+    /// the suggestion on Return; the focus leaving an empty field saves
+    /// nothing.
+    fn finish_curve_name(&self, typed: &str, returned: bool) {
+        if !self.equalizer.get_naming_curve() {
+            return;
+        }
+        self.equalizer.set_naming_curve(false);
+        let suggested = self.equalizer.get_curve_suggestion();
+        let name = if !typed.trim().is_empty() {
+            typed
+        } else if returned {
+            suggested.as_str()
+        } else {
+            return;
+        };
+        self.save_curve(name);
+    }
+
+    fn save_curve(&self, name: &str) {
+        let mut curves = self.snapshot().equalizer_curves;
+        // An empty name saves nothing (spec S270).
+        if eq::curve_name(name).is_none() {
+            return;
+        }
+        let gains_db = self.ui.borrow().save_curve_gains;
+        if let Some(index) = eq::save_curve(&mut curves, name, &gains_db) {
+            self.ui.borrow_mut().chosen_curve = Some(CurveMatch::User(index));
+            self.update(|b| b.set_equalizer_curves(curves));
+        } else {
+            let strings = self.strings();
+            self.show_dialog_message(
+                strings.get_save_curve_title(),
+                strings.invoke_curves_full(count(eq::MAX_USER_CURVES)),
+            );
+        }
     }
 
     fn ask_rename_curve(&self) {
@@ -4863,12 +5222,9 @@ impl App {
         self.open_dialog();
     }
 
-    /// A new zone's name: what was typed, else the first "Zone n" no zone
-    /// has, counting on from the zones there are.
-    fn new_zone_name(&self, typed: &str) -> String {
-        if !typed.trim().is_empty() {
-            return typed.to_owned();
-        }
+    /// A new zone's name: the first "Zone n" no zone has, counting on from
+    /// the zones there are.
+    fn new_zone_name(&self) -> String {
         let zones = self.snapshot().zones;
         let strings = self.strings();
         (zones.len() + 1..)
@@ -4944,56 +5300,41 @@ impl App {
         }
     }
 
+    /// Save as Preset…: a name field in the open presets list, as on the
+    /// Mac, or a caption under the row that says why nothing can be saved yet.
     fn ask_save_preset(&self) {
-        if self.dialog_already_open() {
-            return;
-        }
         let strings = self.strings();
         let state = self.snapshot();
-        if state.presets.len() >= MAX_PRESETS {
-            self.show_dialog_message(strings.get_save_preset_title(), strings.get_presets_full());
-            return;
-        }
-        if ui_model::speakers_on_now(&state).is_empty() {
-            self.show_dialog_message(
-                strings.get_save_preset_title(),
-                strings.get_save_preset_needs_speakers(),
-            );
-            return;
-        }
-        let dialog = &self.zone_dialog;
-        *self.dialog_purpose.borrow_mut() = DialogPurpose::SavePreset;
-        dialog.set_heading(strings.get_save_preset_title());
-        dialog.set_message(strings.get_save_preset_message());
-        dialog.set_placeholder(strings.get_preset_placeholder());
-        dialog.set_field_label(strings.get_preset_field_label());
-        dialog.set_name(SharedString::new());
-        dialog.set_show_field(true);
-        dialog.set_confirm_label(strings.get_save());
-        self.open_dialog();
-    }
-
-    fn ask_rename_preset(&self, id: &str) {
-        if self.dialog_already_open() {
-            return;
-        }
-        let Some(preset) = self.snapshot().presets.into_iter().find(|p| p.id == id) else {
-            return;
+        self.main.set_presets_open(true);
+        let why = if state.presets.len() >= MAX_PRESETS {
+            Some(strings.get_presets_full())
+        } else if ui_model::speakers_on_now(&state).is_empty() {
+            Some(strings.get_save_preset_needs_speakers())
+        } else {
+            None
         };
-        let strings = self.strings();
-        let dialog = &self.zone_dialog;
-        *self.dialog_purpose.borrow_mut() = DialogPurpose::RenamePreset(id.to_owned());
-        dialog.set_heading(strings.get_rename_preset_title());
-        dialog.set_message(strings.invoke_rename_message(preset.name.as_str().into()));
-        dialog.set_placeholder(strings.get_preset_placeholder());
-        dialog.set_field_label(strings.get_preset_field_label());
-        dialog.set_name(preset.name.as_str().into());
-        dialog.set_show_field(true);
-        dialog.set_confirm_label(strings.get_rename());
-        self.open_dialog();
+        match why {
+            Some(why) => self.say_why_no_preset(why),
+            None => {
+                self.main.set_preset_save_note(SharedString::new());
+                self.main.set_preset_saving(true);
+            }
+        }
     }
 
-    /// Save in the Save Preset dialog: a blank name becomes "Preset n".
+    /// The caption under Save as Preset…, said by Narrator too.
+    fn say_why_no_preset(&self, why: SharedString) {
+        self.main.set_preset_save_note(why.clone());
+        self.announce(why);
+    }
+
+    /// Rename…: the preset's name becomes a field in its row, as on the Mac.
+    fn ask_rename_preset(&self, id: &str) {
+        self.main.set_presets_open(true);
+        self.main.set_preset_renaming(id.into());
+    }
+
+    /// Return in Save as Preset…'s field: a blank name becomes "Preset n".
     fn save_preset(&self, typed: &str) {
         let names: Vec<String> = self
             .snapshot()
@@ -5009,13 +5350,11 @@ impl App {
         self.refresh();
         match saved {
             Ok(()) => self.announce(strings.invoke_preset_saved(name.as_str().into())),
-            Err(PresetError::Full) => self
-                .show_dialog_message(strings.get_save_preset_title(), strings.get_presets_full()),
-            // The last speaker went off while the dialog was open.
-            Err(PresetError::NoSpeakerOn) => self.show_dialog_message(
-                strings.get_save_preset_title(),
-                strings.get_save_preset_needs_speakers(),
-            ),
+            Err(PresetError::Full) => self.say_why_no_preset(strings.get_presets_full()),
+            // The last speaker went off while the name was typed.
+            Err(PresetError::NoSpeakerOn) => {
+                self.say_why_no_preset(strings.get_save_preset_needs_speakers());
+            }
         }
     }
 
@@ -5081,38 +5420,7 @@ impl App {
         let purpose = self.dialog_purpose.borrow().clone();
         self.hide_dialog();
         match purpose {
-            DialogPurpose::NewZone => {
-                let name = self.new_zone_name(name);
-                // The dialog only offers a name while a speaker is on; if the
-                // last one went off meanwhile, nothing is made.
-                let _ = self.backend.borrow_mut().new_zone(&name);
-                self.refresh();
-            }
-            DialogPurpose::NewZoneWith(id) => {
-                let name = self.new_zone_name(name);
-                self.update(|b| b.new_zone_with(&id, &name));
-            }
             DialogPurpose::Message => {}
-            DialogPurpose::SavePreset => self.save_preset(name),
-            DialogPurpose::RenamePreset(id) => self.update(|b| b.rename_preset(&id, name)),
-            DialogPurpose::SaveCurve => {
-                let mut curves = self.snapshot().equalizer_curves;
-                // An empty name saves nothing (spec S270).
-                if eq::curve_name(name).is_none() {
-                    return;
-                }
-                let gains_db = self.ui.borrow().save_curve_gains;
-                if let Some(index) = eq::save_curve(&mut curves, name, &gains_db) {
-                    self.ui.borrow_mut().chosen_curve = Some(CurveMatch::User(index));
-                    self.update(|b| b.set_equalizer_curves(curves));
-                } else {
-                    let strings = self.strings();
-                    self.show_dialog_message(
-                        strings.get_save_curve_title(),
-                        strings.invoke_curves_full(count(eq::MAX_USER_CURVES)),
-                    );
-                }
-            }
             DialogPurpose::RenameCurve(old) => {
                 let mut curves = self.snapshot().equalizer_curves;
                 let Some(index) = curves.iter().position(|curve| curve.name == old) else {
@@ -5190,6 +5498,29 @@ impl App {
     pub fn prepare_flyout_open(&self, animate: bool) {
         self.flyout.set_revealed(!animate);
         self.flyout.global::<Motion>().set_on(animate);
+    }
+
+    /// Starts the flyout's opening from where `prepare_flyout_open` put it,
+    /// after its first frame: an animation starts only from a value that was
+    /// drawn, and a reopened flyout draws nothing between the two.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn reveal_flyout(&self) {
+        let flyout = self.flyout.as_weak();
+        // Only the latest opening's timer acts: an earlier one would uncloak a
+        // reopened flyout before its first new frame.
+        let opening = FLYOUT_OPENING.with(|count| {
+            count.set(count.get() + 1);
+            count.get()
+        });
+        slint::Timer::single_shot(FLYOUT_FIRST_FRAME, move || {
+            if FLYOUT_OPENING.with(Cell::get) != opening {
+                return;
+            }
+            if let Some(flyout) = flyout.upgrade() {
+                crate::platform::set_cloaked(flyout.window(), false);
+                flyout.set_revealed(true);
+            }
+        });
     }
 
     pub fn hide_flyout(&self) {
@@ -5680,6 +6011,11 @@ pub fn speaker_item(
 ) -> SpeakerItem {
     let delay = format_offset_ms(speaker.delay_ms.unwrap_or(0.0));
     let (device_volume, device_volume_percent) = device_volume_hint(speaker.device_volume);
+    // Only the reference shows its own volume, as the Mac's built-in speakers.
+    let system = speaker
+        .system_volume
+        .filter(|_| speaker.is_reference())
+        .and_then(|volume| Some((volume.percent()?, volume.muted == Some(true))));
     let renamed = speaker.name != speaker.system_name;
     SpeakerItem {
         id: speaker.id.as_str().into(),
@@ -5737,6 +6073,11 @@ pub fn speaker_item(
         code_every_time: speaker.code_every_time,
         device_volume,
         device_volume_percent,
+        system_volume: system.map_or(-1, |(percent, _)| percent as i32),
+        system_muted: system.is_some_and(|(_, muted)| muted),
+        system_open: sync_open && system.is_some(),
+        // Set by the caller from the slider's last write (`App::refresh`).
+        system_refused: false,
         cast: speaker.cast.is_some(),
         cast_state: speaker
             .cast
@@ -5811,7 +6152,7 @@ fn zone_note(strings: &Strings<'_>, note: ui_model::ZoneNote<'_>) -> SharedStrin
     }
 }
 
-/// The entries of Speakers > Hidden Speakers.
+/// The entries of Settings > Hidden Speakers.
 fn hidden_items(strings: &Strings<'_>, state: &AppState) -> Vec<HiddenItem> {
     state
         .hidden
@@ -6029,7 +6370,8 @@ struct CalibrateAllCard {
     running: bool,
     can_start: bool,
     status: SharedString,
-    /// The status only says what a run does, so it is the row's tooltip.
+    /// The status only says what a run does, or that streaming is off (the
+    /// dimmed row says that, as on the Mac), so it is the row's tooltip.
     status_is_hint: bool,
     privacy: bool,
     results_shown: bool,
@@ -6102,7 +6444,13 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
         outcome.clone()
     };
     CalibrateAllCard {
-        status_is_hint: all.phase == AllPhase::Idle && !all.other_running && all.blocked.is_none(),
+        status_is_hint: all.phase == AllPhase::Idle
+            && !all.other_running
+            && match all.blocked {
+                None => true,
+                Some(Failure::NotPlaying(missing)) => missing.streaming,
+                Some(_) => false,
+            },
         running: matches!(all.phase, AllPhase::Running(_)),
         can_start: !busy && all.blocked.is_none(),
         privacy: offers_privacy(
@@ -6362,6 +6710,11 @@ pub fn notice_item(strings: &Strings<'_>, notice: &ui_model::Notice) -> NoticeIt
         id: i32::try_from(notice.id).unwrap_or(i32::MAX),
         message: notice_text(strings, &notice.message),
         title: notice_title(strings, &notice.message),
+        heading: if matches!(notice.message, NoticeMessage::AirPlayRetrying { .. }) {
+            notice_title(strings, &notice.message)
+        } else {
+            SharedString::new()
+        },
         time: notice.time.as_str().into(),
         has_guide: guide::guide(&notice.message).is_some(),
         has_retry: notice.message == NoticeMessage::AirPlayStopped,
@@ -6658,7 +7011,7 @@ fn preset_left_off(strings: &Strings<'_>, reason: &PresetLeftOff) -> SharedStrin
     }
 }
 
-/// The presets as the Presets card, View > Presets and the flyout list them.
+/// The presets as the Presets card, the Presets row and the flyout list them.
 fn preset_items(state: &AppState) -> Vec<PresetItem> {
     state
         .presets
@@ -6855,14 +7208,89 @@ fn update_buttons(message: &NoticeMessage) -> ModelRc<UpdateButton> {
     ModelRc::new(VecModel::from(buttons))
 }
 
+/// The icon of the app source `id` at `size` from `cache`, else `read` and
+/// kept; a blank one is read again 2 s on, so the icon shows once its app runs
+/// without a read on every state refresh.
+fn cached_app_icon(
+    cache: &RefCell<HashMap<String, (u32, slint::Image, std::time::Instant)>>,
+    id: &str,
+    size: u32,
+    now: std::time::Instant,
+    read: impl FnOnce() -> slint::Image,
+) -> slint::Image {
+    if let Some((at, icon, read_at)) = cache.borrow().get(id)
+        && *at == size
+        && (icon.size().width > 0 || now.duration_since(*read_at) < Duration::from_secs(2))
+    {
+        return icon.clone();
+    }
+    let icon = read();
+    cache
+        .borrow_mut()
+        .insert(id.to_owned(), (size, icon.clone(), now));
+    icon
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ui_model::{MOCK_CAST_HOLD, MockBackend};
+
     use std::sync::PoisonError;
 
     use slint::platform::software_renderer::{MinimalSoftwareWindow, Rgb565Pixel};
     use slint::platform::{Key, PointerEventButton, WindowEvent};
+
+    #[test]
+    fn an_app_icon_not_read_yet_is_read_again_at_most_every_2_s() {
+        let cache = RefCell::default();
+        let id = "app:0:Spotify.exe";
+        let start = std::time::Instant::now();
+        let at = |seconds| start + Duration::from_secs(seconds);
+        let icon = || slint::Image::from_rgba8(slint::SharedPixelBuffer::new(16, 16));
+        let blank = cached_app_icon(&cache, id, 16, at(0), slint::Image::default);
+        assert_eq!(blank.size().width, 0);
+        let soon = cached_app_icon(&cache, id, 16, at(1), icon);
+        assert_eq!(
+            soon.size().width,
+            0,
+            "a blank icon is read again only after 2 s"
+        );
+        let later = cached_app_icon(&cache, id, 16, at(3), icon);
+        assert_eq!(
+            later.size().width,
+            16,
+            "the running app's icon replaces the blank one"
+        );
+    }
+
+    #[test]
+    fn a_covers_image_shares_its_pixels_and_is_made_once_per_cover() {
+        let pixels = |image: &slint::Image| {
+            image
+                .to_rgba8_premultiplied()
+                .expect("an RGBA image")
+                .as_bytes()
+                .as_ptr()
+        };
+        let cover = CardArtwork::new(1, [10u8, 20, 30, 255]);
+        let mut covers = CoverImage::default();
+        let image = covers.of(&cover);
+        assert_eq!(
+            pixels(&image),
+            cover.rgba().as_ptr(),
+            "no copy on the UI thread"
+        );
+        let made = covers.0.as_ref().map(|(_, image)| pixels(image));
+        let _ = covers.of(&cover.clone());
+        assert_eq!(
+            covers.0.as_ref().map(|(_, image)| pixels(image)),
+            made,
+            "Play/Pause keeps the image"
+        );
+        let next = CardArtwork::new(1, [10u8, 20, 30, 255]);
+        assert_eq!(pixels(&covers.of(&next)), next.rgba().as_ptr());
+    }
 
     /// A platform without native windows, so a test can build the whole App
     /// and drive it through the windows' callbacks or keys.
@@ -6918,6 +7346,22 @@ mod tests {
             window.draw_if_needed(|renderer| {
                 let mut pixels = vec![Rgb565Pixel::default(); 1000 * 720];
                 renderer.render(&mut pixels, 1000);
+            });
+        }
+        slint::platform::update_timers_and_animations();
+    }
+
+    /// Draws every headless window at `width` × `height` (logical pixels
+    /// at 1x), which builds what a resize rebuilt, as a shown window does.
+    fn draw_frames_at(width: u32, height: u32) {
+        slint::platform::update_timers_and_animations();
+        let windows: Vec<_> = HEADLESS_WINDOWS
+            .with(|windows| windows.borrow().iter().filter_map(Weak::upgrade).collect());
+        for window in windows {
+            window.set_size(slint::PhysicalSize::new(width, height));
+            window.draw_if_needed(|renderer| {
+                let mut pixels = vec![Rgb565Pixel::default(); (width * height) as usize];
+                renderer.render(&mut pixels, width as usize);
             });
         }
         slint::platform::update_timers_and_animations();
@@ -7029,11 +7473,11 @@ mod tests {
                 .set_size(slint::LogicalSize::new(696.0, 680.0));
             app.flyout
                 .window()
-                .set_size(slint::LogicalSize::new(340.0, 720.0));
+                .set_size(slint::LogicalSize::new(300.0, 720.0));
             let fit = app.flyout.get_fit_height();
             app.flyout
                 .window()
-                .set_size(slint::LogicalSize::new(340.0, fit));
+                .set_size(slint::LogicalSize::new(300.0, fit));
             app.equalizer
                 .window()
                 .set_size(slint::LogicalSize::new(660.0, 420.0));
@@ -7106,6 +7550,21 @@ mod tests {
         chunk(&mut out, b"IDAT", &zlib);
         chunk(&mut out, b"IEND", &[]);
         out
+    }
+
+    // The renderer record is cleared from this hook, so a main window whose show fails must not run it.
+    #[cfg(windows)]
+    #[test]
+    fn the_after_main_shows_hook_runs_once_the_main_window_has_shown() {
+        let app = app_over(MockBackend::new());
+        let ran = Rc::new(Cell::new(0));
+        let count = ran.clone();
+        app.after_main_shows(move || count.set(count.get() + 1));
+        assert_eq!(ran.get(), 0);
+        app.show_main();
+        assert_eq!(ran.get(), 1);
+        app.show_main();
+        assert_eq!(ran.get(), 1);
     }
 
     // covers: S388
@@ -7308,6 +7767,9 @@ mod tests {
         app.main.set_now_playing_focused_button(1);
         fake.read(None);
         app.poll();
+        assert!(app.main.get_now_playing_shown(), "a session gap keeps it");
+        *app.now_playing_source.borrow_mut() = None;
+        app.poll();
         assert!(!app.main.get_now_playing_shown());
         assert_eq!(app.main.get_now_playing_focused_button(), -1);
 
@@ -7450,8 +7912,10 @@ mod tests {
         }
     }
 
-    /// With Shuffle and Repeat showing, all five buttons keep their size
-    /// and fit inside the source block at the default 776 px window.
+    /// With Shuffle and Repeat showing, all five buttons keep their size,
+    /// their centres 38 px apart as the Mac's, and stay inside the source
+    /// block at the default 776 px window: the row passes the cover by at
+    /// most a pixel a side, into the block's padding.
     // covers: S450
     #[test]
     fn the_five_transport_buttons_fit_the_narrow_left_column() {
@@ -7490,8 +7954,8 @@ mod tests {
             element(&app, "MainWindow::left-column").map_or(0.0, |column| column.size().width);
         assert_eq!(
             card.1 - card.0,
-            column - 4.0 - 28.0,
-            "it fills the block inside its padding, clear of the column's scroll gutter"
+            column - 28.0,
+            "it fills the block inside its padding"
         );
         let inner = card;
         let shown = ["Shuffle", "Previous Track", "Pause", "Next Track", "Repeat"].map(span);
@@ -7501,19 +7965,77 @@ mod tests {
         );
         let buttons = shown.map(Option::unwrap_or_default);
         let widths = buttons.map(|(start, end)| end - start);
-        assert_eq!(
-            widths,
-            [32.0, 32.0, 40.0, 32.0, 32.0],
-            "the buttons keep their size"
+        assert_eq!(widths, [32.0; 5], "the buttons keep their size");
+        assert!(
+            buttons.windows(2).all(|pair| pair[1].0 - pair[0].0 == 38.0),
+            "centres 38 px apart: {buttons:?}"
         );
         assert!(
-            buttons[0].0 >= inner.0 && buttons[4].1 <= inner.1,
-            "the row {buttons:?} fits inside the card {inner:?}"
+            buttons[0].0 >= inner.0 - 1.0 && buttons[4].1 <= inner.1 + 1.0,
+            "the row {buttons:?} passes the card {inner:?} by a pixel at most"
         );
         assert!(
             buttons.windows(2).all(|pair| pair[0].1 <= pair[1].0),
             "no button overlaps the next: {buttons:?}"
         );
+    }
+
+    /// At the default 696 x 680 with a song and its Shuffle and Repeat, the
+    /// left column fits with no scrolling, its cards 12 px clear of the
+    /// bottom fade, as on the Mac: no menu row above the header, which sits
+    /// 4 under the top row, and Several Apps in the source menu.
+    // covers: S450
+    #[test]
+    fn the_left_column_fits_the_default_window_with_a_song() {
+        use crate::now_playing_card::fake::{FakeControls, track};
+        use crate::now_playing_card::{PlayModes, Repeat};
+        let app = app_over(MockBackend::new());
+        let fake = FakeControls::default();
+        app.set_media_controls(fake.controls());
+        app.main.show().expect("the main window shows");
+        app.poll();
+        let mut song = track("Spotify.exe", "Song", "Band", true);
+        song.modes = PlayModes {
+            shuffle: Some(false),
+            repeat: Some(Repeat::Off),
+        };
+        fake.read(Some(song));
+        // The mock's first speaker starts with a low Windows volume, whose fix shows under Calibrate.
+        app.main
+            .invoke_device_volume_fix_requested(app.main.get_calibrate_all_volume_id());
+        app.poll();
+        // draw_frames sizes every window 1000 x 720, so the size comes after.
+        draw_frames();
+        app.main
+            .window()
+            .set_size(slint::LogicalSize::new(696.0, 680.0));
+        // Runs the window's change handlers, as the event loop does.
+        slint::platform::update_timers_and_animations();
+        let content = app.main.get_left_content_height();
+        let room = app.main.get_left_visible_height();
+        assert!(content > 400.0, "the card shows: {content}");
+        assert!(content <= room, "{content} of {room}");
+        assert_eq!(app.main.get_presets().row_count(), 0);
+        app.main.set_presets_open(true);
+        for _ in 0..30 {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            slint::platform::update_timers_and_animations();
+        }
+        draw_frames();
+        app.main
+            .window()
+            .set_size(slint::LogicalSize::new(696.0, 680.0));
+        slint::platform::update_timers_and_animations();
+        let content = app.main.get_left_content_height();
+        // As on the Mac, the open list says there is none yet over Save as
+        // Preset…, about 100 px (120 in Segoe UI's larger text), and the
+        // column scrolls the rows below it.
+        assert!(
+            content > room && content <= room + 125.0,
+            "open with no presets: {content} of {room}"
+        );
+        let main = include_str!("../ui/main.slint").replace("\r\n", "\n");
+        assert!(main.contains("padding-top: title-row.height - 1px;"));
     }
 
     /// A Now Playing title too long for its line stays on one line and
@@ -7637,15 +8159,15 @@ mod tests {
             element("MainWindow::left-column"),
         );
         let end = |e: &ElementHandle| e.absolute_position().x + e.size().width;
-        // The scroll bar's room.
-        let inside = end(&column) - 4.0;
+        let inside = end(&column);
         assert!(
             button.size().height < 40.0,
             "one line, {} px high",
             button.size().height
         );
+        // The row's fill reaches 8 px past the column, as the Mac's does.
         assert!(
-            end(&button) <= inside + 0.5,
+            end(&button) <= inside + 8.5,
             "the button ends at {}, the card's inside at {inside}",
             end(&button)
         );
@@ -8052,7 +8574,7 @@ mod tests {
         app.follow_ambient(&weak);
         assert!(app.ambient_timer.running());
         let frame = |fps: f64| Duration::from_secs_f64(1.0 / fps);
-        assert_eq!(app.ambient_timer.interval(), frame(15.0), "the breath");
+        assert_eq!(app.ambient_timer.interval(), frame(30.0), "the breath");
         let look = app.main.get_now_playing_ambient();
         assert_eq!(look.strands.row_count(), 3);
 
@@ -8085,7 +8607,7 @@ mod tests {
         let strip = ElementHandle::find_by_element_type_name(&app.main, "AmbientArt")
             .next()
             .expect("the art's strip");
-        assert_eq!(strip.size().height, 22.0, "the strip keeps its height");
+        assert_eq!(strip.size().height, 16.0, "the strip keeps its height");
     }
 
     #[test]
@@ -8113,7 +8635,7 @@ mod tests {
         }
         assert_eq!(
             app.ambient_timer.interval(),
-            Duration::from_secs_f64(1.0 / 15.0),
+            Duration::from_secs_f64(1.0 / 30.0),
             "the breath's frame rate"
         );
         let strands = app.main.get_now_playing_ambient().strands;
@@ -9368,31 +9890,836 @@ mod tests {
         );
     }
 
-    /// The thumb of the main window's speaker list scroll bar.
-    fn speaker_list_thumb(app: &App) -> i_slint_backend_testing::ElementHandle {
-        i_slint_backend_testing::ElementHandle::find_by_element_id(
+    /// The main window's columns draw no scroll bar, as the Mac's: scrolled
+    /// past its top, a column fades into the window over its top 12 px.
+    #[test]
+    fn a_scrolled_column_fades_into_the_window_at_its_top_with_no_scroll_bar() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        hold_clock();
+        let window = app.main.window();
+        app.main.set_now_playing_shown(true);
+        app.main.set_now_playing_title("A track title".into());
+        app.main.set_now_playing_has_artwork(true);
+        app.main.set_now_playing_artwork(red_cover());
+        draw_frames();
+        assert_eq!(
+            ElementHandle::find_by_element_id(&app.main, "OverlayScrollView::thumb").count(),
+            0,
+            "no scroll bar on the columns"
+        );
+        let column = element(&app, "MainWindow::left-column").expect("the left column");
+        let top = column.absolute_position().y;
+        let (left, ..) = red_bounds(window);
+        let x = left + 20.0;
+        let at = pixels(window);
+        let window_colour = at(x, top - 4.0);
+        scroll(window, x, top + 100.0, -120.0);
+        let at = pixels(window);
+        assert_eq!(at(x, top + 0.5), window_colour, "faded out at the edge");
+        assert_eq!(at(x, top + 12.5), [255, 0, 0, 255], "whole 12 px in");
+        scroll(window, x, top + 100.0, 120.0);
+        let at = pixels(window);
+        assert_ne!(
+            at(x, top + 0.5),
+            window_colour,
+            "no fade with nothing past the top"
+        );
+    }
+
+    /// A speaker's delay panel moves as the Mac's: over 250 ms its edge moves
+    /// in the first half and its content fades in the second, and closing
+    /// runs it back; with Windows' animation effects off it moves at once.
+    // covers: S450
+    #[test]
+    fn a_delay_panel_unfolds_over_250_ms_and_folds_back_edge_last() {
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        hold_clock();
+        draw_frames();
+        let height = || {
+            i_slint_backend_testing::ElementHandle::find_by_element_id(
+                &app.main,
+                "SpeakerRow::sync-pane",
+            )
+            .map(|pane| pane.size().height)
+            .fold(0.0, f32::max)
+        };
+        let after = |ms: u64| {
+            advance_clock(Duration::from_millis(ms));
+            draw_frames();
+            height()
+        };
+        app.main.invoke_sync_toggled("local:desk".into());
+        draw_frames();
+        let unfolding = after(60);
+        let full = after(400);
+        assert!(0.0 < unfolding && unfolding < full, "{unfolding} of {full}");
+        app.main.invoke_sync_toggled("local:desk".into());
+        draw_frames();
+        assert_eq!(after(60), full, "the content fades out first");
+        let folding = after(130);
+        assert!(0.0 < folding && folding < full, "{folding} of {full}");
+        assert_eq!(after(300), 0.0);
+
+        app.main.global::<Motion>().set_on(false);
+        app.main.invoke_sync_toggled("local:desk".into());
+        assert_eq!(after(1), full, "at once with animation effects off");
+        let step = app.strings().invoke_delay_step_accessibility(-10);
+        let fade = || {
+            i_slint_backend_testing::ElementHandle::find_by_accessible_label(&app.main, &step)
+                .next()
+                .expect("the -10 step")
+                .computed_opacity()
+        };
+        let fading = fade();
+        assert!(
+            0.0 < fading && fading < 1.0,
+            "its content fades in: {fading}"
+        );
+        after(200);
+        assert_eq!(fade(), 1.0, "faded in within 150 ms");
+    }
+
+    /// A row's delay rolls to a new value as the Mac's numeric text does:
+    /// the old value leaves over 300 ms as the new one comes in.
+    // covers: S450
+    #[test]
+    fn a_changed_delay_rolls_to_its_new_value() {
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        hold_clock();
+        draw_frames();
+        let leaving = || {
+            i_slint_backend_testing::ElementHandle::find_by_element_id(&app.main, "DelayDigit::old")
+                .map(|text| text.computed_opacity())
+                .fold(0.0, f32::max)
+        };
+        app.main.invoke_delay_stepped("local:desk".into(), 10);
+        // The row takes the new value as a frame is drawn.
+        draw_frames();
+        advance_clock(Duration::from_millis(100));
+        draw_frames();
+        let rolling = leaving();
+        assert!(
+            0.0 < rolling && rolling < 1.0,
+            "the old value leaves: {rolling}"
+        );
+        advance_clock(Duration::from_millis(300));
+        draw_frames();
+        assert_eq!(leaving(), 0.0, "gone after 300 ms");
+
+        app.main.global::<Motion>().set_on(false);
+        app.main.invoke_delay_stepped("local:desk".into(), 10);
+        draw_frames();
+        advance_clock(Duration::from_millis(100));
+        draw_frames();
+        let fading = leaving();
+        assert!(
+            0.0 < fading && fading < 1.0,
+            "cross-fades with animation effects off: {fading}"
+        );
+        advance_clock(Duration::from_millis(300));
+        draw_frames();
+        app.main.global::<Motion>().set_on(true);
+
+        // Renamed to sort first, the last connected speaker moves every row
+        // under it into another's slot; no delay changed, so nothing rolls.
+        let last = app.snapshot().layout().1.last().map(|s| s.id.clone());
+        let last = last.expect("a connected speaker");
+        app.update(|b| b.rename_speaker(&last, "AAA"));
+        draw_frames();
+        advance_clock(Duration::from_millis(100));
+        draw_frames();
+        assert_eq!(leaving(), 0.0, "a moved row doesn't roll");
+    }
+
+    /// As the Mac's numeric text, only the digits that change roll, and a
+    /// teal tint flashes behind the value: up in 120 ms, gone 900 ms later.
+    // covers: S450
+    #[test]
+    fn a_changed_delay_rolls_only_its_changed_digits_under_a_teal_flash() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        hold_clock();
+        draw_frames();
+        let widest_leaving = || {
+            ElementHandle::find_by_element_id(&app.main, "SpeakerRow::delay-old")
+                .chain(ElementHandle::find_by_element_id(
+                    &app.main,
+                    "DelayDigit::old",
+                ))
+                .filter(|part| (0.01..0.99).contains(&part.computed_opacity()))
+                .map(|part| part.size().width)
+                .fold(0.0, f32::max)
+        };
+        let flash = || {
+            ElementHandle::find_by_element_id(&app.main, "SpeakerRow::delay-flash")
+                .map(|tint| tint.computed_opacity())
+                .fold(0.0, f32::max)
+        };
+        // 120 ms to 130 ms: only the tens digit changes.
+        app.main.invoke_delay_stepped("local:desk".into(), 10);
+        draw_frames();
+        advance_clock(Duration::from_millis(100));
+        draw_frames();
+        let width = widest_leaving();
+        assert!(
+            0.0 < width && width < 12.0,
+            "one digit rolls, not the whole value: {width} px"
+        );
+        assert!(flash() > 0.0, "the value flashes teal");
+        advance_clock(Duration::from_millis(1100));
+        draw_frames();
+        assert_eq!(flash(), 0.0, "the flash is gone after a second");
+    }
+
+    /// A row switched off dims its volume knob over 250 ms, as the Mac's
+    /// row does, instead of at once.
+    #[test]
+    fn a_row_switched_off_dims_its_slider_over_250_ms() {
+        use i_slint_backend_testing::ElementHandle;
+        hold_clock();
+        let mut backend = MockBackend::new();
+        backend.set_running(true);
+        let app = app_over(backend);
+        app.main.show().expect("the main window shows");
+        app.main.invoke_appearance_chosen(crate::Appearance::Dark);
+        draw_frames();
+        advance_clock(Duration::from_millis(500));
+        draw_frames();
+        let dimming = || {
+            ElementHandle::find_by_element_id(&app.main, "LevelSlider::thumb")
+                .map(|knob| knob.computed_opacity())
+                .filter(|opacity| (0.3..0.95).contains(opacity))
+                .count()
+        };
+        assert_eq!(dimming(), 0);
+        app.main.invoke_speaker_toggled("local:speakers".into());
+        draw_frames();
+        advance_clock(Duration::from_millis(100));
+        draw_frames();
+        assert_eq!(dimming(), 1, "its knob dims over time");
+        advance_clock(Duration::from_millis(300));
+        draw_frames();
+        assert_eq!(dimming(), 0, "dimmed after 250 ms");
+    }
+
+    /// Settings fades in over 560 ms as it opens, as the Mac's window does;
+    /// with animation effects off it shows at once, with no blank frame.
+    #[test]
+    fn settings_fades_in_as_it_opens() {
+        use i_slint_backend_testing::ElementHandle;
+        hold_clock();
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        draw_frames();
+        let shown = || {
+            ElementHandle::find_by_element_id(&app.settings, "SettingsWindow::fade")
+                .map(|content| content.computed_opacity())
+                .fold(0.0, f32::max)
+        };
+        let after = |ms: u64| {
+            advance_clock(Duration::from_millis(ms));
+            draw_frames();
+            shown()
+        };
+        app.main.invoke_settings_requested();
+        draw_frames();
+        after(60);
+        let fading = after(90);
+        assert!(0.0 < fading && fading < 1.0, "it fades in: {fading}");
+        let late = after(300);
+        assert!(late < 1.0, "still fading 390 ms in: {late}");
+        assert_eq!(after(300), 1.0);
+        app.settings.hide().expect("Settings hides");
+
+        app.main.global::<Motion>().set_on(false);
+        app.main.invoke_settings_requested();
+        draw_frames();
+        assert_eq!(shown(), 1.0, "at once with animation effects off");
+    }
+
+    /// Each time Settings opens, the second time too, it stays off the screen
+    /// until it drew its content hidden, then fades in once: Windows otherwise
+    /// shows the frame it kept from the last opening, or a black one.
+    #[test]
+    fn settings_stays_off_the_screen_until_its_first_hidden_frame_on_every_open() {
+        use i_slint_backend_testing::ElementHandle;
+        hold_clock();
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        draw_frames();
+        let shown = || {
+            ElementHandle::find_by_element_id(&app.settings, "SettingsWindow::fade")
+                .map(|content| content.computed_opacity())
+                .fold(0.0, f32::max)
+        };
+        let cloaked = || crate::platform::is_cloaked(app.settings.window());
+        for opening in ["first", "second"] {
+            app.main.invoke_settings_requested();
+            assert!(cloaked(), "{opening}: off the screen as it shows");
+            draw_frames();
+            assert_eq!(shown(), 0.0, "{opening}: its first frame is hidden");
+            assert!(cloaked(), "{opening}: off the screen until that frame drew");
+            advance_clock(Duration::from_millis(60));
+            draw_frames();
+            assert!(!cloaked(), "{opening}: on the screen after it");
+            advance_clock(Duration::from_millis(90));
+            draw_frames();
+            let fading = shown();
+            assert!(
+                0.0 < fading && fading < 1.0,
+                "{opening}: it fades in: {fading}"
+            );
+            advance_clock(Duration::from_millis(700));
+            draw_frames();
+            app.settings.hide().expect("Settings hides");
+        }
+    }
+
+    /// Settings closed and reopened before its first opening uncloaked it
+    /// waits for its own first frame: the earlier opening's timer leaves it
+    /// alone.
+    #[test]
+    fn a_quick_reopen_uncloaks_settings_only_after_its_own_first_frame() {
+        hold_clock();
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        draw_frames();
+        let cloaked = || crate::platform::is_cloaked(app.settings.window());
+        app.main.invoke_settings_requested();
+        advance_clock(Duration::from_millis(30));
+        draw_frames();
+        app.settings.hide().expect("Settings hides");
+        app.main.invoke_settings_requested();
+        advance_clock(Duration::from_millis(25));
+        draw_frames();
+        assert!(cloaked(), "the first opening's timer");
+        assert!(!app.settings.get_revealed(), "the first opening's timer");
+        advance_clock(Duration::from_millis(30));
+        draw_frames();
+        assert!(!cloaked(), "its own timer");
+        assert!(app.settings.get_revealed(), "its own timer");
+    }
+
+    /// New Zone makes "Zone n" at once, with no name dialog, and opens its
+    /// header's name field empty with the focus, as the Mac's: Return on
+    /// nothing or Escape keeps the numbered name. With no speaker on, a plain
+    /// message says why, under the app's name.
+    #[test]
+    fn a_new_zone_is_made_at_once_and_named_in_its_header() {
+        let app = app_over(MockBackend::zones_preview());
+        let main = &app.main;
+        let zones = app.snapshot().zones.len();
+        let header = |id: &str| {
+            app.models
+                .zones
+                .iter()
+                .find(|zone| zone.id == id)
+                .expect("the new zone's header")
+        };
+        let new_zone = |before: &[String]| {
+            app.snapshot()
+                .zones
+                .into_iter()
+                .find(|zone| !before.contains(&zone.id))
+                .expect("a new zone")
+        };
+        let ids = || {
+            app.snapshot()
+                .zones
+                .into_iter()
+                .map(|zone| zone.id)
+                .collect::<Vec<_>>()
+        };
+
+        let before = ids();
+        main.invoke_new_zone_requested();
+        assert!(!app.zone_dialog.window().is_visible(), "no dialog");
+        let zone = new_zone(&before);
+        assert_eq!(zone.name, format!("Zone {}", zones + 1));
+        assert!(header(&zone.id).renaming);
+        assert_eq!(header(&zone.id).name_text, "", "the field opens empty");
+        slint::platform::update_timers_and_animations();
+        assert_eq!(main.get_focus_zone_part(), RowPart::Name);
+        main.invoke_zone_rename_committed(zone.id.as_str().into());
+        assert_eq!(new_zone(&before).name, format!("Zone {}", zones + 1));
+
+        let before = ids();
+        main.invoke_speaker_new_zone_requested("local:headphones".into());
+        assert!(!app.zone_dialog.window().is_visible(), "no dialog");
+        let zone = new_zone(&before);
+        assert_eq!(
+            app.snapshot()
+                .zone_of("local:headphones")
+                .map(|z| z.id.clone()),
+            Some(zone.id.clone())
+        );
+        assert!(header(&zone.id).renaming);
+        main.invoke_zone_rename_cancelled(zone.id.as_str().into());
+        assert_eq!(new_zone(&before).name, format!("Zone {}", zones + 2));
+
+        let on: Vec<_> = app
+            .snapshot()
+            .speakers
+            .iter()
+            .filter(|speaker| speaker.enabled)
+            .map(|speaker| speaker.id.clone())
+            .collect();
+        for id in on {
+            app.update(|b| b.set_speaker_enabled(&id, false));
+        }
+        let zones = app.snapshot().zones.len();
+        main.invoke_new_zone_requested();
+        assert!(app.zone_dialog.window().is_visible());
+        assert_eq!(app.zone_dialog.get_heading(), "AudioSync");
+        assert_eq!(
+            app.zone_dialog.get_message(),
+            app.strings().get_new_zone_needs_speakers()
+        );
+        assert!(!app.zone_dialog.get_show_field());
+        assert_eq!(app.snapshot().zones.len(), zones, "no zone was made");
+    }
+
+    /// Narrator's Increment and Decrement move a speaker's and the master
+    /// volume by a tenth, as VoiceOver's do on the Mac; arrow keys stay at 1.
+    #[test]
+    fn narrator_steps_the_volume_sliders_by_a_tenth() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        draw_frames();
+        let speaker = app.snapshot().speakers[0].clone();
+        app.update(|b| b.set_master_volume(50.0));
+        app.update(|b| b.set_speaker_volume(&speaker.id, 50.0));
+        draw_frames();
+        let slider = |label: SharedString| {
+            ElementHandle::find_by_accessible_label(&app.main, &label)
+                .next()
+                .expect("the slider")
+        };
+        let strings = app.strings();
+        let master = slider(strings.get_master_volume());
+        master.invoke_accessible_increment_action();
+        assert_eq!(app.snapshot().master_volume, 60.0);
+        master.invoke_accessible_decrement_action();
+        master.invoke_accessible_decrement_action();
+        assert_eq!(app.snapshot().master_volume, 40.0);
+        let row = slider(strings.invoke_volume_of(speaker.name.as_str().into()));
+        row.invoke_accessible_increment_action();
+        let volume = || {
+            app.snapshot()
+                .speaker(&speaker.id)
+                .expect("the speaker")
+                .volume
+        };
+        assert_eq!(volume(), 60.0);
+        row.invoke_accessible_decrement_action();
+        assert_eq!(volume(), 50.0);
+    }
+
+    /// Settings reopened with animation effects off right after a fading
+    /// opening shows at once: the fading opening's timer is left with
+    /// nothing to do.
+    #[test]
+    fn a_reopen_with_animation_effects_off_shows_settings_at_once() {
+        hold_clock();
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        draw_frames();
+        app.main.invoke_settings_requested();
+        advance_clock(Duration::from_millis(30));
+        draw_frames();
+        app.settings.hide().expect("Settings hides");
+        app.main.global::<Motion>().set_on(false);
+        app.main.invoke_settings_requested();
+        assert!(!crate::platform::is_cloaked(app.settings.window()));
+        assert!(app.settings.get_revealed());
+    }
+
+    /// A new zone's empty name field still names the zone for Narrator, as
+    /// the Mac's "Name for" label does.
+    #[test]
+    fn a_new_zones_empty_name_field_is_read_with_the_zones_name() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::zones_preview());
+        app.main.show().expect("the main window shows");
+        let name = format!("Zone {}", app.snapshot().zones.len() + 1);
+        app.main.invoke_new_zone_requested();
+        draw_frames();
+        let label = format!("Name for {name}");
+        assert!(
+            ElementHandle::find_by_accessible_label(&app.main, &label)
+                .next()
+                .is_some(),
+            "{label}"
+        );
+    }
+
+    /// The reference row shows its Windows volume as "System 13%" where
+    /// other rows show their delay, as the Mac's built-in speakers do; the
+    /// value opens a panel whose slider sets that volume, and the value
+    /// follows what Windows reports.
+    // covers: S197
+    #[test]
+    fn the_reference_row_shows_and_sets_its_windows_volume() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        draw_frames();
+        let reference = app
+            .snapshot()
+            .speakers
+            .into_iter()
+            .find(ui_model::Speaker::is_reference)
+            .expect("the reference");
+        let find = |label: &str| {
+            ElementHandle::find_by_accessible_label(&app.main, label)
+                .next()
+                .unwrap_or_else(|| panic!("{label}"))
+        };
+        let button = find("System volume");
+        assert_eq!(button.accessible_value().as_deref(), Some("13%"));
+        button.invoke_accessible_default_action();
+        draw_frames();
+        let slider = find(&format!("Windows volume of {}", reference.name));
+        slider.invoke_accessible_increment_action();
+        draw_frames();
+        let level = app
+            .snapshot()
+            .speaker(&reference.id)
+            .and_then(|speaker| speaker.system_volume)
+            .and_then(|volume| volume.percent());
+        assert_eq!(level, Some(23));
+        assert_eq!(
+            find("System volume").accessible_value().as_deref(),
+            Some("23%")
+        );
+    }
+
+    /// The inked box of what `window` draws inside `x`, `y`, `width`,
+    /// `height` (logical pixels), against the colour at its top-left
+    /// corner: left, top, right, bottom.
+    fn ink(
+        window: &slint::Window,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    ) -> (f32, f32, f32, f32) {
+        let at = pixels(window);
+        let ground = at(x, y);
+        let (mut left, mut top, mut right, mut bottom) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for row in 0..height as usize {
+            for column in 0..width as usize {
+                let (px, py) = (x + column as f32, y + row as f32);
+                let off: u32 = at(px, py)
+                    .iter()
+                    .zip(ground)
+                    .map(|(a, b)| u32::from(a.abs_diff(b)))
+                    .sum();
+                if off > 60 {
+                    (left, top) = (left.min(px), top.min(py));
+                    (right, bottom) = (right.max(px + 1.0), bottom.max(py + 1.0));
+                }
+            }
+        }
+        (left, top, right, bottom)
+    }
+
+    /// The delay and System values' boxes hug their text with the Mac's
+    /// 3 px on either side, so the hover fill is no wider than the value.
+    #[test]
+    fn a_rows_delay_and_system_boxes_hug_their_values() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        draw_frames();
+        for label in ["System volume", "Desk Speaker delay"] {
+            let chip = ElementHandle::find_by_accessible_label(&app.main, label)
+                .next()
+                .unwrap_or_else(|| panic!("{label}"));
+            let (at, size) = (chip.absolute_position(), chip.size());
+            let (left, _, right, _) = ink(app.main.window(), at.x, at.y, size.width, size.height);
+            assert!(
+                size.width <= right - left + 6.0 + 2.0,
+                "{label}: a {} px box around {} px of text",
+                size.width,
+                right - left
+            );
+        }
+    }
+
+    /// "System 13%" shows whole: its letters' tops are not cut off.
+    #[test]
+    fn the_system_value_shows_its_letters_whole() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        draw_frames();
+        let text = ElementHandle::find_by_element_id(&app.main, "SpeakerRow::system-text")
+            .next()
+            .expect("the System value");
+        let (at, size) = (text.absolute_position(), text.size());
+        let (_, top, _, bottom) = ink(
+            app.main.window(),
+            at.x,
+            at.y - 8.0,
+            size.width,
+            size.height + 16.0,
+        );
+        assert!(
+            at.y < top && bottom < at.y + size.height,
+            "ink {top}..{bottom} in a box {}..{}",
+            at.y,
+            at.y + size.height
+        );
+    }
+
+    /// A click anywhere on This PC's row opens its System panel, as a click
+    /// on another row opens that row's delay panel.
+    #[test]
+    fn a_click_on_this_pcs_row_opens_its_system_panel() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        hold_clock();
+        draw_frames();
+        let reference = app
+            .snapshot()
+            .speakers
+            .into_iter()
+            .find(ui_model::Speaker::is_reference)
+            .expect("the reference");
+        let chip = ElementHandle::find_by_accessible_label(&app.main, "System volume")
+            .next()
+            .expect("the System value");
+        let (at, size) = (chip.absolute_position(), chip.size());
+        click(app.main.window(), at.x - 30.0, at.y + size.height / 2.0);
+        advance_clock(Duration::from_secs(1));
+        draw_frames();
+        let slider = format!("Windows volume of {}", reference.name);
+        assert!(
+            ElementHandle::find_by_accessible_label(&app.main, &slider)
+                .next()
+                .is_some(),
+            "the System panel opens"
+        );
+    }
+
+    /// Folding the System panel mid-drag lets go of the slider, as the
+    /// Mac's panel does as it disappears, and clears a refusal: open again,
+    /// it shows what Windows reports and no refusal line.
+    // covers: S197
+    #[test]
+    fn folding_the_system_panel_lets_go_of_the_slider_and_its_refusal() {
+        use i_slint_backend_testing::ElementHandle;
+        let mut mock = MockBackend::new();
+        mock.refuses_system_volume = true;
+        let app = app_over(mock);
+        app.main.show().expect("the main window shows");
+        draw_frames();
+        let reference = app
+            .snapshot()
+            .speakers
+            .into_iter()
+            .find(ui_model::Speaker::is_reference)
+            .expect("the reference");
+        let button = || {
+            ElementHandle::find_by_accessible_label(&app.main, "System volume")
+                .next()
+                .expect("the System value")
+        };
+        // The line under the slider, not the announcement's copy.
+        let refused = || element(&app, "SpeakerRow::refusal").is_some();
+        button().invoke_accessible_default_action();
+        draw_frames();
+        let id = SharedString::from(reference.id.as_str());
+        app.main
+            .invoke_system_volume_editing_requested(id.clone(), true);
+        app.main.invoke_system_volume_requested(id, 40.0);
+        draw_frames();
+        assert!(refused());
+        assert_eq!(button().accessible_value().as_deref(), Some("40%"));
+        button().invoke_accessible_default_action();
+        draw_frames();
+        button().invoke_accessible_default_action();
+        draw_frames();
+        assert_eq!(
+            button().accessible_value().as_deref(),
+            Some("13%"),
+            "what Windows reports"
+        );
+        assert!(!refused(), "no refusal line once the panel folded");
+    }
+
+    /// The System panel reads its value as "13%", as the Mac's; a write
+    /// Windows refuses shows the Mac's line under the slider; while the
+    /// slider is held, Windows' reports wait, and the latest shows on release.
+    // covers: S197
+    #[test]
+    fn the_system_panel_reads_percent_says_a_refusal_and_holds_its_value() {
+        use i_slint_backend_testing::ElementHandle;
+        let shown = |app: &App| {
+            ElementHandle::find_by_accessible_label(&app.main, "System volume")
+                .next()
+                .and_then(|button| button.accessible_value())
+                .map(|value| value.to_string())
+        };
+        let open = |mock: MockBackend| {
+            let app = app_over(mock);
+            app.main.show().expect("the main window shows");
+            draw_frames();
+            let reference = app
+                .snapshot()
+                .speakers
+                .into_iter()
+                .find(ui_model::Speaker::is_reference)
+                .expect("the reference");
+            ElementHandle::find_by_accessible_label(&app.main, "System volume")
+                .next()
+                .expect("the System value")
+                .invoke_accessible_default_action();
+            draw_frames();
+            (app, reference)
+        };
+
+        let (app, reference) = open(MockBackend::new());
+        let slider = ElementHandle::find_by_accessible_label(
             &app.main,
-            "OverlayScrollView::thumb",
+            &format!("Windows volume of {}", reference.name),
         )
-        .max_by(|a, b| a.absolute_position().x.total_cmp(&b.absolute_position().x))
-        .expect("the main window has scroll views")
+        .next()
+        .expect("the slider");
+        assert_eq!(slider.accessible_value().as_deref(), Some("13%"));
+
+        let id = SharedString::from(reference.id.as_str());
+        app.main
+            .invoke_system_volume_editing_requested(id.clone(), true);
+        app.main.invoke_system_volume_requested(id.clone(), 40.0);
+        // Windows reports another level while the slider is held.
+        app.update(|b| {
+            b.set_system_volume(&reference.id, 0.7);
+        });
+        draw_frames();
+        assert_eq!(shown(&app).as_deref(), Some("40%"), "held");
+        app.main.invoke_system_volume_editing_requested(id, false);
+        draw_frames();
+        assert_eq!(shown(&app).as_deref(), Some("70%"), "the latest on release");
+
+        let mut mock = MockBackend::new();
+        mock.refuses_system_volume = true;
+        let (app, reference) = open(mock);
+        let refused = "This output didn't accept the new volume.";
+        let line = || {
+            element(&app, "SpeakerRow::refusal")
+                .and_then(|line| line.accessible_label())
+                .is_some_and(|label| label == refused)
+        };
+        assert!(!line());
+        app.main
+            .invoke_system_volume_requested(reference.id.as_str().into(), 40.0);
+        draw_frames();
+        assert!(line(), "{refused}");
+    }
+
+    /// A Cast speaker's delay is a wait, never below 0, so its row shows it
+    /// with no sign, as the Mac's does.
+    // covers: S450
+    #[test]
+    fn a_cast_rows_delay_has_no_sign() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        draw_frames();
+        let connected = app.main.get_connected();
+        let mut item = connected.row_data(0).expect("a connected speaker");
+        item.cast = true;
+        item.has_delay = true;
+        item.delay_ms = 10;
+        let label = app.strings().invoke_delay_of(item.name.clone());
+        connected.set_row_data(0, item);
+        draw_frames();
+        let value = ElementHandle::find_by_accessible_label(&app.main, &label)
+            .find_map(|button| button.accessible_value())
+            .expect("the delay value");
+        assert_eq!(value.as_str(), "10 ms");
+    }
+
+    /// The delay panel holds the Mac's small steps, 20 px high and 4 px
+    /// apart, around a 72 x 22 field.
+    // covers: S450
+    #[test]
+    fn the_delay_panel_holds_small_steps_around_a_72_by_22_field() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        app.main.global::<Motion>().set_on(false);
+        app.main.invoke_sync_toggled("local:desk".into());
+        draw_frames();
+        let strings = app.strings();
+        let step = |delta: i32| {
+            let label = strings.invoke_delay_step_accessibility(delta);
+            ElementHandle::find_by_accessible_label(&app.main, &label)
+                .next()
+                .unwrap_or_else(|| panic!("the {delta} step"))
+        };
+        let steps = [-100, -10].map(step);
+        assert!(steps.iter().all(|s| s.size().height == 20.0));
+        assert_eq!(
+            steps[1].absolute_position().x - right_edge(&steps[0]),
+            4.0,
+            "4 px apart"
+        );
+        let name = app.snapshot().speaker("local:desk").unwrap().name.clone();
+        let field = ElementHandle::find_by_accessible_label(
+            &app.main,
+            &strings.invoke_delay_of(name.into()),
+        )
+        .find(|e| e.size().width == 72.0)
+        .expect("the delay field");
+        assert_eq!(field.size().height, 22.0);
     }
 
     #[test]
-    fn the_scroll_bar_hides_at_rest_and_shows_with_the_pointer_at_the_edge() {
-        let app = app_over(MockBackend::zones_preview());
-        let window = app.main.window();
-        window.set_size(slint::LogicalSize::new(820.0, 480.0));
+    fn a_click_on_the_source_button_toggles_its_menu() {
+        fn check(name: &str, component: &impl slint::ComponentHandle) {
+            use i_slint_backend_testing::ElementHandle;
+            let window = component.window();
+            let items =
+                || ElementHandle::find_by_accessible_label(component, "Music Player").count();
+            let closed = items();
+            let button = ElementHandle::find_by_accessible_label(component, "Audio Source")
+                .next()
+                .expect("the source button");
+            let (at, size) = (button.absolute_position(), button.size());
+            let (x, y) = (at.x + size.width / 2.0, at.y + size.height / 2.0);
+            click(window, x, y);
+            assert!(items() > closed, "{name}: the first click opens the menu");
+            click(window, x, y);
+            assert_eq!(items(), closed, "{name}: the second click closes it");
+            advance_clock(Duration::from_millis(1000));
+            draw_frames();
+            click(window, x, y);
+            assert!(items() > closed, "{name}: a click later opens it again");
+            press(window, Key::Escape);
+            assert_eq!(items(), closed, "{name}: Escape closes it");
+            click(window, x, y);
+            assert!(items() > closed, "{name}: the next click opens it");
+            press(window, Key::Escape);
+            advance_clock(Duration::from_millis(1000));
+            draw_frames();
+        }
+        let app = app_over(MockBackend::new());
+        app.refresh();
+        app.main.show().expect("the main window shows");
+        app.flyout.show().expect("the flyout shows headless");
+        hold_clock();
         draw_frames();
-        let thumb = speaker_list_thumb(&app);
-        assert_eq!(thumb.computed_opacity(), 0.0, "hidden at rest");
-        let (at, size) = (thumb.absolute_position(), thumb.size());
-        // On the edge, below the thumb.
-        let position =
-            slint::LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height + 8.0);
-        window.dispatch_event(WindowEvent::PointerMoved { position });
-        draw_frames();
-        assert_eq!(thumb.computed_opacity(), 1.0, "shown at the edge");
+        check("main", &app.main);
+        check("flyout", &app.flyout);
     }
 
     #[test]
@@ -9405,7 +10732,7 @@ mod tests {
         let height = app.fit_flyout(300.0);
         app.flyout
             .window()
-            .set_size(slint::LogicalSize::new(340.0, height));
+            .set_size(slint::LogicalSize::new(300.0, height));
         draw_frames();
         let thumbs: Vec<_> =
             ElementHandle::find_by_element_id(&app.flyout, "OverlayScrollView::thumb").collect();
@@ -9476,11 +10803,11 @@ mod tests {
         assert_eq!(app.snapshot().airplay_delay_ms, Some(2100.0));
         assert!(!open(&app).contains("local:desk"), "and closed it");
 
-        // The reference row has no delay: a click there is outside.
+        // Between the wordmark and the streaming switch is outside.
         click(window, 600.0, 357.0);
         app.main
             .invoke_delay_edited("local:desk".into(), "300".into());
-        click(window, 600.0, 124.0);
+        click(window, 500.0, 42.0);
         assert_eq!(delay_of(&app, "local:desk"), Some(300.0));
         assert!(open(&app).is_empty());
     }
@@ -10090,14 +11417,9 @@ mod tests {
         use i_slint_backend_testing::ElementHandle;
         // Between the wordmark and the streaming switch, in the gap under the
         // left column's Equalizer card (None: found in the layout, since the
-        // fonts set how tall the cards are), then on the blank part of a row in each speaker section, which the
+        // fonts set how tall the cards are), then on the blank part of a connected speaker's row, which the
         // row's own TouchArea takes.
-        for place in [
-            Some((500.0, 42.0)),
-            None,
-            Some((600.0, 124.0)),
-            Some((600.0, 305.0)),
-        ] {
+        for place in [Some((500.0, 42.0)), None, Some((600.0, 305.0))] {
             let app = app_over(MockBackend::new());
             draw_frames();
             let (x, y) = place.unwrap_or_else(|| {
@@ -10639,7 +11961,7 @@ mod tests {
         app.main
             .invoke_speaker_rename_edited("local:desk".into(), "Desk".into());
         draw_frames();
-        click(app.main.window(), 600.0, 357.0);
+        click(app.main.window(), 600.0, 370.0);
         assert_eq!(name_of(&app, "local:desk"), "Desk");
         assert!(app.ui.borrow().rename.is_none());
         assert!(app.ui.borrow().sync_open.is_empty(), "no delay panel");
@@ -10990,9 +12312,12 @@ mod tests {
     /// Checks that the tip on `label` holds more than `label` shows. The
     /// tip's Text has no accessible label to compare (Narrator reads the
     /// row). Its font is no larger than the label's yet it needs more width
-    /// than the label has: the label is cut and the tip is not.
+    /// than the label has, or a second line where the tip wraps: the label
+    /// is cut and the tip is not.
     fn shows_in_full(app: &App, label: &str, tip: &str) {
-        let width = element(app, label).map_or(0.0, |label| label.size().width);
+        let (width, height) = element(app, label).map_or((0.0, 0.0), |label| {
+            (label.size().width, label.size().height)
+        });
         let (_, shown) = rest_on(app, label, tip);
         let shown = shown
             .and_then(|tip| {
@@ -11002,9 +12327,9 @@ mod tests {
             })
             .unwrap_or_else(|| panic!("a tooltip on {label}"));
         assert!(
-            shown.size().width > width,
-            "{label}: tip {} wide, label {width}",
-            shown.size().width
+            shown.size().width > width || shown.size().height > height,
+            "{label}: tip {:?}, label {width} x {height}",
+            shown.size()
         );
     }
 
@@ -11022,10 +12347,206 @@ mod tests {
         app
     }
 
-    /// Speaker rows in one list step 52 px from badge to badge, divider
-    /// included, as the Mac's rows step 52 pt.
+    /// The header's state line is one whole line of its font, as the Mac's,
+    /// and a long speaker name ends in an ellipsis before the gear.
     #[test]
-    fn speaker_rows_step_52_px_as_on_the_mac() {
+    fn the_header_status_is_one_whole_line_that_elides_a_long_name() {
+        let app = narrow_app(MockBackend::new());
+        app.main.set_status(
+            "Streaming to Living Room HomePod, Kitchen Speaker, Bedroom TV, Office Speaker, Garage Speaker and the Speaker Out in the Garden"
+                .into(),
+        );
+        draw_frames_at(776, 680);
+        let status = element(&app, "MainWindow::header-status").expect("the status line");
+        let gear = element(&app, "MainWindow::gear").expect("the gear");
+        let (at, size) = (status.absolute_position(), status.size());
+        assert!(
+            at.x + size.width <= gear.absolute_position().x,
+            "it ends before the gear"
+        );
+        assert!(size.height < 26.0, "one line, {} px", size.height);
+        // Segoe UI's 13 px line is 17.3 px; a 16 px box cut its descenders.
+        #[cfg(windows)]
+        assert!(
+            size.height >= 17.0,
+            "a whole Segoe UI line, {} px",
+            size.height
+        );
+        let source = include_str!("../ui/main.slint");
+        let line = &source[source
+            .find("header-status := QuietText {")
+            .expect("the status")..];
+        let line = &line[..line.find('}').expect("its end")];
+        assert!(line.contains("overflow: elide;"), "a long name elides");
+        assert!(line.contains("wrap: no-wrap;"), "it stays on one line");
+    }
+
+    /// Flipping the switch cross-fades the header's old state into the new
+    /// one in place, both ways, as the Mac's: 250 ms ease-in-out, or 150 ms
+    /// linear with Animation effects off.
+    #[test]
+    fn the_header_state_cross_fades_when_the_switch_flips() {
+        hold_clock();
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows headless");
+        draw_frames();
+        for (on, motion, half) in [(true, true, 125), (false, true, 125), (true, false, 75)] {
+            app.main.global::<Motion>().set_on(motion);
+            let before = app.main.get_status();
+            app.main.invoke_power_toggled(on);
+            assert_ne!(app.main.get_status(), before, "the state changes");
+            draw_frames();
+            for _ in 0..half / 16 {
+                advance_clock(Duration::from_millis(16));
+                draw_frames();
+            }
+            let (fade_in, fade_out) = (
+                app.main.get_status_fade_in(),
+                app.main.get_status_fade_out(),
+            );
+            assert!(
+                (0.3..0.7).contains(&fade_in) && (0.3..0.7).contains(&fade_out),
+                "half way through, on {on}, motion {motion}: {fade_in} in, {fade_out} out"
+            );
+            for _ in 0..30 {
+                advance_clock(Duration::from_millis(16));
+                draw_frames();
+            }
+            assert_eq!(app.main.get_status_fade_in(), 1.0, "the new state shows");
+            assert_eq!(app.main.get_status_fade_out(), 0.0, "the old one is gone");
+        }
+    }
+
+    /// Switching on starts the engine on the UI thread (about 190 ms in the
+    /// debug log of 2026-11-17), so the first frames of the fade come late.
+    /// A clock-driven fade was mostly over by then and read as a jump; the
+    /// fade goes on from where the last frame left it, as the Mac's does
+    /// while its main thread is busy (maintainer 2026-11-17).
+    #[test]
+    fn a_busy_start_does_not_eat_the_header_state_cross_fade() {
+        hold_clock();
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows headless");
+        draw_frames();
+        for on in [true, false] {
+            app.main.invoke_power_toggled(on);
+            draw_frames();
+            advance_clock(Duration::from_millis(190));
+            draw_frames();
+            let fade_in = app.main.get_status_fade_in();
+            assert!(fade_in < 0.3, "after the stall, on {on}: {fade_in} in");
+            for _ in 0..30 {
+                advance_clock(Duration::from_millis(16));
+                draw_frames();
+            }
+            assert_eq!(
+                app.main.get_status_fade_in(),
+                1.0,
+                "on {on}: the new state shows"
+            );
+            assert_eq!(
+                app.main.get_status_fade_out(),
+                0.0,
+                "on {on}: the old one is gone"
+            );
+        }
+    }
+
+    /// The open Presets list's tinted box reaches 8 px past the left column
+    /// on both sides, as the Mac's open row does, and shows whole: the
+    /// column's scrolling view leaves those 8 px uncut.
+    #[test]
+    fn the_open_presets_box_shows_whole_past_the_left_column() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = narrow_app(MockBackend::new());
+        app.main.set_presets_open(true);
+        advance_clock(Duration::from_millis(400));
+        slint::platform::update_timers_and_animations();
+        let card = element(&app, "MainWindow::presets-card").expect("the Presets box");
+        let (left, width) = (card.absolute_position().x, card.size().width);
+        let column = element(&app, "MainWindow::left-column").expect("the left column");
+        let column_left = column.absolute_position().x;
+        assert!(
+            (left - (column_left - 8.0)).abs() < 0.5,
+            "box at {left}, column at {column_left}"
+        );
+        let middle = left + width / 2.0;
+        let view = ElementHandle::find_by_element_id(&app.main, "FadeScrollView::flickable")
+            .find(|view| {
+                let x = view.absolute_position().x;
+                x <= middle && middle <= x + view.size().width
+            })
+            .expect("the left column's scrolling view");
+        let (view_left, view_width) = (view.absolute_position().x, view.size().width);
+        assert!(
+            left >= view_left - 0.5,
+            "box left {left} cut at {view_left}"
+        );
+        assert!(
+            left + width <= view_left + view_width + 0.5,
+            "box right {} cut at {}",
+            left + width,
+            view_left + view_width
+        );
+    }
+
+    /// With Add by Address under it, the AirPlay delay's note shows whole
+    /// once the speaker list is scrolled to its end, at a short and a tall
+    /// window: its pane keeps the note's second line and its padding, and
+    /// the note ends above the button.
+    #[test]
+    fn the_airplay_delay_note_shows_whole_above_add_by_address() {
+        use i_slint_backend_testing::ElementHandle;
+        for height in [480, 900] {
+            let app = narrow_app(MockBackend::new());
+            advance_clock(Duration::from_millis(400));
+            draw_frames_at(776, height);
+            let list = element(&app, "MainWindow::scroll").expect("the speaker list");
+            let (at, size) = (list.absolute_position(), list.size());
+            let position =
+                slint::LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0);
+            let window = app.main.window();
+            window.dispatch_event(WindowEvent::PointerMoved { position });
+            window.dispatch_event(WindowEvent::PointerScrolled {
+                position,
+                delta_x: 0.0,
+                delta_y: -3000.0,
+            });
+            draw_frames_at(776, height);
+            let note = element(&app, "AirPlayDelayControls::hint").expect("the delay's note");
+            let pane = element(&app, "MainWindow::delay-pane").expect("the delay pane");
+            let add = ElementHandle::find_by_accessible_label(
+                &app.main,
+                &app.main.global::<Strings>().get_cast_add_address(),
+            )
+            .next()
+            .expect("Add by Address");
+            let note_bottom = note.absolute_position().y + note.size().height;
+            let pane_bottom = pane.absolute_position().y + pane.size().height;
+            assert!(
+                note.size().height > 20.0,
+                "the note's two lines: {}",
+                note.size().height
+            );
+            assert!(
+                note_bottom + 12.0 <= pane_bottom + 0.5,
+                "h {height}: note ends {note_bottom}, pane {pane_bottom}"
+            );
+            assert!(
+                note_bottom <= add.absolute_position().y,
+                "h {height}: note runs under the button"
+            );
+            assert!(
+                note_bottom <= at.y + size.height,
+                "h {height}: note past the list's end"
+            );
+        }
+    }
+
+    /// Speaker rows in one list step 54 px from badge to badge, divider
+    /// included, as the Mac's rows with a volume slider step 54 pt.
+    #[test]
+    fn speaker_rows_step_54_px_as_on_the_mac() {
         let app = narrow_app(MockBackend::new());
         let tops: Vec<f32> = i_slint_backend_testing::ElementHandle::find_by_element_id(
             &app.main,
@@ -11037,7 +12558,7 @@ mod tests {
             .windows(2)
             .map(|pair| pair[1] - pair[0])
             .fold(f32::MAX, f32::min);
-        assert_eq!(pitch, 52.0, "badge tops {tops:?}");
+        assert_eq!(pitch, 54.0, "badge tops {tops:?}");
         assert!(
             tops.iter().all(|y| y.fract() == 0.0),
             "on whole pixels: {tops:?}"
@@ -11045,7 +12566,7 @@ mod tests {
     }
 
     /// A zone's member rows are 36 px tall, as the Mac's compact rows: a
-    /// 24 px badge with 6 px above and below.
+    /// 24 px badge with 6 px above and below, and a hairline between two.
     #[test]
     fn zone_member_rows_are_36_px_as_on_the_mac() {
         let mut backend = MockBackend::new();
@@ -11059,7 +12580,7 @@ mod tests {
         .map(|badge| (badge.absolute_position().y, badge.size().height))
         .collect();
         assert_eq!(rows.len(), 2, "{rows:?}");
-        assert_eq!(rows[1].0 - rows[0].0, 36.0, "{rows:?}");
+        assert_eq!(rows[1].0 - rows[0].0, 37.0, "{rows:?}");
     }
 
     /// This PC, Zones and Connected Speakers are titled in small grey
@@ -11090,8 +12611,8 @@ mod tests {
         assert_eq!(rule.size().width, 1.0);
         assert_eq!(rule.absolute_position().x, header.absolute_position().x);
         assert_eq!(rule.absolute_position().y, top + height);
-        // Both rows and the line between them, as they step 52 px.
-        assert_eq!(rule.size().height, 52.0 + 51.0);
+        // Both rows and the line between them, as they step 54 px.
+        assert_eq!(rule.size().height, 54.0 + 53.0);
     }
 
     /// A long-named copy of the mock's Kitchen speaker.
@@ -11612,7 +13133,7 @@ mod tests {
         assert!(has_line(format!("    min-height: {min_height}px;")));
         // The left column scrolls when it is taller than the window, so
         // its cards never push the window past that height.
-        assert!(main.contains("left-column := OverlayScrollView {"));
+        assert!(main.contains("left-column := FadeScrollView {"));
     }
 
     #[test]
@@ -11781,7 +13302,7 @@ mod tests {
 
     /// X11 shows a dialog at its layout's height before the message wraps,
     /// and no window manager grows it: the name field and the buttons of
-    /// Save Preset were cut off.
+    /// a name dialog were cut off.
     #[test]
     fn the_zone_dialog_grows_to_show_its_field_and_buttons() {
         let app = app_over(MockBackend::new());
@@ -11790,30 +13311,11 @@ mod tests {
         dialog
             .window()
             .set_size(slint::LogicalSize::new(380.0, 153.0));
-        app.ask_save_preset();
+        app.equalizer.invoke_save_curve();
+        app.equalizer.invoke_curve_named("Bass".into(), true);
+        app.equalizer.invoke_rename_curve();
         assert!(dialog.window().is_visible());
-        assert_window_fits(dialog.window(), dialog.get_fit_height(), "Save Preset");
-    }
-
-    /// The same for Add by Address, at opening and once a turned-down
-    /// address puts its reason above the field.
-    #[test]
-    fn the_add_by_address_dialog_grows_to_show_its_buttons() {
-        let app = app_over(MockBackend::new());
-        let dialog = &app.cast_address_dialog;
-        let window = dialog.window();
-        window.set_size(slint::LogicalSize::new(420.0, 153.0));
-        app.ask_cast_address();
-        let opened = dialog.get_fit_height();
-        assert_window_fits(window, opened, "opened");
-        type_text(window, "bad address:99999");
-        press(window, Key::Return);
-        assert!(!dialog.get_error().is_empty(), "turned down");
-        // The event loop's turn after the key.
-        slint::platform::update_timers_and_animations();
-        let fit = dialog.get_fit_height();
-        assert!(fit > opened, "the reason's row adds {fit} - {opened}");
-        assert_window_fits(window, fit, "turned down");
+        assert_window_fits(dialog.window(), dialog.get_fit_height(), "Rename");
     }
 
     #[test]
@@ -12011,16 +13513,8 @@ mod tests {
         let strings = app.strings();
         let updates = strings.get_help_more_updates().to_string();
         for named in [
-            format!(
-                "{} > {}",
-                strings.get_menu_help(),
-                strings.get_menu_check_for_updates()
-            ),
-            format!(
-                "{} > {}",
-                strings.get_menu_file(),
-                strings.get_check_updates_automatically()
-            ),
+            format!("{} in Settings", strings.get_menu_check_for_updates()),
+            format!("{}, in Settings", strings.get_check_updates_automatically()),
             strings
                 .invoke_update_button(UpdateButton::Download)
                 .to_string(),
@@ -12761,10 +14255,68 @@ mod tests {
         );
     }
 
-    /// The flyout's content slides up into place as it opens, from the start
-    /// each time, and the flyout's height doesn't follow the slide.
+    /// Every opening of the flyout plays its rise, not only the first: the
+    /// tray opens it with nothing drawn between putting the parts back down
+    /// and revealing them (maintainer 2026-11-16).
     #[test]
-    fn the_flyout_content_slides_up_as_it_opens() {
+    fn the_flyout_rises_again_on_its_second_opening() {
+        hold_clock();
+        let app = app_over(MockBackend::new());
+        for opening in 1..=2 {
+            app.prepare_flyout_open(true);
+            app.flyout.show().expect("the flyout shows headless");
+            app.reveal_flyout();
+            for _ in 0..19 {
+                advance_clock(Duration::from_millis(16));
+                draw_frames();
+                // A real frame reads where the parts are; the headless one
+                // draws nothing that does.
+                app.flyout.get_content_offset();
+            }
+            let offset = app.flyout.get_content_offset();
+            assert!(
+                offset > 0.0 && offset < 6.0,
+                "opening {opening} rises: {offset}"
+            );
+            advance_clock(Duration::from_millis(1000));
+            draw_frames();
+            assert_eq!(
+                app.flyout.get_content_offset(),
+                0.0,
+                "opening {opening} lands"
+            );
+            app.hide_flyout();
+            draw_frames();
+        }
+    }
+
+    /// The flyout's seven parts fade in and rise 6 px into place as it
+    /// opens, as the Mac panel's: 440 ms each, the first after 90 ms and each
+    /// next 35 ms later, from the start each time; the flyout's height
+    /// doesn't follow them.
+    /// A flyout reopened before its last opening revealed it waits for its
+    /// own first frame: the earlier opening's timer leaves it alone.
+    #[test]
+    fn a_quick_reopen_reveals_the_flyout_only_after_its_own_first_frame() {
+        hold_clock();
+        let app = app_over(MockBackend::new());
+        app.flyout.show().expect("the flyout shows headless");
+        app.prepare_flyout_open(true);
+        app.reveal_flyout();
+        advance_clock(Duration::from_millis(30));
+        draw_frames();
+        app.prepare_flyout_open(true);
+        app.reveal_flyout();
+        advance_clock(Duration::from_millis(25));
+        draw_frames();
+        assert!(!app.flyout.get_revealed(), "the first opening's timer");
+        advance_clock(Duration::from_millis(30));
+        draw_frames();
+        assert!(app.flyout.get_revealed(), "its own timer");
+    }
+
+    #[test]
+    fn the_flyout_parts_fade_in_and_rise_one_after_another_as_it_opens() {
         hold_clock();
         let app = app_over(MockBackend::new());
         app.flyout.show().expect("the flyout shows headless");
@@ -12773,7 +14325,7 @@ mod tests {
         app.prepare_flyout_open(true);
         assert_eq!(
             app.flyout.get_content_offset(),
-            16.0,
+            6.0,
             "back to the start at once"
         );
         assert_eq!(app.flyout.get_fit_height(), height);
@@ -12781,11 +14333,25 @@ mod tests {
         draw_frames();
         advance_clock(Duration::from_millis(80));
         draw_frames();
+        assert_eq!(
+            app.flyout.get_content_offset(),
+            6.0,
+            "the first part waits 90 ms"
+        );
+        advance_clock(Duration::from_millis(230));
+        draw_frames();
         let offset = app.flyout.get_content_offset();
-        assert!(offset > 0.0 && offset < 16.0, "it slides: {offset}");
-        advance_clock(Duration::from_millis(200));
+        assert!(offset > 0.0 && offset < 6.0, "it rises: {offset}");
+        assert_eq!(app.flyout.get_fit_height(), height);
+        advance_clock(Duration::from_millis(800));
         draw_frames();
         assert_eq!(app.flyout.get_content_offset(), 0.0);
+
+        let flyout = include_str!("../ui/flyout.slint");
+        for index in 0..7 {
+            assert!(flyout.contains(&format!("index: {index};")), "part {index}");
+        }
+        assert!(flyout.contains("easing: cubic-bezier(0.22, 0.61, 0.36, 1);"));
 
         app.prepare_flyout_open(false);
         assert_eq!(
@@ -12831,16 +14397,16 @@ mod tests {
         let flyout = &app.flyout;
         let window = flyout.window();
         let preferred = flyout.get_made_height();
-        window.set_size(slint::LogicalSize::new(340.0, preferred));
+        window.set_size(slint::LogicalSize::new(300.0, preferred));
         let height = app.fit_flyout(300.0);
         let size = window.size().to_logical(window.scale_factor());
         assert_eq!(size.height, height);
         let bottom = flyout.get_footer_bottom();
         assert!(
-            bottom + 16.0 <= height,
+            bottom + 12.0 <= height,
             "buttons end at {bottom}, window {height} high (Slint asked for {preferred})"
         );
-        assert!(height <= bottom + 16.5, "no room left under the buttons");
+        assert!(height <= bottom + 12.5, "no room left under the buttons");
     }
 
     /// The hero's borderless source menu reads the chosen source, as the
@@ -12874,6 +14440,158 @@ mod tests {
         let name = flyout_element(&app, "SourceMenu::label");
         let title = flyout_element(&app, "TrayFlyout::song-title");
         assert_eq!(name.absolute_position().x, title.absolute_position().x);
+    }
+
+    /// The source, the title and the artist stack beside the cover with
+    /// none cut short, and the wave sits below the artist, as in the Mac
+    /// panel.
+    #[test]
+    fn the_flyout_song_lines_stack_above_the_wave() {
+        let app = app_over(MockBackend::new());
+        app.flyout.set_now_playing_shown(true);
+        app.flyout
+            .set_now_playing_title("They Regret It Instantly!".into());
+        app.flyout.set_now_playing_subtitle("Sobo".into());
+        app.flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        let source = flyout_element(&app, "SourceMenu::label");
+        let title = flyout_element(&app, "TrayFlyout::song-title");
+        let artist = flyout_element(&app, "TrayFlyout::song-artist");
+        let wave = flyout_element(&app, "TrayFlyout::wave");
+        let top = |e: &i_slint_backend_testing::ElementHandle| e.absolute_position().y;
+        let bottom = |e: &i_slint_backend_testing::ElementHandle| top(e) + e.size().height;
+        assert!(
+            bottom(&source) <= top(&title),
+            "source {} over title {}",
+            bottom(&source),
+            top(&title)
+        );
+        assert!(
+            bottom(&title) <= top(&artist),
+            "title {} over artist {}",
+            bottom(&title),
+            top(&artist)
+        );
+        assert!(
+            bottom(&artist) <= top(&wave),
+            "artist {} over wave {}",
+            bottom(&artist),
+            top(&wave)
+        );
+        assert!(
+            title.size().height >= 19.0,
+            "title {} px high",
+            title.size().height
+        );
+        assert!(
+            artist.size().height >= 16.0,
+            "artist {} px high",
+            artist.size().height
+        );
+    }
+
+    /// The Now Playing card shows whole inside the scrolling body, its
+    /// rounded corners included, as the Mac panel's does.
+    #[test]
+    fn the_flyout_now_playing_card_is_not_clipped() {
+        let app = app_over(MockBackend::new());
+        app.refresh();
+        app.flyout.set_now_playing_shown(true);
+        app.flyout.set_now_playing_title("The Sun Does Rise".into());
+        app.flyout.set_now_playing_subtitle("Compuphonic".into());
+        app.flyout.show().expect("the flyout shows headless");
+        let height = app.fit_flyout(2000.0);
+        app.flyout
+            .window()
+            .set_size(slint::LogicalSize::new(300.0, height));
+        draw_frames();
+        let card = flyout_element(&app, "TrayFlyout::hero-card");
+        let body = flyout_element(&app, "TrayFlyout::body-view");
+        let (c, b) = (card.absolute_position(), body.absolute_position());
+        assert!(c.y >= b.y, "card top {} above the body's {}", c.y, b.y);
+        assert!(c.x >= b.x, "card left {} past the body's {}", c.x, b.x);
+        assert!(
+            c.y + card.size().height <= b.y + body.size().height,
+            "card bottom {} below the body's {}",
+            c.y + card.size().height,
+            b.y + body.size().height
+        );
+        assert!(
+            c.x + card.size().width <= b.x + body.size().width,
+            "card right {} past the body's {}",
+            c.x + card.size().width,
+            b.x + body.size().width
+        );
+    }
+
+    /// A speaker's circle starts 14 px from the panel's edge and its name
+    /// 10 px past it, its end 17 px from the other edge, as in the Mac panel.
+    #[test]
+    fn the_flyout_rows_use_the_mac_panel_margins() {
+        let app = measured_flyout();
+        let disc = flyout_element(&app, "FlyoutRow::disc");
+        let name = flyout_element(&app, "FlyoutRow::name-label");
+        let row = flyout_element(&app, "TrayFlyout::this-pc-view");
+        assert_eq!(disc.absolute_position().x, 14.0);
+        assert_eq!(name.absolute_position().x, 50.0);
+        let end = row.absolute_position().x + row.size().width - 6.0;
+        // The panel is 300 px wide; the headless window around it is wider.
+        assert_eq!(300.0 - end, 17.0);
+        // The hover and focus ring reach 6 px past the circle, as on the Mac.
+        let rows = flyout_element(&app, "FlyoutRow::touch");
+        assert_eq!(rows.absolute_position().x, 8.0);
+    }
+
+    /// A zone's circle sits 32 px from the panel's edge, its arrow before
+    /// it, and its speakers' circles 27 px in, as in the Mac panel.
+    #[test]
+    fn the_flyout_zone_rows_use_the_mac_panel_margins() {
+        let app = app_over(MockBackend::new());
+        app.flyout
+            .set_zones(ModelRc::new(VecModel::from(vec![ZoneItem {
+                id: "z1".into(),
+                name: "Kantor".into(),
+                expanded: true,
+                members: ModelRc::new(VecModel::from(vec![SpeakerItem {
+                    id: "s1".into(),
+                    name: "Monitor Kantor".into(),
+                    ..SpeakerItem::default()
+                }])),
+                ..ZoneItem::default()
+            }])));
+        app.flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        let zone = flyout_element(&app, "FlyoutZoneHeader::zone-disc");
+        // This PC's rows sit at 14 px; the zone's speaker is the one further in.
+        let member = i_slint_backend_testing::ElementHandle::find_by_element_id(
+            &app.flyout,
+            "FlyoutRow::disc",
+        )
+        .map(|disc| disc.absolute_position().x)
+        .fold(0.0, f32::max);
+        assert_eq!(zone.absolute_position().x, 32.0);
+        assert_eq!(member, 27.0);
+    }
+
+    /// The mark starts 16 px from the panel's edge and the footer's words
+    /// 17 px from either edge, as in the Mac panel.
+    #[test]
+    fn the_flyout_header_and_footer_use_the_mac_panel_insets() {
+        let app = measured_flyout();
+        let mark = flyout_element(&app, "TrayFlyout::brand-mark");
+        assert_eq!(mark.absolute_position().x, 16.0);
+        let words: Vec<_> = i_slint_backend_testing::ElementHandle::find_by_element_id(
+            &app.flyout,
+            "FooterButton::words",
+        )
+        .collect();
+        let first = words.first().expect("Open AudioSync");
+        let last = words.last().expect("Exit");
+        assert_eq!(first.absolute_position().x, 17.0);
+        assert_eq!(
+            300.0 - (last.absolute_position().x + last.size().width),
+            17.0
+        );
     }
 
     /// The flyout open with one preset, laid out, for the measuring tests.
@@ -12952,7 +14670,9 @@ mod tests {
         let speaker = element("MasterVolume::speaker");
         let middle = |e: &ElementHandle| e.absolute_position().x + e.size().width / 2.0;
         assert_eq!(middle(&speaker), middle(&row));
-        assert_eq!(speaker.size().width, row.size().width);
+        // Both glyphs are 16 px; the row's slot is the Mac's 20.
+        assert_eq!(speaker.size().width, 16.0);
+        assert_eq!(row.size().width, 20.0);
     }
 
     /// Where the master volume's track starts and ends: between the knob's
@@ -12987,11 +14707,13 @@ mod tests {
         assert!((right_edge(&number) - right_edge(&chevron)).abs() < 0.5);
     }
 
-    /// The main window's master volume number, as in the Mac window: 6 px
-    /// after the track, ending on the rows' chevron edge.
+    /// The main window's master volume number, as in the Mac window: 8 px
+    /// clear of the knob at 100 (16 px after the track's end, the knob's
+    /// centre), its digits' ink ending on the chevron's, 3 px inside the
+    /// chevron glyph's box.
     // covers: S450
     #[test]
-    fn the_main_volume_number_sits_6_px_after_the_track_on_the_chevron_edge() {
+    fn the_main_volume_number_sits_8_px_clear_of_the_knob_on_the_chevron_edge() {
         use i_slint_backend_testing::ElementHandle;
         let app = app_over(MockBackend::new());
         app.main.show().expect("the main window shows");
@@ -13006,9 +14728,9 @@ mod tests {
         };
         let number = element("MasterVolume::number");
         let (_, end) = master_track(&element("MasterVolume::slider"));
-        assert!((number.absolute_position().x - end - 6.0).abs() < 0.5);
+        assert!((number.absolute_position().x - end - 16.0).abs() < 0.5);
         let chevron = element("EqualizerCard::chevron");
-        assert!((right_edge(&number) - right_edge(&chevron)).abs() < 0.5);
+        assert!((right_edge(&number) + 3.0 - right_edge(&chevron)).abs() < 0.5);
     }
 
     /// The preset row's chevron is the hero card's: one size.
@@ -13177,14 +14899,47 @@ mod tests {
         draw_frames();
         let flyout = &app.flyout;
         let window = flyout.window();
-        window.set_size(slint::LogicalSize::new(340.0, 400.0));
+        window.set_size(slint::LogicalSize::new(300.0, 400.0));
         let full = app.fit_flyout(1000.0);
         let room = full - 40.0;
         let height = app.fit_flyout(room);
         assert_eq!(height, room);
         let bottom = flyout.get_footer_bottom();
-        assert!(bottom + 16.0 <= room, "buttons end at {bottom} in {room}");
+        assert!(bottom + 12.0 <= room, "buttons end at {bottom} in {room}");
         assert_eq!(app.fit_flyout(1000.0), full, "the list gets its room back");
+    }
+
+    #[test]
+    fn a_tall_screen_shows_every_flyout_speaker_without_scrolling() {
+        use i_slint_backend_testing::ElementHandle;
+        let mut backend = MockBackend::new();
+        let kitchen = backend
+            .snapshot()
+            .speaker("airplay:kitchen")
+            .unwrap()
+            .clone();
+        for n in 1..=6 {
+            let mut room = kitchen.clone();
+            room.id = format!("airplay:room{n}");
+            room.name = format!("Room {n}");
+            room.system_name = room.name.clone();
+            backend.add_speaker(room);
+        }
+        let app = app_over(backend);
+        app.refresh();
+        app.flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        app.fit_flyout(2000.0);
+        draw_frames();
+        let height = |id: &str| {
+            ElementHandle::find_by_element_id(&app.flyout, id)
+                .next()
+                .expect(id)
+                .size()
+                .height
+        };
+        let (shown, rows) = (height("TrayFlyout::list-view"), height("TrayFlyout::list"));
+        assert!(shown >= rows, "{shown} px shows {rows} px of rows");
     }
 
     /// The refresh refits the flyout every 500 ms: a cut that still fits
@@ -13207,7 +14962,7 @@ mod tests {
         let flyout = &app.flyout;
         flyout
             .window()
-            .set_size(slint::LogicalSize::new(340.0, 400.0));
+            .set_size(slint::LogicalSize::new(300.0, 400.0));
         let room = app.fit_flyout(1000.0) - 40.0;
         assert_eq!(app.fit_flyout(room), room);
         let cuts = (flyout.get_list_cut(), flyout.get_body_cut());
@@ -13226,7 +14981,7 @@ mod tests {
         let grown = flyout.get_list_cut() + flyout.get_body_cut();
         assert!(grown > cuts.0 + cuts.1, "less room, a deeper cut");
         assert!(
-            flyout.get_footer_bottom() + 16.0 <= shorter + 0.5,
+            flyout.get_footer_bottom() + 12.0 <= shorter + 0.5,
             "the buttons still show"
         );
         assert_eq!(app.fit_flyout(room), room);
@@ -13262,7 +15017,7 @@ mod tests {
         assert!(flyout.get_presets().row_count() > 0, "{case}: presets show");
         flyout
             .window()
-            .set_size(slint::LogicalSize::new(340.0, 400.0));
+            .set_size(slint::LogicalSize::new(300.0, 400.0));
         let full = app.fit_flyout(1000.0);
         let room = 300.0;
         assert!(full > room + 100.0, "{case}: {full} fits {room} anyway");
@@ -13270,7 +15025,7 @@ mod tests {
         assert_eq!(height, room, "{case}");
         let bottom = flyout.get_footer_bottom();
         assert!(
-            bottom + 16.0 <= room + 0.5,
+            bottom + 12.0 <= room + 0.5,
             "{case}: buttons end at {bottom} in {room}"
         );
         assert_eq!(app.fit_flyout(1000.0), full, "{case}: the room comes back");
@@ -13984,21 +15739,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn escape_on_several_apps_folds_its_list() {
-        let app = app_over(MockBackend::new());
-        app.main.show().unwrap();
-        draw_frames();
-        let window = app.main.window();
-        tab(window, 3);
-        press(window, " ");
-        draw_frames();
-        assert!(app.main.get_mix_open());
-        press(window, Key::Escape);
-        draw_frames();
-        assert!(!app.main.get_mix_open(), "Escape folded it");
-    }
-
     // covers: S245
     #[test]
     fn move_to_zone_lists_only_the_zones_the_speaker_is_not_in() {
@@ -14059,8 +15799,6 @@ mod tests {
         );
 
         main.invoke_speaker_new_zone_requested("local:headphones".into());
-        assert!(app.zone_dialog.window().is_visible());
-        app.confirm_dialog("  ");
         let state = app.snapshot();
         let zone = state
             .zone_of("local:headphones")
@@ -14583,10 +16321,101 @@ mod tests {
         }
     }
 
-    fn type_text(window: &slint::Window, text: &str) {
+    pub(super) fn type_text(window: &slint::Window, text: &str) {
         for character in text.chars() {
             press(window, character.to_string());
         }
+    }
+
+    /// Add by Address opens as a sheet over the main window, as the Mac's,
+    /// not as a window of its own.
+    #[test]
+    fn add_by_address_opens_as_a_sheet_in_the_main_window() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        let title = app.strings().get_cast_add_address_title();
+        let in_main = || ElementHandle::find_by_accessible_label(&app.main, &title).count();
+        assert_eq!(in_main(), 0, "no sheet before it is asked for");
+        app.main.invoke_cast_add_address_requested();
+        draw_frames();
+        assert_eq!(in_main(), 1, "the sheet is in the main window");
+    }
+
+    /// The sheet's note sets in two lines at its 420 px width, as the Mac's.
+    #[test]
+    fn the_add_by_address_note_takes_two_lines_as_on_the_mac() {
+        use i_slint_backend_testing::{AccessibleRole, ElementHandle};
+        let app = app_over(MockBackend::new());
+        app.main.invoke_cast_add_address_requested();
+        draw_frames();
+        let height = |label: SharedString| {
+            ElementHandle::find_by_accessible_label(&app.main, &label)
+                .find(|e| e.accessible_role() == Some(AccessibleRole::Text))
+                .map(|e| e.size().height)
+                .expect("the text")
+        };
+        let note = height(app.strings().get_cast_add_address_message());
+        // Two 13 px lines of Segoe UI are 35 px high, three are 52.
+        assert!(note < 44.0, "the note is {note} px high");
+    }
+
+    /// The sheet keeps Tab inside it: the field, Cancel, Add and round
+    /// again; Space on Cancel, Escape and Ctrl+W close it, and the focus goes
+    /// back to Add by Address…, where Space opens it again.
+    #[test]
+    fn the_add_by_address_sheet_keeps_tab_inside_and_hands_the_focus_back() {
+        let app = main_window_over(MockBackend::new());
+        let window = app.main.window();
+        let sheet = app.cast_sheet();
+        app.main.invoke_cast_add_address_requested();
+        draw_frames();
+        type_text(window, "a");
+        tab(window, 3);
+        type_text(window, "b");
+        // A field that takes the focus by Tab selects its text, so "b" replaced it.
+        assert_eq!(sheet.get_address(), "b", "Tab came round to the field");
+        tab(window, 1);
+        press(window, " ");
+        assert!(!sheet.get_shown(), "Space on Cancel closed it");
+        draw_frames();
+        press(window, " ");
+        assert!(sheet.get_shown(), "the focus was back on Add by Address…");
+
+        type_text(window, "speaker.local");
+        tab(window, 2);
+        press(window, " ");
+        settle_cast_check(&app);
+        assert!(!sheet.get_shown(), "Space on Add added it");
+        assert!(app.snapshot().speaker("cc:speaker.local").is_some());
+
+        type Close = fn(&slint::Window);
+        let closes: [(&str, Close); 2] = [
+            ("Escape", |window| press(window, Key::Escape)),
+            ("Ctrl+W", |window| ctrl(window, "w")),
+        ];
+        for (key, close) in closes {
+            app.main.invoke_cast_add_address_requested();
+            draw_frames();
+            close(window);
+            assert!(!sheet.get_shown(), "{key} closed it");
+            assert!(app.main.window().is_visible(), "{key} left the window open");
+        }
+    }
+
+    /// The sheet's scrim covers the whole window, the top row's buttons too,
+    /// as a Mac sheet blocks the window's own controls.
+    #[test]
+    fn the_add_by_address_scrim_covers_the_top_row() {
+        let app = main_window_over(MockBackend::new());
+        app.main.invoke_cast_add_address_requested();
+        draw_frames();
+        let scrim = i_slint_backend_testing::ElementHandle::find_by_element_id(
+            &app.main,
+            "MainWindow::cast-scrim",
+        )
+        .next()
+        .expect("the scrim");
+        assert_eq!(scrim.absolute_position().y, 0.0, "from the window's top");
     }
 
     // covers: C18
@@ -14595,14 +16424,14 @@ mod tests {
         let app = app_over(MockBackend::new());
         let strings = app.strings();
         app.main.invoke_cast_add_address_requested();
-        let dialog = &app.cast_address_dialog;
-        let window = dialog.window();
-        assert!(window.is_visible(), "Speakers > Add by Address… opens it");
+        let dialog = app.cast_sheet();
+        let window = app.main.window();
+        assert!(app.cast_sheet().get_shown(), "Add by Address… opens it");
         assert_eq!(dialog.get_error(), "");
 
         type_text(window, "not an address");
         press(window, Key::Return);
-        assert!(window.is_visible(), "stays open");
+        assert!(app.cast_sheet().get_shown(), "stays open");
         assert_eq!(dialog.get_error(), strings.get_cast_address_invalid());
         assert_eq!(
             dialog.get_error(),
@@ -14613,7 +16442,7 @@ mod tests {
         type_text(window, "speaker.invalid");
         press(window, Key::Return);
         settle_cast_check(&app);
-        assert!(window.is_visible());
+        assert!(app.cast_sheet().get_shown());
         assert_eq!(
             dialog.get_error(),
             "AudioSync couldn't find a speaker at that address. Check that it's on and try again."
@@ -14622,7 +16451,7 @@ mod tests {
         type_text(window, "speaker.local");
         press(window, Key::Return);
         settle_cast_check(&app);
-        assert!(!window.is_visible(), "Enter added it");
+        assert!(!app.cast_sheet().get_shown(), "Enter added it");
         assert_eq!(dialog.get_address(), "", "the field is cleared");
         let state = app.snapshot();
         let row = state.speaker("cc:speaker.local").expect("listed");
@@ -14674,7 +16503,7 @@ mod tests {
 
     /// What the dialog's two live regions hold, in order.
     fn cast_address_said(app: &App) -> (String, String) {
-        let dialog = &app.cast_address_dialog;
+        let dialog = app.cast_sheet();
         (dialog.get_said_odd().into(), dialog.get_said_even().into())
     }
 
@@ -14684,7 +16513,7 @@ mod tests {
         let invalid: String = app.strings().get_cast_address_invalid().into();
         let not_found: String = app.strings().get_cast_address_not_found().into();
         app.main.invoke_cast_add_address_requested();
-        let window = app.cast_address_dialog.window();
+        let window = app.main.window();
         assert_eq!(cast_address_said(&app), (String::new(), String::new()));
 
         type_text(window, "not an address");
@@ -14723,14 +16552,14 @@ mod tests {
     fn add_waits_for_an_address_and_enter_on_a_blank_field_does_nothing() {
         let app = app_over(MockBackend::new());
         app.main.invoke_cast_add_address_requested();
-        let dialog = &app.cast_address_dialog;
-        let window = dialog.window();
+        let dialog = app.cast_sheet();
+        let window = app.main.window();
         assert!(!dialog.get_can_add(), "Add is off on an empty field");
         press(window, Key::Return);
         type_text(window, "   ");
         assert!(!dialog.get_can_add(), "spaces alone are no address");
         press(window, Key::Return);
-        assert!(window.is_visible(), "Enter didn't add or close");
+        assert!(app.cast_sheet().get_shown(), "Enter didn't add or close");
         assert_eq!(dialog.get_error(), "", "no reason for an empty field");
         assert_eq!(cast_address_said(&app), (String::new(), String::new()));
 
@@ -14738,7 +16567,7 @@ mod tests {
         assert!(dialog.get_can_add());
         press(window, Key::Return);
         settle_cast_check(&app);
-        assert!(!window.is_visible(), "Enter added it");
+        assert!(!app.cast_sheet().get_shown(), "Enter added it");
         assert!(app.snapshot().speaker("cc:speaker.local").is_some());
     }
 
@@ -14749,8 +16578,8 @@ mod tests {
         let app = app_over(MockBackend::new());
         let strings = app.strings();
         let speakers = app.snapshot().speakers.len();
-        let dialog = &app.cast_address_dialog;
-        let window = dialog.window();
+        let dialog = app.cast_sheet();
+        let window = app.main.window();
         let hold = || {
             MOCK_CAST_HOLD
                 .lock()
@@ -14761,14 +16590,20 @@ mod tests {
         app.main.invoke_cast_add_address_requested();
         type_text(window, "speaker.held");
         press(window, Key::Return);
-        assert!(window.is_visible(), "open while the address is checked");
+        assert!(
+            app.cast_sheet().get_shown(),
+            "open while the address is checked"
+        );
         assert!(dialog.get_checking());
         assert!(!dialog.get_can_add(), "Add is off during the check");
         assert_eq!(strings.get_cast_address_checking(), "Checking…");
         press(window, Key::Return);
         assert!(app.snapshot().speaker("cc:speaker.held").is_none());
         press(window, Key::Escape);
-        assert!(!window.is_visible(), "Escape closes it during the check");
+        assert!(
+            !app.cast_sheet().get_shown(),
+            "Escape closes it during the check"
+        );
         assert!(!dialog.get_checking());
         drop(held);
         std::thread::sleep(Duration::from_millis(200));
@@ -14791,7 +16626,7 @@ mod tests {
         settle_cast_check(&app);
         stop_probe.store(true, std::sync::atomic::Ordering::SeqCst);
         let wakes = probe.join().expect("the probe");
-        if window.is_visible() {
+        if app.cast_sheet().get_shown() {
             let span = let_go.elapsed();
             let starved = unscheduled(&wakes, let_go, let_go + span);
             let what = format!(
@@ -14813,20 +16648,23 @@ mod tests {
     fn reopening_add_by_address_during_a_check_drops_the_old_answer() {
         let app = app_over(MockBackend::new());
         let speakers = app.snapshot().speakers.len();
-        let window = app.cast_address_dialog.window();
+        let window = app.main.window();
         let held = MOCK_CAST_HOLD
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         app.main.invoke_cast_add_address_requested();
         type_text(window, "speaker.held");
         press(window, Key::Return);
-        assert!(app.cast_address_dialog.get_checking());
+        assert!(app.cast_sheet().get_checking());
 
         app.ask_cast_address();
         drop(held);
         settle_cast_check(&app);
         draw_frames();
-        assert!(window.is_visible(), "the reopened dialog stays open");
+        assert!(
+            app.cast_sheet().get_shown(),
+            "the reopened dialog stays open"
+        );
         assert!(app.snapshot().speaker("cc:speaker.held").is_none());
         assert_eq!(app.snapshot().speakers.len(), speakers);
     }
@@ -14837,11 +16675,14 @@ mod tests {
             let app = app_over(MockBackend::new());
             let speakers = app.snapshot().speakers.len();
             app.main.invoke_cast_add_address_requested();
-            let window = app.cast_address_dialog.window();
+            let window = app.main.window();
             type_text(window, "speaker.local");
             tab(window, tabs);
             press(window, Key::Escape);
-            assert!(!window.is_visible(), "Escape closed it ({tabs} tabs)");
+            assert!(
+                !app.cast_sheet().get_shown(),
+                "Escape closed it ({tabs} tabs)"
+            );
             assert_eq!(app.snapshot().speakers.len(), speakers, "nothing added");
         }
     }
@@ -14948,18 +16789,27 @@ mod tests {
     #[test]
     fn escape_on_the_zone_dialog_buttons_cancels() {
         let app = app_over(MockBackend::new());
-        let zones = app.snapshot().zones.len();
-        app.ask_new_zone();
+        app.equalizer.invoke_save_curve();
+        app.equalizer.invoke_curve_named("Bass".into(), true);
+        app.equalizer.invoke_rename_curve();
         let window = app.zone_dialog.window();
         assert!(window.is_visible());
-        assert!(app.zone_dialog.get_show_field(), "a speaker is on");
-        // From the name field to Create.
+        assert!(app.zone_dialog.get_show_field());
+        app.zone_dialog.set_name(SharedString::new());
+        // From the name field to the confirm button.
         tab(window, 1);
         press(window, "x");
         assert_eq!(app.zone_dialog.get_name(), "", "the field lost the focus");
         press(window, Key::Escape);
-        assert!(!window.is_visible(), "Escape on Create closed the dialog");
-        assert_eq!(app.snapshot().zones.len(), zones, "and made no zone");
+        assert!(
+            !window.is_visible(),
+            "Escape on the button closed the dialog"
+        );
+        assert_eq!(
+            app.snapshot().equalizer_curves[0].name,
+            "Bass",
+            "and renamed nothing"
+        );
     }
 
     // covers: S270
@@ -14968,6 +16818,8 @@ mod tests {
         let app = app_over(MockBackend::new());
         let zones = app.snapshot().zones.len();
         app.equalizer.invoke_save_curve();
+        app.equalizer.invoke_curve_named("Bass".into(), true);
+        app.equalizer.invoke_rename_curve();
         app.zone_dialog.set_name("Late night".into());
         let heading = app.zone_dialog.get_heading();
 
@@ -15000,9 +16852,9 @@ mod tests {
         assert!(!eq_window.get_saved_curve_shown());
 
         eq_window.invoke_save_curve();
-        assert!(app.zone_dialog.window().is_visible());
-        assert_eq!(app.zone_dialog.get_name(), "Curve 1");
-        app.zone_dialog.invoke_confirmed("Desk".into());
+        assert!(eq_window.get_naming_curve());
+        assert_eq!(eq_window.get_curve_suggestion(), "Curve 1");
+        eq_window.invoke_curve_named("Desk".into(), true);
         let state = app.snapshot();
         assert_eq!(state.equalizer_curves.len(), 1);
         assert_eq!(state.equalizer.preamp_db, -3.0, "a save leaves the preamp");
@@ -15012,14 +16864,6 @@ mod tests {
         assert_eq!(eq_window.get_picker_shown_index(), presets as i32);
         assert_eq!(app.main.get_equalizer_curve(), "Desk");
         assert!(eq_window.get_saved_curve_shown());
-        for label in [
-            "Rename \u{201c}Desk\u{201d}\u{2026}",
-            "Delete \u{201c}Desk\u{201d}",
-        ] {
-            let found =
-                i_slint_backend_testing::ElementHandle::find_by_accessible_label(eq_window, label);
-            assert_eq!(found.count(), 1, "{label}");
-        }
 
         eq_window.invoke_preset_selected(0);
         assert_eq!(eq_window.get_preset_index(), 0);
@@ -15034,17 +16878,6 @@ mod tests {
         assert_eq!(app.zone_dialog.get_field_label(), "Curve name");
         app.zone_dialog.invoke_confirmed("Office".into());
         assert_eq!(app.snapshot().equalizer_curves[0].name, "Office");
-
-        // The curve dialogs share the zone name dialog.
-        app.ask_new_zone();
-        assert_eq!(app.zone_dialog.get_field_label(), "Zone name");
-        app.zone_dialog.invoke_cancelled();
-        eq_window.invoke_save_curve();
-        app.zone_dialog.invoke_cancelled();
-        let speaker = app.snapshot().speakers[0].id.clone();
-        app.ask_new_zone_with(&speaker);
-        assert_eq!(app.zone_dialog.get_field_label(), "Zone name");
-        app.zone_dialog.invoke_cancelled();
 
         eq_window.invoke_delete_curve();
         assert!(app.snapshot().equalizer_curves.is_empty());
@@ -15066,28 +16899,16 @@ mod tests {
     // covers: S270
     #[test]
     fn the_curve_buttons_are_disabled_while_the_name_dialog_is_open() {
-        use i_slint_backend_testing::ElementHandle;
         let app = app_over(MockBackend::new());
         let eq_window = &app.equalizer;
         eq_window.invoke_save_curve();
-        app.zone_dialog.invoke_confirmed("Bass".into());
+        eq_window.invoke_curve_named("Bass".into(), true);
+        // The curve menu's Save, Rename and Delete wait while `naming`.
+        let menu = include_str!("../ui/equalizer.slint");
+        assert_eq!(menu.matches("enabled: !root.naming;").count(), 3);
+        assert!(menu.contains("naming: root.name-dialog-open;"));
         let assert_enabled = |enabled: bool, after: &str| {
-            let curve = app.snapshot().equalizer_curves[0].name.clone();
-            let buttons = [
-                "Save curve".to_owned(),
-                format!("Rename \u{201c}{curve}\u{201d}\u{2026}"),
-                format!("Delete \u{201c}{curve}\u{201d}"),
-            ];
-            for label in &buttons {
-                let button = ElementHandle::find_by_accessible_label(eq_window, label)
-                    .next()
-                    .unwrap_or_else(|| panic!("nothing is labeled {label}"));
-                assert_eq!(
-                    button.accessible_enabled(),
-                    Some(enabled),
-                    "{label} {after}"
-                );
-            }
+            assert_eq!(eq_window.get_name_dialog_open(), !enabled, "{after}");
         };
         assert_enabled(true, "with no dialog open");
 
@@ -15136,8 +16957,7 @@ mod tests {
         eq_window.invoke_preset_selected(rock as i32);
 
         eq_window.invoke_save_curve();
-        assert_eq!(*app.dialog_purpose.borrow(), DialogPurpose::SaveCurve);
-        app.zone_dialog.invoke_confirmed("warm".into());
+        eq_window.invoke_curve_named("warm".into(), true);
         let state = app.snapshot();
         assert_eq!(state.equalizer_curves.len(), eq::MAX_USER_CURVES);
         assert_eq!(
@@ -15147,7 +16967,7 @@ mod tests {
 
         eq_window.invoke_preset_selected(0);
         eq_window.invoke_save_curve();
-        app.zone_dialog.invoke_confirmed("Late night".into());
+        eq_window.invoke_curve_named("Late night".into(), true);
         assert_eq!(*app.dialog_purpose.borrow(), DialogPurpose::Message);
         assert_eq!(
             app.zone_dialog.get_message(),
@@ -15173,14 +16993,14 @@ mod tests {
             eq_window.invoke_gain_changed(band as i32, *gain as f32);
         }
         eq_window.invoke_save_curve();
-        app.zone_dialog.invoke_confirmed("Warm".into());
+        eq_window.invoke_curve_named("Warm".into(), true);
 
         eq_window.invoke_save_curve();
         let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap();
         eq_window.invoke_preset_selected(rock as i32);
         eq_window.invoke_gain_changed(0, -6.0);
         eq_window.invoke_reset();
-        app.zone_dialog.invoke_confirmed("Warm".into());
+        eq_window.invoke_curve_named("Warm".into(), true);
         let state = app.snapshot();
         assert_eq!(state.equalizer_curves.len(), 1);
         assert_eq!(state.equalizer_curves[0].gains_db, warm);
@@ -15196,14 +17016,14 @@ mod tests {
         let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap() as i32;
         eq_window.invoke_preset_selected(rock);
         eq_window.invoke_save_curve();
-        app.zone_dialog.invoke_confirmed("Mine".into());
+        eq_window.invoke_curve_named("Mine".into(), true);
         assert_eq!(
             eq_window.get_preset_index(),
             presets,
             "a save shows the curve"
         );
         eq_window.invoke_save_curve();
-        app.zone_dialog.invoke_confirmed("Twin".into());
+        eq_window.invoke_curve_named("Twin".into(), true);
         assert_eq!(eq_window.get_preset_index(), presets + 1);
 
         eq_window.invoke_preset_selected(rock);
@@ -15240,7 +17060,7 @@ mod tests {
         eq_window.invoke_reset();
         assert_eq!(eq_window.get_preset_index(), 0, "Reset reads Flat");
         eq_window.invoke_save_curve();
-        app.zone_dialog.invoke_confirmed("Netral".into());
+        eq_window.invoke_curve_named("Netral".into(), true);
         assert_eq!(eq_window.get_preset_index(), presets + 1);
         eq_window.invoke_reset();
         assert_eq!(
@@ -15260,9 +17080,9 @@ mod tests {
         let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap() as i32;
         eq_window.invoke_preset_selected(rock);
         eq_window.invoke_save_curve();
-        app.zone_dialog.invoke_confirmed("Mine".into());
+        eq_window.invoke_curve_named("Mine".into(), true);
         eq_window.invoke_save_curve();
-        app.zone_dialog.invoke_confirmed("Twin".into());
+        eq_window.invoke_curve_named("Twin".into(), true);
         app.save_preset("Rock");
         let ids = preset_ids(&app);
 
@@ -15284,7 +17104,7 @@ mod tests {
         let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap();
         eq_window.invoke_preset_selected(rock as i32);
         eq_window.invoke_save_curve();
-        app.zone_dialog.invoke_confirmed("Mine".into());
+        eq_window.invoke_curve_named("Mine".into(), true);
         app.save_preset("Rock");
         eq_window.invoke_preset_selected(rock as i32);
 
@@ -15305,9 +17125,9 @@ mod tests {
         let first_gain = eq::PRESETS[rock].gains_db[0] as f32;
         eq_window.invoke_preset_selected(rock as i32);
         eq_window.invoke_save_curve();
-        app.zone_dialog.invoke_confirmed("Mine".into());
+        eq_window.invoke_curve_named("Mine".into(), true);
         eq_window.invoke_save_curve();
-        app.zone_dialog.invoke_confirmed("Twin".into());
+        eq_window.invoke_curve_named("Twin".into(), true);
 
         for (picked, name) in [(rock as i32, "Rock"), (presets + 1, "Twin")] {
             eq_window.invoke_preset_selected(picked);
@@ -15342,8 +17162,7 @@ mod tests {
         assert_eq!(eq_window.get_preset_index(), -1, "Custom");
 
         eq_window.invoke_save_curve();
-        assert_eq!(*app.dialog_purpose.borrow(), DialogPurpose::SaveCurve);
-        app.zone_dialog.invoke_confirmed("Mine".into());
+        eq_window.invoke_curve_named("Mine".into(), true);
         assert!(!app.zone_dialog.window().is_visible(), "no full message");
         let state = app.snapshot();
         assert_eq!(state.equalizer_curves.len(), eq::MAX_USER_CURVES);
@@ -15351,7 +17170,7 @@ mod tests {
 
         eq_window.invoke_gain_changed(0, 0.0);
         eq_window.invoke_save_curve();
-        app.zone_dialog.invoke_confirmed("New".into());
+        eq_window.invoke_curve_named("New".into(), true);
         assert_eq!(*app.dialog_purpose.borrow(), DialogPurpose::Message);
         assert_eq!(
             app.zone_dialog.get_message(),
@@ -15421,6 +17240,265 @@ mod tests {
             let at = (y * shot.width() as usize + x) * 4;
             shot.as_bytes()[at..at + 4].try_into().unwrap()
         }
+    }
+
+    /// A one-colour red cover, a colour nothing else in the windows shows.
+    fn red_cover() -> slint::Image {
+        slint::Image::from_rgba8(slint::SharedPixelBuffer::clone_from_slice(
+            &[255, 0, 0, 255].repeat(64),
+            8,
+            8,
+        ))
+    }
+
+    /// The left, top, right and bottom pixels the red cover shows in `window`.
+    fn red_bounds(window: &slint::Window) -> (f32, f32, f32, f32) {
+        let shot = window
+            .take_snapshot()
+            .expect("the software renderer draws it");
+        let width = shot.width() as usize;
+        let red: Vec<(usize, usize)> = shot
+            .as_bytes()
+            .chunks(4)
+            .enumerate()
+            .filter(|(_, pixel)| *pixel == [255, 0, 0, 255])
+            .map(|(at, _)| (at % width, at / width))
+            .collect();
+        let xs = red.iter().map(|&(x, _)| x);
+        let ys = red.iter().map(|&(_, y)| y);
+        (
+            xs.clone().min().expect("the red cover shows") as f32,
+            ys.clone().min().unwrap() as f32,
+            xs.max().unwrap() as f32,
+            ys.max().unwrap() as f32,
+        )
+    }
+
+    // covers: S463
+    #[test]
+    fn the_next_cover_crosses_the_window_whole_level_with_its_box_in_a_scrolled_column() {
+        let app = app_over(MockBackend::new());
+        hold_clock();
+        let window = app.main.window();
+        app.main.set_now_playing_shown(true);
+        app.main.set_now_playing_title("A track title".into());
+        app.main.set_now_playing_outgoing(OutgoingSong {
+            has_artwork: true,
+            artwork: red_cover(),
+            ..OutgoingSong::default()
+        });
+        draw_frames();
+        // The box partly under the column's top edge, the old cover in it red.
+        scroll(window, 150.0, 400.0, -120.0);
+        let slide = |side: f32, slid: f32| {
+            app.main.set_now_playing_slide(SlideLook {
+                sliding: true,
+                side,
+                slid,
+                ..SlideLook::default()
+            });
+            draw_frames();
+            red_bounds(window)
+        };
+        let old = slide(1.0, 0.0);
+        // As on the Mac only the window clips the new cover, so it shows
+        // whole where the column hides the top of the box.
+        let (_, box_top, _, _) = slider_box(&app.main, "Now Playing");
+        assert!(box_top < old.1, "the column hides the box's top");
+        // The cover sits 2 px under the box's top, as the Mac's.
+        let whole = (old.0, box_top + 2.0, old.2, old.3);
+        app.main.set_now_playing_outgoing(OutgoingSong::default());
+        app.main.set_now_playing_has_artwork(true);
+        app.main.set_now_playing_artwork(red_cover());
+        for (side, slid) in [(1.0, 0.25), (-1.0, 0.5), (1.0, 0.75)] {
+            let (_, top, _, bottom) = slide(side, slid);
+            assert_eq!(
+                (top, bottom),
+                (whole.1, whole.3),
+                "level with the whole box ({side}, {slid})"
+            );
+        }
+        assert!(
+            slide(1.0, 0.5).0 > old.2,
+            "Next's cover crosses the speaker list"
+        );
+        assert!(slide(-1.0, 0.5).0 < old.0, "Previous's comes from the left");
+        assert_eq!(slide(1.0, 1.0), whole, "it lands on the whole box");
+    }
+
+    // covers: S463
+    #[test]
+    fn the_flyout_cover_comes_across_the_panel_level_with_its_box() {
+        let app = app_over(MockBackend::new());
+        hold_clock();
+        let window = app.flyout.window();
+        app.flyout.set_now_playing_shown(true);
+        app.flyout.set_now_playing_title("A track title".into());
+        app.flyout.set_now_playing_outgoing(OutgoingSong {
+            has_artwork: true,
+            artwork: red_cover(),
+            ..OutgoingSong::default()
+        });
+        let slide = |side: f32, slid: f32| {
+            app.flyout.set_now_playing_slide(SlideLook {
+                sliding: true,
+                side,
+                slid,
+                ..SlideLook::default()
+            });
+            draw_frames();
+            red_bounds(window)
+        };
+        let old = slide(1.0, 0.0);
+        app.flyout.set_now_playing_outgoing(OutgoingSong::default());
+        app.flyout.set_now_playing_has_artwork(true);
+        app.flyout.set_now_playing_artwork(red_cover());
+        let next = slide(1.0, 0.5);
+        let previous = slide(-1.0, 0.5);
+        assert_eq!(
+            (next.1, next.3),
+            (old.1, old.3),
+            "Next's cover is level with the box"
+        );
+        assert_eq!((previous.1, previous.3), (old.1, old.3), "Previous's too");
+        assert!(next.0 > old.2, "Next's comes from the right");
+        assert!(
+            previous.0 < old.0 && previous.2 < old.2,
+            "Previous's from the left"
+        );
+        assert_eq!(slide(1.0, 1.0), old, "it lands on the box");
+    }
+
+    /// Records Next in the main window at 60 Hz, as a screen shows it: the
+    /// new (red) cover's left and top, and the new title's and artist's x.
+    // covers: S463
+    #[test]
+    fn every_frame_of_next_moves_cover_title_and_artist_and_the_cover_stays_level() {
+        use crate::now_playing_card::CardArtwork;
+        use crate::now_playing_card::fake::{FakeControls, track};
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        hold_clock();
+        let fake = FakeControls::default();
+        app.set_media_controls(fake.controls());
+        app.main.show().expect("the main window shows");
+        let window = app.main.window();
+        let cover = |rgba: [u8; 4]| Some(CardArtwork::new(8, rgba.repeat(64)));
+        let mut first = track("Spotify.exe", "First song", "First band", true);
+        first.artwork = cover([0, 0, 255, 255]);
+        let mut second = track("Spotify.exe", "Second song", "Second band", true);
+        second.artwork = cover([255, 0, 0, 255]);
+        fake.read(Some(first));
+        app.main.invoke_now_playing_read();
+        draw_frames();
+        let frame = Duration::from_micros(16_667);
+        let red = || {
+            let shot = window.take_snapshot().expect("drawn");
+            let width = shot.width() as usize;
+            let (mut left, mut top) = (usize::MAX, usize::MAX);
+            for (at, pixel) in shot.as_bytes().chunks(4).enumerate() {
+                if pixel == [255, 0, 0, 255] {
+                    left = left.min(at % width);
+                    top = top.min(at / width);
+                }
+            }
+            (left as f32, top as f32)
+        };
+        let x_of = |label: &str| {
+            ElementHandle::find_by_accessible_label(&app.main, label)
+                .next()
+                .map_or(f32::NAN, |line| line.absolute_position().x)
+        };
+        app.main.invoke_now_playing_transport(2);
+        for _ in 0..12 {
+            advance_clock(frame);
+            draw_frames();
+        }
+        fake.read(Some(second));
+        app.main.invoke_now_playing_read();
+        let mut frames = Vec::new();
+        for _ in 0..50 {
+            advance_clock(frame);
+            draw_frames();
+            let (left, top) = red();
+            frames.push([left, top, x_of("Second song"), x_of("Second band")]);
+        }
+        let rest = *frames.last().unwrap();
+        let shown: Vec<_> = frames.iter().filter(|f| f[0] < 1e9).collect();
+        assert!(
+            shown.iter().all(|f| f[1] == rest[1]),
+            "the cover never moves up or down on its way in"
+        );
+        // Each frame shows the slide at that frame's time: 0.56 s at 60 Hz
+        // still has the cover on its way 20 frames in.
+        assert!(
+            (frames[20][0] - rest[0]).abs() > 1.0,
+            "the cover is home by frame 20"
+        );
+        // Until a part is within a pixel of its place, every frame moves it,
+        // never much more than the frame before (an ease-out with no stall;
+        // the frame clock counts whole milliseconds, so frames run 16 or 17).
+        for (part, name) in [(0, "cover"), (2, "title"), (3, "artist")] {
+            let away: Vec<f32> = frames
+                .iter()
+                .map(|f| (f[part] - rest[part]).abs())
+                .collect();
+            assert!(away[0] > 0.0, "the {name} moves on the first frame");
+            // The artist sets off 0.06 s after the title, part way into a
+            // frame, so its steps are compared from its second.
+            let start = away.iter().position(|&a| a < away[0]).unwrap_or(1);
+            let mut step_before = f32::MAX;
+            for at in start + 1..away.len() {
+                if away[at - 1] <= 1.0 {
+                    break;
+                }
+                let step = away[at - 1] - away[at];
+                assert!(step > 0.0, "the {name} stalls at frame {at}");
+                assert!(
+                    step <= step_before * 1.1 + 1.0,
+                    "the {name} jumps at frame {at}"
+                );
+                step_before = step;
+            }
+        }
+    }
+
+    /// Skia, which the app draws with, scales the old cover's tile as it
+    /// recedes (the software renderer above doesn't); the new cover still
+    /// comes level with the box and lands on it.
+    // covers: S463
+    #[test]
+    fn the_incoming_cover_keeps_to_the_box_while_the_old_one_shrinks() {
+        use i_slint_backend_testing::ElementHandle;
+        i_slint_backend_testing::init_no_event_loop();
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        app.flyout.show().expect("the flyout shows");
+        app.main.set_now_playing_shown(true);
+        app.flyout.set_now_playing_shown(true);
+        let look = |old_shrink: f32| SlideLook {
+            sliding: true,
+            side: 1.0,
+            slid: 1.0,
+            old_shrink,
+            ..SlideLook::default()
+        };
+        let landed = |component: &dyn Fn() -> Vec<ElementHandle>| {
+            slint::platform::update_timers_and_animations();
+            let cover = component().pop().expect("the new cover is there");
+            cover.absolute_position()
+        };
+        let main =
+            || ElementHandle::find_by_element_type_name(&app.main, "IncomingCover").collect();
+        let flyout =
+            || ElementHandle::find_by_element_type_name(&app.flyout, "IncomingCover").collect();
+        app.main.set_now_playing_slide(look(0.0));
+        app.flyout.set_now_playing_slide(look(0.0));
+        let (main_box, flyout_box) = (landed(&main), landed(&flyout));
+        app.main.set_now_playing_slide(look(0.15));
+        app.flyout.set_now_playing_slide(look(0.15));
+        assert_eq!(landed(&main), main_box, "the main window's");
+        assert_eq!(landed(&flyout), flyout_box, "the tray panel's");
     }
 
     // covers: S453
@@ -15981,7 +18059,7 @@ mod tests {
         for (gain, name) in [(1.0, "A"), (2.0, "B"), (3.0, "C")] {
             eq_window.invoke_gain_changed(0, gain);
             eq_window.invoke_save_curve();
-            app.zone_dialog.invoke_confirmed(name.into());
+            eq_window.invoke_curve_named(name.into(), true);
         }
         eq_window.invoke_preset_selected(presets as i32 + 1);
         assert_eq!(eq_window.get_preset_index(), presets as i32 + 1, "B");
@@ -16001,7 +18079,10 @@ mod tests {
     #[test]
     fn a_zone_name_longer_than_its_field_keeps_the_cursor_in_view() {
         let app = app_over(MockBackend::new());
-        app.ask_new_zone();
+        app.equalizer.invoke_save_curve();
+        app.equalizer.invoke_curve_named("Bass".into(), true);
+        app.equalizer.invoke_rename_curve();
+        app.zone_dialog.set_name(SharedString::new());
         let window = app.zone_dialog.window();
         // Wider than the 1000 px the headless windows draw at.
         let name = "Living Room and Kitchen and Bedroom and Office Speakers, ".repeat(4);
@@ -16055,7 +18136,7 @@ mod tests {
         type Open = fn() -> Rc<App>;
         type Find = fn(&App) -> &slint::Window;
         type Close = fn(&slint::Window);
-        let windows: [(&str, Open, Find); 9] = [
+        let windows: [(&str, Open, Find); 8] = [
             (
                 "equalizer",
                 || {
@@ -16106,7 +18187,9 @@ mod tests {
                 "zone name dialog",
                 || {
                     let app = app_over(MockBackend::new());
-                    app.ask_new_zone();
+                    app.equalizer.invoke_save_curve();
+                    app.equalizer.invoke_curve_named("Bass".into(), true);
+                    app.equalizer.invoke_rename_curve();
                     app
                 },
                 |app| app.zone_dialog.window(),
@@ -16124,15 +18207,6 @@ mod tests {
                 "password dialog",
                 || app_asking_password(false),
                 |app| app.password_dialog.window(),
-            ),
-            (
-                "Add by Address dialog",
-                || {
-                    let app = app_over(MockBackend::new());
-                    app.main.invoke_cast_add_address_requested();
-                    app
-                },
-                |app| app.cast_address_dialog.window(),
             ),
         ];
         assert_eq!(
@@ -16821,7 +18895,7 @@ mod tests {
         // Switch, Several apps, source, Mute, master volume, Save as Preset…,
         // Equalizer, Calibrate All, the reference's volume fix, then the
         // rows: This PC's, then the connected speakers' by name.
-        tab(window, 19);
+        tab(window, 20);
         press(window, " ");
         assert!(enabled(&app, "local:cable"), "the cable row has the focus");
         press(window, " ");
@@ -16852,7 +18926,7 @@ mod tests {
         draw_frames();
         // The cable row's toggle, delay and options, then the desk row's
         // toggle, delay, options, two steps and its field.
-        tab(window, 27);
+        tab(window, 28);
         press(window, "5");
         let draft = || {
             let shown = app.snapshot().speaker("local:desk").unwrap().delay_ms;
@@ -16893,20 +18967,12 @@ mod tests {
         );
     }
 
+    /// The Several Apps submenu ends the main window's source menu, as on
+    /// the Mac: its items check apps and pick the mode.
     #[test]
-    fn the_several_apps_list_opens_from_the_keyboard_and_checks_apps_and_the_mode() {
+    fn the_several_apps_submenu_checks_apps_and_the_mode() {
         let app = app_over(MockBackend::new());
-        app.main.show().unwrap();
-        draw_frames();
-        let window = app.main.window();
-        assert!(!app.main.get_mix_open(), "folded until asked for");
-        // The main switch, the source, then Several apps under it.
-        tab(window, 3);
-        press(window, " ");
-        draw_frames();
-        assert!(app.main.get_mix_open());
         assert_eq!(app.main.get_mix_apps().row_count(), 2);
-
         app.main.invoke_mix_app_toggled(1);
         app.main.invoke_mix_app_toggled(0);
         let state = app.snapshot();
@@ -16915,13 +18981,21 @@ mod tests {
         app.main.invoke_mix_mode_selected(true);
         assert!(app.snapshot().mix_all_except);
         assert!(app.main.get_mix_all_except());
-
-        // Folded again by the user, it stays folded while the mix plays on.
-        press(window, " ");
-        draw_frames();
-        assert!(!app.main.get_mix_open());
-        app.refresh();
-        assert!(!app.main.get_mix_open(), "a refresh never reopens it");
+        let main = include_str!("../ui/main.slint").replace("\r\n", "\n");
+        let menu = &main[main.find("component SourceMenu").unwrap()..];
+        let menu = &menu[..menu.find("FocusRing {").unwrap()];
+        for line in [
+            "text: Strings.source-mix-title;",
+            "root.mix-mode-selected(false);",
+            "root.mix-mode-selected(true);",
+            "root.mix-app-toggled(index);",
+        ] {
+            assert!(menu.contains(line), "{line} in the source menu");
+        }
+        assert!(
+            !main.contains("mix-open"),
+            "no list unfolds under the source"
+        );
     }
 
     /// A click on a flyout row's name, not only on its round mark, switches
@@ -17055,10 +19129,95 @@ mod tests {
         assert!(!app.flyout.window().is_visible());
     }
 
-    /// Resting on the flyout's streaming switch shows a tooltip, Turn On or
-    /// Turn Off by its state, as the Mac panel's power switch does.
+    /// A press on the header band's empty middle, below the 32 px top row,
+    /// drags the main window, as the Mac's whole header moves its window.
     #[test]
-    fn the_flyout_streaming_switch_has_a_tooltip() {
+    fn the_header_band_drags_the_main_window() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        let dragged = std::rc::Rc::new(std::cell::Cell::new(false));
+        let seen = dragged.clone();
+        app.main.on_drag_requested(move || seen.set(true));
+        draw_frames();
+        let header = ElementHandle::find_by_element_id(&app.main, "MainWindow::header")
+            .next()
+            .expect("the header band");
+        let (at, size) = (header.absolute_position(), header.size());
+        assert!(at.y >= 30.0, "the band sits under the top row: {}", at.y);
+        let x = app.main.window().size().width as f32 / 2.0;
+        let y = at.y + size.height / 2.0;
+        let window = app.main.window();
+        let position = slint::LogicalPosition::new(x, y);
+        window.dispatch_event(WindowEvent::PointerMoved { position });
+        window.dispatch_event(WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Left,
+        });
+        assert!(
+            dragged.get(),
+            "a press at ({x}, {y}) on the header band drags the window"
+        );
+    }
+
+    /// Turning streaming on slides the switch's knob across while its track
+    /// turns teal, together over the same 250 ms, in the main window and the
+    /// tray panel, as the Mac's power switch.
+    #[test]
+    fn the_streaming_switch_knob_slides_with_its_track() {
+        use i_slint_backend_testing::{ElementHandle, ElementRoot};
+        fn slides<C: ElementRoot>(window: &C, name: &str) {
+            let switch = || {
+                ElementHandle::find_by_accessible_label(window, "Streaming")
+                    .next()
+                    .expect("the streaming switch")
+            };
+            let left = || {
+                let knob = ElementHandle::find_by_element_id(window, "PowerSwitch::knob")
+                    .next()
+                    .expect("the switch's knob");
+                knob.absolute_position().x - switch().absolute_position().x
+            };
+            // A headless window evaluates an animated property only when read,
+            // so read the knob once and let any turn still pending finish.
+            left();
+            advance_clock(Duration::from_millis(400));
+            draw_frames();
+            let off = left();
+            switch().invoke_accessible_default_action();
+            let mut seen = vec![];
+            for _ in 0..16 {
+                advance_clock(Duration::from_millis(16));
+                draw_frames();
+                seen.push(left());
+            }
+            let on = *seen.last().unwrap();
+            assert!(on - off > 10.0, "{name}: the knob crosses: {off} to {on}");
+            let halfway = (seen[7] - off) / (on - off);
+            assert!(
+                (0.3..=0.7).contains(&halfway),
+                "{name}: halfway through the turn the knob is halfway across: {seen:?}"
+            );
+            assert!(
+                seen.windows(2).all(|w| w[1] >= w[0] - 0.01),
+                "{name}: the knob never steps back: {seen:?}"
+            );
+        }
+        let app = app_over(MockBackend::new());
+        app.main.show().unwrap();
+        app.flyout.show().unwrap();
+        draw_frames();
+        hold_clock();
+        slides(&app.flyout, "flyout");
+        app.update(|b| b.set_running(false));
+        advance_clock(Duration::from_millis(400));
+        draw_frames();
+        slides(&app.main, "main");
+    }
+
+    /// Resting on the flyout's streaming switch shows no tooltip: the switch
+    /// says its state itself (maintainer 2026-11-16).
+    #[test]
+    fn the_flyout_streaming_switch_has_no_tooltip() {
         use i_slint_backend_testing::ElementHandle;
         let app = app_over(MockBackend::new());
         app.flyout.show().unwrap();
@@ -17078,8 +19237,8 @@ mod tests {
         assert!(
             ElementHandle::find_by_element_id(&app.flyout, "TrayFlyout::power-tip")
                 .next()
-                .is_some(),
-            "a tooltip on the streaming switch"
+                .is_none(),
+            "no tooltip on the streaming switch"
         );
     }
 
@@ -17111,7 +19270,8 @@ mod tests {
 
     /// Several Apps… ends the flyout's source menu, as the Mac panel's menu
     /// ends in its submenu: the menu's model holds the sources only, and the
-    /// item opens the main window's list and leaves the source as it was.
+    /// item opens the main window, whose source menu holds the list, and
+    /// leaves the source as it was.
     // covers: S419
     #[test]
     fn several_apps_under_the_flyout_sources_opens_the_main_windows_list() {
@@ -17123,39 +19283,16 @@ mod tests {
 
         app.flyout.show().unwrap();
         app.flyout.invoke_several_apps_requested();
-        assert!(app.main.get_mix_open());
         assert!(app.main.window().is_visible());
         assert!(!app.flyout.window().is_visible());
         assert_eq!(app.snapshot().source_id, chosen);
     }
 
     #[test]
-    fn the_several_apps_list_opens_by_itself_once_as_the_source_becomes_a_mix() {
-        let app = app_over(MockBackend::new());
-        app.main.show().unwrap();
-        draw_frames();
-        assert!(!app.main.get_mix_open());
-        app.main.invoke_mix_app_toggled(0);
-        assert!(!app.main.get_mix_open(), "one app is no mix yet");
-        app.main.invoke_mix_app_toggled(1);
-        assert!(app.main.get_mix_open());
-        app.main.set_mix_open(false);
-        app.main.invoke_mix_app_toggled(1);
-        app.main.invoke_mix_app_toggled(1);
-        assert!(
-            app.main.get_mix_open(),
-            "back to a mix after one app opens it again"
-        );
-        app.main.set_mix_open(false);
-        app.refresh();
-        assert!(!app.main.get_mix_open());
-    }
-
-    #[test]
     fn a_focused_speaker_row_keeps_the_focus_when_its_list_is_rebuilt() {
         let app = main_window_with_listed_cable();
         let window = app.main.window();
-        tab(window, 17);
+        tab(window, 18);
         let bedroom = enabled(&app, "airplay:bedroom");
         press(window, " ");
         assert_ne!(
@@ -17363,19 +19500,20 @@ mod tests {
             assert_eq!(refreshes.get(), before, "Shift+F5 in the {name}");
             press(window, Key::F1);
             assert!(app.help.window().is_visible(), "F1 in the {name}");
+            let zones = app.snapshot().zones.len();
             ctrl(window, "n");
-            assert!(
-                app.zone_dialog.window().is_visible(),
+            assert_eq!(
+                app.snapshot().zones.len(),
+                zones + 1,
                 "Ctrl+N in the {name}"
             );
-            let _ = app.zone_dialog.hide();
             let before = refreshes.get();
             press(window, Key::F5);
             assert_eq!(refreshes.get(), before + 1, "F5 in the {name}");
         }
 
         // T33: an open name dialog comes to the front as it is.
-        app.ask_save_preset();
+        app.ask_save_curve();
         let heading = app.zone_dialog.get_heading();
         ctrl(app.equalizer.window(), "n");
         assert_eq!(app.zone_dialog.get_heading(), heading);
@@ -17422,7 +19560,9 @@ mod tests {
         held(app.flyout.window(), &[Key::Control, Key::Meta], "1");
         assert!(!preset_rows(&app)[0].1, "Ctrl+Win+1 in the flyout");
 
-        app.ask_save_preset();
+        app.equalizer.invoke_save_curve();
+        app.equalizer.invoke_curve_named("Bass".into(), true);
+        app.equalizer.invoke_rename_curve();
         draw_frames();
         held(app.zone_dialog.window(), &[Key::Control, Key::Shift], "w");
         assert!(app.zone_dialog.window().is_visible(), "Ctrl+Shift+W");
@@ -17468,22 +19608,24 @@ mod tests {
     fn save_rename_update_and_delete_ask_nothing_and_say_what_they_did() {
         let app = main_window_over(MockBackend::new());
         app.ask_save_preset();
-        assert_eq!(*app.dialog_purpose.borrow(), DialogPurpose::SavePreset);
-        assert_eq!(app.zone_dialog.get_heading(), "Save Preset");
-        assert_eq!(app.zone_dialog.get_field_label(), "Preset name");
-        assert_eq!(app.zone_dialog.get_placeholder(), "Evening, Party…");
-        app.confirm_dialog("Evening");
+        assert!(app.main.get_preset_saving(), "a name field in the list");
+        assert!(!app.zone_dialog.window().is_visible(), "Save asks nothing");
+        app.main.invoke_preset_save_named("Evening".into());
         assert_eq!(preset_rows(&app), [("Evening".into(), true)]);
         assert_eq!(app.main.get_notice_announcement(), "Evening saved");
 
         let id = preset_ids(&app)[0].clone();
         app.ask_rename_preset(&id);
-        assert_eq!(app.zone_dialog.get_heading(), "Rename Preset");
-        assert_eq!(app.zone_dialog.get_name(), "Evening");
-        app.confirm_dialog("   ");
+        assert_eq!(app.main.get_preset_renaming(), id.as_str());
+        assert!(
+            !app.zone_dialog.window().is_visible(),
+            "Rename asks nothing"
+        );
+        app.main
+            .invoke_preset_rename_named(id.as_str().into(), "   ".into());
         assert_eq!(preset_rows(&app)[0].0, "Evening", "a blank name keeps it");
-        app.ask_rename_preset(&id);
-        app.confirm_dialog("Late");
+        app.main
+            .invoke_preset_rename_named(id.as_str().into(), "Late".into());
         assert_eq!(preset_rows(&app)[0].0, "Late");
 
         app.save_preset("Party");
@@ -17514,9 +19656,10 @@ mod tests {
             app.update(|b| b.set_speaker_enabled(&speaker.id, false));
         }
         app.ask_save_preset();
-        assert_eq!(*app.dialog_purpose.borrow(), DialogPurpose::Message);
+        assert!(!app.zone_dialog.window().is_visible());
+        assert!(!app.main.get_preset_saving());
         assert_eq!(
-            app.zone_dialog.get_message(),
+            app.main.get_preset_save_note(),
             "Turn on the speakers you want in the preset first, then save it."
         );
         assert!(preset_rows(&app).is_empty());
@@ -17531,6 +19674,8 @@ mod tests {
             app.update(|b| b.set_speaker_enabled(&speaker.id, false));
         }
         app.equalizer.invoke_save_curve();
+        app.equalizer.invoke_curve_named("Bass".into(), true);
+        app.equalizer.invoke_rename_curve();
         app.zone_dialog.set_name("Late night".into());
         let heading = app.zone_dialog.get_heading();
 
@@ -17539,7 +19684,10 @@ mod tests {
         assert!(app.zone_dialog.window().is_visible());
         assert_eq!(app.zone_dialog.get_heading(), heading);
         assert_eq!(app.zone_dialog.get_name(), "Late night");
-        assert_eq!(*app.dialog_purpose.borrow(), DialogPurpose::SaveCurve);
+        assert_eq!(
+            *app.dialog_purpose.borrow(),
+            DialogPurpose::RenameCurve("Bass".to_owned())
+        );
         assert_eq!(app.main.get_notice_announcement(), why);
         let notices = app.snapshot().notices;
         let notice = notices.last().expect("a notice says it");
@@ -17579,9 +19727,8 @@ mod tests {
         assert!(app.main.get_presets_open(), "a delete leaves the list open");
         tab(window, 1);
         press(window, Key::Return);
-        assert_eq!(
-            *app.dialog_purpose.borrow(),
-            DialogPurpose::SavePreset,
+        assert!(
+            app.main.get_preset_saving(),
             "with no preset left, the list still offers Save as Preset…"
         );
     }
@@ -17760,14 +19907,14 @@ mod tests {
         let app = main_window_over(backend);
         assert!(!app.main.get_can_save_preset());
         app.ask_save_preset();
-        assert_eq!(*app.dialog_purpose.borrow(), DialogPurpose::Message);
+        assert!(!app.zone_dialog.window().is_visible());
+        assert!(!app.main.get_preset_saving());
         assert_eq!(
-            app.zone_dialog.get_message(),
+            app.main.get_preset_save_note(),
             "AudioSync keeps 256 presets at most. Delete one to save another."
         );
 
         let first = preset_ids(&app)[0].clone();
-        app.zone_dialog.hide().unwrap();
         app.delete_preset(&first);
         assert!(app.main.get_can_save_preset());
     }
@@ -17837,11 +19984,11 @@ mod tests {
             press(window, Key::DownArrow);
             press(window, Key::Return);
             assert_eq!(
-                *app.dialog_purpose.borrow(),
-                DialogPurpose::RenamePreset(preset_ids(&app)[0].clone()),
+                app.main.get_preset_renaming(),
+                preset_ids(&app)[0].as_str(),
                 "{open:?}: the menu opened, and its first item is Rename…"
             );
-            app.zone_dialog.hide().expect("the dialog hides");
+            press(window, Key::Escape);
         }
     }
 
@@ -17849,20 +19996,21 @@ mod tests {
     #[test]
     fn the_presets_list_folds_open_recalls_and_folds_by_keyboard() {
         let app = main_window_over(MockBackend::new());
+        hold_clock();
         let window = app.main.window();
         app.main.set_focus_presets(true);
         draw_frames();
         press(window, Key::Return);
+        advance_clock(Duration::from_secs(1));
         draw_frames();
         assert!(app.main.get_presets_open());
         tab(window, 1);
         press(window, " ");
-        assert_eq!(
-            *app.dialog_purpose.borrow(),
-            DialogPurpose::SavePreset,
+        assert!(
+            app.main.get_preset_saving(),
             "an empty list holds only Save as Preset…"
         );
-        app.zone_dialog.hide().expect("the dialog hides");
+        press(window, Key::Escape);
 
         app.save_preset("Evening");
         app.update(|b| b.set_master_volume(30.0));
@@ -17951,8 +20099,8 @@ mod tests {
         };
         let five = list().size().height;
         assert!(
-            (five - 6.0 * 40.0).abs() < 1.0,
-            "five rows and Save as Preset… show whole: {five}"
+            (five - (6.0 * 40.0 + 6.0)).abs() < 1.0,
+            "five rows, Save as Preset… and the 6 px under it show whole: {five}"
         );
 
         app.update(|b| b.set_master_volume(77.0));
@@ -18227,7 +20375,7 @@ mod tests {
         let window = app.main.window();
         // As in the example's order without Bedroom's row:
         // the cable row's toggle.
-        tab(window, 17);
+        tab(window, 18);
         press(window, " ");
         assert!(enabled(&app, "local:cable"), "the cable row has the focus");
         press(window, " ");
@@ -18894,12 +21042,12 @@ mod tests {
         );
     }
 
-    /// While a speaker row's round switch has the keyboard focus, its name
-    /// tooltip shows, so a keyboard user can read a cut name; it goes with
-    /// the focus (S447).
+    /// The keyboard focus on a speaker row's round switch shows no name
+    /// tooltip, as on the Mac: Narrator reads the name from the switch, and
+    /// a tip there covered the next row (S447).
     // covers: S447
     #[test]
-    fn a_speaker_name_tooltip_shows_while_its_switch_has_the_keyboard_focus() {
+    fn a_speaker_switch_with_the_keyboard_focus_shows_no_name_tooltip() {
         let app = app_over(MockBackend::new());
         app.main.show().unwrap();
         draw_frames();
@@ -18914,8 +21062,8 @@ mod tests {
             Some(("airplay:kitchen".into(), RowPart::Toggle))
         );
         assert!(
-            element(&app, "SpeakerRow::focus-tip").is_some(),
-            "the name tip shows with the switch focused"
+            element(&app, "SpeakerRow::focus-tip").is_none(),
+            "no name tip with the switch focused"
         );
         focus(RowPart::Options);
         assert!(element(&app, "SpeakerRow::focus-tip").is_none());
@@ -18946,29 +21094,1475 @@ mod tests {
         assert!(source.contains("glyph: root.is-input ? Glyphs.microphone"));
     }
 
-    /// Web Remote… sits under View, right after Presets, with the other
-    /// items that open a window, not under File (S449).
+    /// The gear's menu, as the Mac's: Speakers (New Zone, Refresh Devices),
+    /// Windows (Web Remote, Settings, the Guide), then About and Exit, the
+    /// app menu items a Windows app has no other place for. Each item calls
+    /// the callback its File, Speakers, View or Help item called (S449).
     // covers: S449
     #[test]
-    fn web_remote_sits_under_view_below_presets() {
-        let source = include_str!("../ui/main.slint");
-        let at = |text: &str| {
-            source
-                .find(text)
-                .unwrap_or_else(|| panic!("{text} in main.slint"))
-        };
-        let view = at("title: Strings.menu-view;");
-        let help = at("title: Strings.menu-help;");
-        let remote = at("title: Strings.menu-remote;");
-        let presets = view
-            + source[view..]
-                .find("title: Strings.presets;")
-                .expect("View > Presets");
-        let virtual_devices = at("title: Strings.show-virtual-devices;");
-        assert!(view < remote && remote < help, "under View");
-        assert!(
-            presets < remote && remote < virtual_devices,
-            "right after Presets"
+    fn the_gear_menu_holds_the_old_menus_items_in_the_macs_order() {
+        let source = include_str!("../ui/main.slint").replace("\r\n", "\n");
+        let gear = &source[source.find("component GearButton").expect("the gear")..];
+        let gear = &gear[..gear.find("\n}\n").unwrap()];
+        let mut at = 0;
+        for title in [
+            "text: Strings.menu-speakers;",
+            "text: Strings.new-zone;\n                keys: \"Ctrl+N\";",
+            "text: Strings.refresh-devices;\n                keys: \"F5\";",
+            "text: Strings.menu-group-windows;",
+            "text: Strings.menu-remote;",
+            "text: Strings.settings-menu;\n                keys: \"Ctrl+,\";",
+            "text: Strings.help-title;\n                keys: \"F1\";",
+            "MenuDivider { }",
+            "text: Strings.menu-about;",
+            "text: Strings.menu-exit;\n                keys: \"Ctrl+Q\";",
+        ] {
+            at += gear[at..]
+                .find(title)
+                .unwrap_or_else(|| panic!("{title} after the item before it"));
+        }
+        let header = &source[source.find("gear := GearButton {").unwrap()..];
+        let header: String = header[..header.find("power := PowerSwitch").unwrap()]
+            .split_whitespace()
+            .collect();
+        for (item, callback) in [
+            ("new-zone", "new-zone-requested"),
+            ("refresh", "refresh-devices"),
+            ("remote", "remote-requested"),
+            ("settings", "settings-requested"),
+            ("guide", "help-requested"),
+            ("about", "about-requested"),
+            ("exit", "exit-requested"),
+        ] {
+            assert!(
+                header.contains(&format!("{item}=>{{root.{callback}();}}")),
+                "{item} calls {callback}"
+            );
+        }
+        assert!(!source.contains("MenuName"), "no menu row");
+        at = 0;
+        for (index, callback) in [
+            "new-zone", "refresh", "remote", "settings", "guide", "about", "exit",
+        ]
+        .iter()
+        .enumerate()
+        {
+            at = gear[at..]
+                .find(&format!("index: {index};"))
+                .map(|i| at + i)
+                .unwrap_or_else(|| panic!("item {index}"));
+            assert!(
+                gear[at..].starts_with(&format!("index: {index};"))
+                    && gear[at..(at + 400).min(gear.len())]
+                        .contains(&format!("root.{callback}();")),
+                "item {index} calls {callback}"
+            );
+        }
+    }
+
+    /// The gear's and the source picker's menus are one popup drawn in the
+    /// app's colors, so they are dark with the app, as the Mac's menus are:
+    /// the arrows pick an item with a focus ring, Enter runs it, Escape
+    /// closes it and gives the button the focus.
+    // covers: S449
+    #[test]
+    fn the_gear_menu_follows_the_theme_and_the_keyboard() {
+        let source = include_str!("../ui/main.slint").replace("\r\n", "\n");
+        for name in ["GearButton", "SourceMenu"] {
+            let menu = &source[source.find(&format!("component {name}")).unwrap()..];
+            let menu = &menu[..menu.find("\n}\n").unwrap()];
+            assert!(!menu.contains("ContextMenuArea"), "{name}: no native menu");
+            assert!(menu.contains("panel := MenuPanel {"), "{name}");
+        }
+        let widgets = include_str!("../ui/widgets.slint").replace("\r\n", "\n");
+        let gear = &widgets[widgets.find("export component MenuPanel").unwrap()..];
+        for colour in [
+            "background: Tokens.surface;",
+            "border-color: Fluent.stroke;",
+            "color: Tokens.text;",
+            "color: Tokens.secondary-text;",
+            "background: root.selected ? Fluent.hover : transparent;",
+            "visible-focus: root.selected && root.keyboard;",
+            "height: 32px;",
+        ] {
+            assert!(gear.contains(colour), "{colour}");
+        }
+        assert!(source.contains("width: max(270px + 2 * MenuRoom.margin, panel.preferred-width);"));
+        let backend = MockBackend::new();
+        let refreshes = backend.refreshes.clone();
+        let app = app_over(backend);
+        app.main.show().expect("the main window shows");
+        draw_frames();
+        let window = app.main.window();
+        app.main.invoke_focus_gear();
+        press(window, " ");
+        press(window, Key::DownArrow);
+        press(window, Key::DownArrow);
+        let before = refreshes.get();
+        press(window, Key::Return);
+        assert_eq!(refreshes.get(), before + 1, "Refresh Devices ran");
+        app.main.invoke_focus_gear();
+        press(window, " ");
+        press(window, Key::Escape);
+        press(window, Key::Return);
+        assert_eq!(refreshes.get(), before + 1, "Escape closed the menu");
+    }
+
+    /// The source menu sorts its rows into the Mac's sections: All System
+    /// Audio, the apps, then the input devices, in both windows' menus.
+    #[test]
+    fn the_source_menu_knows_each_rows_section() {
+        let app = app_over(MockBackend::new());
+        app.refresh();
+        let kinds: Vec<SourceRowKind> = app
+            .main
+            .get_source_looks()
+            .iter()
+            .map(|look| look.kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                SourceRowKind::System,
+                SourceRowKind::App,
+                SourceRowKind::App,
+                SourceRowKind::Input
+            ]
         );
+        assert_eq!(app.flyout.get_source_looks().row_count(), kinds.len());
+    }
+
+    /// The keyboard reaches every row of the source menu: each source, then
+    /// Several Apps, whose rows unfold under it with Enter, its two modes and
+    /// each app.
+    #[test]
+    fn the_keyboard_reaches_every_row_of_the_source_menu() {
+        let app = app_over(MockBackend::new());
+        app.refresh();
+        app.main.show().expect("the main window shows");
+        draw_frames();
+        let window = app.main.window();
+        let sources = app.main.get_sources().row_count();
+        assert!(sources > 1);
+        app.main.invoke_open_sources();
+        draw_frames();
+        press(window, Key::End);
+        press(window, Key::UpArrow);
+        press(window, Key::Return);
+        draw_frames();
+        assert_eq!(
+            app.main.get_source_index() as usize,
+            sources - 1,
+            "the last source"
+        );
+        app.main.invoke_open_sources();
+        draw_frames();
+        press(window, Key::End);
+        press(window, Key::Return);
+        press(window, Key::DownArrow);
+        press(window, Key::DownArrow);
+        press(window, Key::Return);
+        assert!(app.snapshot().mix_all_except, "All Apps Except");
+        app.main.invoke_open_sources();
+        draw_frames();
+        press(window, Key::End);
+        press(window, Key::Return);
+        press(window, Key::End);
+        press(window, Key::Return);
+        assert!(
+            app.main.get_mix_apps().row_data(1).unwrap().checked,
+            "the last app"
+        );
+    }
+
+    /// Each window with a menu repaints all of itself as a menu opens or
+    /// closes, so no old menu pixels stay where the popup was. The tests'
+    /// snapshots always draw a fresh buffer, so only the window's partial
+    /// repaint showed them; this checks the window-wide item behind it.
+    // covers: S449
+    #[test]
+    fn closing_a_menu_repaints_the_whole_window_it_was_in() {
+        let widgets = include_str!("../ui/widgets.slint").replace("\r\n", "\n");
+        let repaint = &widgets[widgets
+            .find("component MenuRepaint inherits Rectangle")
+            .unwrap()..];
+        let repaint = &repaint[..repaint.find("\n}\n").unwrap()];
+        for needle in [
+            "width: 100%;",
+            "height: 100%;",
+            "background: MenuState.open == 0 ?",
+        ] {
+            assert!(repaint.contains(needle), "{needle}");
+        }
+        for (source, window) in [
+            (include_str!("../ui/main.slint"), "MainWindow"),
+            (include_str!("../ui/equalizer.slint"), "EqualizerWindow"),
+            (include_str!("../ui/flyout.slint"), "TrayFlyout"),
+        ] {
+            let source = source.replace("\r\n", "\n");
+            let body = &source[source
+                .find(&format!("component {window} inherits Window"))
+                .unwrap_or_else(|| panic!("{window}"))..];
+            assert!(body.contains("\n    MenuRepaint { }\n"), "{window}");
+        }
+    }
+
+    /// Every popup menu but a text field's editing menu is the app's own,
+    /// drawn in its colors as the gear's is, and a click outside it, the
+    /// opener's included, closes it.
+    // covers: S449
+    #[test]
+    fn every_menu_but_the_text_fields_is_the_apps_themed_menu() {
+        let widgets = include_str!("../ui/widgets.slint").replace("\r\n", "\n");
+        let main = include_str!("../ui/main.slint").replace("\r\n", "\n");
+        let equalizer = include_str!("../ui/equalizer.slint").replace("\r\n", "\n");
+        let flyout = include_str!("../ui/flyout.slint").replace("\r\n", "\n");
+        for (source, name) in [
+            (&widgets, "SpeakerRow"),
+            (&widgets, "ZoneMemberRow"),
+            (&widgets, "ZoneHeader"),
+            (&main, "PresetListRow"),
+            (&equalizer, "CurveMenu"),
+            (&flyout, "PresetPicker"),
+            (&flyout, "SourceMenu"),
+        ] {
+            let body = &source[source
+                .find(&format!("component {name} inherits"))
+                .unwrap_or_else(|| panic!("{name}"))..];
+            let body = &body[..body.find("\n}\n").unwrap()];
+            assert!(!body.contains("ContextMenuArea"), "{name}: no native menu");
+            for needle in [
+                "menu := PopupWindow {",
+                "close-policy: close-on-click-outside;",
+                "panel := MenuPanel {",
+            ] {
+                assert!(body.contains(needle), "{name}: {needle}");
+            }
+        }
+        let text_field = &widgets[widgets.find("export component TextField").unwrap()..];
+        let native = [&widgets, &main, &equalizer, &flyout]
+            .iter()
+            .map(|source| source.matches("ContextMenuArea {").count())
+            .sum::<usize>();
+        assert_eq!(native, 1, "the text field's editing menu only");
+        assert!(text_field[..text_field.find("\n}\n").unwrap()].contains("ContextMenuArea {"));
+        let row = &widgets[widgets.find("export component MenuRow").unwrap()..];
+        assert!(row.contains("opacity: root.enabled ? 1 : Tokens.disabled-opacity;"));
+    }
+
+    /// A speaker's options menu opens from its … button, a right-click on
+    /// the row, the Menu key and Shift+F10; End reaches its last item, and
+    /// Escape gives the focus back to the … button.
+    // covers: S449
+    #[test]
+    fn the_speaker_menu_opens_by_click_right_click_and_keys_and_reaches_its_last_item() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = main_window_over(MockBackend::new());
+        let window = app.main.window();
+        let strings = app.strings();
+        let hide = strings.get_hide_speaker();
+        let open = || ElementHandle::find_by_accessible_label(&app.main, &hide).count() > 0;
+        let label = strings.invoke_speaker_options(name_of(&app, "local:desk").into());
+        let options = ElementHandle::find_by_accessible_label(&app.main, &label)
+            .next()
+            .expect("the … button");
+        let (at, size) = (options.absolute_position(), options.size());
+        click(window, at.x + size.width / 2.0, at.y + size.height / 2.0);
+        assert!(open(), "a click on … opens it");
+        press(window, Key::Escape);
+        assert!(!open(), "Escape closes it");
+
+        // The row's padding right of the … button.
+        let position = slint::LogicalPosition::new(at.x + size.width + 4.0, at.y + 2.0);
+        let button = PointerEventButton::Right;
+        window.dispatch_event(WindowEvent::PointerMoved { position });
+        window.dispatch_event(WindowEvent::PointerPressed { position, button });
+        window.dispatch_event(WindowEvent::PointerReleased { position, button });
+        draw_frames();
+        assert!(open(), "a right-click on the row opens it");
+        press(window, Key::Escape);
+
+        let opens: [&[Key]; 2] = [&[Key::Menu], &[Key::Shift, Key::F10]];
+        for open_keys in opens {
+            app.main.set_focus_speaker_part(RowPart::Options);
+            app.main.set_focus_speaker_id("local:desk".into());
+            draw_frames();
+            for key in open_keys {
+                window.dispatch_event(WindowEvent::KeyPressed {
+                    text: (*key).into(),
+                });
+            }
+            for key in open_keys.iter().rev() {
+                window.dispatch_event(WindowEvent::KeyReleased {
+                    text: (*key).into(),
+                });
+            }
+            draw_frames();
+            assert!(open(), "{open_keys:?} opens it");
+            press(window, Key::Escape);
+            assert!(!open());
+            assert_eq!(
+                app.main_focus.borrow().speaker,
+                Some(("local:desk".into(), RowPart::Options)),
+                "{open_keys:?}: Escape gave the … button the focus back"
+            );
+        }
+
+        window.dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Menu.into(),
+        });
+        draw_frames();
+        press(window, Key::End);
+        press(window, Key::Return);
+        assert!(
+            app.snapshot().speaker("local:desk").is_none(),
+            "End reached Hide Speaker"
+        );
+    }
+
+    /// The … button stays shown while its menu is open, though the menu
+    /// takes the pointer and the focus from the row.
+    #[test]
+    fn a_speakers_options_button_stays_shown_while_its_menu_is_open() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = main_window_over(MockBackend::new());
+        let window = app.main.window();
+        let strings = app.strings();
+        let label = strings.invoke_speaker_options(name_of(&app, "local:desk").into());
+        let options = || {
+            ElementHandle::find_by_accessible_label(&app.main, &label)
+                .next()
+                .expect("the … button")
+        };
+        hold_clock();
+        let (at, size) = (options().absolute_position(), options().size());
+        click(window, at.x + size.width / 2.0, at.y + size.height / 2.0);
+        let hide = ElementHandle::find_by_accessible_label(&app.main, &strings.get_hide_speaker())
+            .next()
+            .expect("a click on … opens the menu");
+        let position = slint::LogicalPosition::new(
+            hide.absolute_position().x + hide.size().width / 2.0,
+            hide.absolute_position().y + hide.size().height / 2.0,
+        );
+        window.dispatch_event(WindowEvent::PointerMoved { position });
+        advance_clock(Duration::from_millis(1000));
+        draw_frames();
+        assert_eq!(
+            options().computed_opacity(),
+            1.0,
+            "the pointer on the menu leaves … shown"
+        );
+        press(window, Key::Escape);
+
+        // With the pointer gone and the focus on another speaker's …, a
+        // closed menu leaves no … shown but that one.
+        let other = app
+            .snapshot()
+            .speakers
+            .iter()
+            .map(|s| s.id.clone())
+            .find(|id| id != "local:desk")
+            .expect("another speaker");
+        let settle = || {
+            window.dispatch_event(WindowEvent::PointerExited);
+            app.main.set_focus_speaker_part(RowPart::Options);
+            app.main.set_focus_speaker_id(other.as_str().into());
+            draw_frames();
+            advance_clock(Duration::from_millis(1000));
+            draw_frames();
+        };
+        let shown = || {
+            app.snapshot()
+                .speakers
+                .iter()
+                .filter(|s| s.id != other)
+                .map(|s| strings.invoke_speaker_options(s.name.as_str().into()))
+                .flat_map(|label| {
+                    ElementHandle::find_by_accessible_label(&app.main, &label).collect::<Vec<_>>()
+                })
+                .map(|button| button.computed_opacity())
+                .fold(0.0, f32::max)
+        };
+        settle();
+        assert_eq!(shown(), 0.0, "Escape's close hides …");
+
+        click(window, at.x + size.width / 2.0, at.y + size.height / 2.0);
+        let height = window.size().to_logical(window.scale_factor()).height;
+        click(window, 4.0, height - 4.0);
+        settle();
+        assert_eq!(shown(), 0.0, "a click away hides …");
+
+        window.dispatch_event(WindowEvent::PointerExited);
+        app.main.set_focus_speaker_part(RowPart::Options);
+        app.main.set_focus_speaker_id("local:desk".into());
+        draw_frames();
+        press(window, Key::Menu);
+        advance_clock(Duration::from_millis(1000));
+        draw_frames();
+        assert_eq!(
+            options().computed_opacity(),
+            1.0,
+            "a menu opened by key leaves … shown"
+        );
+
+        app.update(|b| b.hide_speaker("local:desk", "USB"));
+        draw_frames();
+        settle();
+        assert_eq!(
+            shown(),
+            0.0,
+            "a row gone with its menu open leaves no … shown"
+        );
+    }
+
+    /// An open delay panel keeps the delay shown but not the … button,
+    /// which shows only under the pointer or the focus, as on the Mac.
+    #[test]
+    fn an_open_delay_panel_leaves_the_options_button_hidden() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = main_window_over(MockBackend::new());
+        let window = app.main.window();
+        let strings = app.strings();
+        let name = name_of(&app, "local:desk");
+        let opacity = |label: slint::SharedString| {
+            ElementHandle::find_by_accessible_label(&app.main, &label)
+                .next()
+                .expect("the control")
+                .computed_opacity()
+        };
+        hold_clock();
+        app.toggle_sync("local:desk");
+        window.dispatch_event(WindowEvent::PointerExited);
+        app.main.set_focus_speaker_part(RowPart::None);
+        draw_frames();
+        advance_clock(Duration::from_millis(1000));
+        draw_frames();
+        assert!(app.ui.borrow().sync_open.contains("local:desk"));
+        assert_eq!(
+            opacity(strings.invoke_delay_of(name.as_str().into())),
+            1.0,
+            "the delay stays shown"
+        );
+        assert_eq!(
+            opacity(strings.invoke_speaker_options(name.as_str().into())),
+            0.0,
+            "no … without the pointer or the focus"
+        );
+    }
+
+    /// Tabbing through a speaker row shows … only on … itself and the delay
+    /// only on the delay, as on the Mac.
+    #[test]
+    fn a_speaker_rows_controls_show_only_on_their_own_focus() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = main_window_over(MockBackend::new());
+        let window = app.main.window();
+        let strings = app.strings();
+        let name = name_of(&app, "local:desk");
+        let opacity = |label: slint::SharedString| {
+            ElementHandle::find_by_accessible_label(&app.main, &label)
+                .next()
+                .expect("the control")
+                .computed_opacity()
+        };
+        let focus = |part| {
+            window.dispatch_event(WindowEvent::PointerExited);
+            app.main.set_focus_speaker_part(part);
+            app.main.set_focus_speaker_id("local:desk".into());
+            draw_frames();
+            advance_clock(Duration::from_millis(1000));
+            draw_frames();
+        };
+        hold_clock();
+        let options = || opacity(strings.invoke_speaker_options(name.as_str().into()));
+        focus(RowPart::Toggle);
+        assert_eq!(options(), 0.0, "the switch's focus leaves … hidden");
+        focus(RowPart::Delay);
+        assert_eq!(options(), 0.0, "the delay's focus leaves … hidden");
+        assert_eq!(
+            opacity(strings.invoke_delay_of(name.as_str().into())),
+            1.0,
+            "the delay shows on its own focus"
+        );
+        focus(RowPart::Options);
+        assert_eq!(options(), 1.0, "… shows on its own focus");
+    }
+
+    /// A menu opened near the window's bottom or right edge stays whole
+    /// inside it, a right-click's menu flipped above the pointer.
+    // covers: S449
+    #[test]
+    fn a_speaker_menu_near_the_bottom_edge_stays_inside_the_window() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = main_window_over(MockBackend::new());
+        let window = app.main.window();
+        let strings = app.strings();
+        let label = strings.invoke_speaker_options(name_of(&app, "local:desk").into());
+        let options = || {
+            ElementHandle::find_by_accessible_label(&app.main, &label)
+                .next()
+                .expect("the … button")
+        };
+        let bottom = options().absolute_position().y + options().size().height;
+        window.set_size(slint::LogicalSize::new(
+            window.size().to_logical(window.scale_factor()).width,
+            bottom + 30.0,
+        ));
+        draw_frames();
+        let (at, size) = (options().absolute_position(), options().size());
+        click(window, at.x + size.width / 2.0, at.y + size.height / 2.0);
+        let height = window.size().to_logical(window.scale_factor()).height;
+        let hide = ElementHandle::find_by_accessible_label(&app.main, &strings.get_hide_speaker())
+            .next()
+            .expect("the menu opened");
+        assert!(
+            hide.absolute_position().y + hide.size().height <= height,
+            "its last row is inside the window"
+        );
+        press(window, Key::Escape);
+
+        let width = at.x + size.width + 20.0;
+        window.set_size(slint::LogicalSize::new(width, height));
+        draw_frames();
+        let (at, size) = (options().absolute_position(), options().size());
+        let width = window.size().to_logical(window.scale_factor()).width;
+        let position = slint::LogicalPosition::new(at.x + size.width + 4.0, at.y + 2.0);
+        let button = PointerEventButton::Right;
+        window.dispatch_event(WindowEvent::PointerMoved { position });
+        window.dispatch_event(WindowEvent::PointerPressed { position, button });
+        window.dispatch_event(WindowEvent::PointerReleased { position, button });
+        draw_frames();
+        let hide = ElementHandle::find_by_accessible_label(&app.main, &strings.get_hide_speaker())
+            .next()
+            .expect("the right-click's menu opened");
+        let (top, extent) = (hide.absolute_position(), hide.size());
+        assert!(top.x + extent.width <= width, "inside the right edge");
+        assert!(
+            top.y + extent.height <= position.y,
+            "above the pointer, with no room below"
+        );
+    }
+
+    /// Only one menu shows at a time, and Invoke (how Narrator presses a
+    /// button) on the button whose menu shows closes it.
+    // covers: S449
+    #[test]
+    fn one_menu_shows_at_a_time_and_invoking_its_button_again_closes_it() {
+        use i_slint_backend_testing::{AccessibleRole, ElementHandle};
+        let app = main_window_over(MockBackend::new());
+        let strings = app.strings();
+        let count = |label: &str| ElementHandle::find_by_accessible_label(&app.main, label).count();
+        let button = |label: &str| {
+            ElementHandle::find_by_accessible_label(&app.main, label)
+                .find(|e| e.accessible_role() == Some(AccessibleRole::Button))
+                .expect("the button")
+        };
+        let exit = strings.get_menu_exit();
+        let gear = button(&strings.get_more_options());
+        let source = button("Audio Source");
+        let sources_closed = count("Web Browser");
+        gear.invoke_accessible_default_action();
+        draw_frames();
+        assert_eq!(count(&exit), 1, "Invoke opens the gear's menu");
+        gear.invoke_accessible_default_action();
+        draw_frames();
+        assert_eq!(count(&exit), 0, "a second Invoke closes it");
+        gear.invoke_accessible_default_action();
+        draw_frames();
+        source.invoke_accessible_default_action();
+        draw_frames();
+        assert_eq!(count(&exit), 0, "opening the source menu closed the gear's");
+        assert!(
+            count("Web Browser") > sources_closed,
+            "the source menu shows"
+        );
+        press(app.main.window(), Key::Escape);
+        assert_eq!(count("Web Browser"), sources_closed, "it has the keys");
+        for (name, opener) in [("gear", &gear), ("source", &source)] {
+            let shown = || count(&exit) + count("Web Browser") > sources_closed;
+            for _ in 0..2 {
+                opener.invoke_accessible_default_action();
+                draw_frames();
+                assert!(shown(), "{name}: Invoke opens it");
+                opener.invoke_accessible_default_action();
+                draw_frames();
+                assert!(!shown(), "{name}: Invoke again closes it");
+            }
+            opener.invoke_accessible_default_action();
+            draw_frames();
+            // Narrator may move the focus before it invokes the button.
+            app.main.invoke_focus_gear();
+            draw_frames();
+            opener.invoke_accessible_default_action();
+            draw_frames();
+            assert!(!shown(), "{name}: closed with the focus moved");
+        }
+    }
+
+    /// A menu is as wide as its widest item, so none is cut short, as the
+    /// Mac's menus size to theirs: a long source name, past the picker's
+    /// width. The gear's New Zone from Active Speakers… beside Ctrl+N fits
+    /// its 270 px in Segoe UI.
+    // covers: S449
+    #[test]
+    fn a_menu_is_as_wide_as_its_widest_item() {
+        use i_slint_backend_testing::ElementHandle;
+        let long = "Microphone (Realtek USB2.0 Audio Device on the front panel)";
+        let mut backend = MockBackend::new();
+        backend.rename_source("app:player", long);
+        let app = main_window_over(backend);
+        let strings = app.strings();
+        let row = |label: &str| {
+            ElementHandle::find_by_accessible_label(&app.main, label)
+                .last()
+                .expect("the row")
+        };
+        app.main.invoke_focus_gear();
+        press(app.main.window(), " ");
+        assert!(
+            row(&strings.get_new_zone()).size().width >= 262.0,
+            "the 270 px menu's rows"
+        );
+        press(app.main.window(), Key::Escape);
+        app.main.invoke_open_sources();
+        draw_frames();
+        assert!(
+            row(long).size().width > 360.0,
+            "the long name's row fits it"
+        );
+    }
+
+    /// A rename field takes the name's whole width, up to the icons at the
+    /// row's end, as the Mac's does, so a long name shows whole: a
+    /// speaker's reaches its delay button, a zone's its volume and a
+    /// preset's its … button.
+    // covers: S228
+    #[test]
+    fn a_rename_field_is_as_wide_as_the_name_room() {
+        use i_slint_backend_testing::ElementHandle;
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:den", "Den", &["local:desk"]);
+        let app = main_window_over(backend);
+        app.save_preset("Evening");
+        app.main.set_presets_open(true);
+        draw_frames();
+        let strings = app.strings();
+        let right = |label: &str| {
+            let element = ElementHandle::find_by_accessible_label(&app.main, label)
+                .next()
+                .unwrap_or_else(|| panic!("{label}"));
+            element.absolute_position().x + element.size().width
+        };
+        let left = |label: &str| {
+            ElementHandle::find_by_accessible_label(&app.main, label)
+                .next()
+                .unwrap_or_else(|| panic!("{label}"))
+                .absolute_position()
+                .x
+        };
+
+        let speaker = app.snapshot().speakers[1].clone();
+        app.start_rename(&speaker.id, RenamePlace::Row);
+        draw_frames();
+        let device = row_of(&app, &speaker.id).device_name;
+        assert!(
+            right(&strings.invoke_speaker_name_field(device))
+                > left(&strings.invoke_speaker_options(speaker.name.into())) - 100.0,
+            "the speaker's field reaches the delay button beside its … button"
+        );
+        app.end_rename(false);
+
+        app.start_rename("zone:den", RenamePlace::Zone);
+        draw_frames();
+        assert!(
+            right(&strings.invoke_speaker_name_field("Den".into()))
+                > left(&strings.invoke_zone_volume("Den".into())) - 20.0,
+            "the zone's field reaches its volume"
+        );
+        app.end_rename(false);
+
+        app.ask_rename_preset(&preset_ids(&app)[0]);
+        draw_frames();
+        assert!(
+            right(&strings.get_preset_field_label())
+                > left(&strings.invoke_speaker_options("Evening".into())) - 20.0,
+            "the preset's field reaches its … button"
+        );
+    }
+
+    /// The keys pass over a disabled item, as the Mac's menus do: Down from
+    /// Rename… on the current preset lands on Delete, past Update.
+    // covers: S449
+    #[test]
+    fn the_keys_pass_over_a_disabled_menu_item() {
+        let app = main_window_over(MockBackend::new());
+        app.save_preset("Evening");
+        app.main.set_presets_open(true);
+        draw_frames();
+        let window = app.main.window();
+        app.main.set_focus_presets(true);
+        draw_frames();
+        tab(window, 1);
+        press(window, Key::Menu);
+        press(window, Key::DownArrow);
+        press(window, Key::DownArrow);
+        press(window, Key::UpArrow);
+        press(window, Key::DownArrow);
+        press(window, Key::Return);
+        assert!(
+            preset_ids(&app).is_empty(),
+            "Delete ran, Update was passed over"
+        );
+    }
+
+    /// A zone's menus, on its header and on a speaker row in it: the
+    /// keyboard reaches their last items, Delete Zone and Remove from Zone.
+    // covers: S449
+    #[test]
+    fn the_keyboard_reaches_the_last_item_of_a_zones_menus() {
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:den", "Den", &["local:desk"]);
+        let app = main_window_over(backend);
+        let window = app.main.window();
+        app.main.set_focus_in_zones_part(RowPart::Options);
+        app.main.set_focus_in_zones_id("local:desk".into());
+        draw_frames();
+        press(window, Key::Menu);
+        press(window, Key::End);
+        press(window, Key::Return);
+        assert!(
+            app.snapshot()
+                .zones
+                .iter()
+                .all(|zone| zone.members.is_empty()),
+            "Remove from Zone ran"
+        );
+
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:den", "Den", &["local:desk"]);
+        let app = main_window_over(backend);
+        let window = app.main.window();
+        app.main.set_focus_zone_part(RowPart::Options);
+        app.main.set_focus_zone_id("zone:den".into());
+        draw_frames();
+        press(window, Key::Menu);
+        press(window, Key::End);
+        press(window, Key::Return);
+        assert!(app.snapshot().zones.is_empty(), "Delete Zone ran");
+    }
+
+    /// Rename… in a speaker's, a zone's or a preset's menu, run by UI
+    /// Automation's Invoke or by the keys, leaves the name field showing
+    /// with the focus once the menu has closed.
+    // covers: S449
+    #[test]
+    fn rename_from_a_menu_leaves_the_name_field_focused() {
+        use i_slint_backend_testing::ElementHandle;
+        let invoke = |app: &App, label: &str| {
+            ElementHandle::find_by_accessible_label(&app.main, label)
+                .next()
+                .unwrap_or_else(|| panic!("{label}"))
+                .invoke_accessible_default_action();
+            draw_frames();
+            draw_frames();
+        };
+
+        let app = main_window_over(MockBackend::new());
+        let strings = app.strings();
+        invoke(
+            &app,
+            &strings.invoke_speaker_options(name_of(&app, "local:desk").into()),
+        );
+        invoke(&app, &strings.get_rename_speaker());
+        assert!(
+            row_of(&app, "local:desk").renaming,
+            "Invoke: the field shows"
+        );
+        assert!(
+            app.main_focus
+                .borrow()
+                .holds_name(RenamePlace::Row, "local:desk"),
+            "Invoke: the field has the focus"
+        );
+
+        let app = main_window_over(MockBackend::new());
+        let window = app.main.window();
+        app.main.set_focus_speaker_part(RowPart::Options);
+        app.main.set_focus_speaker_id("local:desk".into());
+        draw_frames();
+        press(window, Key::Menu);
+        press(window, Key::Home);
+        press(window, Key::Return);
+        draw_frames();
+        assert!(row_of(&app, "local:desk").renaming, "keys: the field shows");
+        assert!(
+            app.main_focus
+                .borrow()
+                .holds_name(RenamePlace::Row, "local:desk"),
+            "keys: the field has the focus"
+        );
+
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:den", "Den", &["local:desk"]);
+        let app = main_window_over(backend);
+        let window = app.main.window();
+        app.main.set_focus_zone_part(RowPart::Options);
+        app.main.set_focus_zone_id("zone:den".into());
+        draw_frames();
+        press(window, Key::Menu);
+        press(window, Key::Home);
+        press(window, Key::Return);
+        draw_frames();
+        assert!(
+            app.main_focus
+                .borrow()
+                .holds_name(RenamePlace::Zone, "zone:den"),
+            "the zone's field has the focus"
+        );
+
+        let app = main_window_over(MockBackend::new());
+        app.save_preset("Evening");
+        app.main.set_presets_open(true);
+        draw_frames();
+        let window = app.main.window();
+        app.main.set_focus_presets(true);
+        draw_frames();
+        tab(window, 1);
+        press(window, Key::Menu);
+        press(window, Key::Home);
+        press(window, Key::Return);
+        draw_frames();
+        assert_eq!(
+            app.main.get_preset_renaming(),
+            preset_ids(&app)[0].as_str(),
+            "the preset's field shows"
+        );
+
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:den", "Den", &["local:desk"]);
+        let app = main_window_over(backend);
+        invoke(&app, &strings.invoke_speaker_options("Den".into()));
+        invoke(&app, &strings.get_rename_zone());
+        assert!(
+            app.main_focus
+                .borrow()
+                .holds_name(RenamePlace::Zone, "zone:den"),
+            "Invoke: the zone's field has the focus"
+        );
+
+        let app = main_window_over(MockBackend::new());
+        app.save_preset("Evening");
+        app.main.set_presets_open(true);
+        draw_frames();
+        invoke(&app, &strings.invoke_speaker_options("Evening".into()));
+        invoke(&app, &strings.get_rename_preset());
+        assert_eq!(
+            app.main.get_preset_renaming(),
+            preset_ids(&app)[0].as_str(),
+            "Invoke: the preset's field shows"
+        );
+    }
+
+    /// A preset row's menu: the keyboard reaches its last item, Delete.
+    // covers: S449
+    #[test]
+    fn the_keyboard_reaches_delete_in_a_presets_menu() {
+        let app = main_window_over(MockBackend::new());
+        app.save_preset("Evening");
+        app.main.set_presets_open(true);
+        draw_frames();
+        let window = app.main.window();
+        app.main.set_focus_presets(true);
+        draw_frames();
+        tab(window, 1);
+        press(window, Key::Menu);
+        press(window, Key::End);
+        press(window, Key::Return);
+        assert!(preset_ids(&app).is_empty(), "Delete ran");
+    }
+
+    /// The equalizer's Curve menu and the tray panel's Presets menu: a
+    /// second click on the button closes them, and End reaches the last
+    /// item.
+    // covers: S449
+    #[test]
+    fn the_curve_and_tray_presets_menus_close_on_a_second_click_and_reach_their_last_item() {
+        use i_slint_backend_testing::ElementHandle;
+        fn toggles(component: &impl slint::ComponentHandle, button: &str, item: &str) {
+            let window = component.window();
+            let items = || ElementHandle::find_by_accessible_label(component, item).count();
+            let closed = items();
+            use i_slint_backend_testing::AccessibleRole;
+            let button = ElementHandle::find_by_accessible_label(component, button)
+                .find(|e| {
+                    matches!(
+                        e.accessible_role(),
+                        Some(AccessibleRole::Button | AccessibleRole::Combobox)
+                    )
+                })
+                .expect("the button");
+            let (at, size) = (button.absolute_position(), button.size());
+            let (x, y) = (at.x + size.width / 2.0, at.y + size.height / 2.0);
+            click(window, x, y);
+            assert!(items() > closed, "{item}: the first click opens the menu");
+            click(window, x, y);
+            assert_eq!(items(), closed, "{item}: the second click closes it");
+            click(window, x, y);
+            press(window, Key::End);
+            press(window, Key::Return);
+        }
+        let app = app_over(MockBackend::new());
+        app.save_preset("Evening");
+        app.update(|b| b.set_master_volume(30.0));
+        app.save_preset("Party");
+        app.update(|b| b.set_master_volume(60.0));
+        app.refresh();
+        app.flyout.show().expect("the flyout shows headless");
+        app.equalizer.show().expect("the equalizer shows headless");
+        draw_frames();
+        let strings = app.strings();
+        toggles(
+            &app.equalizer,
+            &strings.get_equalizer_curve(),
+            &strings.get_equalizer_save_curve(),
+        );
+        assert!(app.equalizer.get_naming_curve(), "Save Curve… ran");
+        toggles(&app.flyout, &strings.get_presets(), "Party");
+        draw_frames();
+        assert_eq!(app.flyout.get_current_preset(), "Party", "the last preset");
+    }
+
+    /// The Presets row opens through UI Automation's Expand, as a screen
+    /// reader opens it, not only through Invoke.
+    #[test]
+    fn the_presets_row_opens_through_expand() {
+        let app = narrow_app(MockBackend::new());
+        let presets = app.main.global::<crate::Strings>().get_presets();
+        let row = || {
+            i_slint_backend_testing::ElementHandle::find_by_accessible_label(&app.main, &presets)
+                .find(|e| e.accessible_expandable() == Some(true))
+                .expect("the Presets row")
+        };
+        assert_eq!(row().accessible_expanded(), Some(false));
+        row().invoke_accessible_expand_action();
+        draw_frames();
+        assert_eq!(row().accessible_expanded(), Some(true), "Expand opened it");
+    }
+
+    /// A row's options button hides again once the pointer leaves, even after
+    /// a click on the row's slider left the slider with the focus: only the
+    /// keyboard's focus keeps it shown, as on the Mac.
+    #[test]
+    fn a_click_on_a_rows_slider_leaves_no_options_button_behind() {
+        let app = narrow_app(MockBackend::new());
+        let window = app.main.window();
+        let options = app
+            .main
+            .global::<crate::Strings>()
+            .invoke_speaker_options("Speakers".into());
+        let button =
+            i_slint_backend_testing::ElementHandle::find_by_accessible_label(&app.main, &options)
+                .next()
+                .expect("the Speakers row's options button");
+        let (at, size) = (button.absolute_position(), button.size());
+        let inked = || {
+            let pixel = pixels(window);
+            (0..size.width as i32)
+                .flat_map(|x| (0..size.height as i32).map(move |y| (x, y)))
+                .filter(|&(x, y)| pixel(at.x + x as f32, at.y + y as f32)[0] < 200)
+                .count()
+        };
+        assert_eq!(inked(), 0, "hidden before the pointer comes");
+        click(window, 500.0, at.y + 28.0);
+        click(window, 400.0, 640.0);
+        advance_clock(Duration::from_secs(1));
+        draw_frames_at(776, 680);
+        assert_eq!(inked(), 0, "hidden again after the pointer left");
+    }
+
+    /// A row's slider reached with Tab leaves the row's options button
+    /// hidden, as on the Mac, where only its own focus shows it.
+    #[test]
+    fn a_rows_slider_reached_with_tab_leaves_the_options_button_hidden() {
+        let app = narrow_app(MockBackend::new());
+        let window = app.main.window();
+        let options = app
+            .main
+            .global::<crate::Strings>()
+            .invoke_speaker_options("Speakers".into());
+        let button =
+            i_slint_backend_testing::ElementHandle::find_by_accessible_label(&app.main, &options)
+                .next()
+                .expect("the Speakers row's options button");
+        let (at, size) = (button.absolute_position(), button.size());
+        let slider = || {
+            i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+                &app.main,
+                "Speakers volume",
+            )
+            .next()
+            .expect("the Speakers row's slider")
+            .accessible_value()
+        };
+        let reached = (0..60).any(|_| {
+            tab(window, 1);
+            let before = slider();
+            press(window, Key::LeftArrow);
+            slider() != before
+        });
+        assert!(reached, "Tab reaches the Speakers slider");
+        advance_clock(Duration::from_secs(1));
+        draw_frames_at(776, 680);
+        let pixel = pixels(window);
+        let inked = (0..size.width as i32)
+            .flat_map(|x| (0..size.height as i32).map(move |y| (x, y)))
+            .filter(|&(x, y)| pixel(at.x + x as f32, at.y + y as f32)[0] < 200)
+            .count();
+        assert_eq!(
+            inked, 0,
+            "the options button stays hidden while the slider has the keyboard's focus"
+        );
+    }
+
+    /// When Windows' own volume of an output comes back up, the hint under
+    /// its slider shuts over the Mac's 0.35 s ease-out, so the next row
+    /// glides up instead of jumping.
+    #[test]
+    fn the_rows_below_a_shutting_device_volume_hint_glide() {
+        let app = narrow_app(MockBackend::new());
+        let next_row_y = || {
+            i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+                &app.main,
+                "Options for Headphones",
+            )
+            .next()
+            .expect("the Headphones row")
+            .absolute_position()
+            .y
+        };
+        draw_frames_at(776, 680);
+        let before = next_row_y();
+        i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+            &app.main,
+            "Set to 75%, Speakers",
+        )
+        .next()
+        .expect("the hint's fix")
+        .invoke_accessible_default_action();
+        app.refresh();
+        draw_frames_at(776, 680);
+        advance_clock(Duration::from_millis(100));
+        draw_frames_at(776, 680);
+        let gliding = next_row_y();
+        advance_clock(Duration::from_secs(1));
+        draw_frames_at(776, 680);
+        let after = next_row_y();
+        assert!(after < before, "the hint shut: {before} -> {after}");
+        assert!(
+            gliding < before && gliding > after,
+            "100 ms in, the next row is on its way: {before} -> {gliding} -> {after}"
+        );
+    }
+
+    /// With many hidden speakers Settings scrolls, so its last box, Check
+    /// Setup, can still be reached at the bottom of a window that fits the screen.
+    #[test]
+    fn settings_with_30_hidden_speakers_scrolls_to_check_setup() {
+        let app = app_over(MockBackend::new());
+        assert!(app.main.invoke_shortcut(",".into(), true, false));
+        let hidden: Vec<HiddenItem> = (0..30)
+            .map(|n| HiddenItem {
+                id: format!("local:hidden{n}").into(),
+                name: format!("Hidden Speaker {n}").into(),
+                kind: SharedString::new(),
+                present: false,
+            })
+            .collect();
+        app.settings
+            .set_hidden_speakers(ModelRc::new(VecModel::from(hidden)));
+        // A screen with 700 px of room, whatever the test machine's screen is.
+        app.settings.set_room(700.0);
+        draw_frames();
+        let label = app.main.global::<crate::Strings>().get_menu_check_setup();
+        let check_setup = || {
+            i_slint_backend_testing::ElementHandle::find_by_accessible_label(&app.settings, &label)
+                .next()
+                .expect("Check Setup")
+        };
+        for _ in 0..40 {
+            scroll(app.settings.window(), 200.0, 300.0, -120.0);
+        }
+        let (at, size) = (check_setup().absolute_position(), check_setup().size());
+        assert!(
+            at.y >= 0.0 && at.y + size.height <= 720.0,
+            "Check Setup at {at:?} {size:?}, out of the 720 px window"
+        );
+    }
+
+    /// A hidden speaker's row keeps its 48 px inside the Speakers box, as the
+    /// Mac's: the box ends under the Unhide row, not across it.
+    #[test]
+    fn the_speakers_box_holds_the_whole_unhide_row() {
+        let app = app_over(MockBackend::new());
+        assert!(app.main.invoke_shortcut(",".into(), true, false));
+        app.settings
+            .set_hidden_speakers(ModelRc::new(VecModel::from(vec![HiddenItem {
+                id: "local:usb".into(),
+                name: "Speakers (2- Thronmax MDrill Zero Plus)".into(),
+                kind: "USB".into(),
+                present: true,
+            }])));
+        draw_frames_at(460, 900);
+        let strings = app.main.global::<crate::Strings>();
+        let find = |label: SharedString| {
+            let e = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+                &app.settings,
+                &label,
+            )
+            .next()
+            .expect("the element");
+            (e.absolute_position().y, e.size().height)
+        };
+        let (unhide, height) = find(strings.get_unhide());
+        let (title, _) = find(strings.get_setup_title());
+        let row_bottom = unhide + height + (48.0 - 8.0 - height) / 2.0 + 4.0;
+        assert!(
+            title - row_bottom >= 16.0,
+            "the Unhide row ends at {row_bottom}, the next box's title starts at {title}"
+        );
+    }
+
+    /// Settings lays out the same on light and dark: a text as wide in both,
+    /// so a row that fits one line on dark fits it on light too.
+    #[test]
+    fn settings_lays_out_the_same_on_light_and_dark() {
+        let app = app_over(MockBackend::new());
+        assert!(app.main.invoke_shortcut(",".into(), true, false));
+        app.main.invoke_speaker_hide_requested("local:desk".into());
+        let strings = app.main.global::<crate::Strings>();
+        let labels = [
+            strings.get_switch_source_on_quit(),
+            strings.get_volume_keys(),
+            strings.get_unhide(),
+        ];
+        let boxes = |look| {
+            app.main.invoke_appearance_chosen(look);
+            draw_frames_at(460, 640);
+            labels
+                .iter()
+                .map(|label| {
+                    let e = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+                        &app.settings,
+                        label,
+                    )
+                    .next()
+                    .expect("the control");
+                    (e.absolute_position(), e.size())
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            boxes(crate::Appearance::Light),
+            boxes(crate::Appearance::Dark)
+        );
+    }
+
+    /// Settings… (Ctrl+,) opens the Settings window, which shows the main
+    /// window's settings and hands each change to the main window's callback.
+    // covers: S449
+    #[test]
+    fn settings_shows_the_main_windows_settings_and_changes_them_through_its_callbacks() {
+        let app = app_over(MockBackend::new());
+        assert!(app.main.invoke_shortcut(",".into(), true, false));
+        assert!(app.settings.window().is_visible());
+        assert!(!app.settings.get_show_virtual_devices());
+        app.settings.invoke_show_virtual_devices_toggled(true);
+        assert!(app.main.get_show_virtual_devices());
+        assert!(app.settings.get_show_virtual_devices());
+        app.settings.invoke_resume_after_sleep_toggled(true);
+        assert!(app.snapshot().resume_after_sleep);
+        assert!(app.settings.get_resume_after_sleep());
+        app.settings
+            .invoke_appearance_chosen(crate::Appearance::Dark);
+        assert_eq!(app.settings.get_appearance(), crate::Appearance::Dark);
+        app.main.invoke_speaker_hide_requested("local:desk".into());
+        let hidden = app.settings.get_hidden_speakers();
+        assert_eq!(hidden.row_count(), 1);
+        app.settings
+            .invoke_speaker_unhide_requested(hidden.row_data(0).unwrap().id);
+        assert_eq!(app.settings.get_hidden_speakers().row_count(), 0);
+        app.settings.invoke_close_requested();
+        assert!(!app.settings.window().is_visible());
+    }
+
+    /// A speaker's rename field fills its name slot, at least 120 px wide,
+    /// at the Mac's 22 px height, so the row keeps its 49 px step.
+    #[test]
+    fn a_speaker_rename_field_fills_the_name_slot_at_the_macs_height() {
+        let app = narrow_app(MockBackend::new());
+        let tops = || -> Vec<f32> {
+            i_slint_backend_testing::ElementHandle::find_by_element_id(
+                &app.main,
+                "SpeakerRow::badge",
+            )
+            .map(|badge| badge.absolute_position().y)
+            .collect()
+        };
+        let before = tops();
+        app.main
+            .invoke_speaker_rename_requested("local:desk".into());
+        slint::platform::update_timers_and_animations();
+        let field = element(&app, "NameEditor::field").expect("the rename field");
+        let size = field.size();
+        assert!(size.width >= 120.0, "{size:?}");
+        assert_eq!(size.height, 22.0);
+        assert_eq!(tops(), before, "no row moves while one renames");
+    }
+
+    /// A speaker row's content sits 10 px inside it, and the line between
+    /// rows runs from the name's start (54 px) to the row's right edge.
+    #[test]
+    fn speaker_rows_inset_10_px_and_their_dividers_reach_the_edge() {
+        let app = narrow_app(MockBackend::new());
+        let row = element(&app, "SpeakerRow::hover").expect("a speaker row");
+        let badge = element(&app, "SpeakerRow::badge").expect("its switch");
+        let (left, right) = (
+            row.absolute_position().x,
+            row.absolute_position().x + row.size().width,
+        );
+        assert_eq!(badge.absolute_position().x - left, 10.0);
+        let tops: Vec<f32> = i_slint_backend_testing::ElementHandle::find_by_element_id(
+            &app.main,
+            "SpeakerRow::hover",
+        )
+        .map(|row| row.absolute_position().y)
+        .collect();
+        let divider =
+            i_slint_backend_testing::ElementHandle::find_by_element_type_name(&app.main, "Divider")
+                .find(|line| {
+                    let y = line.absolute_position().y;
+                    tops.iter().any(|top| (top - y - 1.0).abs() < 0.5)
+                })
+                .expect("a line right above a row");
+        let at = divider.absolute_position().x;
+        assert_eq!(at - left, 54.0);
+        assert_eq!(at + divider.size().width, right);
+    }
+
+    /// An icon button shows its label as a tooltip under the pointer, as
+    /// every Mac icon button's help does.
+    #[test]
+    fn icon_buttons_show_their_label_as_a_tooltip() {
+        let app = narrow_app(MockBackend::new());
+        let (_, tip) = rest_on(&app, "IconButton::touch", "IconButton::tip");
+        assert!(tip.is_some(), "a tooltip on the icon button");
+    }
+
+    /// A row's switch keeps its look under the pointer, as the Mac's
+    /// SpeakerBadge, which has no hover look; a press hides its tooltip
+    /// until the pointer leaves, as AppKit hides a control's help on click.
+    #[test]
+    fn a_rows_switch_has_no_hover_look_and_a_press_hides_its_tip() {
+        let app = narrow_app(MockBackend::new());
+        let window = app.main.window();
+        let badges: Vec<_> = i_slint_backend_testing::ElementHandle::find_by_element_id(
+            &app.main,
+            "SpeakerRow::badge",
+        )
+        .take(3)
+        .collect();
+        assert!(!badges.is_empty());
+        for badge in &badges {
+            let (at, size) = (badge.absolute_position(), badge.size());
+            let (x, y) = (at.x + 3.0, at.y + size.height / 2.0);
+            // Past the 250 ms fade, before the tooltip shows over the disc.
+            let rest = |position| {
+                window.dispatch_event(WindowEvent::PointerMoved { position });
+                advance_clock(Duration::from_millis(300));
+                draw_frames_at(776, 680);
+                pixels(window)(x, y)
+            };
+            let beside = rest(slint::LogicalPosition::new(at.x + 60.0, y));
+            let on = rest(slint::LogicalPosition::new(at.x + size.width / 2.0, y));
+            assert_eq!(on, beside, "the switch at {at:?} under the pointer");
+        }
+
+        let badge = &badges[0];
+        let (at, size) = (badge.absolute_position(), badge.size());
+        let position =
+            slint::LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0);
+        let nudged = slint::LogicalPosition::new(position.x + 1.0, position.y);
+        let tip_after = |position| {
+            window.dispatch_event(WindowEvent::PointerMoved { position });
+            advance_clock(Duration::from_secs(2));
+            slint::platform::update_timers_and_animations();
+            element(&app, "SpeakerBadge::tip").is_some()
+        };
+        assert!(tip_after(position), "its tooltip under the pointer");
+        let button = PointerEventButton::Left;
+        window.dispatch_event(WindowEvent::PointerPressed { position, button });
+        window.dispatch_event(WindowEvent::PointerReleased { position, button });
+        assert!(!tip_after(nudged), "a press hides its tooltip");
+        tip_after(slint::LogicalPosition::new(at.x + 200.0, position.y));
+        assert!(tip_after(position), "back once the pointer left");
+    }
+
+    /// A speaker's volume has a 16 px knob, as the master volume's and as
+    /// measured on the Mac's window.
+    #[test]
+    fn speaker_volume_knobs_are_16_px_as_the_masters() {
+        let app = narrow_app(MockBackend::new());
+        let row = element(&app, "SpeakerRow::volume-slider").expect("a speaker's volume");
+        let knob = row
+            .query_descendants()
+            .match_id("LevelSlider::thumb")
+            .find_first()
+            .expect("its knob");
+        assert_eq!(knob.size().width, 16.0);
+        let master = element(&app, "MasterVolume::slider").expect("the master volume");
+        let knob = master
+            .query_descendants()
+            .match_id("LevelSlider::thumb")
+            .find_first()
+            .expect("its knob");
+        assert_eq!(knob.size().width, 16.0);
+    }
+
+    /// A zone header leads as the Mac's: 2 px, a 16 px chevron, 8 px to the
+    /// switch, and the rule between two zones starts 70 px in.
+    #[test]
+    fn a_zone_header_leads_with_the_macs_chevron_and_rule() {
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:one", "One", &["local:desk"]);
+        backend.add_zone("zone:two", "Two", &["local:bt"]);
+        let app = narrow_app(backend);
+        let chevron = element(&app, "ZoneHeader::chevron").expect("a zone's chevron");
+        let badge = element(&app, "ZoneHeader::badge").expect("its switch");
+        let left = chevron.absolute_position().x - 2.0;
+        assert_eq!(chevron.size().width, 16.0);
+        assert_eq!(badge.absolute_position().x - left, 26.0);
+        let headers: Vec<f32> = i_slint_backend_testing::ElementHandle::find_by_element_id(
+            &app.main,
+            "ZoneHeader::chevron",
+        )
+        .map(|chevron| chevron.absolute_position().y)
+        .collect();
+        let rule =
+            i_slint_backend_testing::ElementHandle::find_by_element_type_name(&app.main, "Divider")
+                .find(|line| {
+                    let y = line.absolute_position().y;
+                    line.absolute_position().x > left
+                        && headers.iter().any(|top| y < *top && top - y < 20.0)
+                })
+                .expect("a rule above the second zone");
+        assert_eq!(rule.absolute_position().x - left, 70.0);
+    }
+
+    /// Save as Preset… opens a name field in the presets list instead of a
+    /// dialog, as on the Mac: Return saves, Escape drops it.
+    #[test]
+    fn save_as_preset_names_the_preset_in_a_field_in_the_list() {
+        let app = main_window_over(MockBackend::new());
+        hold_clock();
+        app.ask_save_preset();
+        // The list folds open over 250 ms.
+        advance_clock(Duration::from_secs(1));
+        draw_frames();
+        assert!(!app.zone_dialog.window().is_visible(), "no dialog");
+        assert!(app.main.get_presets_open(), "the list folds open");
+        let field = element(&app, "PresetsCard::save-field").expect("a name field in the list");
+        assert_eq!(
+            field.accessible_placeholder_text().as_deref(),
+            Some("Evening, Party…")
+        );
+        type_text(app.main.window(), "Evening");
+        press(app.main.window(), Key::Return);
+        assert_eq!(preset_rows(&app), [("Evening".into(), true)]);
+        assert!(element(&app, "PresetsCard::save-field").is_none());
+
+        app.ask_save_preset();
+        draw_frames();
+        type_text(app.main.window(), "Party");
+        press(app.main.window(), Key::Escape);
+        assert_eq!(preset_rows(&app).len(), 1, "Escape saves nothing");
+        assert!(element(&app, "PresetsCard::save-field").is_none());
+    }
+
+    /// Rename… edits a preset's name in its row instead of a dialog.
+    #[test]
+    fn rename_edits_a_presets_name_in_its_row() {
+        let app = main_window_over(MockBackend::new());
+        app.save_preset("Evening");
+        app.main.set_presets_open(true);
+        draw_frames();
+        let id = preset_ids(&app)[0].clone();
+        app.ask_rename_preset(&id);
+        draw_frames();
+        assert!(!app.zone_dialog.window().is_visible(), "no dialog");
+        let field = element(&app, "PresetListRow::name-field").expect("a name field in the row");
+        assert_eq!(field.accessible_value().as_deref(), Some("Evening"));
+        type_text(app.main.window(), "Late");
+        press(app.main.window(), Key::Return);
+        assert_eq!(preset_rows(&app)[0].0, "Late");
+        assert!(element(&app, "PresetListRow::name-field").is_none());
+    }
+
+    /// With no speaker on, Save as Preset… stays a button and says what to
+    /// do first in a caption under it, as on the Mac, not in a dialog.
+    #[test]
+    fn save_as_preset_with_no_speaker_on_says_why_under_the_row() {
+        let app = main_window_over(MockBackend::new());
+        for speaker in app.snapshot().speakers {
+            app.update(|b| b.set_speaker_enabled(&speaker.id, false));
+        }
+        app.main.set_presets_open(true);
+        draw_frames();
+        app.ask_save_preset();
+        draw_frames();
+        let why = "Turn on the speakers you want in the preset first, then save it.";
+        assert!(!app.zone_dialog.window().is_visible(), "no dialog");
+        let note = element(&app, "PresetsCard::save-note").expect("a caption under Save");
+        assert_eq!(note.accessible_label().as_deref(), Some(why));
+        assert_eq!(app.main.get_notice_announcement(), why);
+        assert!(element(&app, "PresetsCard::save-field").is_none());
+    }
+
+    /// An empty presets list says what a preset is above Save as Preset….
+    #[test]
+    fn an_empty_presets_list_says_what_a_preset_holds() {
+        let app = main_window_over(MockBackend::new());
+        app.main.set_presets_open(true);
+        draw_frames();
+        let hint = element(&app, "PresetsCard::empty-note").expect("a caption in the empty list");
+        assert_eq!(
+            hint.accessible_label().as_deref(),
+            Some(
+                "No presets yet. Turn on the speakers you want, set the volumes and the curve, then save them as a preset."
+            )
+        );
+    }
+
+    /// Why Calibrate All can't start sits 6 px under its row and 8 px in,
+    /// as the Mac's caption, and the row's tooltip says it too.
+    #[test]
+    fn calibrate_alls_reason_sits_under_the_row_8_px_in_and_is_its_tooltip() {
+        let app = narrow_app(MockBackend::new());
+        app.main
+            .set_calibrate_all_status("Turn on streaming to calibrate.".into());
+        app.main.set_calibrate_all_status_is_hint(false);
+        advance_clock(Duration::from_secs(1));
+        draw_frames();
+        let row = element(&app, "CalibrationCard::calibrate-button").expect("the row");
+        let line = element(&app, "CalibrationCard::status-line").expect("the reason");
+        let (at, below) = (row.absolute_position(), line.absolute_position());
+        assert_eq!(below.y - (at.y + row.size().height), 6.0, "the gap");
+        assert_eq!(below.x - at.x, 8.0, "the inset");
+        assert_eq!(row.size().height, 36.0, "the quick row, 36 high");
+        let (_, tip) = rest_on(
+            &app,
+            "CalibrationCard::calibrate-button",
+            "QuickRow::tip-text",
+        );
+        assert!(tip.is_some(), "the reason is the row's tooltip");
     }
 }
