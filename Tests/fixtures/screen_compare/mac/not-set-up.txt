@@ -1,0 +1,1 @@
+TRAY-IDLE: the panel is not drawn here
