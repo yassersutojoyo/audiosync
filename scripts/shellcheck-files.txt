@@ -11,5 +11,6 @@ Tests/*.sh
 scripts/*.sh
 scripts/brand/*.sh
 scripts/screenshots/*.sh
+scripts/stranger/*.sh
 core/ffi/*.sh
 desktop/linux/AppRun

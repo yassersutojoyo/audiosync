@@ -1,0 +1,234 @@
+name: Stranger
+
+# A stranger's machine: the package a release ships, installed on a clean
+# runner, launched, played to a receiver once and uninstalled. Runs on every
+# train and on main; a manual run tries any branch.
+on:
+  push:
+    branches: [main, 'integ/**']
+  workflow_dispatch:
+
+# Every commit on main keeps its own group, so main's runs are never cancelled.
+concurrency:
+  group: stranger.yml-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  SLINT_COMPILER_DENY_WARNINGS: '1'
+  # Skia built with the static C runtime, restored from the cache skia.yml fills.
+  SKIA_BINARIES_URL: file://${{ github.workspace }}/skia-cache/{tag}/skia-binaries-{key}.tar.gz
+
+jobs:
+  proven:
+    # main skips the rest for a commit this workflow already passed on an integ/* train.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - name: Was this commit green on an integ/* train?
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          SHA: ${{ github.sha }}
+        # Any API error leaves skip=false, so main runs everything.
+        run: |
+          skip=false
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/main ]; then
+            wf=${WORKFLOW_REF%@*}
+            if n=$(gh api "repos/$REPO/actions/workflows/${wf##*/}/runs?head_sha=$SHA&status=success&per_page=100" \
+                --jq '[.workflow_runs[] | select(.event == "push" and .head_repository.full_name == $ENV.REPO and (.head_branch | startswith("integ/")))] | length') &&
+              [ "$n" -gt 0 ] 2>/dev/null; then
+              skip=true
+            fi
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
+  linux:
+    name: Linux stranger (${{ matrix.distro }})
+    needs: proven
+    if: needs.proven.outputs.skip != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        # ubuntu installs the .deb on the runner itself; fedora installs the
+        # .rpm in a Fedora 43 container on the runner's network.
+        distro: [ubuntu, fedora]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      WORK: ${{ github.workspace }}/stranger-work
+      DISTRO: ${{ matrix.distro }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: The heard-once check tells once from twice (heard.py --self-test)
+        run: python3 -I scripts/stranger/heard.py --self-test
+
+      - name: Rust toolchain (1.99.1)
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal
+          rustup default 1.99.1
+
+      # Build: as linux.yml. On ubuntu the session's desktop stand-ins:
+      # PipeWire, WirePlumber, its PulseAudio server and tools, Xvfb, a session
+      # bus and the X11 libraries winit loads.
+      - name: System packages
+        run: |
+          packages="libfontconfig1-dev libxkbcommon-dev libwayland-dev libx11-dev libssl-dev pkg-config
+            libpipewire-0.3-dev clang libclang-dev rpm"
+          if [ "$DISTRO" = ubuntu ]; then
+            packages="$packages pipewire pipewire-bin wireplumber pipewire-pulse pulseaudio-utils
+              dbus dbus-user-session xvfb libx11-xcb1 libxcursor1 libxkbcommon-x11-0 libxi6 libxrandr2"
+          fi
+          sudo apt-get update -q
+          # shellcheck disable=SC2086
+          sudo apt-get install -y --no-install-recommends $packages
+
+      # A push to main makes the build the updater runs in, as linux.yml does.
+      - name: Release build, the package, the stand-in tray host and receiver
+        working-directory: desktop
+        env:
+          AUDIOSYNC_RELEASE_BUILD: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && '1' || '' }}
+        run: |
+          cargo build --locked --release
+          cargo build --locked --release --example sni_watcher_stub
+          cargo build --locked --release --manifest-path ../airplay/Cargo.toml --example stranger_rx
+          python3 -I ../scripts/windows_notices.py x86_64-unknown-linux-gnu --output target/release/THIRD-PARTY-NOTICES.txt
+          version=$(cargo metadata --locked --no-deps --format-version 1 | python3 -c 'import json, sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "audiosync-desktop"))')
+          mkdir -p ../dist
+          if [ "$DISTRO" = ubuntu ]; then
+            ../scripts/build_deb.sh target/release/audiosync target/release/THIRD-PARTY-NOTICES.txt "$version" \
+              "../dist/AudioSync-$version-amd64.deb"
+          else
+            ../scripts/build_rpm.sh target/release/audiosync target/release/THIRD-PARTY-NOTICES.txt "$version" \
+              "../dist/AudioSync-$version-x86_64.rpm"
+          fi
+
+      - name: Receiver (the fake AirPlay 1 receiver, recorded)
+        run: scripts/stranger/linux_receiver.sh start "$WORK" airplay/target/release/examples/stranger_rx
+
+      - name: Install, launch, stream, quit and uninstall
+        run: |
+          stub=$PWD/desktop/target/release/examples/sni_watcher_stub
+          if [ "$DISTRO" = ubuntu ]; then
+            deb=$(ls dist/AudioSync-*.deb)
+            sudo apt-get install -y "./$deb"
+            dpkg-query -W audiosync | tee -a "$WORK/env.pkg.txt"
+            scripts/stranger/linux_session.sh "$WORK" "$stub" sudo apt-get remove -y audiosync
+          else
+            rpm=$(basename "$(ls dist/AudioSync-*.rpm)")
+            echo "package: $rpm" | tee -a "$WORK/env.pkg.txt"
+            # The repository at its own path, so the session writes where the host reads.
+            docker run --rm --network host -v "$PWD:$PWD:ro" -v "$WORK:$WORK" -w "$PWD" \
+              -e RPM="$rpm" -e WORK="$WORK" -e STUB="$stub" fedora:43 bash -euo pipefail -c '
+                dnf install -y -q "dist/$RPM" pipewire wireplumber pipewire-pulseaudio pipewire-utils \
+                  pulseaudio-utils xorg-x11-server-Xvfb dbus-daemon python3 procps-ng findutils \
+                  libxkbcommon-x11 libXcursor libXi libXrandr libX11-xcb dejavu-sans-fonts
+                scripts/stranger/linux_session.sh "$WORK" "$STUB" dnf remove -y -q audiosync'
+          fi
+
+      - name: Heard once on the receiver, not twice on the stand-in PC speaker, and the offset
+        if: ${{ !cancelled() }}
+        run: |
+          scripts/stranger/linux_receiver.sh stop "$WORK"
+          echo "--- environment"
+          cat "$WORK/env.txt" "$WORK/receiver-env.txt" "$WORK/env.pkg.txt" 2>/dev/null || true
+          label="$(sed -n 's/^os: //p' "$WORK/env.txt"), PipeWire $(sed -n 's/^pipewire: //p' "$WORK/env.txt")"
+          python3 -I scripts/stranger/heard.py check --label "$label" \
+            --receiver "$WORK/receiver.wav" "$WORK/receiver.stamps" \
+            --sink "$WORK/sink.wav" "$WORK/sink.stamps"
+
+      - name: Upload the recordings and logs (workflow artifact)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: stranger-linux-${{ matrix.distro }}
+          path: |
+            stranger-work/*.txt
+            stranger-work/*.log
+            stranger-work/*.out
+            stranger-work/*.wav
+            stranger-work/*.stamps
+            stranger-work/tmp/**/*debug.log
+          if-no-files-found: warn
+          retention-days: 7
+
+  skia:
+    # Builds and caches Skia only when the cache misses.
+    needs: proven
+    if: needs.proven.outputs.skip != 'true'
+    uses: ./.github/workflows/skia.yml
+
+  windows:
+    name: Windows stranger (install, launch, uninstall)
+    needs: [proven, skia]
+    if: needs.proven.outputs.skip != 'true'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Rust toolchain (1.99.1)
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal
+          rustup default 1.99.1
+          rustup target add x86_64-pc-windows-msvc
+
+      - name: Skia cache key
+        id: skia
+        run: echo "key=$(bash scripts/skia_cache_key.sh x86_64-pc-windows-msvc)" >> "$GITHUB_OUTPUT"
+
+      - name: Skia (stored by skia.yml)
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: skia-cache
+          key: ${{ steps.skia.outputs.key }}
+          fail-on-cache-miss: true
+
+      # A push to main makes the build the updater runs in, as windows.yml does.
+      - name: Release build and notices
+        working-directory: desktop
+        env:
+          AUDIOSYNC_RELEASE_BUILD: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && '1' || '' }}
+        run: |
+          cargo build --locked --release --target x86_64-pc-windows-msvc
+          python -I ../scripts/windows_notices.py x86_64-pc-windows-msvc
+
+      # Pinned and checked by hash, as in windows.yml.
+      - name: Inno Setup 6.7.3
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/innosetup.exe" https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe
+          echo "9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732  $RUNNER_TEMP/innosetup.exe" | sha256sum -c
+          MSYS2_ARG_CONV_EXCL="*" "$RUNNER_TEMP/innosetup.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER
+
+      - name: Installer (AudioSync-Setup.exe, as the release ships it)
+        working-directory: desktop
+        run: bash ../scripts/build_installer.sh x64 target/x86_64-pc-windows-msvc/release target/installer-x64
+
+      - name: Silent install, launch, screenshot, uninstall, default output as found
+        shell: pwsh
+        run: ./scripts/stranger/windows_run.ps1 -Setup desktop/target/installer-x64/AudioSync-Setup.exe -Work stranger-work
+
+      - name: Upload the screenshot and logs (workflow artifact)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: stranger-windows
+          path: stranger-work
+          if-no-files-found: warn
+          retention-days: 7

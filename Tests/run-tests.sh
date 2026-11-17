@@ -138,6 +138,14 @@ else
   "$python" -I scripts/check_appcast.py --self-test || status=1
 fi
 
+echo "▶ stranger workflow's heard-once check (scripts/stranger/heard.py --self-test)"
+if [ -z "$python" ]; then
+  echo "$no_python"
+  status=1
+else
+  "$python" -I scripts/stranger/heard.py --self-test || status=1
+fi
+
 echo "▶ Windows app icon (scripts/brand/app_tile.py --check)"
 if [ -z "$python" ]; then
   echo "$no_python"
