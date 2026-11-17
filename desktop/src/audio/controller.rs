@@ -5710,6 +5710,17 @@ impl<D: Driver> AudioBackend for Controller<D> {
             self.check_routing_if_due(now);
         }
         self.sync_app_output(new_session);
+        // The app may be leaving the outputs it just opened its session on
+        // for its move, as at the start (S471).
+        if new_session && self.app_redirect.record().is_some() {
+            for played in &self.routing.played_on {
+                if played.idle_checks == 0 && !self.routing.at_start.contains(&played.endpoint_id) {
+                    self.routing.at_start.push(played.endpoint_id.clone());
+                }
+            }
+            self.hold_at_start_briefly();
+            self.routing.at_start_until = Some(now + START_ROUTING_WINDOW);
+        }
         let failures = self.sync_outputs();
         self.release_held_leads(true);
         // An output that left or joined moves the others (S177).
@@ -6881,6 +6892,34 @@ mod tests {
             })
             .unwrap();
         backend.poll();
+        assert_eq!(playing(&backend), [HEADPHONES]);
+        backend.move_session(PLAYER_PID, SPEAKERS, CABLE);
+        backend.check_routing_if_due(Instant::now() + Duration::from_millis(300));
+        backend.poll();
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    // covers: S470, S471
+    #[test]
+    fn an_app_that_opens_a_session_mid_stream_and_follows_the_move_gives_its_output_back_within_half_a_second()
+     {
+        let mut backend = backend();
+        with_switch(&mut backend);
+        backend.set_default_output(SPEAKERS);
+        backend.connect_output_as(CABLE, "Cable Input", OutputKind::Virtual);
+        backend.list_outputs().unwrap();
+        let (apps, _) = with_app_outputs(&mut backend, None);
+        apps.0.borrow_mut().sessionless.push(PLAYER_PID);
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.poll();
+        apps.0.borrow_mut().sessionless.clear();
+        backend.open_session(PLAYER_PID, SPEAKERS);
+        backend.poll();
+        assert_eq!(player_output(&apps), render_interface(switch_fakes::CABLE));
         assert_eq!(playing(&backend), [HEADPHONES]);
         backend.move_session(PLAYER_PID, SPEAKERS, CABLE);
         backend.check_routing_if_due(Instant::now() + Duration::from_millis(300));
