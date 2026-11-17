@@ -44,6 +44,7 @@
 //! lock, block or log.
 
 pub mod airplay;
+pub mod app_output;
 pub mod backend;
 pub mod calibrate_all;
 pub mod calibration;
@@ -52,7 +53,9 @@ pub mod cast;
 pub mod cast_address;
 pub mod clock_probe;
 pub mod controller;
+pub mod default_output;
 pub mod explicit_pause;
+pub mod local_volume;
 #[cfg(all(test, target_os = "linux"))]
 mod mdns_live_tests;
 #[cfg(any(windows, target_os = "linux", test))]
@@ -70,6 +73,8 @@ pub mod pipewire;
 pub mod process;
 pub mod render;
 pub mod routing;
+#[cfg(test)]
+pub mod test_cells;
 pub mod wake_resume;
 #[cfg(windows)]
 pub mod wasapi;

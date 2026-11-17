@@ -7,6 +7,7 @@
 //! and the data folder's base from `xdg`; `other` is the UI-only build on
 //! hosts without a backend yet.
 
+pub mod app_icon;
 #[cfg(any(windows, target_os = "linux"))]
 mod claim;
 #[cfg(any(target_os = "linux", test))]
@@ -44,7 +45,7 @@ pub use imp::{
 /// What [`start`] opened.
 pub struct Started {
     /// What the windows show and drive.
-    pub backend: Box<dyn crate::ui_model::Backend>,
+    pub backend: crate::view::Engine,
     /// What the backend hands the app once its windows exist.
     pub media: Media,
 }

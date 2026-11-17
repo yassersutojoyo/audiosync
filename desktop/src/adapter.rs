@@ -683,7 +683,7 @@ pub struct AudioAdapter<A: AudioBackend> {
     airplay2_switch_env: Option<String>,
     /// What a session does when the app it captures quits (spec S227).
     when_source_quits: WhenSourceQuits,
-    /// File > Resume Playback After Sleep (spec S465).
+    /// Settings > Resume Playback After Sleep (spec S465).
     resume_after_sleep: bool,
     /// The microphone calibration running, or letting its cut-off sweep
     /// play out.
@@ -889,6 +889,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     fn restore(&mut self, saved: Settings) {
         let saved = saved.with_zones_migrated().with_presets_migrated();
         self.audio.set_master_volume(saved.master_volume);
+        self.audio.set_local_volumes(saved.local_volumes.clone());
         // A hidden speaker is never switched on, not even by the saved on-state.
         self.hidden = saved.hidden_speakers.clone();
         for (endpoint_id, pair) in &saved.input_pairs {
@@ -1022,6 +1023,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             presets_list_open: saved.presets_list_open,
             appearance: saved.appearance,
             window: saved.window,
+            guide: saved.guide_window,
             remote: saved.remote,
             check_updates_automatically: saved.check_updates_automatically,
             volume_keys: saved.volume_keys,
@@ -1168,6 +1170,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             presets_list_open: self.view.presets_list_open,
             appearance: self.view.appearance,
             window: self.view.window,
+            guide_window: self.view.guide,
             slim_window_applied: true,
             airplay_adjustment_ms: self.audio.airplay_adjustment(),
             when_source_quits: self.when_source_quits.stored().to_owned(),
@@ -1183,6 +1186,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
             volume_keys: self.view.volume_keys,
             last_update_check: self.view.last_update_check,
             update_record: self.view.update_record.clone(),
+            default_output: self.audio.default_output_record(),
+            app_output: self.audio.app_output_record(),
+            local_volumes: self.audio.local_volumes(),
             other_fields: self.saved.other_fields.clone(),
         }
         .clamped()
@@ -3041,6 +3047,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             refused_for_code: false,
             own_volume: speaker.volume_known.then_some(speaker.volume),
             device_volume: None,
+            system_volume: None,
             waiting: (speaker.enabled && speaker.status == CastStatus::Reconnecting)
                 .then_some(Waiting::Reconnecting),
             cast: Some(CastRow {
@@ -4202,7 +4209,17 @@ impl<A: AudioBackend> AudioAdapter<A> {
             self.handle(event);
         }
         self.forget_stale_waits();
-        any
+        self.save_local_volumes() || any
+    }
+
+    /// Saves at once the levels the outputs were found at or left at, so
+    /// a crash before the next poll still puts them back (S472). Returns
+    /// whether the notices changed.
+    fn save_local_volumes(&mut self) -> bool {
+        // A failing file is retried by the poll alone, so its wait counts once a poll.
+        self.unsaved.is_none()
+            && self.audio.local_volumes() != self.saved.local_volumes
+            && self.persist()
     }
 
     /// Only a speaker that is on while streaming is on waits: turned off, or
@@ -4590,7 +4607,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 );
             }
             // The next snapshot shows it; no notice, no focus change (S198).
-            BackendEvent::DeviceVolumeChanged { .. } => {}
+            BackendEvent::DeviceVolumeChanged { .. } | BackendEvent::HeldOutChanged => {}
             // Told once while the writes keep failing (the backend reports
             // only the changes); a write that works clears it.
             BackendEvent::PairingStore { saved: false } => {
@@ -4840,6 +4857,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             own_volume: Some(speaker.volume),
             // An AirPlay speaker's volume is its own slider (S192).
             device_volume: None,
+            system_volume: None,
             waiting: self
                 .audio
                 .airplay_waiting_for_user()
@@ -4903,9 +4921,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
             refused_for_code: false,
             // Read only while the output is on (S192).
             own_volume: None,
+            // The reference is read while off too, but hints only while on.
             device_volume: output
                 .device_volume
+                .filter(|_| output.enabled)
                 .and_then(|device_volume| device_volume.hint()),
+            system_volume: output.device_volume,
             waiting: (output.enabled && self.busy.contains(&output.id))
                 .then_some(Waiting::ForDevice),
             cast: None,
@@ -5113,6 +5134,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             }
             self.clear_switch_notices();
             self.forget_stale_waits();
+            let _ = self.save_local_volumes();
             return;
         }
         let action = self.streaming_after(SpeakerEvent::StartRequested);
@@ -5819,6 +5841,15 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.take_events();
     }
 
+    fn set_system_volume(&mut self, id: &str, level: f64) -> bool {
+        let Some(SpeakerKey::Local(endpoint_id)) = SpeakerKey::parse(id) else {
+            return false;
+        };
+        let taken = self.audio.set_device_volume(&endpoint_id, level);
+        self.take_events();
+        taken
+    }
+
     /// The speakers that were on come back as they do after a launch: the
     /// backend kept their settings, and the auto-connect ones switch on as
     /// the new sender lists them.
@@ -5917,6 +5948,10 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
 
     fn sound_bands(&mut self) -> Option<[f32; 3]> {
         self.audio.sound_bands()
+    }
+
+    fn follow_new_sessions(&mut self) {
+        self.audio.follow_new_sessions();
     }
 
     /// Also writes the settings file when anything changed since the last
@@ -6211,6 +6246,12 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
 
     fn shut_down(&mut self) {
         self.audio.shut_down();
+        // The levels the outputs' fade-outs put back (S472).
+        let _ = self.persist();
+    }
+
+    fn restore_default_output(&mut self) {
+        self.audio.restore_default_output();
     }
 
     fn set_when_source_quits(&mut self, setting: WhenSourceQuits) {
@@ -6439,6 +6480,7 @@ mod tests {
     use crate::audio::pairings::PairingStore;
     use crate::audio::pairings::tests::credentials;
     use crate::audio::routing::HOLD_CHECKS;
+    use crate::audio::test_cells::SyncCell;
     use crate::debug_log::{FILE_NAME, TEST_FLUSH, assert_in_order, read_messages, test_dir};
     use crate::ui_model::{
         CastMembers, CastProblem as UiCastProblem, MAX_DELAY_MS, MIN_DELAY_MS, SpeakerState,
@@ -8082,6 +8124,49 @@ mod tests {
             "it shows: {:?}",
             state.sources
         );
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+    }
+
+    // covers: S12
+    #[test]
+    fn a_running_app_with_a_window_is_offered_before_it_plays() {
+        let mut adapter = adapter();
+        adapter.audio_mut().add_windowed_app(2600, "spotify.exe");
+        adapter.audio_mut().add_windowed_app(2700, "Spotify.exe");
+        for (pid, host) in [
+            (2800, "ApplicationFrameHost.exe"),
+            (2810, "TextInputHost.exe"),
+            (2820, "msedgewebview2.exe"),
+            (2830, "SystemSettings.exe"),
+            (2840, "ShellExperienceHost.exe"),
+            (2850, "StartMenuExperienceHost.exe"),
+            (2860, "RazerAppEngine.exe"),
+        ] {
+            adapter.audio_mut().add_windowed_app(pid, host);
+        }
+        adapter.refresh_devices();
+        let names: Vec<String> = adapter
+            .snapshot()
+            .sources
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
+        assert_eq!(
+            names,
+            ["All System Audio", "Player", "Spotify"],
+            "hosts and helpers stay out"
+        );
+        let offered: Vec<_> = adapter
+            .snapshot()
+            .sources
+            .into_iter()
+            .filter(|s| s.name == "Spotify")
+            .collect();
+        assert_eq!(offered.len(), 1, "one entry per executable: {offered:?}");
+        adapter.select_source(&offered[0].id);
+        turn_on(&mut adapter, SPEAKERS);
+        assert!(adapter.snapshot().running);
+        assert_eq!(captures(&adapter), [(LoopbackMode::IncludeTree, 2600)]);
         assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
     }
 
@@ -12602,7 +12687,7 @@ mod tests {
     #[test]
     fn a_late_retry_leaves_a_working_sender_alone() {
         let (mut adapter, _fake, _, _) = airplay_adapter();
-        let starts = std::rc::Rc::new(std::cell::Cell::new(0));
+        let starts = std::sync::Arc::new(SyncCell::new(0));
         let counted = starts.clone();
         adapter.audio.set_airplay_starter(Box::new(move || {
             counted.set(counted.get() + 1);
@@ -12992,7 +13077,7 @@ mod tests {
         let (mut adapter, fake, _, _) = airplay_adapter();
         let next = FakeAirPlay::new();
         let started = next.clone();
-        let refreshes = std::rc::Rc::new(std::cell::Cell::new(0));
+        let refreshes = std::sync::Arc::new(SyncCell::new(0));
         let counted = refreshes.clone();
         adapter.audio.set_airplay_starter(Box::new(move || {
             counted.set(counted.get() + 1);
@@ -13018,7 +13103,7 @@ mod tests {
     #[test]
     fn refresh_devices_leaves_a_running_airplay_sender_alone() {
         let (mut adapter, _fake, _, _) = airplay_adapter();
-        let starts = std::rc::Rc::new(std::cell::Cell::new(0));
+        let starts = std::sync::Arc::new(SyncCell::new(0));
         let counted = starts.clone();
         adapter.audio.set_airplay_starter(Box::new(move || {
             counted.set(counted.get() + 1);
@@ -14494,6 +14579,7 @@ mod tests {
             presets_list_open: true,
             appearance: ui_model::Appearance::Light,
             window: None,
+            guide: Some(ui_model::WindowPlace { x: -1500, y: 120 }),
             remote: crate::remote::RemoteSettings {
                 on: true,
                 port: 8123,
@@ -14542,6 +14628,10 @@ mod tests {
                 on: true,
                 port: 8123
             }
+        );
+        assert_eq!(
+            adapter.view_settings().guide,
+            Some(ui_model::WindowPlace { x: -1500, y: 120 })
         );
 
         // A new zone gets the next number, and streaming starts from the

@@ -98,6 +98,8 @@ export component IncomingCover inherits Rectangle {
     in property <length> corner;
     // What the cover's place stands on, so the tile is opaque in flight.
     in property <color> base;
+    // The empty tile's tint, the same as the cover's place.
+    in property <brush> fill: Tokens.text.with-alpha(0.06);
     in property <bool> has-artwork;
     in property <image> artwork;
     in property <string> glyph;
@@ -115,7 +117,7 @@ export component IncomingCover inherits Rectangle {
     accessible-role: none;
 
     Rectangle {
-        background: Tokens.text.with-alpha(0.06);
+        background: root.fill;
     }
 
     if !root.has-artwork || root.look.cover-fade > 0: Glyph {

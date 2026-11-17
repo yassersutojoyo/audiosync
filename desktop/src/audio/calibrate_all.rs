@@ -1339,14 +1339,12 @@ fn plan_failure(error: PlanError) -> Failure {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::cell::Cell;
-    use std::rc::Rc;
-
     use audiosync_core::calibrate;
     use audiosync_core::calibrate_all::{ApplyRefusal, SharedState};
 
     use super::*;
     use crate::audio::calibration::logged_after_estimates;
+    use crate::audio::test_cells::SyncCell;
     use crate::debug_log::{FILE_NAME, assert_in_order, test_dir};
 
     /// The lowest rate the signal is made at keeps the estimates quick.
@@ -1357,11 +1355,11 @@ pub(crate) mod tests {
     #[derive(Default)]
     struct MicFault {
         /// No first frame ever comes.
-        cold: Cell<bool>,
+        cold: SyncCell<bool>,
         /// No frame comes after this moment.
-        frozen_at: Cell<Option<u64>>,
+        frozen_at: SyncCell<Option<u64>>,
         /// It stopped on its own, as an unplugged device does.
-        stopped: Cell<bool>,
+        stopped: SyncCell<bool>,
     }
 
     impl MicFault {
@@ -1374,10 +1372,10 @@ pub(crate) mod tests {
     struct FakeMic {
         id: MicrophoneId,
         first_ns: u64,
-        now: Rc<Cell<u64>>,
+        now: Arc<SyncCell<u64>>,
         tap: Arc<CalibrationTap>,
         heard_after_ms: Option<f64>,
-        fault: Rc<MicFault>,
+        fault: Arc<MicFault>,
     }
 
     impl Microphone for FakeMic {
@@ -1437,7 +1435,7 @@ pub(crate) mod tests {
     }
 
     struct FakeRig {
-        now: Rc<Cell<u64>>,
+        now: Arc<SyncCell<u64>>,
         lineup: Lineup,
         tap: Arc<CalibrationTap>,
         solo: Option<Member>,
@@ -1451,7 +1449,7 @@ pub(crate) mod tests {
         heard_after_ms: BTreeMap<String, Vec<f64>>,
         sweeps: BTreeMap<String, usize>,
         mic: Result<MicrophoneId, MicrophoneError>,
-        mic_fault: Rc<MicFault>,
+        mic_fault: Arc<MicFault>,
         /// The capture writes no block, as when the source sends nothing.
         capture_off: bool,
     }
@@ -1501,7 +1499,7 @@ pub(crate) mod tests {
         /// speaker at L = 2000 ms and a Cast speaker at 3000 ms.
         fn new() -> FakeRig {
             FakeRig {
-                now: Rc::new(Cell::new(1_000_000_000)),
+                now: Arc::new(SyncCell::new(1_000_000_000)),
                 lineup: Lineup {
                     session: Some(1),
                     switching: false,
@@ -1537,7 +1535,7 @@ pub(crate) mod tests {
                     device: "mic".to_owned(),
                     rate: MIC_RATE,
                 }),
-                mic_fault: Rc::default(),
+                mic_fault: Arc::default(),
                 capture_off: false,
             }
         }
@@ -1601,10 +1599,10 @@ pub(crate) mod tests {
             Ok(Box::new(FakeMic {
                 id,
                 first_ns: self.now.get() + 30_000_000,
-                now: Rc::clone(&self.now),
+                now: Arc::clone(&self.now),
                 tap: Arc::clone(&self.tap),
                 heard_after_ms,
-                fault: Rc::clone(&self.mic_fault),
+                fault: Arc::clone(&self.mic_fault),
             }))
         }
     }
