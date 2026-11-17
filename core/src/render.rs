@@ -2729,7 +2729,7 @@ mod tests {
         }
     }
 
-    // covers: S325
+    // covers: S208
     #[test]
     fn after_a_quiet_bluetooth_restart_with_a_new_lead_the_built_in_sits_on_it() {
         for period in [4096, 64] {
@@ -2751,7 +2751,19 @@ mod tests {
         }
     }
 
-    // covers: S325
+    // covers: S187
+    #[test]
+    fn a_delay_given_again_at_the_same_value_re_anchors_the_output_once() {
+        let mut s = BuiltInAndBluetooth::new();
+        s.step(300);
+        let before = s.built_in_resyncs();
+        s.built_in.1.set_delay_frames(HELD_211_MS);
+        s.step(100);
+        assert_eq!(s.built_in_resyncs() - before, 1);
+        assert!(s.built_in_off().abs() <= 1, "{}", s.built_in_off());
+    }
+
+    // covers: S208
     #[test]
     fn after_a_quiet_bluetooth_restart_with_the_same_lead_nothing_re_anchors() {
         let mut s = BuiltInAndBluetooth::new();

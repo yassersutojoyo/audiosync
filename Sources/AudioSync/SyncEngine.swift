@@ -827,6 +827,14 @@ final class StreamEngine {
             + "(\(counted.driftSilenceFrames) frames)"
     }
 
+    /// For the debug log of a re-seat (S325): how far output `uid`'s reader
+    /// trails the newest frame against its hold-back, and its device's latency.
+    func seatNote(uid: String) -> String {
+        guard let renderer = renderers[uid] else { return "\(uid): no renderer" }
+        return "\(uid): lag-hold-back \(renderer.lagFrames - renderer.newestDelayFrames) frames, "
+            + "output latency \(renderer.outputLatencyNs / 1000) µs"
+    }
+
     /// A new linear gain for output `uid`, with the equalizer's headroom cut
     /// given back (S26, S71), applied from its next callback (S64).
     func setGain(uid: String, g: Double) {

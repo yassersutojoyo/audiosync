@@ -332,6 +332,9 @@ final class FreshLinkWatch {
     private var pending: [String: (ticket: Int, session: Int)] = [:]
     private var leftIn: [String: Int] = [:]
     private var calm: [String: (ticket: Int, session: Int)] = [:]
+    /// Outputs whose next start in that session re-seats the others: the first
+    /// after a return mid-session, and the one after the calm restart.
+    private var reseat: [String: Int] = [:]
     private var nextTicket = 0
     /// Outputs between their restart's fade-out and their new start: the
     /// sync leaves them off.
@@ -347,6 +350,7 @@ final class FreshLinkWatch {
         if let before = listed {
             for uid in before.subtracting(current) {
                 calm[uid] = nil
+                reseat[uid] = nil
                 leftIn[uid] = session
             }
             for uid in current.subtracting(before) {
@@ -355,6 +359,7 @@ final class FreshLinkWatch {
                 guard let session, left == session else { continue }
                 nextTicket += 1
                 calm[uid] = (nextTicket, session)
+                reseat[uid] = session
                 armed[uid] = nextTicket
             }
         }
@@ -393,6 +398,7 @@ final class FreshLinkWatch {
         } else if let late = calm[uid], late.ticket == ticket {
             calm[uid] = nil
             armed = late
+            reseat[uid] = late.session
         } else {
             return false
         }
@@ -403,10 +409,23 @@ final class FreshLinkWatch {
 
     func release(uid: String) { held.remove(uid) }
 
+    /// Whether output `uid`, just started in `session`, re-seats the other
+    /// outputs; true once per arming.
+    func takeReseat(uid: String, session: Int) -> Bool {
+        reseat.removeValue(forKey: uid) == session
+    }
+
+    /// The forced `setDelay` calls that re-seat every running output but
+    /// `uid`, each at its current hold-back.
+    static func reseats(of uid: String, running: [String], holdBacks: [String: Double]) -> [String: Double] {
+        holdBacks.filter { $0.key != uid && running.contains($0.key) }
+    }
+
     /// The output stopped another way (switched off, lost): no restart.
     func cancel(uid: String) {
         pending[uid] = nil
         calm[uid] = nil
+        reseat[uid] = nil
     }
 
     /// The Mac goes to sleep: the restarts still due are dropped, since the link's
