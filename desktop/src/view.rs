@@ -16392,17 +16392,6 @@ mod tests {
         app.zone_dialog.invoke_confirmed("Office".into());
         assert_eq!(app.snapshot().equalizer_curves[0].name, "Office");
 
-        // The curve dialogs share the zone name dialog.
-        app.ask_new_zone();
-        assert_eq!(app.zone_dialog.get_field_label(), "Zone name");
-        app.zone_dialog.invoke_cancelled();
-        eq_window.invoke_rename_curve();
-        app.zone_dialog.invoke_cancelled();
-        let speaker = app.snapshot().speakers[0].id.clone();
-        app.ask_new_zone_with(&speaker);
-        assert_eq!(app.zone_dialog.get_field_label(), "Zone name");
-        app.zone_dialog.invoke_cancelled();
-
         eq_window.invoke_delete_curve();
         assert!(app.snapshot().equalizer_curves.is_empty());
         assert_eq!(eq_window.get_preset_index(), -1, "the gains stay");
@@ -17471,7 +17460,10 @@ mod tests {
     #[test]
     fn a_zone_name_longer_than_its_field_keeps_the_cursor_in_view() {
         let app = app_over(MockBackend::new());
-        app.ask_new_zone();
+        app.equalizer.invoke_save_curve();
+        app.equalizer.invoke_curve_named("Bass".into(), true);
+        app.equalizer.invoke_rename_curve();
+        app.zone_dialog.set_name(SharedString::new());
         let window = app.zone_dialog.window();
         // Wider than the 1000 px the headless windows draw at.
         let name = "Living Room and Kitchen and Bedroom and Office Speakers, ".repeat(4);
@@ -17576,7 +17568,9 @@ mod tests {
                 "zone name dialog",
                 || {
                     let app = app_over(MockBackend::new());
-                    app.ask_new_zone();
+                    app.equalizer.invoke_save_curve();
+                    app.equalizer.invoke_curve_named("Bass".into(), true);
+                    app.equalizer.invoke_rename_curve();
                     app
                 },
                 |app| app.zone_dialog.window(),
@@ -18887,12 +18881,13 @@ mod tests {
             assert_eq!(refreshes.get(), before, "Shift+F5 in the {name}");
             press(window, Key::F1);
             assert!(app.help.window().is_visible(), "F1 in the {name}");
+            let zones = app.snapshot().zones.len();
             ctrl(window, "n");
-            assert!(
-                app.zone_dialog.window().is_visible(),
+            assert_eq!(
+                app.snapshot().zones.len(),
+                zones + 1,
                 "Ctrl+N in the {name}"
             );
-            let _ = app.zone_dialog.hide();
             let before = refreshes.get();
             press(window, Key::F5);
             assert_eq!(refreshes.get(), before + 1, "F5 in the {name}");
@@ -18946,8 +18941,9 @@ mod tests {
         held(app.flyout.window(), &[Key::Control, Key::Meta], "1");
         assert!(!preset_rows(&app)[0].1, "Ctrl+Win+1 in the flyout");
 
-        let speaker = app.snapshot().speakers[0].id.clone();
-        app.ask_new_zone_with(&speaker);
+        app.equalizer.invoke_save_curve();
+        app.equalizer.invoke_curve_named("Bass".into(), true);
+        app.equalizer.invoke_rename_curve();
         draw_frames();
         held(app.zone_dialog.window(), &[Key::Control, Key::Shift], "w");
         assert!(app.zone_dialog.window().is_visible(), "Ctrl+Shift+W");
