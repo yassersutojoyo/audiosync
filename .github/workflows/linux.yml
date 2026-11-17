@@ -17,6 +17,8 @@ permissions:
 
 env:
   SLINT_COMPILER_DENY_WARNINGS: '1'
+  # The oldest glibc the packages run on (Ubuntu 24.04's); their Depends and Requires name it too.
+  GLIBC_FLOOR: '2.39'
 
   # The runtime's source (with its patch to libfuse's mount.c) and that of the
   # libfuse it links statically (LGPL-2.1), as its build fetches it; both go
@@ -227,7 +229,9 @@ jobs:
           for lib in $required; do
             echo "$needed" | grep -qx "$lib" || { echo "$lib isn't linked"; exit 1; }
           done
-          echo "Highest glibc symbol version: $(objdump -T "$root/usr/bin/audiosync" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
+          top=$(objdump -T "$root/usr/bin/audiosync" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1)
+          echo "Highest glibc symbol version: $top (floor $GLIBC_FLOOR)"
+          [ "$(printf '%s\n' "$top" "$GLIBC_FLOOR" | sort -V | tail -1)" = "$GLIBC_FLOOR" ] || { echo "the program needs glibc $top, newer than the $GLIBC_FLOOR floor"; exit 1; }
           file "$appimage"
 
       - name: Upload the AppImage, the .deb, the .rpm and the notices (workflow artifact, not a release)
