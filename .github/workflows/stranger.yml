@@ -18,6 +18,8 @@ permissions:
 
 env:
   SLINT_COMPILER_DENY_WARNINGS: '1'
+  # As in linux.yml: the oldest glibc the packages run on.
+  GLIBC_FLOOR: '2.39'
   # Skia built with the static C runtime, restored from the cache skia.yml fills.
   SKIA_BINARIES_URL: file://${{ github.workspace }}/skia-cache/{tag}/skia-binaries-{key}.tar.gz
 
@@ -61,7 +63,8 @@ jobs:
         # ubuntu installs the .deb on the runner itself; fedora installs the
         # .rpm in a Fedora 43 container on the runner's network.
         distro: [ubuntu, fedora]
-    runs-on: ubuntu-latest
+    # The release's build host (linux.yml): a newer image links a newer glibc.
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       WORK: ${{ github.workspace }}/stranger-work
@@ -101,6 +104,9 @@ jobs:
           AUDIOSYNC_RELEASE_BUILD: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && '1' || '' }}
         run: |
           cargo build --locked --release
+          top=$(objdump -T target/release/audiosync | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1)
+          echo "Highest glibc symbol version: $top (floor $GLIBC_FLOOR)"
+          [ "$(printf '%s\n' "$top" "$GLIBC_FLOOR" | sort -V | tail -1)" = "$GLIBC_FLOOR" ] || { echo "the program needs glibc $top, newer than the $GLIBC_FLOOR floor"; exit 1; }
           cargo build --locked --release --example sni_watcher_stub
           cargo build --locked --release --manifest-path ../airplay/Cargo.toml --example stranger_rx
           python3 -I ../scripts/windows_notices.py x86_64-unknown-linux-gnu --output target/release/THIRD-PARTY-NOTICES.txt
