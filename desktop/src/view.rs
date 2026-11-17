@@ -9951,6 +9951,39 @@ mod tests {
         assert_eq!(flash(), 0.0, "the flash is gone after a second");
     }
 
+    /// Settings fades in over 250 ms as it opens, as the Mac's window does;
+    /// with animation effects off it shows at once.
+    #[test]
+    fn settings_fades_in_as_it_opens() {
+        use i_slint_backend_testing::ElementHandle;
+        hold_clock();
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        draw_frames();
+        let shown = || {
+            ElementHandle::find_by_element_id(&app.settings, "SettingsWindow::fade")
+                .map(|content| content.computed_opacity())
+                .fold(0.0, f32::max)
+        };
+        let after = |ms: u64| {
+            advance_clock(Duration::from_millis(ms));
+            draw_frames();
+            shown()
+        };
+        app.main.invoke_settings_requested();
+        draw_frames();
+        after(60);
+        let fading = after(90);
+        assert!(0.0 < fading && fading < 1.0, "it fades in: {fading}");
+        assert_eq!(after(300), 1.0);
+        app.settings.hide().expect("Settings hides");
+
+        app.main.global::<Motion>().set_on(false);
+        app.main.invoke_settings_requested();
+        draw_frames();
+        assert_eq!(after(60), 1.0, "at once with animation effects off");
+    }
+
     /// A Cast speaker's delay is a wait, never below 0, so its row shows it
     /// with no sign, as the Mac's does.
     // covers: S450
