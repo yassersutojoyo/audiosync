@@ -195,6 +195,7 @@ struct UIStrings {
     }
 
     func speakerOptions(name: String) -> String { "Options for \(name)" }
+    func presetOptions(name: String) -> String { "Options for \(name)" }
 
     /// A speaker's (or group's) accessibility value.
     func value(_ state: SpeakerState) -> String {

@@ -9,18 +9,19 @@
 //! while the window or a receiver needs them. With the whole system as the
 //! source, the session that plays counts, else the first paused one; with
 //! a mix of apps, the same among the apps it captures; with one app, that
-//! app's own; an input device has none, so the card hides. Without a session that counts, the card hides too.
+//! app's own; an input device has none, so the card hides. Without a session that counts, the card hides too,
+//! after [`GAP_GRACE`].
 //!
 //! The card keeps the last track while the window is hidden, so it shows at
 //! once when the window comes back, and changes with the first new reading.
 
 #[cfg(any(windows, target_os = "linux", test))]
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::track_slide::PRESS_WINDOW;
 use crate::ui_model::AppState;
+use crate::window_rules::Rgb;
 
 /// Which sessions count for the card, from the chosen source.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -129,16 +130,78 @@ impl PlayModes {
     }
 }
 
-/// A track's artwork for the card: square, premultiplied RGBA.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// A track's artwork for the card: square, premultiplied RGBA, with its
+/// band colours ([`crate::ambient::cover_bands`]).
+#[derive(Clone, Debug)]
 pub struct CardArtwork {
     pub side: u32,
-    pub rgba: Arc<[u8]>,
+    /// Shared with every image the window makes of it, never copied again.
+    pub pixels: slint::SharedPixelBuffer<slint::Rgba8Pixel>,
+    pub bands: [Rgb; 3],
 }
 
-/// How many pixels a side the card's artwork has: its 48 px tile at 200 %.
-#[cfg(any(windows, target_os = "linux"))]
-pub const ARTWORK_SIDE: u32 = 96;
+impl CardArtwork {
+    /// Copies the pixels into the window's buffer and measures the bands
+    /// here, on the thread that decoded the cover, so a song change does no
+    /// per-pixel work on the UI thread.
+    pub fn new(side: u32, rgba: impl AsRef<[u8]>) -> Self {
+        let rgba = rgba.as_ref();
+        let bands = crate::ambient::cover_bands(rgba, side);
+        let pixels = slint::SharedPixelBuffer::clone_from_slice(rgba, side, side);
+        Self {
+            side,
+            pixels,
+            bands,
+        }
+    }
+
+    pub fn rgba(&self) -> &[u8] {
+        self.pixels.as_bytes()
+    }
+}
+
+// The bands follow from the pixels.
+impl PartialEq for CardArtwork {
+    fn eq(&self, other: &Self) -> bool {
+        self.side == other.side && self.rgba() == other.rgba()
+    }
+}
+
+impl Eq for CardArtwork {}
+
+/// The most pixels a side the card's artwork has: the main window's widest
+/// cover, 248 px, at 250 %.
+#[cfg(any(windows, target_os = "linux", test))]
+const ARTWORK_SIDE: u32 = 640;
+
+/// The main window's widest cover: its widest left column, 280 px, less
+/// the 14 px the block around the cover leaves on each side.
+#[cfg(any(windows, target_os = "linux", test))]
+const WIDEST_TILE: u32 = 252;
+
+/// The main window's scale factor in hundredths, which covers are made at.
+#[cfg(any(windows, target_os = "linux", test))]
+static COVER_SCALE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(100);
+
+/// Makes the next covers for a window at `scale`.
+#[cfg(any(windows, target_os = "linux", test))]
+pub fn set_cover_scale(scale: f32) {
+    let percent = (scale * 100.0).round().max(1.0) as u32;
+    COVER_SCALE.store(percent, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// How many pixels a side the card's artwork has: the widest cover at the
+/// window's scale factor, up to [`ARTWORK_SIDE`], so a small thumbnail is
+/// scaled up once, smoothly, rather than stretched by the window.
+#[cfg(any(windows, target_os = "linux", test))]
+pub fn card_side() -> u32 {
+    side_at(COVER_SCALE.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+#[cfg(any(windows, target_os = "linux", test))]
+fn side_at(percent: u32) -> u32 {
+    (WIDEST_TILE * percent).div_ceil(100).clamp(1, ARTWORK_SIDE)
+}
 
 /// The size an image of `width` × `height` is scaled to so that it covers a
 /// `side` × `side` square, the rest cropped evenly, as the Mac's tile fills.
@@ -152,9 +215,10 @@ pub fn cover_size(width: u32, height: u32, side: u32) -> (u32, u32) {
     (scaled(width), scaled(height))
 }
 
-/// Artwork kept for at most this many tracks.
+/// Artwork kept for at most this many tracks: 8 covers of 640 px a side
+/// stay under 14 MB.
 #[cfg(any(windows, target_os = "linux", test))]
-const ARTWORK_CACHE: usize = 32;
+const ARTWORK_CACHE: usize = 8;
 
 /// The card's artwork, made once per track by key. A failed attempt isn't
 /// kept, so the next reading tries again; only a track's first failure is
@@ -171,6 +235,11 @@ impl ArtworkCache {
     /// What was made for `key`, if an attempt worked.
     pub fn get(&self, key: &str) -> Option<Option<CardArtwork>> {
         self.made.get(key).cloned()
+    }
+
+    /// Whether the last attempt for `key` failed.
+    pub fn failed(&self, key: &str) -> bool {
+        self.failed.contains(key)
     }
 
     /// Takes an attempt for `key`: the artwork, and the error when it is
@@ -209,6 +278,8 @@ pub struct CardTrack {
     pub artist: String,
     pub playing: bool,
     pub artwork: Option<CardArtwork>,
+    /// The cover's read or decode failed, so none is on its way.
+    pub cover_failed: bool,
     pub modes: PlayModes,
 }
 
@@ -266,15 +337,22 @@ pub trait MediaControls {
     fn send(&mut self, command: Transport);
 }
 
-/// The longest the shown song stays up for the next one's cover, as the
-/// Mac's `ArtHold.limit`.
-pub const ART_HOLD: Duration = Duration::from_millis(1500);
+/// The longest the shown song stays up for the next one's cover: the Mac's
+/// cover fetch timeout (`ArtFetches.timeout`), which its hold and slide share.
+pub const ART_HOLD: Duration = Duration::from_secs(4);
+
+/// How long the shown song stays up while no session counts. Spotify drops
+/// its session for about 1 s when it rewrites a title (Windows debug log,
+/// 2026-11-16); 3 s also covers a listing that waits its 1 s `APP_WAIT` on
+/// an app.
+pub const GAP_GRACE: Duration = Duration::from_secs(3);
 
 /// Whether `next` is another song from the player `shown` came from,
-/// without a cover yet while `shown` has one.
+/// with its cover still to come while `shown` has one.
 fn waits_for_cover(shown: &CardTrack, next: &CardTrack) -> bool {
     shown.artwork.is_some()
         && next.artwork.is_none()
+        && !next.cover_failed
         && shown.app_id == next.app_id
         && (shown.title != next.title || shown.artist != next.artist)
 }
@@ -294,6 +372,8 @@ pub struct NowPlayingCard {
     held: Option<(CardTrack, Instant)>,
     /// The latest Next or Previous press, which a cover hold counts from.
     skipped_at: Option<Instant>,
+    /// Since when no session counts while the card still shows.
+    gap_since: Option<Instant>,
 }
 
 impl NowPlayingCard {
@@ -325,8 +405,21 @@ impl NowPlayingCard {
         if source.is_none() {
             next = None;
         }
-        if let Some(reading) = controls.take_reading() {
-            next = reading;
+        match controls.take_reading() {
+            Some(None) if source.is_some() && self.track.is_some() => {
+                self.gap_since.get_or_insert(now);
+            }
+            Some(reading) => {
+                next = reading;
+                self.gap_since = None;
+            }
+            None => {}
+        }
+        if let Some(since) = self.gap_since
+            && (source.is_none() || now.duration_since(since) >= GAP_GRACE)
+        {
+            next = None;
+            self.gap_since = None;
         }
         if let (Some(shown), Some(song)) = (&self.track, &next)
             && waits_for_cover(shown, song)
@@ -338,7 +431,7 @@ impl NowPlayingCard {
                 .skipped_at
                 .filter(|at| now.saturating_duration_since(*at) <= PRESS_WINDOW)
                 .map_or(since, |at| since.min(at));
-            if now.duration_since(since) < ART_HOLD {
+            if self.gap_since.is_some() || now.duration_since(since) < ART_HOLD {
                 self.held = Some((song.clone(), since));
                 return false;
             }
@@ -355,6 +448,11 @@ impl NowPlayingCard {
         self.held
             .as_ref()
             .map(|(_, since)| ART_HOLD.saturating_sub(since.elapsed()))
+    }
+
+    /// Whether the card shows a song while no session counts.
+    pub fn in_gap(&self) -> bool {
+        self.gap_since.is_some()
     }
 
     /// The track the card shows; `None` while the card is hidden.
@@ -443,6 +541,7 @@ pub mod fake {
             artist: artist.into(),
             playing,
             artwork: None,
+            cover_failed: false,
             modes: PlayModes::default(),
         }
     }
@@ -551,10 +650,7 @@ mod tests {
     }
 
     fn with_cover(mut track: CardTrack) -> CardTrack {
-        track.artwork = Some(CardArtwork {
-            side: 1,
-            rgba: Arc::from(vec![0u8; 4]),
-        });
+        track.artwork = Some(CardArtwork::new(1, vec![0u8; 4]));
         track
     }
 
@@ -585,11 +681,11 @@ mod tests {
         assert_eq!(card.track().map(|t| t.title.as_str()), Some("Three"));
     }
 
-    /// A cover still loading 1.5 s after the hold began gives way: the next
+    /// A cover still loading 4 s after the hold began gives way: the next
     /// song shows without it.
     // covers: S459
     #[test]
-    fn a_cover_still_loading_after_1_5_s_gives_way() {
+    fn a_cover_still_loading_after_4_s_gives_way() {
         let fake = FakeControls::default();
         let mut card = card(&fake);
         let source = || Some(CardSource::AnyApp);
@@ -612,10 +708,10 @@ mod tests {
     }
 
     /// A Next or Previous press starts the wait, so the next song shows
-    /// 1.5 s after the press at most, with or without its cover.
+    /// 4 s after the press at most, with or without its cover.
     // covers: S463
     #[test]
-    fn a_cover_hold_ends_1_5_s_after_a_next_press() {
+    fn a_cover_hold_ends_4_s_after_a_next_press() {
         let fake = FakeControls::default();
         let mut card = card(&fake);
         let source = || Some(CardSource::AnyApp);
@@ -630,27 +726,144 @@ mod tests {
         assert!(card.sync_at(source(), true, start + ART_HOLD));
         assert_eq!(card.track().map(|t| t.title.as_str()), Some("Two"));
 
-        card.send_at(Transport::PlayPause, start + Duration::from_secs(4));
+        card.send_at(Transport::PlayPause, start + Duration::from_secs(6));
         fake.read(Some(with_cover(track("Spotify.exe", "Two", "Band", true))));
-        assert!(card.sync_at(source(), true, start + Duration::from_secs(4)));
+        assert!(card.sync_at(source(), true, start + Duration::from_secs(6)));
         fake.read(Some(track("Spotify.exe", "Three", "Band", true)));
-        let held = start + Duration::from_secs(5);
+        let held = start + Duration::from_secs(7);
         assert!(
             !card.sync_at(source(), true, held),
             "Play/Pause starts no wait"
         );
-        assert!(!card.sync_at(source(), true, held + Duration::from_millis(1400)));
+        assert!(!card.sync_at(source(), true, held + Duration::from_millis(3900)));
+    }
+
+    /// The Mac's rule: a pressed card waits for the new cover up to the
+    /// cover fetch's timeout, and the slide keeps the press's side.
+    // covers: S459, S463
+    #[test]
+    fn a_cover_2_3_or_3_5_s_after_previous_holds_and_slides_from_the_left() {
+        use crate::track_slide::{Direction, Place, TrackSlide};
+        for seconds in [2.3, 3.5] {
+            let fake = FakeControls::default();
+            let mut card = card(&fake);
+            let mut slide = TrackSlide::new(Place::Window);
+            let source = || Some(CardSource::AnyApp);
+            let start = Instant::now();
+            let at = |s: f64| start + Duration::from_secs_f64(s);
+            fake.read(Some(with_cover(track("Spotify.exe", "One", "Band", true))));
+            assert!(card.sync_at(source(), true, start));
+            card.send_at(Transport::Previous, start);
+            slide.press(Some(Direction::Previous), true, false, start);
+            fake.read(Some(track("Spotify.exe", "Two", "Band", true)));
+            assert!(!card.sync_at(source(), true, at(0.4)));
+            assert!(
+                !card.sync_at(source(), true, at(seconds - 0.01)),
+                "{seconds} s: the old song still waits"
+            );
+            let old = card.track().cloned();
+            fake.read(Some(with_cover(track("Spotify.exe", "Two", "Band", true))));
+            assert!(card.sync_at(source(), true, at(seconds)));
+            let shown = card.track().expect("the card shows");
+            assert_eq!(shown.title, "Two");
+            assert!(
+                shown.artwork.is_some(),
+                "{seconds} s: it comes with its cover"
+            );
+            assert!(slide.change(old.as_ref(), card.track(), true, false, at(seconds)));
+            assert_eq!(slide.look(at(seconds)).0.side, -1.0, "{seconds} s");
+        }
+    }
+
+    /// A cover that failed to come lets the next song show at once.
+    // covers: S459
+    #[test]
+    fn a_failed_cover_shows_the_next_song_at_once() {
+        let fake = FakeControls::default();
+        let mut card = card(&fake);
+        let source = || Some(CardSource::AnyApp);
+        let start = Instant::now();
+        fake.read(Some(with_cover(track("Spotify.exe", "One", "Band", true))));
+        assert!(card.sync_at(source(), true, start));
+        card.send_at(Transport::Next, start);
+        let mut failed = track("Spotify.exe", "Two", "Band", true);
+        failed.cover_failed = true;
+        fake.read(Some(failed));
+        assert!(card.sync_at(source(), true, start + Duration::from_millis(300)));
+        let shown = card.track().expect("the card shows");
+        assert_eq!(shown.title, "Two");
+        assert!(shown.artwork.is_none());
+        assert_eq!(card.art_hold_left(), None);
     }
 
     #[test]
-    fn the_card_hides_without_a_session_that_counts() {
+    fn the_card_hides_3_s_into_a_gap_without_a_session_that_counts() {
         let fake = FakeControls::default();
         let mut card = card(&fake);
+        let start = Instant::now();
+        let ms = Duration::from_millis;
         fake.read(Some(track("Spotify.exe", "Song", "Band", true)));
-        card.sync(Some(CardSource::AnyApp), true);
+        card.sync_at(Some(CardSource::AnyApp), true, start);
         fake.read(None);
-        assert!(card.sync(Some(CardSource::AnyApp), true));
+        assert!(!card.sync_at(Some(CardSource::AnyApp), true, start));
+        fake.read(None);
+        assert!(!card.sync_at(Some(CardSource::AnyApp), true, start + ms(1000)));
+        assert!(!card.sync_at(Some(CardSource::AnyApp), true, start + ms(2999)));
+        assert!(card.sync_at(Some(CardSource::AnyApp), true, start + ms(3000)));
         assert_eq!(card.track(), None);
+    }
+
+    /// A cover hold that runs out during a gap keeps the shown song, so the
+    /// held one never slides in only for the gap to hide it.
+    #[test]
+    fn a_cover_hold_that_ends_in_a_session_gap_keeps_the_shown_song() {
+        let fake = FakeControls::default();
+        let mut card = card(&fake);
+        let source = || Some(CardSource::AnyApp);
+        let start = Instant::now();
+        let ms = Duration::from_millis;
+        fake.read(Some(with_cover(track("Spotify.exe", "One", "Band", true))));
+        card.sync_at(source(), true, start);
+        card.send_at(Transport::Next, start);
+        fake.read(Some(track("Spotify.exe", "Two", "Band", true)));
+        assert!(!card.sync_at(source(), true, start));
+        fake.read(None);
+        assert!(!card.sync_at(source(), true, start + ms(1500)));
+        assert!(!card.sync_at(source(), true, start + ART_HOLD));
+        assert_eq!(card.track().map(|t| t.title.as_str()), Some("One"));
+        assert!(card.sync_at(source(), true, start + ms(4500)));
+        assert_eq!(card.track(), None);
+    }
+
+    /// Spotify drops its session for about 1 s when it rewrites a title
+    /// (Windows debug log, 2026-11-16), which hid and showed the card.
+    #[test]
+    fn a_session_gap_under_3_s_keeps_the_shown_song() {
+        let fake = FakeControls::default();
+        let mut card = card(&fake);
+        let start = Instant::now();
+        let ms = Duration::from_millis;
+        let hurting = |title: &str| track("Spotify.exe", title, "SG Lewis", true);
+        fake.read(Some(hurting("Hurting")));
+        card.sync_at(Some(CardSource::AnyApp), true, start);
+        fake.read(None);
+        assert!(!card.sync_at(Some(CardSource::AnyApp), true, start + ms(10)));
+        fake.read(Some(hurting("Hurting")));
+        assert!(
+            !card.sync_at(Some(CardSource::AnyApp), true, start + ms(1000)),
+            "the same song came back"
+        );
+
+        fake.read(None);
+        assert!(!card.sync_at(Some(CardSource::AnyApp), true, start + ms(5000)));
+        assert!(!card.sync_at(Some(CardSource::AnyApp), true, start + ms(7900)));
+        assert_eq!(card.track().map(|t| t.title.as_str()), Some("Hurting"));
+        fake.read(Some(hurting("Hurting (feat. AlunaGeorge)")));
+        assert!(card.sync_at(Some(CardSource::AnyApp), true, start + ms(8000)));
+        assert_eq!(
+            card.track().map(|t| t.title.as_str()),
+            Some("Hurting (feat. AlunaGeorge)")
+        );
     }
 
     #[test]
@@ -702,19 +915,25 @@ mod tests {
 
     #[test]
     fn artwork_is_scaled_to_cover_the_square_tile() {
-        assert_eq!(cover_size(600, 600, ARTWORK_SIDE), (96, 96));
-        assert_eq!(cover_size(300, 150, ARTWORK_SIDE), (192, 96));
-        assert_eq!(cover_size(100, 333, ARTWORK_SIDE), (96, 320));
-        assert_eq!(cover_size(56, 56, ARTWORK_SIDE), (96, 96), "scaled up");
-        assert_eq!(cover_size(0, 10, ARTWORK_SIDE), (96, 960));
+        assert_eq!(cover_size(600, 600, 96), (96, 96));
+        assert_eq!(cover_size(300, 150, 96), (192, 96));
+        assert_eq!(cover_size(100, 333, 96), (96, 320));
+        assert_eq!(cover_size(56, 56, 96), (96, 96), "scaled up");
+        assert_eq!(cover_size(0, 10, 96), (96, 960));
+    }
+
+    /// Every cover is made at the widest tile's pixels, so an 83 px
+    /// thumbnail is scaled up once, smoothly, before the window draws it.
+    #[test]
+    fn the_cards_artwork_is_made_at_the_widest_tiles_pixels() {
+        assert_eq!(side_at(100), 252, "an 83 px thumbnail at 100 %");
+        assert_eq!(side_at(150), 378);
+        assert_eq!(side_at(300), ARTWORK_SIDE);
     }
 
     #[test]
     fn failed_artwork_is_tried_again_and_logged_once() {
-        let art = CardArtwork {
-            side: 1,
-            rgba: Arc::from(&[1, 2, 3, 4][..]),
-        };
+        let art = CardArtwork::new(1, [1u8, 2, 3, 4]);
         let mut cache = ArtworkCache::default();
         assert_eq!(cache.keep("a", Err("busy")), (None, Some("busy")));
         assert_eq!(cache.get("a"), None, "a failure isn't kept");

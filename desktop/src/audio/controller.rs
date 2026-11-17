@@ -70,6 +70,9 @@ use audiosync_core::volume::SharedGain;
 
 use super::SESSION_RATE;
 use super::airplay::{AirPlayLink, AirPlaySpeakers, FeedSlot, SenderStarter, StartedSender};
+use super::app_output::{
+    AppEndpoints, AppRecord, AppRecordStore, AppRedirect, Process, render_interface,
+};
 use super::backend::{
     AirPlayInfo, AirPlayPasswordPrompt, AirPlayPinPrompt, AirPlayProblem, AudioBackend,
     BackendError, BackendEvent, CastDiscovery, CastInfo, CastProblem, InTarget, OutputInfo,
@@ -84,6 +87,10 @@ use super::capture::{
 use super::cast::{CastLink, CastSpeakers, CastTrack};
 use super::cast_address::CastAddress;
 use super::clock_probe::{ClockQueue, describe_clock_queue};
+use super::default_output::{
+    DefaultEndpoints, DefaultSwitch, Record, RecordStore, silent_endpoint,
+};
+use super::local_volume::{LocalVolumeMemory, LocalVolumes};
 use super::now_playing::{
     Follow, Mix, POLL_INTERVAL, SharedLabels, TrackInfo, TrackReader, TrackSource,
 };
@@ -117,6 +124,12 @@ const LEVEL_INTERVAL: Duration = Duration::from_secs(10);
 /// How often a running session checks whether the source is heard twice
 /// ([`routing`](super::routing)).
 const ROUTING_INTERVAL: Duration = Duration::from_secs(3);
+
+/// How often the double-audio check runs while an app source may still be
+/// following its move at the start, for at most [`START_ROUTING_WINDOW`].
+const START_ROUTING_INTERVAL: Duration = Duration::from_millis(250);
+
+const START_ROUTING_WINDOW: Duration = Duration::from_secs(2);
 
 /// How often a session of several apps looks for apps whose audio sessions
 /// came or went: each app is its own loopback in the running mix.
@@ -360,6 +373,12 @@ pub trait Driver {
     /// output.
     fn session_pids(&mut self) -> Result<Vec<u32>, BackendError>;
 
+    /// The IDs of the processes that show a top-level window on the
+    /// desktop, so an app can be offered before it plays.
+    fn window_pids(&mut self) -> Vec<u32> {
+        Vec::new()
+    }
+
     /// The connected render endpoints, and notes for the log on the ones
     /// left out or listed without their properties.
     fn outputs(&mut self) -> Result<Listing, BackendError>;
@@ -404,6 +423,13 @@ pub trait Driver {
     /// output changes.
     fn endpoint_audio(&mut self) -> Result<Vec<EndpointAudio>, BackendError>;
 
+    /// Whether an audio session was created or changed state on a render
+    /// endpoint since the last call (S470). The notification runs on a system thread and only
+    /// marks.
+    fn new_audio_sessions(&mut self) -> bool {
+        false
+    }
+
     /// Starts following the endpoint `id`'s own mute and master volume
     /// (spec S195): a change notification from Windows marks it for
     /// [`Driver::endpoint_volume_changes`]. The notification runs on a system
@@ -428,7 +454,8 @@ pub trait Driver {
     fn endpoint_volume(&mut self, id: &str) -> Result<EndpointVolume, BackendError>;
 
     /// Sets the endpoint `id`'s master volume, 0 to 1
-    /// (`SetMasterVolumeLevelScalar`): only the fix the user clicks (S197).
+    /// (`SetMasterVolumeLevelScalar`): only the fix the user clicks (S197)
+    /// and a local output's remembered or found level (S472).
     /// [`BackendError::NotResponding`] when Windows audio didn't answer in
     /// time.
     fn set_endpoint_level(&mut self, id: &str, level: f32) -> Result<(), BackendError>;
@@ -816,6 +843,12 @@ struct RoutingState {
     last_check: Option<Instant>,
     /// The endpoints the source played on at the last check.
     played_on: Vec<PlayedOn>,
+    /// The endpoints an app source played on as it started, which the app
+    /// may be leaving for its move (S471): each drops at its first idle check.
+    at_start: Vec<String>,
+    /// Until when [`START_ROUTING_INTERVAL`] applies while `at_start` isn't
+    /// empty.
+    at_start_until: Option<Instant>,
     /// What was last reported: empty while the source is heard only through
     /// AudioSync.
     reported: Vec<DirectPath>,
@@ -843,6 +876,8 @@ pub struct Controller<D: Driver> {
     input_pairs: BTreeMap<String, u16>,
     /// Events for the next poll.
     pending: Vec<BackendEvent>,
+    /// What [`Self::held_out`] answered at the last poll.
+    held_out_shown: Vec<String>,
     /// The debug log; it writes nothing unless `AUDIOSYNC_DEBUG=1`.
     log: DebugLog,
     /// The last name of every output listed, so the log names outputs
@@ -903,6 +938,8 @@ pub struct Controller<D: Driver> {
     /// The own volume and mute of each output that is on and connected
     /// (spec S192 to S202), followed through Windows' notifications.
     device_volumes: device_volume::Followed,
+    /// Each local output's remembered and found Windows level (S472).
+    local_volumes: LocalVolumeMemory,
     /// The outputs reported busy ([`BackendEvent::OutputBusy`]) that
     /// haven't played since or been switched off, each with the polls left
     /// before its next try ([`BUSY_RETRY_POLLS`]).
@@ -946,6 +983,20 @@ pub struct Controller<D: Driver> {
     calibration_tap: Arc<CalibrationTap>,
     /// The one local output a calibration lets be heard.
     calibration_solo: Option<String>,
+    /// Where Windows' default output is read and moved while the whole
+    /// system streams, and where its restore record is kept (S469); `None`
+    /// where it isn't moved.
+    default_output: Option<(Box<dyn DefaultEndpoints>, Box<dyn RecordStore>)>,
+    default_switch: DefaultSwitch,
+    /// Where one captured app's own output is moved to the silent endpoint,
+    /// and where its restore record is kept (S471); `None` where it isn't.
+    app_output: Option<(Box<dyn AppEndpoints>, Box<dyn AppRecordStore>)>,
+    app_redirect: AppRedirect,
+    /// When the redirect last ran, and what it said once this stream.
+    app_checked: Option<Instant>,
+    app_said: Vec<&'static str>,
+    /// When the switch was last checked for a change it didn't make.
+    default_checked: Option<Instant>,
     /// The zone volumes (S249), for the senders started later too.
     zone_volumes: ZoneVolumes,
     /// Sessions started so far, captures started again included: a
@@ -995,6 +1046,7 @@ impl<D: Driver> Controller<D> {
             equalizer: EqSettings::default(),
             input_pairs: BTreeMap::new(),
             pending: Vec::new(),
+            held_out_shown: Vec::new(),
             log: DebugLog::default(),
             names: BTreeMap::new(),
             setups: BTreeMap::new(),
@@ -1022,6 +1074,7 @@ impl<D: Driver> Controller<D> {
             quit_watch: SourceQuitWatch::default(),
             mix_checked: None,
             device_volumes: device_volume::Followed::default(),
+            local_volumes: LocalVolumeMemory::default(),
             busy: BTreeMap::new(),
             unplayable: BTreeSet::new(),
             stalled: BTreeMap::new(),
@@ -1034,6 +1087,13 @@ impl<D: Driver> Controller<D> {
             track_source: None,
             calibration_tap: Arc::new(CalibrationTap::new()),
             calibration_solo: None,
+            default_output: None,
+            default_switch: DefaultSwitch::default(),
+            app_output: None,
+            app_redirect: AppRedirect::default(),
+            app_checked: None,
+            app_said: Vec::new(),
+            default_checked: None,
             zone_volumes: ZoneVolumes::default(),
             sessions_started: 0,
             polls: 0,
@@ -1181,6 +1241,355 @@ impl<D: Driver> Controller<D> {
     }
 
     /// Sends what the backend does to `log`.
+    /// Moves Windows' default output through `endpoints` while the whole
+    /// system streams, with the restore record in `store`, after restoring
+    /// what a record an earlier run left says (S469).
+    pub fn set_default_switch(
+        &mut self,
+        mut endpoints: Box<dyn DefaultEndpoints>,
+        mut store: Box<dyn RecordStore>,
+    ) {
+        let lines = self
+            .default_switch
+            .restore_at_launch(endpoints.as_mut(), store.as_mut());
+        for line in lines {
+            self.log.log(|| line);
+        }
+        self.default_output = Some((endpoints, store));
+    }
+
+    /// Moves a captured app's own output through `endpoints` while it
+    /// streams, with the restore record in `store`, after restoring what a
+    /// record an earlier run left says (S471).
+    pub fn set_app_output(
+        &mut self,
+        mut endpoints: Box<dyn AppEndpoints>,
+        mut store: Box<dyn AppRecordStore>,
+    ) {
+        let running = match store.load() {
+            Ok(Some(record)) => self.recorded_running(&record),
+            _ => Vec::new(),
+        };
+        let lines =
+            self.app_redirect
+                .restore_at_launch(endpoints.as_mut(), store.as_mut(), &running);
+        for line in lines {
+            self.log.log(|| line);
+        }
+        self.app_output = Some((endpoints, store));
+    }
+
+    /// The running processes of each executable `record` holds, those with
+    /// an audio session first.
+    fn recorded_running(&mut self, record: &AppRecord) -> Vec<Process> {
+        let Ok(table) = self.driver.processes() else {
+            return Vec::new();
+        };
+        let sessions: Vec<u32> = self
+            .driver
+            .endpoint_audio()
+            .map(|audio| {
+                audio
+                    .into_iter()
+                    .flat_map(|endpoint| endpoint.active_pids)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut running: Vec<Process> = record
+            .apps
+            .iter()
+            .flat_map(|app| {
+                table.running(&app.exe).map(|pid| Process {
+                    pid,
+                    exe: app.exe.clone(),
+                })
+            })
+            .collect();
+        running.sort_by_key(|process| !sessions.contains(&process.pid));
+        running
+    }
+
+    /// Logs a line once per stream under `key`.
+    fn say_once(&mut self, key: &'static str, line: impl FnOnce() -> String) {
+        if !self.app_said.contains(&key) {
+            self.app_said.push(key);
+            self.log.log(line);
+        }
+    }
+
+    /// Moves the captured app's own output while one app streams to an
+    /// output, and otherwise puts back what the record holds (S471); every
+    /// [`ROUTING_INTERVAL`], or at once with `now`. An app that isn't
+    /// running is put back once it runs again.
+    fn sync_app_output(&mut self, now: bool) {
+        if self.app_output.is_none() {
+            return;
+        }
+        let due = now
+            || self
+                .app_checked
+                .is_none_or(|at| at.elapsed() >= ROUTING_INTERVAL);
+        let listed = |id: &str| self.present.iter().any(|endpoint| endpoint.id == id);
+        let plays = self.policy.enabled_ids().into_iter().any(listed)
+            || !self.enabled_airplay().is_empty()
+            || self.cast_enabled().is_some();
+        let root = self
+            .session
+            .as_ref()
+            .and_then(|session| match &session.target {
+                CaptureTarget::Loopback(activation)
+                    if activation.mode == LoopbackMode::IncludeTree && plays =>
+                {
+                    Some(activation.target_pid)
+                }
+                _ => None,
+            });
+        if root.is_none() {
+            self.app_said.clear();
+        }
+        if !due || (root.is_none() && self.app_redirect.record().is_none()) {
+            return;
+        }
+        self.app_checked = Some(Instant::now());
+        match root {
+            Some(root) if !self.app_said.contains(&"gone") => self.redirect_app(root),
+            Some(_) => {}
+            None => self.restore_apps(""),
+        }
+    }
+
+    fn restore_apps(&mut self, why: &str) {
+        let Some(record) = self.app_redirect.record().cloned() else {
+            return;
+        };
+        let running = self.recorded_running(&record);
+        let Some((endpoints, store)) = self.app_output.as_mut() else {
+            return;
+        };
+        let lines = self
+            .app_redirect
+            .restore(endpoints.as_mut(), store.as_mut(), &running);
+        for line in lines {
+            self.log.log(|| format!("{why}{line}"));
+        }
+    }
+
+    fn redirect_app(&mut self, root: u32) {
+        let chosen = self.policy.enabled_ids();
+        let silent = self
+            .default_output
+            .as_mut()
+            .and_then(|(endpoints, _)| endpoints.endpoints().ok())
+            .and_then(|listed| silent_endpoint(&listed, &chosen).map(str::to_owned));
+        let recorded = self
+            .app_redirect
+            .record()
+            .map(|record| record.silent.clone());
+        if let Some(recorded) = recorded
+            && silent.as_deref().map(render_interface).as_ref() != Some(&recorded)
+        {
+            self.say_once("changed", || {
+                format!(
+                    "app output: the silent endpoint {recorded} is gone or no longer the one \
+                     picked, so the apps moved there are put back"
+                )
+            });
+            self.restore_apps("");
+            if self.app_redirect.record().is_some() {
+                return;
+            }
+        }
+        let Some(silent) = silent else {
+            self.say_once("none", || {
+                "app output: not moved, no silent endpoint, so the app plays on the PC too"
+                    .to_owned()
+            });
+            return;
+        };
+        let (Ok(table), Ok(audio)) = (self.driver.processes(), self.driver.endpoint_audio()) else {
+            return;
+        };
+        let moved: Vec<String> = self
+            .app_redirect
+            .record()
+            .map(|record| record.apps.iter().map(|app| app.exe.clone()).collect())
+            .unwrap_or_default();
+        let playing: Vec<Process> = table
+            .tree(root)
+            .into_iter()
+            .filter(|pid| {
+                audio
+                    .iter()
+                    .any(|endpoint| endpoint.active_pids.contains(pid))
+            })
+            .filter_map(|pid| {
+                Some(Process {
+                    pid,
+                    exe: table.get(pid)?.executable.clone(),
+                })
+            })
+            .collect();
+        // Windows keeps the choice per executable, so a helper running
+        // another executable (a shared web view host) would move every app
+        // that uses it.
+        let own = table.get(root).map(|entry| entry.executable.clone());
+        // The move reaches every process of the executable, and one outside
+        // the captured tree would then play nowhere.
+        let tree = table.tree(root);
+        let elsewhere = own.as_ref().and_then(|own| {
+            audio
+                .iter()
+                .flat_map(|endpoint| &endpoint.active_pids)
+                .find(|&&pid| {
+                    !tree.contains(&pid)
+                        && table
+                            .get(pid)
+                            .is_some_and(|entry| entry.executable.eq_ignore_ascii_case(own))
+                })
+                .map(|&pid| (own.clone(), pid))
+        });
+        if let Some((exe, pid)) = elsewhere {
+            self.say_once("elsewhere", || {
+                format!(
+                    "app output: {exe} isn't moved, process {pid} runs it outside the captured app"
+                )
+            });
+            self.restore_apps("");
+            return;
+        }
+        let (playing, shared): (Vec<Process>, Vec<Process>) =
+            playing.into_iter().partition(|process| {
+                own.as_ref()
+                    .is_some_and(|own| own.eq_ignore_ascii_case(&process.exe))
+            });
+        // A paused app moves too, so its first note plays where nobody
+        // listens; Windows refuses a process with no audio session at all.
+        let idle_root = own
+            .filter(|_| !playing.iter().any(|process| process.pid == root))
+            .map(|exe| Process { pid: root, exe });
+        if let Some(helper) = shared.first() {
+            let exe = helper.exe.clone();
+            self.say_once("shared", || {
+                format!("app output: {exe} isn't moved, it isn't the app's own executable")
+            });
+        }
+        let stuck = playing.iter().find_map(|process| {
+            let endpoint = audio.iter().find(|endpoint| {
+                endpoint.id != silent && endpoint.active_pids.contains(&process.pid)
+            })?;
+            moved
+                .contains(&process.exe)
+                .then(|| (process.exe.clone(), endpoint.id.clone()))
+        });
+        if let Some((exe, endpoint)) = stuck {
+            self.say_once("stuck", || {
+                format!(
+                    "app output: {exe} still plays on {endpoint}; its playback may need a \
+                     restart to move"
+                )
+            });
+        }
+        let Some((endpoints, store)) = self.app_output.as_mut() else {
+            return;
+        };
+        let lines =
+            self.app_redirect
+                .redirect(endpoints.as_mut(), store.as_mut(), &silent, &playing);
+        let idle_lines = idle_root.map(|root| {
+            let lines = self.app_redirect.redirect(
+                endpoints.as_mut(),
+                store.as_mut(),
+                &silent,
+                std::slice::from_ref(&root),
+            );
+            let moved = self
+                .app_redirect
+                .record()
+                .is_some_and(|record| record.apps.iter().any(|app| app.exe == root.exe));
+            (lines, moved)
+        });
+        for line in lines {
+            self.log.log(|| line);
+        }
+        // Refused until the app opens a session: said once, not every check.
+        if let Some((lines, moved)) = idle_lines {
+            for line in lines {
+                if moved {
+                    self.log.log(|| line);
+                } else {
+                    self.say_once("idle", || line);
+                }
+            }
+        }
+    }
+
+    /// Starts, checks or ends the default output's switch for a stream that
+    /// is of the whole system or not (S469); one that plays to no output
+    /// counts as not, since moving the default would silence the PC. The
+    /// check runs every [`ROUTING_INTERVAL`].
+    fn sync_default_output(&mut self, streams_system: bool) {
+        let listed = |id: &str| self.present.iter().any(|endpoint| endpoint.id == id);
+        let whole_system = streams_system
+            && (self.policy.enabled_ids().into_iter().any(listed)
+                || !self.enabled_airplay().is_empty()
+                || self.cast_enabled().is_some());
+        let Some((endpoints, store)) = self.default_output.as_mut() else {
+            return;
+        };
+        let switch = &mut self.default_switch;
+        let chosen = self.policy.enabled_ids();
+        let due = self
+            .default_checked
+            .is_none_or(|at| at.elapsed() >= ROUTING_INTERVAL);
+        let lines = if !whole_system {
+            // A stream left with no output keeps a fallback: a default the
+            // user moved meanwhile stays theirs (S469).
+            let keep = streams_system && switch.holds_out_default();
+            switch.restore(endpoints.as_mut(), store.as_mut(), keep)
+        } else if !switch.engaged() {
+            self.default_checked = Some(Instant::now());
+            switch.engage(endpoints.as_mut(), store.as_mut(), &chosen)
+        } else if due {
+            self.default_checked = Some(Instant::now());
+            switch.check(endpoints.as_mut(), store.as_mut(), &chosen)
+        } else {
+            Vec::new()
+        };
+        for line in lines {
+            self.log.log(|| line);
+        }
+    }
+
+    /// The outputs that get no copy, since the original plays there
+    /// (S470): for one app on Windows every output the app plays on, and
+    /// Windows' default output while the whole system streams unswitched.
+    fn held_out(&self) -> Vec<String> {
+        let apps = self
+            .session
+            .as_ref()
+            .is_some_and(|session| match &session.target {
+                CaptureTarget::Loopback(activation) => activation.mode == LoopbackMode::IncludeTree,
+                CaptureTarget::Mix(_) => true,
+                CaptureTarget::Input { .. } => false,
+            });
+        if apps && self.default_output.is_some() {
+            return self
+                .routing
+                .played_on
+                .iter()
+                .map(|played| played.endpoint_id.clone())
+                .collect();
+        }
+        if !self.default_switch.holds_out_default() {
+            return Vec::new();
+        }
+        self.present
+            .iter()
+            .filter(|endpoint| endpoint.is_default)
+            .map(|endpoint| endpoint.id.clone())
+            .collect()
+    }
+
     pub fn set_debug_log(&mut self, log: DebugLog) {
         if let Some(airplay) = self.airplay.as_mut() {
             airplay.set_debug_log(log.clone());
@@ -1600,9 +2009,13 @@ impl<D: Driver> Controller<D> {
         // One that left is fresh again once it's back.
         self.appeared
             .retain(|id, _| listed.iter().any(|endpoint| endpoint.id == *id));
+        let first = !self.listed_once;
         self.listed_once = true;
         self.present = listed;
         self.policy.set_listed(&self.present);
+        if first {
+            self.recover_local_volumes();
+        }
         self.listing_ok = true;
         // A busy output whose device is gone no longer waits for it: it
         // stays on and is tried again once it is listed (S68).
@@ -1776,11 +2189,18 @@ impl<D: Driver> Controller<D> {
     /// start hung go last in the next pass.
     fn sync_outputs(&mut self) -> Vec<(String, BackendError)> {
         self.cancel_stale_fresh_restarts();
+        let held_out = self.held_out();
         let Some(session) = self.session.as_mut() else {
             return Vec::new();
         };
         let active: Vec<&str> = session.outputs.keys().map(String::as_str).collect();
-        let plan = self.policy.plan(true, &self.present, &active);
+        let mut plan = self.policy.plan(true, &self.present, &active);
+        for held_out in &held_out {
+            plan.attach.retain(|endpoint| endpoint.id != *held_out);
+            if session.outputs.contains_key(held_out) && !plan.detach.contains(held_out) {
+                plan.detach.push(held_out.clone());
+            }
+        }
 
         // A switched-off output fades out first, together with any others
         // switched off now; one whose device isn't listed has nothing to
@@ -1792,8 +2212,14 @@ impl<D: Driver> Controller<D> {
             };
             playing.handle.request_stop();
             switched_off.push(playing);
-            self.log
-                .log(|| format!("output {} stopped: switched off", label(&self.names, id)));
+            self.log.log(|| {
+                let why = if held_out.contains(id) {
+                    "the source plays there itself"
+                } else {
+                    "switched off"
+                };
+                format!("output {} stopped: {why}", label(&self.names, id))
+            });
         }
         if !switched_off.is_empty() {
             self.retiring.push(Retiring {
@@ -1851,6 +2277,23 @@ impl<D: Driver> Controller<D> {
                     )
                 });
                 continue;
+            }
+            // Its remembered level goes on before its first audio (S472).
+            let current = self.driver.endpoint_volume(&endpoint.id);
+            let current = current.ok().map(|volume| f64::from(volume.level));
+            if let Some(level) = self.local_volumes.switched_on(&endpoint.id, current) {
+                let set = self.driver.set_endpoint_level(&endpoint.id, level as f32);
+                if set.is_err() {
+                    self.local_volumes.refused(&endpoint.id);
+                }
+                self.log.log(|| {
+                    format!(
+                        "output {} device volume set to its remembered {}%: {}",
+                        label(&self.names, &endpoint.id),
+                        (level * 100.0).round(),
+                        device_volume::outcome(&set)
+                    )
+                });
             }
             let params = self.policy.params(&endpoint.id);
             let reader = Reader::new(Arc::clone(&session.ring), SESSION_RATE);
@@ -3794,6 +4237,21 @@ impl<D: Driver> Controller<D> {
             said_waiting: false,
         });
         self.refresh_if_needed(false);
+        // An app already playing is moved, then holds its output out from
+        // the first pass, not the first poll (S470, S471).
+        if self.default_output.is_some() && !matches!(source, SourceId::WholeSystem) {
+            self.sync_app_output(true);
+            self.check_routing(Instant::now());
+            self.routing.at_start = self
+                .routing
+                .played_on
+                .iter()
+                .map(|played| played.endpoint_id.clone())
+                .collect();
+            self.hold_at_start_briefly();
+            self.routing.at_start_until = Some(Instant::now() + START_ROUTING_WINDOW);
+            self.routing.last_check = None;
+        }
         let failures = self.sync_outputs();
         self.report_failures(failures);
         // An output that couldn't start was turned off: the others no
@@ -4045,9 +4503,46 @@ impl<D: Driver> Controller<D> {
         let due = self
             .routing
             .last_check
-            .is_none_or(|last| now.saturating_duration_since(last) >= ROUTING_INTERVAL);
+            .is_none_or(|last| now.saturating_duration_since(last) >= self.routing_interval(now));
         if due {
             self.check_routing(now);
+        }
+    }
+
+    /// A new session may be the app starting to play: checked at once, so
+    /// its output is held out or the app moved before its first note.
+    /// Returns whether Windows reported one since the last call.
+    fn take_new_sessions(&mut self, now: Instant) -> bool {
+        if !self.driver.new_audio_sessions() {
+            return false;
+        }
+        self.check_routing(now);
+        self.sync_app_output(true);
+        // The app may be leaving the outputs it just opened its session on
+        // for its move, as at the start (S471).
+        if self.app_redirect.record().is_some() {
+            let mut added = false;
+            for played in &self.routing.played_on {
+                if played.idle_checks == 0 && !self.routing.at_start.contains(&played.endpoint_id) {
+                    self.routing.at_start.push(played.endpoint_id.clone());
+                    added = true;
+                }
+            }
+            if added {
+                self.hold_at_start_briefly();
+                self.routing.at_start_until = Some(now + START_ROUTING_WINDOW);
+            }
+        }
+        true
+    }
+
+    fn routing_interval(&self, now: Instant) -> Duration {
+        let following = !self.routing.at_start.is_empty()
+            && self.routing.at_start_until.is_some_and(|until| now < until);
+        if following {
+            START_ROUTING_INTERVAL
+        } else {
+            ROUTING_INTERVAL
         }
     }
 
@@ -4120,8 +4615,10 @@ impl<D: Driver> Controller<D> {
             return;
         };
         // An input device is no render stream Windows could play straight.
-        let &CaptureTarget::Loopback(activation) = &session.target else {
-            return;
+        let activations = match &session.target {
+            CaptureTarget::Loopback(activation) => vec![*activation],
+            CaptureTarget::Mix(activations) => activations.clone(),
+            CaptureTarget::Input { .. } => return,
         };
         self.routing.last_check = Some(now);
         let rendered: Vec<String> = session.outputs.keys().cloned().collect();
@@ -4153,10 +4650,17 @@ impl<D: Driver> Controller<D> {
                     .unwrap_or_else(|| endpoint.id.clone());
             }
         }
-        let tree = processes.tree(activation.target_pid);
-        let captured = match activation.mode {
-            LoopbackMode::IncludeTree => Captured::Only(tree),
-            LoopbackMode::ExcludeTree => Captured::AllExcept(tree),
+        let captured = match activations.as_slice() {
+            [activation] if activation.mode == LoopbackMode::ExcludeTree => {
+                Captured::AllExcept(processes.tree(activation.target_pid))
+            }
+            // A mix takes in each app's tree.
+            _ => Captured::Only(
+                activations
+                    .iter()
+                    .flat_map(|activation| processes.tree(activation.target_pid))
+                    .collect(),
+            ),
         };
         let answer = routing::check(&captured, &endpoints, &rendered, &self.routing.played_on);
         if answer.paths != self.routing.reported {
@@ -4171,18 +4675,46 @@ impl<D: Driver> Controller<D> {
                 )
             });
             self.routing.reported.clone_from(&answer.paths);
-            self.pending.push(BackendEvent::HeardTwice {
-                paths: answer.paths,
-            });
+            // Where the default output can be moved (Windows), AudioSync
+            // handles double audio itself and asks the user for no change.
+            if self.default_output.is_none() {
+                self.pending.push(BackendEvent::HeardTwice {
+                    paths: answer.paths,
+                });
+            }
         }
         self.routing.played_on = answer.played_on;
+        self.hold_at_start_briefly();
+    }
+
+    /// Keeps the endpoints of [`RoutingState::at_start`] one idle check from
+    /// dropping, while the app still plays there.
+    fn hold_at_start_briefly(&mut self) {
+        let state = &mut self.routing;
+        state.at_start.retain(|id| {
+            state
+                .played_on
+                .iter()
+                .any(|played| played.endpoint_id == *id)
+        });
+        for played in &mut state.played_on {
+            if state.at_start.contains(&played.endpoint_id) {
+                played.idle_checks = routing::HOLD_CHECKS;
+            }
+        }
     }
 
     /// The sources to offer, from the processes and audio sessions now.
     fn read_sources(&mut self) -> Result<Vec<SourceInfo>, BackendError> {
         let processes = self.driver.processes()?;
         let session_pids = self.driver.session_pids()?;
-        let mut sources = source_list(&processes, &session_pids, self.driver.own_pid());
+        let window_pids = self.driver.window_pids();
+        let mut sources = source_list(
+            &processes,
+            &session_pids,
+            &window_pids,
+            self.driver.own_pid(),
+        );
         match self.driver.inputs() {
             Ok(readings) => {
                 if self.inputs_error.take().is_some() {
@@ -4208,6 +4740,12 @@ impl<D: Driver> Controller<D> {
     }
 }
 
+/// Whether streaming `source` moves Windows' default output (S469): only
+/// the whole system does, so an app source never silences other apps.
+fn moves_default(source: Option<&SourceId>) -> bool {
+    source == Some(&SourceId::WholeSystem)
+}
+
 impl<D: Driver> Drop for Controller<D> {
     fn drop(&mut self) {
         self.shut_down();
@@ -4221,7 +4759,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
         let cast = self.cast.as_mut().and_then(CastSpeakers::begin_shutdown);
         self.next_start = None;
         self.end_session();
+        self.sync_app_output(true);
+        self.sync_default_output(false);
         self.reap(true);
+        self.put_back_local_volumes();
         self.stop_following_device_volumes();
         self.airplay = None;
         self.starter = None;
@@ -4294,6 +4835,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
                             .get(&endpoint.id)
                             .is_some_and(|restart| !matches!(restart, FreshRestart::Due(_))),
                     device_volume: self.device_volumes.reading(&endpoint.id),
+                    plays_original: self.held_out().contains(&endpoint.id),
                 }
             })
             .collect();
@@ -4319,6 +4861,8 @@ impl<D: Driver> AudioBackend for Controller<D> {
         let from = self.switch_origin();
         self.switch_from = None;
         self.end_session();
+        self.sync_app_output(true);
+        self.sync_default_output(moves_default(Some(source)));
         self.log
             .log(|| format!("starting: capturing {}", describe_source(source)));
         let started = match self.begin_session(source) {
@@ -4326,6 +4870,9 @@ impl<D: Driver> AudioBackend for Controller<D> {
                 if self.next_start.is_some() {
                     self.switch_from = from;
                 }
+                // Moved now, not at the first poll: a paused app's first note
+                // would double on the output it plays on (S471).
+                self.sync_app_output(true);
                 Ok(())
             }
             Err(error) => {
@@ -4359,8 +4906,45 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.next_start = None;
         self.switch_from = None;
         self.end_session();
+        self.sync_app_output(true);
+        self.sync_default_output(false);
         self.airplay_streaming(false);
         self.release_busy();
+        self.put_back_local_volumes();
+    }
+
+    fn default_output_record(&self) -> Option<Record> {
+        self.default_switch.record().cloned()
+    }
+
+    fn app_output_record(&self) -> Option<AppRecord> {
+        self.app_redirect.record().cloned()
+    }
+
+    fn local_volumes(&self) -> LocalVolumes {
+        self.local_volumes.stored.clone()
+    }
+
+    fn set_local_volumes(&mut self, stored: LocalVolumes) {
+        self.local_volumes.replace(stored);
+    }
+
+    fn restore_default_output(&mut self) {
+        let streaming = moves_default(self.running_source().as_ref());
+        let Some((endpoints, store)) = self.default_output.as_mut() else {
+            return;
+        };
+        let lines = self
+            .default_switch
+            .restore(endpoints.as_mut(), store.as_mut(), streaming);
+        for line in lines {
+            self.log.log(|| format!("Windows session ends: {line}"));
+        }
+        if self.app_output.is_some() {
+            self.app_said.push("gone");
+            self.restore_apps("Windows session ends: ");
+        }
+        self.sync_outputs();
     }
 
     fn running_source(&self) -> Option<SourceId> {
@@ -4501,6 +5085,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
 
     fn fix_device_volume(&mut self, id: &str) {
         self.fix_followed_device_volume(id);
+    }
+
+    fn set_device_volume(&mut self, id: &str, level: f64) -> bool {
+        self.set_followed_device_level(id, level)
     }
 
     fn set_master_volume(&mut self, position: f64) {
@@ -4974,6 +5562,16 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
     }
 
+    fn follow_new_sessions(&mut self) {
+        if !self.take_new_sessions(Instant::now()) {
+            return;
+        }
+        let failures = self.sync_outputs();
+        self.report_failures(failures);
+        self.release_held_leads(false);
+        self.retime();
+    }
+
     fn poll(&mut self) -> Vec<BackendEvent> {
         self.polls += 1;
         self.follow_power();
@@ -5002,6 +5600,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         // Outputs that faded out stop, and then an ended session's capture;
         // a start that waited for them goes ahead.
         self.reap(false);
+        self.put_back_local_volumes();
         self.start_when_faded();
         self.reopen_capture_when_due();
         // A session whose capture stopped ends first. One lost because
@@ -5174,6 +5773,14 @@ impl<D: Driver> AudioBackend for Controller<D> {
         ended.extend(self.stop_unlisted_outputs());
         ended.extend(self.forget_unlisted_unplayable());
         self.tick_fresh_restarts();
+        self.sync_default_output(moves_default(self.running_source().as_ref()));
+        // Before the outputs, so one a captured app plays on is held out in
+        // this pass (S470).
+        let now = Instant::now();
+        if !self.take_new_sessions(now) {
+            self.check_routing_if_due(now);
+            self.sync_app_output(false);
+        }
         let failures = self.sync_outputs();
         self.release_held_leads(true);
         // An output that left or joined moves the others (S177).
@@ -5191,13 +5798,17 @@ impl<D: Driver> AudioBackend for Controller<D> {
         // reported of the followed outputs' own volumes.
         self.follow_device_volumes();
         self.read_device_volume_changes();
-        let now = Instant::now();
-        self.check_routing_if_due(now);
         self.follow_mix_apps(now);
         self.log_status_if_due(now);
         self.log_levels_if_due(now);
         self.log_drift(now);
         self.power.awake = Some((self.driver.wall_clock(), self.driver.awake_clock()));
+        let mut held_out = self.held_out();
+        held_out.sort();
+        if held_out != self.held_out_shown {
+            self.held_out_shown = held_out;
+            self.pending.push(BackendEvent::HeldOutChanged);
+        }
         let events = std::mem::take(&mut self.pending);
         // A device volume that changed is logged when its decision changes
         // (S201), so its event isn't.
@@ -5899,6 +6510,7 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
         BackendEvent::DeviceVolumeChanged { id } => {
             format!("output {}: its own volume changed", label(names, id))
         }
+        BackendEvent::HeldOutChanged => "the outputs held out changed".to_owned(),
         BackendEvent::CastChanged => "the Google Cast speakers changed".to_owned(),
         BackendEvent::CastIdentified { from, to } => {
             format!("Google Cast speaker {from}, added by address, is {to}")
@@ -5940,8 +6552,12 @@ mod tests {
 
     use super::*;
     use crate::audio::airplay::tests::{Call, FakeAirPlay, OPEN_TXT, device, device_at, id_of};
+    use crate::audio::app_output::tests as app_fakes;
+    use crate::audio::app_output::{Previous, render_interface};
     use crate::audio::backend::OutputKind;
     use crate::audio::capture::Activation;
+    use crate::audio::default_output::Role;
+    use crate::audio::default_output::tests as switch_fakes;
     use crate::audio::mock::{MOCK_OWN_PID, MockBackend};
     use crate::audio::now_playing::DROP_AFTER;
     use crate::audio::now_playing::fake::{FakeReader, shared_labels, track};
@@ -5985,6 +6601,624 @@ mod tests {
             })]
         );
         assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
+    }
+
+    /// The default-output seam's fakes, shared with the test.
+    type SwitchFakes = (
+        switch_fakes::Calls,
+        switch_fakes::Shared<switch_fakes::Fake>,
+        switch_fakes::Shared<switch_fakes::Store>,
+    );
+
+    fn with_switch(backend: &mut MockBackend) -> SwitchFakes {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let calls = switch_fakes::Calls::default();
+        let fake = switch_fakes::Shared(Rc::new(RefCell::new(switch_fakes::Fake::new(&calls))));
+        let store = switch_fakes::Shared(Rc::new(RefCell::new(switch_fakes::Store::new(&calls))));
+        backend.set_default_switch(Box::new(fake.clone()), Box::new(store.clone()));
+        (calls, fake, store)
+    }
+
+    fn console(fake: &switch_fakes::Shared<switch_fakes::Fake>) -> Option<String> {
+        fake.0.borrow().console.clone()
+    }
+
+    // covers: S469
+    #[test]
+    fn a_whole_system_stream_moves_the_default_and_a_stop_puts_it_back() {
+        let mut backend = backend();
+        let (_, fake, store) = with_switch(&mut backend);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(console(&fake).as_deref(), Some(switch_fakes::CABLE));
+        assert_eq!(
+            backend.default_output_record(),
+            Some(switch_fakes::the_record())
+        );
+        backend.stop();
+        assert_eq!(console(&fake).as_deref(), Some(switch_fakes::SPEAKERS));
+        assert_eq!(store.0.borrow().record, None);
+        assert_eq!(backend.default_output_record(), None);
+    }
+
+    // covers: S469
+    #[test]
+    fn a_whole_system_stream_to_no_output_leaves_the_default_alone() {
+        let mut backend = backend();
+        let (calls, fake, _) = with_switch(&mut backend);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(console(&fake).as_deref(), Some(switch_fakes::CABLE));
+        backend.set_output_enabled(SPEAKERS, false).unwrap();
+        backend.set_output_enabled(HEADPHONES, false).unwrap();
+        backend.poll();
+        assert_eq!(console(&fake).as_deref(), Some(switch_fakes::SPEAKERS));
+        backend.stop();
+        calls.borrow_mut().clear();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.poll();
+        assert!(calls.borrow().is_empty(), "{:?}", calls.borrow());
+    }
+
+    // covers: S469
+    #[test]
+    fn the_only_output_unplugged_mid_stream_puts_the_default_back() {
+        let mut backend = backend();
+        backend.set_output_enabled(HEADPHONES, false).unwrap();
+        let (_, fake, _) = with_switch(&mut backend);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(console(&fake).as_deref(), Some(switch_fakes::CABLE));
+        backend.disconnect_output(SPEAKERS);
+        backend.poll();
+        assert_eq!(console(&fake).as_deref(), Some(switch_fakes::SPEAKERS));
+    }
+
+    // covers: S469, S470
+    #[test]
+    fn a_fallback_outlasts_a_moment_with_no_output() {
+        let mut backend = backend();
+        let (calls, fake, _) = with_switch(&mut backend);
+        fake.0.borrow_mut().broken = true;
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.set_output_enabled(SPEAKERS, false).unwrap();
+        backend.set_output_enabled(HEADPHONES, false).unwrap();
+        backend.poll();
+        fake.0.borrow_mut().broken = false;
+        calls.borrow_mut().clear();
+        backend.set_output_enabled(SPEAKERS, true).unwrap();
+        backend.poll();
+        assert!(calls.borrow().is_empty(), "{:?}", calls.borrow());
+    }
+
+    // covers: S471
+    #[test]
+    fn quitting_puts_a_moved_app_back() {
+        let mut backend = backend();
+        with_switch(&mut backend);
+        let (apps, _) = with_app_outputs(&mut backend, None);
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.play_on(PLAYER_PID, SPEAKERS);
+        backend.poll();
+        assert_eq!(player_output(&apps), render_interface(switch_fakes::CABLE));
+        backend.shut_down();
+        assert_eq!(player_output(&apps), "");
+    }
+
+    // covers: S469
+    #[test]
+    fn quitting_puts_the_default_back() {
+        let mut backend = backend();
+        let (_, fake, _) = with_switch(&mut backend);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(console(&fake).as_deref(), Some(switch_fakes::CABLE));
+        backend.shut_down();
+        assert_eq!(console(&fake).as_deref(), Some(switch_fakes::SPEAKERS));
+    }
+
+    // covers: S469
+    #[test]
+    fn a_record_left_on_disk_is_restored_before_any_stream() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let mut backend = backend();
+        let calls = switch_fakes::Calls::default();
+        let mut left = switch_fakes::Fake::new(&calls);
+        left.console = Some(switch_fakes::CABLE.to_owned());
+        left.multimedia = Some(switch_fakes::CABLE.to_owned());
+        let fake = switch_fakes::Shared(Rc::new(RefCell::new(left)));
+        let mut kept = switch_fakes::Store::new(&calls);
+        kept.record = Some(switch_fakes::the_record());
+        let store = switch_fakes::Shared(Rc::new(RefCell::new(kept)));
+        backend.set_default_switch(Box::new(fake.clone()), Box::new(store.clone()));
+        assert_eq!(console(&fake).as_deref(), Some(switch_fakes::SPEAKERS));
+        assert_eq!(store.0.borrow().record, None);
+    }
+
+    // covers: S469
+    #[test]
+    fn one_app_or_an_input_leaves_the_default_alone() {
+        let mut backend = backend();
+        let (calls, _, _) = with_switch(&mut backend);
+        let source = SourceId::App {
+            root_pid: PLAYER_PID,
+        };
+        backend.start(&source).unwrap();
+        backend.poll();
+        backend.stop();
+        assert!(calls.borrow().is_empty(), "{:?}", calls.borrow());
+    }
+
+    // covers: S470
+    #[test]
+    fn without_the_switch_the_default_output_gets_no_copy_and_stays_on() {
+        let mut backend = backend();
+        let (_, fake, _) = with_switch(&mut backend);
+        fake.0.borrow_mut().broken = true;
+        backend.set_default_output(SPEAKERS);
+        backend.list_outputs().unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(playing(&backend), [HEADPHONES]);
+        let speakers = backend
+            .outputs()
+            .into_iter()
+            .find(|output| output.id == SPEAKERS)
+            .expect("listed");
+        assert!(speakers.enabled && speakers.plays_original);
+        backend.stop();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    // covers: S469, S470
+    #[test]
+    fn the_session_query_restores_and_the_stream_runs_on_without_a_copy() {
+        let mut backend = backend();
+        let (_, fake, _) = with_switch(&mut backend);
+        backend.set_default_output(SPEAKERS);
+        backend.list_outputs().unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        backend.restore_default_output();
+        assert_eq!(console(&fake).as_deref(), Some(switch_fakes::SPEAKERS));
+        assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
+        assert_eq!(playing(&backend), [HEADPHONES]);
+    }
+
+    // covers: S470
+    #[test]
+    fn an_output_the_app_plays_on_gets_no_copy() {
+        let mut backend = backend();
+        with_switch(&mut backend);
+        backend.set_default_output(SPEAKERS);
+        backend.list_outputs().unwrap();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        backend.play_on(PLAYER_PID, HEADPHONES);
+        backend.check_routing_now();
+        backend.poll();
+        assert_eq!(playing(&backend), [SPEAKERS]);
+        let headphones = backend
+            .outputs()
+            .into_iter()
+            .find(|output| output.id == HEADPHONES)
+            .expect("listed");
+        assert!(headphones.enabled && headphones.plays_original);
+    }
+
+    // covers: S470
+    #[test]
+    fn an_output_an_app_of_a_mix_plays_on_gets_no_copy() {
+        let mut backend = backend();
+        with_switch(&mut backend);
+        backend.set_default_output(SPEAKERS);
+        backend.list_outputs().unwrap();
+        backend
+            .start(&SourceId::Apps {
+                root_pids: vec![PLAYER_PID],
+                executables: vec!["player.exe".to_owned()],
+            })
+            .unwrap();
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        backend.play_on(PLAYER_PID, HEADPHONES);
+        backend.check_routing_now();
+        backend.poll();
+        assert_eq!(playing(&backend), [SPEAKERS]);
+    }
+
+    // The adapter redraws only on a poll with events, so each flip of a
+    // row's held-out state must come with one.
+    // covers: S470
+    #[test]
+    fn a_held_out_output_that_changes_raises_an_event() {
+        fn headphones_held(backend: &MockBackend) -> bool {
+            backend
+                .outputs()
+                .into_iter()
+                .any(|output| output.id == HEADPHONES && output.plays_original)
+        }
+        let mut backend = backend();
+        with_switch(&mut backend);
+        backend.set_default_output(SPEAKERS);
+        backend.list_outputs().unwrap();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.poll();
+        backend.play_on(PLAYER_PID, HEADPHONES);
+        backend.check_routing_now();
+        let held = backend.poll();
+        assert!(headphones_held(&backend));
+        assert!(!held.is_empty(), "held out without an event");
+        backend.pause_on(PLAYER_PID, HEADPHONES);
+        backend.play_on(PLAYER_PID, SPEAKERS);
+        for _ in 0..=routing::HOLD_CHECKS + 1 {
+            backend.check_routing_now();
+            let events = backend.poll();
+            if !headphones_held(&backend) {
+                assert!(!events.is_empty(), "cleared without an event");
+                return;
+            }
+        }
+        panic!("the headphones stayed held out");
+    }
+
+    // covers: S470
+    #[test]
+    fn an_output_the_app_already_plays_on_gets_no_copy_at_the_start() {
+        let mut backend = backend();
+        with_switch(&mut backend);
+        backend.set_default_output(SPEAKERS);
+        backend.list_outputs().unwrap();
+        backend.play_on(PLAYER_PID, HEADPHONES);
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        assert_eq!(playing(&backend), [SPEAKERS]);
+        backend.poll();
+        backend.check_routing_now();
+        backend.poll();
+        assert_eq!(playing(&backend), [SPEAKERS], "an app that stays is held");
+    }
+
+    /// The per-app output seam's fakes, shared with the test.
+    type AppFakes = (
+        app_fakes::Shared<app_fakes::Fake>,
+        app_fakes::Shared<app_fakes::Store>,
+    );
+
+    fn with_app_outputs(backend: &mut MockBackend, record: Option<AppRecord>) -> AppFakes {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let calls = app_fakes::Calls::default();
+        let player = [app_fakes::process(PLAYER_PID, "player.exe")];
+        let fake = app_fakes::Shared(Rc::new(RefCell::new(app_fakes::Fake::new(&calls, &player))));
+        let store = app_fakes::Shared(Rc::new(RefCell::new(app_fakes::Store {
+            calls,
+            record,
+            failing: false,
+        })));
+        backend.set_app_output(Box::new(fake.clone()), Box::new(store.clone()));
+        (fake, store)
+    }
+
+    fn player_output(fake: &app_fakes::Shared<app_fakes::Fake>) -> String {
+        fake.0.borrow().output("player.exe", Role::Console)
+    }
+
+    // covers: S470, S471
+    #[test]
+    fn an_app_with_no_active_session_is_moved_as_the_stream_starts() {
+        let mut backend = backend();
+        with_switch(&mut backend);
+        let (apps, _) = with_app_outputs(&mut backend, None);
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        assert_eq!(player_output(&apps), render_interface(switch_fakes::CABLE));
+    }
+
+    // covers: S470, S471
+    #[test]
+    fn a_new_session_of_the_app_is_checked_at_once() {
+        let mut backend = backend();
+        with_switch(&mut backend);
+        backend.set_default_output(SPEAKERS);
+        backend.list_outputs().unwrap();
+        let (apps, _) = with_app_outputs(&mut backend, None);
+        apps.0.borrow_mut().sessionless.push(PLAYER_PID);
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.poll();
+        assert_eq!(player_output(&apps), "");
+        apps.0.borrow_mut().sessionless.clear();
+        backend.open_session(PLAYER_PID, SPEAKERS);
+        backend.poll();
+        assert_eq!(player_output(&apps), render_interface(switch_fakes::CABLE));
+        assert_eq!(playing(&backend), [HEADPHONES]);
+    }
+
+    // covers: S470, S471
+    #[test]
+    fn a_session_turning_active_holds_its_output_out_before_the_next_poll() {
+        let mut backend = backend();
+        with_switch(&mut backend);
+        backend.set_default_output(SPEAKERS);
+        backend.list_outputs().unwrap();
+        let (apps, _) = with_app_outputs(&mut backend, None);
+        apps.0.borrow_mut().sessionless.push(PLAYER_PID);
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.poll();
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        apps.0.borrow_mut().sessionless.clear();
+        backend.open_session(PLAYER_PID, SPEAKERS);
+        backend.follow_new_sessions();
+        assert_eq!(playing(&backend), [HEADPHONES]);
+        assert_eq!(player_output(&apps), render_interface(switch_fakes::CABLE));
+    }
+
+    // covers: S471
+    #[test]
+    fn a_second_instance_of_the_app_outside_the_captured_tree_is_never_moved_uncaptured() {
+        const OTHER_PID: u32 = PLAYER_PID + 10;
+        let (mut backend, (apps, _)) = player_on_speakers();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.poll();
+        assert_eq!(player_output(&apps), render_interface(switch_fakes::CABLE));
+        backend.add_app(OTHER_PID, "player.exe");
+        backend.open_session(OTHER_PID, SPEAKERS);
+        backend.follow_new_sessions();
+        let captured = match backend.driver().capture_target() {
+            Some(CaptureTarget::Loopback(activation)) => activation.target_pid == OTHER_PID,
+            Some(CaptureTarget::Mix(trees)) => trees
+                .iter()
+                .any(|activation| activation.target_pid == OTHER_PID),
+            _ => false,
+        };
+        let moved = player_output(&apps) == render_interface(switch_fakes::CABLE);
+        assert!(captured || !moved, "the second instance plays nowhere");
+    }
+
+    /// The backend of [`backend`] moving the default and apps' outputs, with
+    /// the cable listed, Speakers the default, and the player playing there.
+    fn player_on_speakers() -> (MockBackend, AppFakes) {
+        let mut backend = backend();
+        with_switch(&mut backend);
+        backend.set_default_output(SPEAKERS);
+        backend.connect_output_as(CABLE, "Cable Input", OutputKind::Virtual);
+        backend.list_outputs().unwrap();
+        let fakes = with_app_outputs(&mut backend, None);
+        backend.play_on(PLAYER_PID, SPEAKERS);
+        (backend, fakes)
+    }
+
+    // covers: S470, S471
+    #[test]
+    fn an_app_still_on_its_output_at_the_first_poll_gives_it_back_at_the_next_check() {
+        let (mut backend, (apps, _)) = player_on_speakers();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        assert_eq!(player_output(&apps), render_interface(switch_fakes::CABLE));
+        backend.poll();
+        assert_eq!(playing(&backend), [HEADPHONES]);
+        backend.move_session(PLAYER_PID, SPEAKERS, CABLE);
+        backend.check_routing_now();
+        backend.poll();
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    // covers: S470, S471
+    #[test]
+    fn an_app_that_follows_the_move_late_gives_its_output_back_within_a_second() {
+        let (mut backend, _) = player_on_speakers();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.poll();
+        assert_eq!(playing(&backend), [HEADPHONES]);
+        backend.move_session(PLAYER_PID, SPEAKERS, CABLE);
+        backend.check_routing_if_due(Instant::now() + Duration::from_millis(300));
+        backend.poll();
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    // covers: S470, S471
+    #[test]
+    fn an_app_that_opens_a_session_mid_stream_and_follows_the_move_gives_its_output_back_within_half_a_second()
+     {
+        let mut backend = backend();
+        with_switch(&mut backend);
+        backend.set_default_output(SPEAKERS);
+        backend.connect_output_as(CABLE, "Cable Input", OutputKind::Virtual);
+        backend.list_outputs().unwrap();
+        let (apps, _) = with_app_outputs(&mut backend, None);
+        apps.0.borrow_mut().sessionless.push(PLAYER_PID);
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.poll();
+        apps.0.borrow_mut().sessionless.clear();
+        backend.open_session(PLAYER_PID, SPEAKERS);
+        backend.poll();
+        assert_eq!(player_output(&apps), render_interface(switch_fakes::CABLE));
+        assert_eq!(playing(&backend), [HEADPHONES]);
+        backend.move_session(PLAYER_PID, SPEAKERS, CABLE);
+        backend.check_routing_if_due(Instant::now() + Duration::from_millis(300));
+        backend.poll();
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    // covers: S470, S471
+    #[test]
+    fn an_app_started_after_a_fade_gives_its_output_back_at_the_next_check() {
+        let (mut backend, (apps, _)) = player_on_speakers();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.driver().hold_fades(true);
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.driver().hold_fades(false);
+        backend.poll();
+        assert_eq!(player_output(&apps), render_interface(switch_fakes::CABLE));
+        assert_eq!(playing(&backend), [HEADPHONES]);
+        backend.move_session(PLAYER_PID, SPEAKERS, CABLE);
+        backend.check_routing_now();
+        backend.poll();
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    // covers: S470, S471
+    #[test]
+    fn an_output_the_app_leaves_for_the_move_at_the_start_plays_at_the_first_poll() {
+        let mut backend = backend();
+        with_switch(&mut backend);
+        backend.set_default_output(SPEAKERS);
+        backend.connect_output_as(CABLE, "Cable Input", OutputKind::Virtual);
+        backend.list_outputs().unwrap();
+        let (apps, _) = with_app_outputs(&mut backend, None);
+        backend.play_on(PLAYER_PID, SPEAKERS);
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        assert_eq!(player_output(&apps), render_interface(switch_fakes::CABLE));
+        backend.move_session(PLAYER_PID, SPEAKERS, CABLE);
+        backend.poll();
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    // covers: S471
+    #[test]
+    fn an_app_source_moves_only_that_apps_output_and_a_stop_puts_it_back() {
+        let mut backend = backend();
+        let (_, switch, _) = with_switch(&mut backend);
+        let (apps, store) = with_app_outputs(&mut backend, None);
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.play_on(PLAYER_PID, SPEAKERS);
+        backend.poll();
+        assert_eq!(player_output(&apps), render_interface(switch_fakes::CABLE));
+        assert_eq!(console(&switch).as_deref(), Some(switch_fakes::SPEAKERS));
+        assert!(backend.app_output_record().is_some());
+        backend.stop();
+        assert_eq!(player_output(&apps), "");
+        assert_eq!(store.0.borrow().record, None);
+        assert_eq!(backend.app_output_record(), None);
+    }
+
+    // covers: S471
+    #[test]
+    fn the_whole_system_never_moves_an_apps_output() {
+        let mut backend = backend();
+        with_switch(&mut backend);
+        let (apps, _) = with_app_outputs(&mut backend, None);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.play_on(PLAYER_PID, SPEAKERS);
+        backend.poll();
+        assert_eq!(player_output(&apps), "");
+    }
+
+    // covers: S471
+    #[test]
+    fn the_next_launch_puts_back_an_app_a_crash_left_moved() {
+        let mut backend = backend();
+        with_switch(&mut backend);
+        let silent = render_interface(switch_fakes::CABLE);
+        let record = AppRecord {
+            silent: silent.clone(),
+            apps: vec![Previous {
+                exe: "player.exe".into(),
+                console: String::new(),
+                multimedia: String::new(),
+            }],
+        };
+        let calls = app_fakes::Calls::default();
+        let player = [app_fakes::process(PLAYER_PID, "player.exe")];
+        let mut fake = app_fakes::Fake::new(&calls, &player);
+        fake.put("player.exe", Role::Console, &silent);
+        fake.put("player.exe", Role::Multimedia, &silent);
+        let fake = app_fakes::Shared(std::rc::Rc::new(std::cell::RefCell::new(fake)));
+        let store = app_fakes::Shared(std::rc::Rc::new(std::cell::RefCell::new(
+            app_fakes::Store {
+                calls,
+                record: Some(record),
+                failing: false,
+            },
+        )));
+        backend.set_app_output(Box::new(fake.clone()), Box::new(store.clone()));
+        assert_eq!(player_output(&fake), "");
+        assert_eq!(store.0.borrow().record, None);
+    }
+
+    // covers: S471
+    #[test]
+    fn without_a_silent_endpoint_no_app_is_moved() {
+        let mut backend = backend();
+        let (apps, _) = with_app_outputs(&mut backend, None);
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.play_on(PLAYER_PID, SPEAKERS);
+        backend.poll();
+        assert_eq!(player_output(&apps), "");
+    }
+
+    // covers: S382
+    #[test]
+    fn with_the_default_switch_no_double_audio_notice_is_posted() {
+        let mut backend = backend();
+        with_switch(&mut backend);
+        backend.connect_output_as(TV, "TV", OutputKind::Hdmi);
+        backend.list_outputs().unwrap();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.play_on(PLAYER_PID, TV);
+        assert!(check_routing(&mut backend).is_empty());
     }
 
     // covers: S380
@@ -10125,7 +11359,7 @@ mod tests {
     fn the_now_playing_art_rests_whenever_streaming_is_off() {
         use crate::ambient::{Driver, NO_COVER, WINDOW_DENSITY, WINDOW_SLOT};
         use crate::window_rules::ambient_breath::OPACITY;
-        let idle = Some(std::time::Duration::from_secs_f64(1.0 / 15.0));
+        let idle = Some(std::time::Duration::from_secs_f64(1.0 / 30.0));
         let mut backend = backend();
         let mut art = Driver::default();
         let frames = |backend: &mut MockBackend, art: &mut Driver, seconds: f64| {

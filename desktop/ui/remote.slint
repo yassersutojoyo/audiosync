@@ -1,4 +1,4 @@
-// View > Web Remote…: the setting, and while it is on, the address with its QR
+// The gear's Web Remote…: the setting, and while it is on, the address with its QR
 // code, the pairing code and the paired devices. Closing it keeps the remote on.
 
 import { Button } from "std-widgets.slint";
@@ -96,7 +96,7 @@ export component RemoteWindow inherits Window {
     callback port-submitted(string);
     pure callback use-port-enabled(string, int, bool) -> bool;
     callback close-requested();
-    // Ctrl+Q, File > Exit from this window.
+    // Ctrl+Q, the gear's Exit, from this window.
     callback exit-requested();
     // Ctrl+1 to Ctrl+9: recall the preset in that place (spec S261).
     callback preset-shortcut(int);
@@ -113,6 +113,7 @@ export component RemoteWindow inherits Window {
     preferred-width: 460px;
     preferred-height: 640px;
     default-font-family: Fluent.font;
+    default-font-weight: Fluent.weight-regular;
     default-font-size: Tokens.font-size-body;
     forward-focus: keys;
 
@@ -376,7 +377,7 @@ export component RemoteWindow inherits Window {
                                 text: root.code;
                                 color: Tokens.text;
                                 font-size: Tokens.font-size-pairing-code;
-                                font-weight: 600;
+                                font-weight: Fluent.weight-semibold;
                                 letter-spacing: 4px;
                                 accessible-label: Strings.remote-code-label(root.code-spoken);
                             }

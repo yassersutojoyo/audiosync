@@ -2,12 +2,14 @@
 // Zone), the PIN prompt of an Apple TV pairing and the password
 // prompt of a speaker protected by a password. Enter confirms,
 // Escape cancels wherever the focus is: in the content's key scope or on a
-// button (DialogButton).
+// button (DialogButton). Add by Address is a sheet the main window shows,
+// not a window: CastSheet holds its state.
 
+import { Spinner } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { PinPhase } from "types.slint";
-import { Announcer, Card, DialogButton, Fluent, Glyph, Glyphs, TextField } from "widgets.slint";
+import { Announcer, Card, DialogButton, Fluent, Glyph, Glyphs, SmallButton, TextField } from "widgets.slint";
 
 export component ZoneNameDialog inherits Dialog {
     in property <string> heading;
@@ -27,6 +29,7 @@ export component ZoneNameDialog inherits Dialog {
     icon: @image-url("../res/audiosync-256.png");
     background: Tokens.background;
     default-font-family: Fluent.font;
+    default-font-weight: Fluent.weight-regular;
     default-font-size: Tokens.font-size-body;
     // A fixed width: X11 showed it at its layout's narrowest.
     width: 380px;
@@ -138,6 +141,7 @@ export component PinDialog inherits Dialog {
     icon: @image-url("../res/audiosync-256.png");
     background: Tokens.background;
     default-font-family: Fluent.font;
+    default-font-weight: Fluent.weight-regular;
     default-font-size: Tokens.font-size-body;
     preferred-width: 380px;
 
@@ -264,6 +268,7 @@ export component PasswordDialog inherits Dialog {
     icon: @image-url("../res/audiosync-256.png");
     background: Tokens.background;
     default-font-family: Fluent.font;
+    default-font-weight: Fluent.weight-regular;
     default-font-size: Tokens.font-size-body;
     preferred-width: 380px;
 
@@ -306,7 +311,7 @@ export component PasswordDialog inherits Dialog {
                             text: root.speaker;
                             font-family: Fluent.display-font;
                             font-size: Tokens.font-size-body;
-                            font-weight: 600;
+                            font-weight: Fluent.weight-semibold;
                             color: Tokens.text;
                             vertical-alignment: center;
                             overflow: elide;
@@ -392,15 +397,17 @@ export component PasswordDialog inherits Dialog {
 
 // Add by Address…: one field for a Google Cast speaker's IP address or host
 // name, with an optional port. Enter adds, Escape cancels. An address that
-// is turned down keeps the dialog open with the reason above the field.
-export component CastAddressDialog inherits Dialog {
+// is turned down keeps the dialog open with the reason under the field.
+// Add by Address's state, shared by the main window's sheet and the app.
+export global CastSheet {
+    in-out property <bool> shown;
     in-out property <string> address;
     // Why the last address was turned down; "" while there is none.
     in property <string> error;
     // 0 until an address is turned down, then 1 and 2 by turns: it picks
     // the live region that says the reason, so the same reason twice in a
     // row lands in a new region, which Narrator reads again.
-    in property <int> refusals;
+    in-out property <int> refusals;
     out property <string> said-odd: Math.mod(root.refusals, 2) == 1 ? root.error : "";
     out property <string> said-even: root.refusals > 0 && Math.mod(root.refusals, 2) == 0 ? root.error : "";
     callback confirmed(string);
@@ -411,88 +418,95 @@ export component CastAddressDialog inherits Dialog {
     in property <bool> checking;
     // Add waits for an address, as on the Mac.
     out property <bool> can-add: !root.checking && !root.blank(root.address);
-
-    title: Strings.cast-add-address-title;
-    icon: @image-url("../res/audiosync-256.png");
-    background: Tokens.background;
-    default-font-family: Fluent.font;
-    default-font-size: Tokens.font-size-body;
-    preferred-width: 420px;
-
-    // The height its layout needs at its width, which the window grows to.
-    out property <length> fit-height: root.min-height;
-
-    // Bumped each time the dialog opens or turns an address down, so the
+    // Bumped each time the sheet opens or turns an address down, so the
     // field takes the cursor.
-    property <int> focus-request;
+    out property <int> focus-request;
 
     public function prepare() {
         root.focus-request += 1;
     }
+}
 
-    FocusScope {
-        key-pressed(event) => {
-            if event.text == Key.Escape || (event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text.to-lowercase() == "w") {
-                root.cancelled();
-                return accept;
-            }
-            return reject;
+// Add by Address as the Mac's sheet: 420 px, its title, note and field,
+// then Cancel and Add at the right, Cancel first.
+export component CastAddressSheet inherits FocusScope {
+    width: 420px;
+    height: layout.preferred-height;
+    focus-on-click: false;
+    focus-on-tab-navigation: false;
+    accessible-role: groupbox;
+    accessible-label: Strings.cast-add-address-title;
+    key-pressed(event) => {
+        if event.text == Key.Escape || (event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text.to-lowercase() == "w") {
+            CastSheet.cancelled();
+            return accept;
+        }
+        return reject;
+    }
+
+    Rectangle {
+        background: Tokens.surface;
+        // As the Mac's sheet: no edge or shadow on light, where the dimmed window sets it off.
+        border-width: Tokens.dark ? 1px : 0px;
+        border-color: Fluent.stroke;
+        border-radius: 20px;
+        // An unblurred shadow still draws, 8 px under the sheet.
+        drop-shadow-blur: Tokens.dark ? 24px : 0px;
+        drop-shadow-offset-y: 8px;
+        drop-shadow-color: Tokens.dark ? #00000040 : transparent;
+    }
+
+    Announcer {
+        said: CastSheet.said-odd;
+    }
+
+    Announcer {
+        said: CastSheet.said-even;
+    }
+
+    Announcer {
+        said: CastSheet.checking ? Strings.cast-address-checking : "";
+    }
+
+    layout := VerticalLayout {
+        padding: 20px;
+        spacing: 12px;
+
+        Text {
+            text: Strings.cast-add-address-title;
+            color: Tokens.text;
+            font-size: Tokens.font-size-title3;
+            font-weight: Fluent.weight-semibold;
+            wrap: word-wrap;
+            accessible-role: none;
         }
 
-        Announcer {
-            said: root.said-odd;
+        Text {
+            text: Strings.cast-add-address-message;
+            color: Tokens.secondary-text;
+            // Segoe UI sets this 2% wider than the Mac's 12 pt, which pushed "8009." to a third line.
+            font-size: Tokens.font-size-callout - 0.25px;
+            wrap: word-wrap;
         }
 
-        Announcer {
-            said: root.said-even;
-        }
-
-        Announcer {
-            said: root.checking ? Strings.cast-address-checking : "";
-        }
-
-        VerticalLayout {
-            padding: 18px;
-            spacing: 12px;
+        HorizontalLayout {
+            spacing: 8px;
 
             Text {
-                text: Strings.cast-add-address-message;
+                text: Strings.cast-address-label;
                 color: Tokens.text;
-                wrap: word-wrap;
-            }
-
-            // A turned-down address sits on the notice color, as a wrong
-            // PIN does.
-            if root.error != "": Rectangle {
-                background: Tokens.notice;
-                border-radius: Fluent.radius-control;
-
-                HorizontalLayout {
-                    padding: 8px;
-                    spacing: 8px;
-
-                    Glyph {
-                        glyph: Glyphs.warning;
-                        font-size: 14px;
-                        vertical-alignment: top;
-                    }
-
-                    Text {
-                        text: root.error;
-                        color: Tokens.text;
-                        wrap: word-wrap;
-                        horizontal-stretch: 1;
-                    }
-                }
+                vertical-alignment: center;
+                accessible-role: none;
             }
 
             TextField {
-                property <int> focus-request: root.focus-request;
-                text <=> root.address;
-                read-only: root.checking;
-                placeholder-text: Strings.cast-address-placeholder;
+                property <int> focus-request: CastSheet.focus-request;
+                boxed: true;
+                text <=> CastSheet.address;
+                read-only: CastSheet.checking;
+                placeholder-text: Strings.cast-address-label;
                 accessible-label: Strings.cast-address-label;
-                accessible-description: root.error != "" ? root.error : Strings.cast-add-address-message;
+                accessible-description: CastSheet.error != "" ? CastSheet.error : Strings.cast-add-address-message;
                 init => {
                     self.focus();
                 }
@@ -501,37 +515,56 @@ export component CastAddressDialog inherits Dialog {
                     self.select-all();
                 }
                 accepted => {
-                    if root.can-add {
-                        root.confirmed(root.address);
+                    if CastSheet.can-add {
+                        CastSheet.confirmed(CastSheet.address);
                     }
                 }
             }
         }
-    }
 
-    DialogButton {
-        text: root.checking ? Strings.cast-address-checking : Strings.add;
-        primary: true;
-        active: root.can-add;
-        dialog-button-role: accept;
-        clicked => {
-            if root.can-add {
-                root.confirmed(root.address);
+        if CastSheet.error != "": Text {
+            text: CastSheet.error;
+            color: Tokens.error-text;
+            font-size: Tokens.font-size-callout;
+            wrap: word-wrap;
+        }
+
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+
+            if CastSheet.checking: VerticalLayout {
+                alignment: center;
+
+                Spinner {
+                    indeterminate: true;
+                    width: 16px;
+                    height: 16px;
+                    accessible-label: Strings.cast-address-checking;
+                }
             }
-        }
-        escape-pressed => {
-            root.cancelled();
-        }
-    }
 
-    DialogButton {
-        text: Strings.cancel;
-        dialog-button-role: reject;
-        clicked => {
-            root.cancelled();
-        }
-        escape-pressed => {
-            root.cancelled();
+            SmallButton {
+                height: 26px;
+                font-size: Tokens.font-size-body;
+                text: Strings.cancel;
+                clicked => {
+                    CastSheet.cancelled();
+                }
+            }
+
+            SmallButton {
+                height: 26px;
+                font-size: Tokens.font-size-body;
+                text: CastSheet.checking ? Strings.cast-address-checking : Strings.add;
+                dimmed: !CastSheet.can-add;
+                accessible-enabled: CastSheet.can-add;
+                clicked => {
+                    if CastSheet.can-add {
+                        CastSheet.confirmed(CastSheet.address);
+                    }
+                }
+            }
         }
     }
 }
