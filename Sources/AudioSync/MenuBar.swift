@@ -2966,6 +2966,8 @@ struct MasterMuteButton: View {
 struct MasterSlider: View {
     @ObservedObject var model: AppModel
     let text: UIStrings
+    @StateObject private var click = SliderClick()
+    @FocusState private var focused: Bool
     static let height: CGFloat = 18
 
     static func key(_ key: KeyEquivalent) -> MasterTrack.Key? {
@@ -3000,6 +3002,7 @@ struct MasterSlider: View {
             .frame(width: width, height: geo.size.height)
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0).onChanged { drag in
+                if !click.clicked { click.clicked = true }
                 model.actions.setMaster(MasterTrack.level(at: drag.location.x, width: width))
             })
         }
@@ -3009,7 +3012,12 @@ struct MasterSlider: View {
             model.actions.setMaster(MasterTrack.level(afterScroll: Double(up), precise: event.hasPreciseScrollingDeltas,
                                                       from: model.master))
         })
-        .focusable()
+        // As the equalizer bands: NSSlider's rule, the ring only under keyboard navigation, a clicked slider keeps the arrows.
+        .focusable(interactions: click.clicked ? .edit : .activate)
+        .focused($focused)
+        .focusEffectDisabled(!NSApp.isFullKeyboardAccessEnabled)
+        .onChange(of: click.clicked) { _, now in if now { focused = true } }
+        .onChange(of: focused) { _, now in if !now { click.clicked = false } }
         .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow, .pageUp, .pageDown, .home, .end]) { press in
             guard let key = MasterSlider.key(press.key) else { return .ignored }
             model.actions.setMaster(MasterTrack.level(after: key, from: model.master))

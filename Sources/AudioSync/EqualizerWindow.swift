@@ -120,8 +120,8 @@ private final class EqualizerPanel: NSWindow {
 
 private let accent = Brand.teal
 
-/// Set by a click on a band, which then takes keyboard focus as a text field does.
-private final class SliderClick: ObservableObject {
+/// Set by a click on a band or the master slider, which then takes keyboard focus as a text field does.
+final class SliderClick: ObservableObject {
     @Published var clicked = false
 }
 
@@ -278,6 +278,8 @@ struct VerticalSlider: View {
             // Edit focus only after a click, so Tab reaches the bands only with keyboard navigation on.
             .focusable(interactions: click.clicked ? .edit : .activate)
             .focused($focused)
+            // NSSlider's rule: the ring only under keyboard navigation, a clicked band keeps the arrows.
+            .focusEffectDisabled(!NSApp.isFullKeyboardAccessEnabled)
             .onChange(of: click.clicked) { _, now in if now { focused = true } }
             .onChange(of: focused) { _, now in if !now { click.clicked = false } }
             .onKeyPress(.upArrow) { nudge(1); return .handled }
