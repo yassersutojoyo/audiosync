@@ -125,6 +125,12 @@ const LEVEL_INTERVAL: Duration = Duration::from_secs(10);
 /// ([`routing`](super::routing)).
 const ROUTING_INTERVAL: Duration = Duration::from_secs(3);
 
+/// How often the double-audio check runs while an app source may still be
+/// following its move at the start, for at most [`START_ROUTING_WINDOW`].
+const START_ROUTING_INTERVAL: Duration = Duration::from_millis(250);
+
+const START_ROUTING_WINDOW: Duration = Duration::from_secs(2);
+
 /// How often a session of several apps looks for apps whose audio sessions
 /// came or went: each app is its own loopback in the running mix.
 const MIX_FOLLOW_INTERVAL: Duration = Duration::from_secs(2);
@@ -834,6 +840,9 @@ struct RoutingState {
     /// The endpoints an app source played on as it started, which the app
     /// may be leaving for its move (S471): each drops at its first idle check.
     at_start: Vec<String>,
+    /// Until when [`START_ROUTING_INTERVAL`] applies while `at_start` isn't
+    /// empty.
+    at_start_until: Option<Instant>,
     /// What was last reported: empty while the source is heard only through
     /// AudioSync.
     reported: Vec<DirectPath>,
@@ -4207,6 +4216,7 @@ impl<D: Driver> Controller<D> {
                 .map(|played| played.endpoint_id.clone())
                 .collect();
             self.hold_at_start_briefly();
+            self.routing.at_start_until = Some(Instant::now() + START_ROUTING_WINDOW);
             self.routing.last_check = None;
         }
         let failures = self.sync_outputs();
@@ -4460,9 +4470,19 @@ impl<D: Driver> Controller<D> {
         let due = self
             .routing
             .last_check
-            .is_none_or(|last| now.saturating_duration_since(last) >= ROUTING_INTERVAL);
+            .is_none_or(|last| now.saturating_duration_since(last) >= self.routing_interval(now));
         if due {
             self.check_routing(now);
+        }
+    }
+
+    fn routing_interval(&self, now: Instant) -> Duration {
+        let following = !self.routing.at_start.is_empty()
+            && self.routing.at_start_until.is_some_and(|until| now < until);
+        if following {
+            START_ROUTING_INTERVAL
+        } else {
+            ROUTING_INTERVAL
         }
     }
 
@@ -6847,6 +6867,23 @@ mod tests {
         assert_eq!(playing(&backend), [HEADPHONES]);
         backend.move_session(PLAYER_PID, SPEAKERS, CABLE);
         backend.check_routing_now();
+        backend.poll();
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    // covers: S470, S471
+    #[test]
+    fn an_app_that_follows_the_move_late_gives_its_output_back_within_a_second() {
+        let (mut backend, _) = player_on_speakers();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.poll();
+        assert_eq!(playing(&backend), [HEADPHONES]);
+        backend.move_session(PLAYER_PID, SPEAKERS, CABLE);
+        backend.check_routing_if_due(Instant::now() + Duration::from_millis(300));
         backend.poll();
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
     }
