@@ -2344,8 +2344,8 @@ component NowPlayingCard inherits VerticalLayout {
     in property <SlideLook> slide;
     in property <OutgoingSong> outgoing;
     // Where the cover sits in the window, for the incoming cover above it.
-    out property <length> tile-x: tile.absolute-position.x;
-    out property <length> tile-y: tile.absolute-position.y;
+    out property <length> tile-x: place.absolute-position.x;
+    out property <length> tile-y: place.absolute-position.y;
     // As the player reports them, -1 where it doesn't take the command:
     // shuffle 0 off, 1 on; repeat 0 off, 1 all, 2 one.
     in property <int> shuffle: -1;
@@ -2400,34 +2400,40 @@ component NowPlayingCard inherits VerticalLayout {
         padding-top: 2px;
         spacing: 4px;
 
-        tile := Rectangle {
-            property <bool> has-artwork: root.slide.sliding ? root.outgoing.has-artwork : root.has-artwork;
+        // Unscaled, so the incoming cover lands where the old one shrinks from.
+        place := Rectangle {
             width: root.cover-size;
             height: root.cover-size;
-            border-radius: 10px;
-            clip: true;
-            background: Tokens.text.with-alpha(Tokens.secondary-text-opacity * 0.15);
-            transform-scale: 1 - root.slide.old-shrink;
-            opacity: 1 - root.slide.old-fade;
 
-            if tile.has-artwork: Image {
-                width: parent.width;
-                height: parent.height;
-                source: root.slide.sliding ? root.outgoing.artwork : root.artwork;
-                image-fit: cover;
-                accessible-role: none;
-            }
+            tile := Rectangle {
+                property <bool> has-artwork: root.slide.sliding ? root.outgoing.has-artwork : root.has-artwork;
+                width: root.cover-size;
+                height: root.cover-size;
+                border-radius: 10px;
+                clip: true;
+                background: Tokens.text.with-alpha(Tokens.secondary-text-opacity * 0.15);
+                transform-scale: 1 - root.slide.old-shrink;
+                opacity: 1 - root.slide.old-fade;
 
-            if !tile.has-artwork: Glyph {
-                width: parent.width;
-                height: parent.height;
-                glyph: Glyphs.music-note;
-                color: Tokens.secondary-text;
-                font-size: 28px;
-            }
+                if tile.has-artwork: Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: root.slide.sliding ? root.outgoing.artwork : root.artwork;
+                    image-fit: cover;
+                    accessible-role: none;
+                }
 
-            Rectangle {
-                background: #000000.with-alpha(root.slide.old-dim);
+                if !tile.has-artwork: Glyph {
+                    width: parent.width;
+                    height: parent.height;
+                    glyph: Glyphs.music-note;
+                    color: Tokens.secondary-text;
+                    font-size: 28px;
+                }
+
+                Rectangle {
+                    background: #000000.with-alpha(root.slide.old-dim);
+                }
             }
         }
 
@@ -2609,6 +2615,9 @@ export component MainWindow inherits Window {
     in property <image> now-playing-artwork;
     in property <AmbientLook> now-playing-ambient;
     in property <SlideLook> now-playing-slide;
+    // While a slide moves, each frame takes its look at its own tick.
+    in property <bool> now-playing-moving;
+    property <SlideLook> now-playing-look: root.now-playing-moving ? TrackMotion.slide(animation-tick()) : root.now-playing-slide;
     in property <OutgoingSong> now-playing-outgoing;
     property <length> now-playing-tile-x;
     property <length> now-playing-tile-y;
@@ -3294,7 +3303,7 @@ export component MainWindow inherits Window {
                                     has-artwork: root.now-playing-has-artwork;
                                     artwork: root.now-playing-artwork;
                                     ambient: root.now-playing-ambient;
-                                    slide: root.now-playing-slide;
+                                    slide: root.now-playing-look;
                                     outgoing: root.now-playing-outgoing;
                                     shuffle: root.now-playing-shuffle;
                                     repeat: root.now-playing-repeat;
@@ -3910,8 +3919,8 @@ export component MainWindow inherits Window {
         }
     }
 
-    if root.now-playing-shown && root.now-playing-slide.sliding: IncomingCover {
-        look: root.now-playing-slide;
+    if root.now-playing-shown && root.now-playing-look.sliding: IncomingCover {
+        look: root.now-playing-look;
         at-x: root.now-playing-tile-x;
         at-y: root.now-playing-tile-y;
         size: MainColumns.left(root.columns-width) - 28px;

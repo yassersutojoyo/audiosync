@@ -879,6 +879,9 @@ pub struct App {
     art_hold_timer: Timer,
     window_slide: RefCell<TrackSlide>,
     panel_slide: RefCell<TrackSlide>,
+    /// Slint's animation tick 0 as an Instant: the slides run on the
+    /// frames' clock, so each frame shows the slide at its own time.
+    motion_epoch: std::time::Instant,
     /// Draws the Now Playing cards' slide frames while one moves.
     slide_timer: Timer,
     /// Moves a microphone calibration on while one holds the outputs.
@@ -1353,6 +1356,7 @@ impl App {
             art_hold_timer: Timer::default(),
             window_slide: RefCell::new(TrackSlide::new(Place::Window)),
             panel_slide: RefCell::new(TrackSlide::new(Place::Panel)),
+            motion_epoch: std::time::Instant::now(),
             slide_timer: Timer::default(),
             calibration_timer: Timer::default(),
             meter_timer: Timer::default(),
@@ -1418,6 +1422,18 @@ impl App {
             });
         }
         app.refresh();
+        let weak = Rc::downgrade(&app);
+        app.main.global::<TrackMotion>().on_slide(move |tick| {
+            weak.upgrade().map_or_else(SlideLook::default, |app| {
+                slide_look(app.window_slide.borrow_mut().look(app.frame_time(tick)).0)
+            })
+        });
+        let weak = Rc::downgrade(&app);
+        app.flyout.global::<TrackMotion>().on_slide(move |tick| {
+            weak.upgrade().map_or_else(SlideLook::default, |app| {
+                slide_look(app.panel_slide.borrow_mut().look(app.frame_time(tick)).0)
+            })
+        });
         let weak = Rc::downgrade(&app);
         app.poll_timer
             .start(TimerMode::Repeated, POLL_INTERVAL, move || {
@@ -1879,7 +1895,7 @@ impl App {
     /// Starts or ends the Now Playing cards' slide for a change of song; a
     /// card that is hidden, or with the system's animations off, swaps at once.
     fn slide_change(&self, old: Option<&CardTrack>, new: Option<&CardTrack>) {
-        let now = std::time::Instant::now();
+        let now = self.frame_now();
         let (window_shows, panel_shows, still) = self.slides_shown();
         if self
             .window_slide
@@ -1910,13 +1926,26 @@ impl App {
         )
     }
 
-    /// Shows the slides' frame now; returns whether one still moves.
+    /// The animation tick `tick` as an Instant.
+    fn frame_time(&self, tick: i64) -> std::time::Instant {
+        self.motion_epoch + Duration::from_millis(u64::try_from(tick).unwrap_or_default())
+    }
+
+    /// The frame clock now: the last animation tick.
+    fn frame_now(&self) -> std::time::Instant {
+        self.frame_time(self.main.global::<TrackMotion>().get_tick())
+    }
+
+    /// Hands the slides' frames to the windows' frame clock while one moves,
+    /// and shows the rest look once none does; returns whether one moves.
     fn draw_slides(&self) -> bool {
-        let now = std::time::Instant::now();
+        let now = self.frame_now();
         let (window, window_moving) = self.window_slide.borrow_mut().look(now);
         let (panel, panel_moving) = self.panel_slide.borrow_mut().look(now);
         self.main.set_now_playing_slide(slide_look(window));
         self.flyout.set_now_playing_slide(slide_look(panel));
+        self.main.set_now_playing_moving(window_moving);
+        self.flyout.set_now_playing_moving(panel_moving);
         window_moving || panel_moving
     }
 
@@ -1987,7 +2016,7 @@ impl App {
                 Transport::Next | Transport::Previous | Transport::PlayPause
             )
         {
-            let now = std::time::Instant::now();
+            let now = self.frame_now();
             let (window_shows, panel_shows, still) = self.slides_shown();
             self.window_slide
                 .borrow_mut()
@@ -17299,6 +17328,138 @@ mod tests {
             "Previous's from the left"
         );
         assert_eq!(slide(1.0, 1.0), old, "it lands on the box");
+    }
+
+    /// Records Next in the main window at 60 Hz, as a screen shows it: the
+    /// new (red) cover's left and top, and the new title's and artist's x.
+    // covers: S463
+    #[test]
+    fn every_frame_of_next_moves_cover_title_and_artist_and_the_cover_stays_level() {
+        use crate::now_playing_card::CardArtwork;
+        use crate::now_playing_card::fake::{FakeControls, track};
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        hold_clock();
+        let fake = FakeControls::default();
+        app.set_media_controls(fake.controls());
+        app.main.show().expect("the main window shows");
+        let window = app.main.window();
+        let cover = |rgba: [u8; 4]| Some(CardArtwork::new(8, rgba.repeat(64)));
+        let mut first = track("Spotify.exe", "First song", "First band", true);
+        first.artwork = cover([0, 0, 255, 255]);
+        let mut second = track("Spotify.exe", "Second song", "Second band", true);
+        second.artwork = cover([255, 0, 0, 255]);
+        fake.read(Some(first));
+        app.main.invoke_now_playing_read();
+        draw_frames();
+        let frame = Duration::from_micros(16_667);
+        let red = || {
+            let shot = window.take_snapshot().expect("drawn");
+            let width = shot.width() as usize;
+            let (mut left, mut top) = (usize::MAX, usize::MAX);
+            for (at, pixel) in shot.as_bytes().chunks(4).enumerate() {
+                if pixel == [255, 0, 0, 255] {
+                    left = left.min(at % width);
+                    top = top.min(at / width);
+                }
+            }
+            (left as f32, top as f32)
+        };
+        let x_of = |label: &str| {
+            ElementHandle::find_by_accessible_label(&app.main, label)
+                .next()
+                .map_or(f32::NAN, |line| line.absolute_position().x)
+        };
+        app.main.invoke_now_playing_transport(2);
+        for _ in 0..12 {
+            advance_clock(frame);
+            draw_frames();
+        }
+        fake.read(Some(second));
+        app.main.invoke_now_playing_read();
+        let mut frames = Vec::new();
+        for _ in 0..50 {
+            advance_clock(frame);
+            draw_frames();
+            let (left, top) = red();
+            frames.push([left, top, x_of("Second song"), x_of("Second band")]);
+        }
+        let rest = *frames.last().unwrap();
+        let shown: Vec<_> = frames.iter().filter(|f| f[0] < 1e9).collect();
+        assert!(
+            shown.iter().all(|f| f[1] == rest[1]),
+            "the cover never moves up or down on its way in"
+        );
+        // Each frame shows the slide at that frame's time: 0.56 s at 60 Hz
+        // still has the cover on its way 20 frames in.
+        assert!(
+            (frames[20][0] - rest[0]).abs() > 1.0,
+            "the cover is home by frame 20"
+        );
+        // Until a part is within a pixel of its place, every frame moves it,
+        // never much more than the frame before (an ease-out with no stall;
+        // the frame clock counts whole milliseconds, so frames run 16 or 17).
+        for (part, name) in [(0, "cover"), (2, "title"), (3, "artist")] {
+            let away: Vec<f32> = frames
+                .iter()
+                .map(|f| (f[part] - rest[part]).abs())
+                .collect();
+            assert!(away[0] > 0.0, "the {name} moves on the first frame");
+            // The artist sets off 0.06 s after the title, part way into a
+            // frame, so its steps are compared from its second.
+            let start = away.iter().position(|&a| a < away[0]).unwrap_or(1);
+            let mut step_before = f32::MAX;
+            for at in start + 1..away.len() {
+                if away[at - 1] <= 1.0 {
+                    break;
+                }
+                let step = away[at - 1] - away[at];
+                assert!(step > 0.0, "the {name} stalls at frame {at}");
+                assert!(
+                    step <= step_before * 1.1 + 1.0,
+                    "the {name} jumps at frame {at}"
+                );
+                step_before = step;
+            }
+        }
+    }
+
+    /// Skia, which the app draws with, scales the old cover's tile as it
+    /// recedes (the software renderer above doesn't); the new cover still
+    /// comes level with the box and lands on it.
+    // covers: S463
+    #[test]
+    fn the_incoming_cover_keeps_to_the_box_while_the_old_one_shrinks() {
+        use i_slint_backend_testing::ElementHandle;
+        i_slint_backend_testing::init_no_event_loop();
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        app.flyout.show().expect("the flyout shows");
+        app.main.set_now_playing_shown(true);
+        app.flyout.set_now_playing_shown(true);
+        let look = |old_shrink: f32| SlideLook {
+            sliding: true,
+            side: 1.0,
+            slid: 1.0,
+            old_shrink,
+            ..SlideLook::default()
+        };
+        let landed = |component: &dyn Fn() -> Vec<ElementHandle>| {
+            slint::platform::update_timers_and_animations();
+            let cover = component().pop().expect("the new cover is there");
+            cover.absolute_position()
+        };
+        let main =
+            || ElementHandle::find_by_element_type_name(&app.main, "IncomingCover").collect();
+        let flyout =
+            || ElementHandle::find_by_element_type_name(&app.flyout, "IncomingCover").collect();
+        app.main.set_now_playing_slide(look(0.0));
+        app.flyout.set_now_playing_slide(look(0.0));
+        let (main_box, flyout_box) = (landed(&main), landed(&flyout));
+        app.main.set_now_playing_slide(look(0.15));
+        app.flyout.set_now_playing_slide(look(0.15));
+        assert_eq!(landed(&main), main_box, "the main window's");
+        assert_eq!(landed(&flyout), flyout_box, "the tray panel's");
     }
 
     // covers: S453

@@ -41,6 +41,10 @@ export struct IconLook {
 export global TrackMotion {
     // Play/Pause's icon the given seconds after it changed.
     pure callback icon(float) -> IconLook;
+    // A card's slide at a frame's animation tick, so each frame shows the
+    // slide at its own time.
+    pure callback slide(duration) -> SlideLook;
+    out property <duration> tick: animation-tick();
 }
 
 // A title or artist line: the old one leaves away from the side the cover
