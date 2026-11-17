@@ -54,17 +54,18 @@ impl App {
     /// Opens Settings, or brings it to the front when it is open.
     pub fn show_settings(&self) {
         self.show_settings_state();
-        let opening = !self.settings.window().is_visible();
-        if opening {
-            let motion = self.main.global::<Motion>().get_on();
-            self.settings.global::<Motion>().set_on(motion);
+        let motion = self.main.global::<Motion>().get_on();
+        // With animation effects off it shows at once, never blank first.
+        let fading = motion && !self.settings.window().is_visible();
+        self.settings.global::<Motion>().set_on(motion);
+        if fading {
             self.settings.set_revealed(false);
         }
         if let Err(error) = self.settings.show() {
             self.show_window_error(&error);
             return;
         }
-        if opening {
+        if fading {
             // The fade starts only from a drawn frame, as the flyout's does.
             let settings = self.settings.as_weak();
             slint::Timer::single_shot(FLYOUT_FIRST_FRAME, move || {

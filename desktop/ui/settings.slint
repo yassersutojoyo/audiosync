@@ -173,7 +173,7 @@ export component SettingsWindow inherits Window {
     in property <bool> updater-available;
     in property <bool> check-updates-automatically;
     // Set false then true by the app as the window opens: it fades in over
-    // 250 ms, as the Mac's does.
+    // 560 ms, as the Mac's does.
     in property <bool> revealed: true;
 
     callback appearance-chosen(Appearance);
@@ -225,8 +225,8 @@ export component SettingsWindow inherits Window {
         fade := Rectangle {
             opacity: root.revealed ? 1 : 0;
             animate opacity {
-                duration: root.revealed && Motion.on ? 250ms : 0ms;
-                easing: ease-out;
+                duration: !root.revealed ? 0ms : Motion.on ? 560ms : 150ms;
+                easing: Motion.on ? cubic-bezier(0.2, 0.9, 0.3, 1) : linear;
             }
 
             // Past the screen's room it scrolls, so its last box stays in reach.

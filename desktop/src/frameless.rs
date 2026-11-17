@@ -41,6 +41,13 @@ fn ends_a_drag(from: Option<slint::PhysicalPosition>, now: slint::PhysicalPositi
     from.is_some_and(|from| from != now)
 }
 
+/// Forgets the last drag's start as a new press comes in, before Slint sees
+/// it: a release that `drag_window` swallowed must not turn the next still
+/// click into the end of a drag.
+pub fn forget_drag() {
+    DRAG_FROM.with(|from| from.set(None));
+}
+
 /// Lets the top row's drag area, right click and edges reach the native window.
 pub fn connect(main: &MainWindow) {
     let weak = main.as_weak();

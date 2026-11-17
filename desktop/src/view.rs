@@ -343,6 +343,10 @@ const FLYOUT_NOTICE_LIMIT: usize = 1;
 /// Narrator's scan mode, and the same words can be announced again later.
 // Time enough for a shown flyout to draw its first frame at any refresh rate.
 const FLYOUT_FIRST_FRAME: Duration = Duration::from_millis(50);
+
+thread_local! {
+    static FLYOUT_OPENING: Cell<u64> = const { Cell::new(0) };
+}
 const ANNOUNCEMENT_CLEARS_AFTER: Duration = Duration::from_secs(5);
 
 /// How long a live region stays empty before the words it held come back.
@@ -2302,6 +2306,10 @@ impl App {
                     }
                     app.apply_frame(window(app), name, Frame::Titled);
                 }),
+                WindowEvent::MouseInput {
+                    state: slint::winit_030::winit::event::ElementState::Pressed,
+                    ..
+                } if kind == Titled::Main => crate::frameless::forget_drag(),
                 WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. }
                     if name == "Settings" =>
                 {
@@ -5403,7 +5411,16 @@ impl App {
     #[cfg_attr(not(windows), allow(dead_code))]
     pub fn reveal_flyout(&self) {
         let flyout = self.flyout.as_weak();
+        // Only the latest opening's timer acts: an earlier one would uncloak a
+        // reopened flyout before its first new frame.
+        let opening = FLYOUT_OPENING.with(|count| {
+            count.set(count.get() + 1);
+            count.get()
+        });
         slint::Timer::single_shot(FLYOUT_FIRST_FRAME, move || {
+            if FLYOUT_OPENING.with(Cell::get) != opening {
+                return;
+            }
             if let Some(flyout) = flyout.upgrade() {
                 crate::platform::set_cloaked(flyout.window(), false);
                 flyout.set_revealed(true);
@@ -9985,8 +10002,8 @@ mod tests {
         assert_eq!(dimming(), 0, "dimmed after 250 ms");
     }
 
-    /// Settings fades in over 250 ms as it opens, as the Mac's window does;
-    /// with animation effects off it shows at once.
+    /// Settings fades in over 560 ms as it opens, as the Mac's window does;
+    /// with animation effects off it shows at once, with no blank frame.
     #[test]
     fn settings_fades_in_as_it_opens() {
         use i_slint_backend_testing::ElementHandle;
@@ -10009,13 +10026,15 @@ mod tests {
         after(60);
         let fading = after(90);
         assert!(0.0 < fading && fading < 1.0, "it fades in: {fading}");
+        let late = after(300);
+        assert!(late < 1.0, "still fading 390 ms in: {late}");
         assert_eq!(after(300), 1.0);
         app.settings.hide().expect("Settings hides");
 
         app.main.global::<Motion>().set_on(false);
         app.main.invoke_settings_requested();
         draw_frames();
-        assert_eq!(after(60), 1.0, "at once with animation effects off");
+        assert_eq!(shown(), 1.0, "at once with animation effects off");
     }
 
     /// A Cast speaker's delay is a wait, never below 0, so its row shows it
@@ -13620,6 +13639,27 @@ mod tests {
     /// opens, as the Mac panel's: 440 ms each, the first after 90 ms and each
     /// next 35 ms later, from the start each time; the flyout's height
     /// doesn't follow them.
+    /// A flyout reopened before its last opening revealed it waits for its
+    /// own first frame: the earlier opening's timer leaves it alone.
+    #[test]
+    fn a_quick_reopen_reveals_the_flyout_only_after_its_own_first_frame() {
+        hold_clock();
+        let app = app_over(MockBackend::new());
+        app.flyout.show().expect("the flyout shows headless");
+        app.prepare_flyout_open(true);
+        app.reveal_flyout();
+        advance_clock(Duration::from_millis(30));
+        draw_frames();
+        app.prepare_flyout_open(true);
+        app.reveal_flyout();
+        advance_clock(Duration::from_millis(25));
+        draw_frames();
+        assert!(!app.flyout.get_revealed(), "the first opening's timer");
+        advance_clock(Duration::from_millis(30));
+        draw_frames();
+        assert!(app.flyout.get_revealed(), "its own timer");
+    }
+
     #[test]
     fn the_flyout_parts_fade_in_and_rise_one_after_another_as_it_opens() {
         hold_clock();
