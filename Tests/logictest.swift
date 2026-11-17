@@ -9289,6 +9289,8 @@ do {
             && sliderSource.contains("click.clicked = true")
             && sliderSource.contains(".focusEffectDisabled(!NSApp.isFullKeyboardAccessEnabled)"),
           "master slider source: a click or drag takes the arrow keys without a focus ring under keyboard navigation off, Tab reaches it with keyboard navigation on")
+    check(sliderSource.contains(".onEnded { _ in click.clicked = true; focused = true }"),
+          "master slider source: a still click on the thumb takes the arrow keys, its mouse-down focus loss is won back at mouse-up")
     // covers: S403
     check(rowsSource.contains(".clipShape(FoldClip(moving: zoneDisclosure.moving))") && mainSource.contains("moving = true"),
           "menu bar panel source: a fold clips each zone to its own moving edge, so the rows and the footer below never slide over its fading rows")
@@ -18661,12 +18663,14 @@ do {
     let equalizer = (try? String(contentsOfFile: "Sources/AudioSync/EqualizerWindow.swift", encoding: .utf8)) ?? ""
     let bandSlider = equalizer.components(separatedBy: "struct VerticalSlider").dropFirst().first ?? ""
     func inBandSlider(_ needle: String) -> Int { bandSlider.components(separatedBy: needle).count - 1 }
-    check(inBandSlider(".focused($focused)") == 1 && inBandSlider("click.clicked = true") == 1,
+    check(inBandSlider(".focused($focused)") == 1 && inBandSlider("click.clicked = true") >= 1,
           "equalizer band: a click gives the band keyboard focus, with keyboard navigation off too")
     check(inBandSlider(".focusable(interactions: click.clicked ? .edit : .activate)") == 1,
           "equalizer band: Tab reaches a band it was not clicked into only with keyboard navigation on")
     check(inBandSlider(".focusEffectDisabled(!NSApp.isFullKeyboardAccessEnabled)") == 1,
           "equalizer band: a click shows no focus ring with keyboard navigation off")
+    check(inBandSlider(".onEnded { _ in click.clicked = true; focused = true }") == 1,
+          "equalizer band: a still click takes the arrow keys, its mouse-down focus loss is won back at mouse-up")
     check(inBandSlider(".accessibilityRepresentation {") == 1 && inBandSlider("Slider(value:") == 1,
           "equalizer band: the accessibility API sees a slider, not an unknown element")
 }
