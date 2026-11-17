@@ -963,6 +963,11 @@ pub trait AudioBackend {
     /// The output shows the result once Windows reports the change.
     fn fix_device_volume(&mut self, id: &str);
 
+    /// The reference row's System slider moved by the user (spec S197): sets
+    /// output `id`'s own volume in Windows to `level`, 0 to 1, while it is
+    /// followed. Nothing else calls it.
+    fn set_device_volume(&mut self, id: &str, level: f64);
+
     /// Sets the master volume slider position (0 to 100), which scales every
     /// output and AirPlay speaker, live. A value that isn't finite is
     /// ignored.

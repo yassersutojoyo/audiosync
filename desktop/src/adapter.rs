@@ -3047,6 +3047,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             refused_for_code: false,
             own_volume: speaker.volume_known.then_some(speaker.volume),
             device_volume: None,
+            system_volume: None,
             waiting: (speaker.enabled && speaker.status == CastStatus::Reconnecting)
                 .then_some(Waiting::Reconnecting),
             cast: Some(CastRow {
@@ -4856,6 +4857,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             own_volume: Some(speaker.volume),
             // An AirPlay speaker's volume is its own slider (S192).
             device_volume: None,
+            system_volume: None,
             waiting: self
                 .audio
                 .airplay_waiting_for_user()
@@ -4922,6 +4924,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             device_volume: output
                 .device_volume
                 .and_then(|device_volume| device_volume.hint()),
+            system_volume: output.device_volume,
             waiting: if output.enabled && output.plays_original {
                 Some(Waiting::PlaysOriginal)
             } else {
@@ -5836,6 +5839,14 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             return;
         };
         self.audio.fix_device_volume(&endpoint_id);
+        self.take_events();
+    }
+
+    fn set_system_volume(&mut self, id: &str, level: f64) {
+        let Some(SpeakerKey::Local(endpoint_id)) = SpeakerKey::parse(id) else {
+            return;
+        };
+        self.audio.set_device_volume(&endpoint_id, level);
         self.take_events();
     }
 

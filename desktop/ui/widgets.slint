@@ -3450,6 +3450,8 @@ export component SpeakerRow inherits Rectangle {
     callback forget-pairing();
     // The fix after the device-volume hint.
     callback device-volume-fix();
+    // The System slider moved by the user, 0 to 100.
+    callback system-volume-changed(float);
     // Rename… in its menu, or a double-click on its name: edit the name here.
     callback rename-requested();
     callback rename-edited(string);
@@ -3881,6 +3883,66 @@ export component SpeakerRow inherits Rectangle {
                                 width: Fluent.delay-column;
                                 alignment: center;
 
+                                // The reference's Windows volume, where other rows show
+                                // their delay, as the Mac's built-in speakers: it opens
+                                // the panel holding its slider.
+                                if root.item.system-volume >= 0: Rectangle {
+                                    min-width: system-text.preferred-width + 12px;
+                                    height: 16px;
+                                    border-radius: Fluent.radius-control;
+                                    background: system-touch.pressed ? Fluent.pressed : system-touch.has-hover ? Fluent.hover : transparent;
+                                    forward-focus: system-focus;
+                                    accessible-role: button;
+                                    accessible-label: Strings.system-volume-button;
+                                    accessible-value: root.item.system-muted ? Strings.device-volume-hint(DeviceVolumeHint.muted, 0) : Strings.system-volume-percent(root.item.system-volume);
+                                    accessible-description: Strings.system-volume-help(root.item.name);
+                                    accessible-expandable: true;
+                                    accessible-expanded: root.item.system-open;
+                                    accessible-action-default => {
+                                        root.sync-toggled();
+                                    }
+
+                                    system-focus := FocusScope {
+                                        focus-on-click: false;
+                                        key-pressed(event) => {
+                                            if event.text == " " || event.text == Key.Return {
+                                                root.sync-toggled();
+                                                return accept;
+                                            }
+                                            return reject;
+                                        }
+                                        changed has-focus => {
+                                            root.delay-focused = self.has-focus;
+                                        }
+                                    }
+
+                                    system-touch := TouchArea {
+                                        y: -4px;
+                                        height: 24px;
+                                        clicked => {
+                                            root.sync-toggled();
+                                        }
+                                    }
+
+                                    system-text := Text {
+                                        x: (parent.width - self.width) / 2;
+                                        height: parent.height;
+                                        text: Strings.system-volume-value(root.item.system-volume, root.item.system-muted);
+                                        font-size: Tokens.font-size-subheadline;
+                                        // Small text: the readable teal, as the delay's.
+                                        color: root.item.system-open ? Tokens.teal-text : Tokens.secondary-text;
+                                        vertical-alignment: center;
+                                        accessible-role: none;
+                                    }
+
+                                    FocusRing {
+                                        y: system-touch.y;
+                                        height: system-touch.height;
+                                        visible-focus: system-focus.has-focus;
+                                        border-radius: parent.border-radius;
+                                    }
+                                }
+
                                 if root.item.has-delay: Rectangle {
                                     min-width: delay-row.preferred-width + 12px;
                                     height: 16px;
@@ -4235,6 +4297,35 @@ export component SpeakerRow inherits Rectangle {
                                         }
                                     }
                                 }
+                            }
+                        }
+                    }
+                }
+
+                // The reference's panel: its Windows volume, no delay
+                // controls. The slider follows what Windows reports.
+                system-pane := FoldPane {
+                    open: root.item.system-volume >= 0 && root.item.system-open;
+
+                    if system-pane.shown: VerticalLayout {
+                        padding-left: Fluent.name-inset - Fluent.row-padding-x;
+                        padding-top: 6px;
+                        padding-bottom: 4px;
+                        spacing: 2px;
+
+                        Text {
+                            text: Strings.system-volume-title;
+                            font-size: Tokens.font-size-caption;
+                            color: Tokens.secondary-text;
+                            accessible-role: none;
+                        }
+
+                        VolumeSlider {
+                            small: true;
+                            volume: max(root.item.system-volume, 0);
+                            label: Strings.system-volume-slider(root.item.name);
+                            changed(value) => {
+                                root.system-volume-changed(value);
                             }
                         }
                     }

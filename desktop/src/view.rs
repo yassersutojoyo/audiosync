@@ -3387,6 +3387,12 @@ impl App {
             with_app(&w, |app| app.update(|b| b.forget_pairing(&id)))
         });
         let w = weak.clone();
+        main.on_system_volume_requested(move |id, value| {
+            with_app(&w, |app| {
+                app.update(|b| b.set_system_volume(&id, f64::from(value) / 100.0));
+            });
+        });
+        let w = weak.clone();
         main.on_device_volume_fix_requested(move |id| {
             with_app(&w, |app| app.update(|b| b.fix_device_volume(&id)))
         });
@@ -5905,6 +5911,11 @@ pub fn speaker_item(
 ) -> SpeakerItem {
     let delay = format_offset_ms(speaker.delay_ms.unwrap_or(0.0));
     let (device_volume, device_volume_percent) = device_volume_hint(speaker.device_volume);
+    // Only the reference shows its own volume, as the Mac's built-in speakers.
+    let system = speaker
+        .system_volume
+        .filter(|_| speaker.is_reference())
+        .and_then(|volume| Some((volume.percent()?, volume.muted == Some(true))));
     let renamed = speaker.name != speaker.system_name;
     SpeakerItem {
         id: speaker.id.as_str().into(),
@@ -5962,6 +5973,9 @@ pub fn speaker_item(
         code_every_time: speaker.code_every_time,
         device_volume,
         device_volume_percent,
+        system_volume: system.map_or(-1, |(percent, _)| percent as i32),
+        system_muted: system.is_some_and(|(_, muted)| muted),
+        system_open: sync_open && system.is_some(),
         cast: speaker.cast.is_some(),
         cast_state: speaker
             .cast
@@ -10239,6 +10253,47 @@ mod tests {
                 .next()
                 .is_some(),
             "{label}"
+        );
+    }
+
+    /// The reference row shows its Windows volume as "System 13%" where
+    /// other rows show their delay, as the Mac's built-in speakers do; the
+    /// value opens a panel whose slider sets that volume, and the value
+    /// follows what Windows reports.
+    // covers: S197
+    #[test]
+    fn the_reference_row_shows_and_sets_its_windows_volume() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        draw_frames();
+        let reference = app
+            .snapshot()
+            .speakers
+            .into_iter()
+            .find(ui_model::Speaker::is_reference)
+            .expect("the reference");
+        let find = |label: &str| {
+            ElementHandle::find_by_accessible_label(&app.main, label)
+                .next()
+                .unwrap_or_else(|| panic!("{label}"))
+        };
+        let button = find("System volume");
+        assert_eq!(button.accessible_value().as_deref(), Some("13%"));
+        button.invoke_accessible_default_action();
+        draw_frames();
+        let slider = find(&format!("Windows volume of {}", reference.name));
+        slider.invoke_accessible_increment_action();
+        draw_frames();
+        let level = app
+            .snapshot()
+            .speaker(&reference.id)
+            .and_then(|speaker| speaker.system_volume)
+            .and_then(|volume| volume.percent());
+        assert_eq!(level, Some(23));
+        assert_eq!(
+            find("System volume").accessible_value().as_deref(),
+            Some("23%")
         );
     }
 
@@ -18314,7 +18369,7 @@ mod tests {
         // Switch, Several apps, source, Mute, master volume, Save as Preset…,
         // Equalizer, Calibrate All, the reference's volume fix, then the
         // rows: This PC's, then the connected speakers' by name.
-        tab(window, 19);
+        tab(window, 20);
         press(window, " ");
         assert!(enabled(&app, "local:cable"), "the cable row has the focus");
         press(window, " ");
@@ -18345,7 +18400,7 @@ mod tests {
         draw_frames();
         // The cable row's toggle, delay and options, then the desk row's
         // toggle, delay, options, two steps and its field.
-        tab(window, 27);
+        tab(window, 28);
         press(window, "5");
         let draft = || {
             let shown = app.snapshot().speaker("local:desk").unwrap().delay_ms;
@@ -18711,7 +18766,7 @@ mod tests {
     fn a_focused_speaker_row_keeps_the_focus_when_its_list_is_rebuilt() {
         let app = main_window_with_listed_cable();
         let window = app.main.window();
-        tab(window, 17);
+        tab(window, 18);
         let bedroom = enabled(&app, "airplay:bedroom");
         press(window, " ");
         assert_ne!(
@@ -19794,7 +19849,7 @@ mod tests {
         let window = app.main.window();
         // As in the example's order without Bedroom's row:
         // the cable row's toggle.
-        tab(window, 17);
+        tab(window, 18);
         press(window, " ");
         assert!(enabled(&app, "local:cable"), "the cable row has the focus");
         press(window, " ");
@@ -21121,7 +21176,7 @@ mod tests {
         app.start_rename("zone:den", RenamePlace::Zone);
         draw_frames();
         assert!(
-            right(&strings.get_new_zone_field_label())
+            right(&strings.invoke_speaker_name_field("Den".into()))
                 > left(&strings.invoke_zone_volume("Den".into())) - 20.0,
             "the zone's field reaches its volume"
         );

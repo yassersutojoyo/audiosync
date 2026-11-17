@@ -1697,6 +1697,39 @@ export global Strings {
     // The fix sets this volume, which the core decides (FIX_VOLUME).
     out property <int> device-volume-fix-percent: 75;
 
+    // The reference row's value button, where other rows show their delay,
+    // as the Mac's built-in speakers: "System 60%".
+    public pure function system-volume-value(percent: int, muted: bool) -> string {
+        if muted {
+            return @tr("System muted");
+        }
+        return @tr("System {}%", percent);
+    }
+
+    // That button's label, its visible word first so speech input finds it.
+    out property <string> system-volume-button: @tr("System volume");
+
+    public pure function system-volume-help(name: string) -> string {
+        if Platform.os == OperatingSystemType.linux {
+            return @tr("Sets the PipeWire volume of {}", name);
+        }
+        return @tr("Sets the Windows volume of {}", name);
+    }
+
+    // The line above the slider in the reference's panel.
+    out property <string> system-volume-title: Platform.os == OperatingSystemType.linux ? @tr("PipeWire volume") : @tr("Windows volume");
+
+    public pure function system-volume-slider(name: string) -> string {
+        if Platform.os == OperatingSystemType.linux {
+            return @tr("PipeWire volume of {}", name);
+        }
+        return @tr("Windows volume of {}", name);
+    }
+
+    public pure function system-volume-percent(percent: int) -> string {
+        return @tr("{}%", percent);
+    }
+
     public pure function device-volume-hint(hint: DeviceVolumeHint, percent: int) -> string {
         if hint == DeviceVolumeHint.low {
             if Platform.os == OperatingSystemType.linux {

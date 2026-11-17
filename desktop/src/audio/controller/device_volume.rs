@@ -403,6 +403,18 @@ impl<D: Driver> Controller<D> {
         }
     }
 
+    /// The System slider's write (S197), to an output that is followed only.
+    /// The row follows what Windows reports afterwards, as after the fix.
+    pub(super) fn set_followed_device_level(&mut self, id: &str, level: f64) {
+        if self.device_volumes.reading(id).is_none() || !level.is_finite() {
+            return;
+        }
+        let result = self
+            .driver
+            .set_endpoint_level(id, level.clamp(0.0, 1.0) as f32);
+        self.stalls(id, &result);
+    }
+
     /// Lets go of every output's own volume: AudioSync quits.
     pub(super) fn stop_following_device_volumes(&mut self) {
         for id in std::mem::take(&mut self.device_volumes.readings).into_keys() {
@@ -512,6 +524,36 @@ mod tests {
         backend.poll();
         let percent = device_volume(&backend, HEADPHONES).and_then(DeviceVolume::percent);
         assert_eq!(percent, Some(18), "the level it was found at goes back");
+    }
+
+    /// The System slider writes the level of an output that is followed,
+    /// only when it moves: a start or a stop writes nothing, and an output
+    /// switched off isn't written.
+    // covers: S192, S197
+    #[test]
+    fn the_system_slider_writes_the_level_only_when_it_moves() {
+        let mut backend = backend();
+        let record = backend.volume_record();
+        backend.set_output_level(SPEAKERS, 0.5);
+        backend.poll();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.poll();
+        backend.stop();
+        backend.poll();
+        assert!(record.writes().is_empty(), "nothing at a start or a stop");
+        backend.set_device_volume(SPEAKERS, 0.4);
+        assert_eq!(
+            record.writes(),
+            [VolumeWrite::Level {
+                id: SPEAKERS.to_owned(),
+                level: 0.4
+            }]
+        );
+        backend.poll();
+        assert_eq!(device_volume(&backend, SPEAKERS), at(0.4_f32.into(), false));
+        backend.set_output_enabled(HEADPHONES, false).unwrap();
+        backend.set_device_volume(HEADPHONES, 0.9);
+        assert_eq!(record.writes().len(), 1, "an output that is off");
     }
 
     // covers: S195, S202

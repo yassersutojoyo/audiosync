@@ -191,6 +191,11 @@ export struct SpeakerItem {
     // whole percent.
     device-volume: DeviceVolumeHint,
     device-volume-percent: int,
+    // The reference's own volume in Windows as a whole percent, -1 while it
+    // isn't known; whether it is muted; whether its panel is open (S197).
+    system-volume: int,
+    system-muted: bool,
+    system-open: bool,
     // A Google Cast speaker: its delay is the offset the user measured, and
     // while it connects or plays it offers Mute and Resync.
     cast: bool,

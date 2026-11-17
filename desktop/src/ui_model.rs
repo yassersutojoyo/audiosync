@@ -11,7 +11,7 @@
 //! device.
 
 use audiosync_core::eq::{self, CurveMatch, EqSettings, UserCurve};
-use audiosync_core::policy::device_volume::Hint;
+use audiosync_core::policy::device_volume::{DeviceVolume, Hint};
 #[cfg(any(test, feature = "mock-backend"))]
 use audiosync_core::policy::presets as policy_presets;
 use audiosync_core::policy::presets::{Preset, Scene, SpeakerNow};
@@ -272,6 +272,9 @@ pub struct Speaker {
     /// A local output that is on, whose own volume in Windows is low or
     /// muted (spec S196): the hint under its volume slider, with the fix.
     pub device_volume: Option<Hint>,
+    /// A local output's own volume and mute in Windows as last read, while
+    /// it is on: the reference row's System value and slider (spec S197).
+    pub system_volume: Option<DeviceVolume>,
     /// Why a speaker that is on can't play right now, while streaming is
     /// on; it plays again by itself. `None` while it plays or is off.
     pub waiting: Option<Waiting>,
@@ -1785,6 +1788,10 @@ pub trait Backend {
     /// (spec S197).
     fn fix_device_volume(&mut self, _id: &str) {}
 
+    /// The reference row's System slider moved by the user: sets output
+    /// `id`'s own volume in Windows to `level`, 0 to 1 (spec S197).
+    fn set_system_volume(&mut self, _id: &str, _level: f64) {}
+
     /// The PIN the user typed for the pairing with speaker `id`.
     fn submit_pin(&mut self, _id: &str, _pin: &str) {}
 
@@ -2149,6 +2156,7 @@ impl MockBackend {
             refused_for_code: false,
             own_volume: None,
             device_volume: None,
+            system_volume: None,
             waiting: None,
             cast: None,
             group: None,
@@ -2211,6 +2219,10 @@ impl MockBackend {
         speakers[2].auto_connect = true;
         // The PC's speakers left at 13 % in Windows.
         speakers[0].device_volume = Some(Hint::Low { percent: 13 });
+        speakers[0].system_volume = Some(DeviceVolume {
+            volume: Some(0.13),
+            muted: Some(false),
+        });
         let state = AppState {
             running: false,
             no_speaker_on: false,
@@ -2977,6 +2989,7 @@ impl Backend for MockBackend {
                 refused_for_code: false,
                 own_volume: None,
                 device_volume: None,
+                system_volume: None,
                 waiting: None,
                 cast: Some(CastRow {
                     state: CastState::Idle,
@@ -3146,6 +3159,16 @@ impl Backend for MockBackend {
 
     fn refresh_devices(&mut self) {
         self.refreshes.set(self.refreshes.get() + 1);
+    }
+
+    /// As Windows would report it once the level is written.
+    fn set_system_volume(&mut self, id: &str, level: f64) {
+        if let Some(volume) = self
+            .speaker_mut(id)
+            .and_then(|speaker| speaker.system_volume.as_mut())
+        {
+            volume.volume = Some(level);
+        }
     }
 
     /// As Windows would report it once the fix is written.
@@ -3453,6 +3476,7 @@ mod tests {
             refused_for_code: false,
             own_volume: None,
             device_volume: None,
+            system_volume: None,
             waiting: None,
             cast: None,
             group: None,

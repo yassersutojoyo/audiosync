@@ -955,6 +955,7 @@ pub(crate) mod tests {
             refused_for_code: false,
             own_volume: None,
             device_volume: None,
+            system_volume: None,
             waiting: None,
             cast: None,
             group: None,
