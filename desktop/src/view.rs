@@ -1851,7 +1851,7 @@ impl App {
             )
         });
         self.main.set_now_playing_title(track.title.as_str().into());
-        #[cfg(any(windows, target_os = "linux"))]
+        #[cfg(all(any(windows, target_os = "linux"), not(test)))]
         self.main
             .global::<Motion>()
             .set_on(crate::platform::animation_effects());
