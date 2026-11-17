@@ -1757,13 +1757,6 @@ export component LevelSlider inherits Rectangle {
     // The Mac's small slider (a speaker's or a zone's volume).
     in property <bool> small;
     out property <bool> has-focus: focus.has-focus;
-    // Focus a click gave it, until a key moves it.
-    out property <bool> clicked-focus;
-    changed has-focus => {
-        if !self.has-focus {
-            self.clicked-focus = false;
-        }
-    }
     out property <bool> held: touch.pressed;
     callback changed(float);
     callback released(float);
@@ -1820,7 +1813,6 @@ export component LevelSlider inherits Rectangle {
             if !root.enabled || event.modifiers.control || event.modifiers.alt || event.modifiers.shift || event.modifiers.meta || !root.moves(event.text) {
                 return reject;
             }
-            root.clicked-focus = false;
             let page = max(root.step, (root.maximum - root.minimum) / 10);
             if event.text == Key.Home {
                 root.move-to(root.minimum);
@@ -1900,7 +1892,6 @@ export component LevelSlider inherits Rectangle {
             }
             if event.kind == PointerEventKind.down {
                 focus.focus();
-                root.clicked-focus = true;
                 root.move-to(root.value-at(self.mouse-x, self.mouse-y));
             } else if event.kind == PointerEventKind.up {
                 root.released(root.value);
@@ -2100,7 +2091,6 @@ export component VolumeSlider inherits HorizontalLayout {
     }
 
     out property <bool> slider-focused: slider.has-focus;
-    out property <bool> slider-clicked-focus: slider.clicked-focus;
 
     Rectangle {
         HorizontalLayout {
@@ -3599,15 +3589,19 @@ export component SpeakerRow inherits Rectangle {
         duration: root.plated ? Fluent.row-hover-in : 0ms;
         easing: linear;
     }
-    // The options button and a delay of 0 ms show under the pointer or the
-    // keyboard focus, and while the row's menu, which takes both, is open;
+    // The options button and a delay of 0 ms show under the pointer or their
+    // own keyboard focus, and while the row's menu, which takes both, is open;
     // Narrator finds them either way.
-    // A slider focused by a click reveals nothing once the pointer leaves, as on the Mac.
-    property <bool> revealed: hover.has-hover || (root.focused-part != RowPart.none && !(root.focused-part == RowPart.volume && volume-slider.slider-clicked-focus)) || (MenuState.open != 0 && MenuState.open == root.menu-serial);
+    property <bool> revealed: hover.has-hover || (MenuState.open != 0 && MenuState.open == root.menu-serial);
     // The Mac's Reveal: a fade with a 4 px slide from the right over 440 ms;
     // with animation effects off, a 150 ms fade alone.
-    property <float> reveal: root.revealed ? 1 : 0;
+    property <float> reveal: root.revealed || root.focused-part == RowPart.options ? 1 : 0;
     animate reveal {
+        duration: Motion.on ? 440ms : 150ms;
+        easing: Motion.on ? ease-out : linear;
+    }
+    property <float> delay-reveal: root.revealed || root.focused-part == RowPart.delay ? 1 : 0;
+    animate delay-reveal {
         duration: Motion.on ? 440ms : 150ms;
         easing: Motion.on ? ease-out : linear;
     }
@@ -3965,7 +3959,7 @@ export component SpeakerRow inherits Rectangle {
                                 if root.item.has-delay: Rectangle {
                                     min-width: delay-row.preferred-width + 12px;
                                     height: 16px;
-                                    opacity: root.item.delay-ms != 0 || root.item.sync-open ? 1 : root.reveal;
+                                    opacity: root.item.delay-ms != 0 || root.item.sync-open ? 1 : root.delay-reveal;
                                     border-radius: Fluent.radius-control;
                                     background: delay-touch.pressed ? Fluent.pressed : delay-touch.has-hover ? Fluent.hover : transparent;
                                     animate background { duration: Fluent.fast; }

@@ -21196,6 +21196,44 @@ mod tests {
         );
     }
 
+    /// Tabbing through a speaker row shows … only on … itself and the delay
+    /// only on the delay, as on the Mac.
+    #[test]
+    fn a_speaker_rows_controls_show_only_on_their_own_focus() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = main_window_over(MockBackend::new());
+        let window = app.main.window();
+        let strings = app.strings();
+        let name = name_of(&app, "local:desk");
+        let opacity = |label: slint::SharedString| {
+            ElementHandle::find_by_accessible_label(&app.main, &label)
+                .next()
+                .expect("the control")
+                .computed_opacity()
+        };
+        let focus = |part| {
+            window.dispatch_event(WindowEvent::PointerExited);
+            app.main.set_focus_speaker_part(part);
+            app.main.set_focus_speaker_id("local:desk".into());
+            draw_frames();
+            advance_clock(Duration::from_millis(1000));
+            draw_frames();
+        };
+        hold_clock();
+        let options = || opacity(strings.invoke_speaker_options(name.as_str().into()));
+        focus(RowPart::Toggle);
+        assert_eq!(options(), 0.0, "the switch's focus leaves … hidden");
+        focus(RowPart::Delay);
+        assert_eq!(options(), 0.0, "the delay's focus leaves … hidden");
+        assert_eq!(
+            opacity(strings.invoke_delay_of(name.as_str().into())),
+            1.0,
+            "the delay shows on its own focus"
+        );
+        focus(RowPart::Options);
+        assert_eq!(options(), 1.0, "… shows on its own focus");
+    }
+
     /// A menu opened near the window's bottom or right edge stays whole
     /// inside it, a right-click's menu flipped above the pointer.
     // covers: S449
@@ -21688,10 +21726,10 @@ mod tests {
         assert_eq!(inked(), 0, "hidden again after the pointer left");
     }
 
-    /// A row's slider reached with Tab keeps the row's options button shown,
-    /// as the keyboard's focus does on the Mac.
+    /// A row's slider reached with Tab leaves the row's options button
+    /// hidden, as on the Mac, where only its own focus shows it.
     #[test]
-    fn a_rows_slider_reached_with_tab_shows_the_options_button() {
+    fn a_rows_slider_reached_with_tab_leaves_the_options_button_hidden() {
         let app = narrow_app(MockBackend::new());
         let window = app.main.window();
         let options = app
@@ -21726,9 +21764,9 @@ mod tests {
             .flat_map(|x| (0..size.height as i32).map(move |y| (x, y)))
             .filter(|&(x, y)| pixel(at.x + x as f32, at.y + y as f32)[0] < 200)
             .count();
-        assert!(
-            inked > 0,
-            "the options button shows while the slider has the keyboard's focus"
+        assert_eq!(
+            inked, 0,
+            "the options button stays hidden while the slider has the keyboard's focus"
         );
     }
 
