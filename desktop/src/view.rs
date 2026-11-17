@@ -15635,13 +15635,13 @@ mod tests {
         let app = app_over(MockBackend::new());
         app.update(|b| b.set_master_volume(40.0));
         app.volume_key(VolumeKey::Up);
-        assert_eq!(app.snapshot().master_volume, 42.0);
+        assert_eq!(app.snapshot().master_volume, 43.0);
         app.volume_key(VolumeKey::Mute);
         assert_eq!(app.snapshot().master_volume, 0.0);
         app.volume_key(VolumeKey::Up);
         assert_eq!(
             app.snapshot().master_volume,
-            42.0,
+            43.0,
             "up at 0 brings the level back"
         );
         assert_eq!(app.main.get_volume_keys_available(), cfg!(windows));

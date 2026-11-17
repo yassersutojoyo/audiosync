@@ -7133,14 +7133,14 @@ do {
 // MARK: The keyboard's volume keys moving the master
 // covers: S429
 do {
-    check(VolumeKeys.master(after: .up, level: 40, remembered: 50) == 46.25,
-          "volume keys: volume up raises the master by a sixteenth")
-    check(VolumeKeys.master(after: .down, level: 40, remembered: 50) == 33.75,
-          "volume keys: volume down lowers the master by a sixteenth")
+    check(VolumeKeys.master(after: .up, level: 40, remembered: 50) == 43,
+          "volume keys: volume up raises the master by 3")
+    check(VolumeKeys.master(after: .down, level: 40, remembered: 50) == 37,
+          "volume keys: volume down lowers the master by 3")
     check(VolumeKeys.master(after: .up, level: 97, remembered: 50) == 100
           && VolumeKeys.master(after: .up, level: 100, remembered: 50) == 100
-          && VolumeKeys.master(after: .down, level: 3, remembered: 50) == 0
-          && VolumeKeys.master(after: .down, level: 6.5, remembered: 50) == 0,
+          && VolumeKeys.master(after: .down, level: 2, remembered: 50) == 0
+          && VolumeKeys.master(after: .down, level: 3.4, remembered: 50) == 0,
           "volume keys: the master stays within 0 and 100, and a trace becomes 0")
     check(VolumeKeys.master(after: .mute, level: 40, remembered: 40) == 0
           && VolumeKeys.master(after: .mute, level: 0, remembered: 40) == 40,

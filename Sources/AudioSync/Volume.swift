@@ -73,8 +73,8 @@ enum MasterMute {
 enum VolumeKeys {
     enum Key { case up, down, mute }
 
-    /// How far volume up and volume down move the master, as macOS steps its own volume.
-    static let step: Double = 100.0 / 16
+    /// How far volume up and volume down move the master: 3 points, finer than macOS's own sixteenths.
+    static let step: Double = 3
 
     /// The master after `key`, from `level`; `remembered` is what unmuting returns to.
     static func master(after key: Key, level: Double, remembered: Double) -> Double {

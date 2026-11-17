@@ -15,6 +15,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Changed
 
+- Volume keys now move the volume 3 points per press instead of about 6 on the Mac and 2 on Windows.
 - On the Mac, AudioSync remembers the macOS volume each local output last played at through it, sets it again before the output's first audio, and puts back the level it found when the output stops or AudioSync quits. A level you set in macOS in between wins and becomes the remembered one.
 - On the Mac, the preset and the equalizer curve you picked show on a grey second line under Presets and Equalizer, in the main window and the menu bar panel. The Edited mark and the dots for the preset in use are gone.
 - On the Mac, the Presets row in the main window folds open into a list: one click recalls a preset, each row's options button renames, updates or deletes it, and Save as Preset is the last row.
