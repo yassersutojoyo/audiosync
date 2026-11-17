@@ -2222,24 +2222,32 @@ export component MasterVolume inherits HorizontalLayout {
     in property <length> number-gap: 6px;
     // The mute button's side: 24 in the main window, as the Mac's.
     in property <length> button-size: 32px;
+    // The row's height; the button overhangs a lower row, centred on it.
+    in property <length> row-height: root.button-size;
     out property <bool> slider-focused: slider.slider-focused;
     callback changed(float);
     callback mute-toggled();
 
     spacing: 4px;
+    height: root.row-height;
 
-    IconButton {
+    Rectangle {
         width: root.button-size;
-        height: root.button-size;
-        label: root.waves == 0 ? Strings.unmute-master : Strings.mute-master;
-        clicked => {
-            root.mute-toggled();
-        }
 
-        speaker := Glyph {
-            x: (parent.width - self.width) / 2;
-            width: 16px;
-            glyph: Glyphs.master-volume(root.waves);
+        IconButton {
+            y: (parent.height - self.height) / 2;
+            width: root.button-size;
+            height: root.button-size;
+            label: root.waves == 0 ? Strings.unmute-master : Strings.mute-master;
+            clicked => {
+                root.mute-toggled();
+            }
+
+            speaker := Glyph {
+                x: (parent.width - self.width) / 2;
+                width: 16px;
+                glyph: Glyphs.master-volume(root.waves);
+            }
         }
     }
 
