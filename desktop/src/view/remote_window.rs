@@ -1,4 +1,4 @@
-//! View > Web Remote (`ui/remote.slint`) and the server behind it.
+//! Web Remote (`ui/remote.slint`) and the server behind it.
 //!
 //! The setting is kept with the windows' own settings and starts the server
 //! at launch when it was on. Every refresh publishes the page's snapshot
@@ -1599,7 +1599,7 @@ mod tests {
         let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap() as i32;
         eq_window.invoke_preset_selected(rock);
         eq_window.invoke_save_curve();
-        app.zone_dialog.invoke_confirmed("Mine".into());
+        eq_window.invoke_curve_named("Mine".into(), true);
         app.save_preset("Rock");
         eq_window.invoke_preset_selected(rock);
         let ids: Vec<String> = app.snapshot().presets.into_iter().map(|p| p.id).collect();
