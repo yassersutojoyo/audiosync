@@ -335,6 +335,9 @@ final class FreshLinkWatch {
     /// Outputs whose next start in that session re-seats the others: the first
     /// after a return mid-session, and the one after the calm restart.
     private var reseat: [String: Int] = [:]
+    /// The uptime of each output's latest re-seat; the next waits `reseatEveryS`.
+    private var reseatedAt: [String: Double] = [:]
+    static let reseatEveryS = 300.0
     private var nextTicket = 0
     /// Outputs between their restart's fade-out and their new start: the
     /// sync leaves them off.
@@ -409,16 +412,24 @@ final class FreshLinkWatch {
 
     func release(uid: String) { held.remove(uid) }
 
-    /// Whether output `uid`, just started in `session`, re-seats the other
-    /// outputs; true once per arming.
-    func takeReseat(uid: String, session: Int) -> Bool {
-        reseat.removeValue(forKey: uid) == session
+    /// Whether output `uid`, just started in `session` at `now`, re-seats the
+    /// other outputs; true once per arming, and at most once per `reseatEveryS`.
+    func takeReseat(uid: String, session: Int, now: Double) -> Bool {
+        guard reseat.removeValue(forKey: uid) == session else { return false }
+        if let last = reseatedAt[uid], now - last < Self.reseatEveryS { return false }
+        reseatedAt[uid] = now
+        return true
     }
 
+    /// The re-seat armed for `uid` goes: its restart's new start failed.
+    func dropReseat(uid: String) { reseat[uid] = nil }
+
     /// The forced `setDelay` calls that re-seat every running output but
-    /// `uid`, each at its current hold-back.
-    static func reseats(of uid: String, running: [String], holdBacks: [String: Double]) -> [String: Double] {
-        holdBacks.filter { $0.key != uid && running.contains($0.key) }
+    /// `uid`, each at its current hold-back; one whose hold-back moved from
+    /// `before` was re-timed by the same sync and already faded once.
+    static func reseats(of uid: String, running: [String], holdBacks: [String: Double],
+                        before: [String: Double]) -> [String: Double] {
+        holdBacks.filter { $0.key != uid && running.contains($0.key) && before[$0.key] == $0.value }
     }
 
     /// The output stopped another way (switched off, lost): no restart.
@@ -435,6 +446,7 @@ final class FreshLinkWatch {
         let dropped = Array(pending.keys)
         pending = [:]
         calm = [:]
+        reseat = [:]
         return dropped
     }
 }

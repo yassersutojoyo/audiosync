@@ -664,8 +664,9 @@ extension AppDelegate {
     /// quiet restart (S325); every Bluetooth start logs the decision.
     private func noteFreshLinkStart(_ uid: String, _ device: AudioDevices.Device) {
         let bluetooth = BluetoothIOBuffer.isBluetooth(transport: device.transport)
-        if bluetooth, freshLinks.takeReseat(uid: uid, session: session) {
-            DispatchQueue.main.async { [weak self] in self?.reseatOthers(around: uid) }   // after this sync's re-times
+        if bluetooth, freshLinks.takeReseat(uid: uid, session: session, now: ProcessInfo.processInfo.systemUptime) {
+            let before = localHoldBacks   // this sync re-times the others after its starts
+            DispatchQueue.main.async { [weak self] in self?.reseatOthers(around: uid, before: before) }
         }
         switch freshLinks.decide(uid: uid, bluetooth: bluetooth, now: ProcessInfo.processInfo.systemUptime,
                                  session: session) {
@@ -686,9 +687,10 @@ extension AppDelegate {
     /// Imitates the switch-off and on that put a Bluetooth speaker back in time
     /// (S325, cause open): every other running output gets its current
     /// hold-back again, so one fade and a fresh read point.
-    private func reseatOthers(around uid: String) {
+    private func reseatOthers(around uid: String, before: [String: Double]) {
         guard engine.isRunning else { return }
-        let calls = FreshLinkWatch.reseats(of: uid, running: engine.activeOutputUIDs, holdBacks: localHoldBacks)
+        let calls = FreshLinkWatch.reseats(of: uid, running: engine.activeOutputUIDs, holdBacks: localHoldBacks,
+                                           before: before)
         guard !calls.isEmpty else { return }
         let others = calls.keys.sorted()
         for other in others {
@@ -728,6 +730,7 @@ extension AppDelegate {
                     + "its device still running somewhere during the rest: \(running)")
                 self.freshLinks.release(uid: uid)
                 self.syncLocalOutputs(origin: .automatic)
+                if !self.engine.activeOutputUIDs.contains(uid) { self.freshLinks.dropReseat(uid: uid) }
                 self.checkBriefLosses()   // its held start lead goes once due (S328)
             }
         }
