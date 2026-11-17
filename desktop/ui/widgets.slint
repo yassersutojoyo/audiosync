@@ -3561,11 +3561,11 @@ export component SpeakerRow inherits Rectangle {
     property <string> note: root.item.zone-note != "" ? root.item.zone-note : Strings.speaker-note(root.item);
     property <string> note-help: root.availability-note != "" && root.note == Strings.speaker-caption(Strings.row-note(root.item.state, root.item.name), root.availability-note) ? Strings.speaker-availability-help(root.item.availability, root.item.code-every-time, root.item.state) : "";
 
-    // A click on the row's box works like its delay button; a row without a
-    // delay is outside every sync control.
+    // A click on the row's box works like its delay or System button; a row
+    // without either is outside every sync control.
     // While the row is renaming, a click on it only applies the name.
     function box-clicked() {
-        if root.item.has-delay && !root.item.renaming {
+        if (root.item.has-delay || root.item.system-volume >= 0) && !root.item.renaming {
             root.sync-toggled();
         } else {
             root.blank-clicked();
@@ -3897,16 +3897,19 @@ export component SpeakerRow inherits Rectangle {
                             }
 
                             // Delay column: the same width on every row, empty where a
-                            // speaker has no delay.
+                            // speaker has no delay. A value's box hugs it by the Mac's
+                            // 3 px, so the hover fill is no wider than the value.
                             VerticalLayout {
                                 width: Fluent.delay-column;
                                 alignment: center;
+                                cross-axis-alignment: end;
+                                padding-right: 3px;
 
                                 // The reference's Windows volume, where other rows show
                                 // their delay, as the Mac's built-in speakers: it opens
                                 // the panel holding its slider.
                                 if root.item.system-volume >= 0: Rectangle {
-                                    min-width: system-text.preferred-width + 12px;
+                                    width: system-text.preferred-width + 6px;
                                     height: 16px;
                                     border-radius: Fluent.radius-control;
                                     background: system-touch.pressed ? Fluent.pressed : system-touch.has-hover ? Fluent.hover : transparent;
@@ -3943,10 +3946,12 @@ export component SpeakerRow inherits Rectangle {
                                         }
                                     }
 
-                                    // Right edge on the delay chip's, as on the Mac.
+                                    // 2 px spare above and below: Skia clips a Text to its box, and the
+                                    // line box ends on the descender.
                                     system-text := Text {
-                                        x: parent.width - self.width - 6px;
-                                        height: parent.height;
+                                        x: 3px;
+                                        y: (parent.height - self.height) / 2;
+                                        height: self.preferred-height + 4px;
                                         text: Strings.system-volume-value(root.item.system-volume, root.item.system-muted);
                                         font-size: Tokens.font-size-subheadline;
                                         // Small text: the readable teal, as the delay's.
@@ -3964,7 +3969,7 @@ export component SpeakerRow inherits Rectangle {
                                 }
 
                                 if root.item.has-delay: Rectangle {
-                                    min-width: delay-row.preferred-width + 6px;
+                                    width: delay-row.preferred-width;
                                     height: 16px;
                                     opacity: root.item.delay-ms != 0 || root.item.sync-open ? 1 : root.delay-reveal;
                                     border-radius: Fluent.radius-control;
@@ -4021,9 +4026,7 @@ export component SpeakerRow inherits Rectangle {
                                     // At its 12% peak the tint keeps the readable teal
                                     // at 4.5:1 or better, as on the Mac.
                                     delay-flash := Rectangle {
-                                        x: parent.width - self.width - 3px;
                                         y: -3px;
-                                        width: delay-row.preferred-width + 6px;
                                         height: parent.height + 6px;
                                         border-radius: 4px;
                                         background: Tokens.teal;
@@ -4033,8 +4036,8 @@ export component SpeakerRow inherits Rectangle {
                                     // The Mac's 5 px ink gap: the timer's drawing is inset in its box.
                                     delay-row := HorizontalLayout {
                                         spacing: 2px;
-                                        padding-right: 6px;
-                                        alignment: end;
+                                        padding-left: 3px;
+                                        padding-right: 3px;
 
                                         // Skia draws the 12 px number 1 px under its box's middle;
                                         // the timer drops as far to stay level with it, as on the Mac.

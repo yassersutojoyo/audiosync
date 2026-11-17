@@ -10353,6 +10353,116 @@ mod tests {
         );
     }
 
+    /// The inked box of what `window` draws inside `x`, `y`, `width`,
+    /// `height` (logical pixels), against the colour at its top-left
+    /// corner: left, top, right, bottom.
+    fn ink(
+        window: &slint::Window,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    ) -> (f32, f32, f32, f32) {
+        let at = pixels(window);
+        let ground = at(x, y);
+        let (mut left, mut top, mut right, mut bottom) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for row in 0..height as usize {
+            for column in 0..width as usize {
+                let (px, py) = (x + column as f32, y + row as f32);
+                let off: u32 = at(px, py)
+                    .iter()
+                    .zip(ground)
+                    .map(|(a, b)| u32::from(a.abs_diff(b)))
+                    .sum();
+                if off > 60 {
+                    (left, top) = (left.min(px), top.min(py));
+                    (right, bottom) = (right.max(px + 1.0), bottom.max(py + 1.0));
+                }
+            }
+        }
+        (left, top, right, bottom)
+    }
+
+    /// The delay and System values' boxes hug their text with the Mac's
+    /// 3 px on either side, so the hover fill is no wider than the value.
+    #[test]
+    fn a_rows_delay_and_system_boxes_hug_their_values() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        draw_frames();
+        for label in ["System volume", "Desk Speaker delay"] {
+            let chip = ElementHandle::find_by_accessible_label(&app.main, label)
+                .next()
+                .unwrap_or_else(|| panic!("{label}"));
+            let (at, size) = (chip.absolute_position(), chip.size());
+            let (left, _, right, _) = ink(app.main.window(), at.x, at.y, size.width, size.height);
+            assert!(
+                size.width <= right - left + 6.0 + 2.0,
+                "{label}: a {} px box around {} px of text",
+                size.width,
+                right - left
+            );
+        }
+    }
+
+    /// "System 13%" shows whole: its letters' tops are not cut off.
+    #[test]
+    fn the_system_value_shows_its_letters_whole() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        draw_frames();
+        let text = ElementHandle::find_by_element_id(&app.main, "SpeakerRow::system-text")
+            .next()
+            .expect("the System value");
+        let (at, size) = (text.absolute_position(), text.size());
+        let (_, top, _, bottom) = ink(
+            app.main.window(),
+            at.x,
+            at.y - 8.0,
+            size.width,
+            size.height + 16.0,
+        );
+        assert!(
+            at.y < top && bottom < at.y + size.height,
+            "ink {top}..{bottom} in a box {}..{}",
+            at.y,
+            at.y + size.height
+        );
+    }
+
+    /// A click anywhere on This PC's row opens its System panel, as a click
+    /// on another row opens that row's delay panel.
+    #[test]
+    fn a_click_on_this_pcs_row_opens_its_system_panel() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        hold_clock();
+        draw_frames();
+        let reference = app
+            .snapshot()
+            .speakers
+            .into_iter()
+            .find(ui_model::Speaker::is_reference)
+            .expect("the reference");
+        let chip = ElementHandle::find_by_accessible_label(&app.main, "System volume")
+            .next()
+            .expect("the System value");
+        let (at, size) = (chip.absolute_position(), chip.size());
+        click(app.main.window(), at.x - 30.0, at.y + size.height / 2.0);
+        advance_clock(Duration::from_secs(1));
+        draw_frames();
+        let slider = format!("Windows volume of {}", reference.name);
+        assert!(
+            ElementHandle::find_by_accessible_label(&app.main, &slider)
+                .next()
+                .is_some(),
+            "the System panel opens"
+        );
+    }
+
     /// Folding the System panel mid-drag lets go of the slider, as the
     /// Mac's panel does as it disappears, and clears a refusal: open again,
     /// it shows what Windows reports and no refusal line.
@@ -10647,11 +10757,11 @@ mod tests {
         assert_eq!(app.snapshot().airplay_delay_ms, Some(2100.0));
         assert!(!open(&app).contains("local:desk"), "and closed it");
 
-        // The reference row has no delay: a click there is outside.
+        // Between the wordmark and the streaming switch is outside.
         click(window, 600.0, 357.0);
         app.main
             .invoke_delay_edited("local:desk".into(), "300".into());
-        click(window, 600.0, 124.0);
+        click(window, 500.0, 42.0);
         assert_eq!(delay_of(&app, "local:desk"), Some(300.0));
         assert!(open(&app).is_empty());
     }
@@ -11261,14 +11371,9 @@ mod tests {
         use i_slint_backend_testing::ElementHandle;
         // Between the wordmark and the streaming switch, in the gap under the
         // left column's Equalizer card (None: found in the layout, since the
-        // fonts set how tall the cards are), then on the blank part of a row in each speaker section, which the
+        // fonts set how tall the cards are), then on the blank part of a connected speaker's row, which the
         // row's own TouchArea takes.
-        for place in [
-            Some((500.0, 42.0)),
-            None,
-            Some((600.0, 124.0)),
-            Some((600.0, 305.0)),
-        ] {
+        for place in [Some((500.0, 42.0)), None, Some((600.0, 305.0))] {
             let app = app_over(MockBackend::new());
             draw_frames();
             let (x, y) = place.unwrap_or_else(|| {
