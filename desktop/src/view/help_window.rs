@@ -1,5 +1,5 @@
 //! The AudioSync Guide (`ui/help.slint`): how to use the Windows app, opened
-//! from Help > AudioSync Guide (F1). There is one Guide window, made with the
+//! from the gear's AudioSync Guide (F1). There is one Guide window, made with the
 //! App; opening it again brings that window to the front at the top. Its
 //! Show How opens the double-audio notice's own guide, and shows only while
 //! that notice does.
@@ -8,9 +8,9 @@ use std::rc::Rc;
 
 use slint::ComponentHandle;
 
-use super::{App, with_app};
+use super::{App, guide_place_to_show, with_app};
 use crate::guide;
-use crate::ui_model::AppState;
+use crate::ui_model::{AppState, WindowPlace};
 
 impl App {
     pub(super) fn connect_help(self: &Rc<Self>) {
@@ -25,6 +25,7 @@ impl App {
         let w = weak.clone();
         self.help.on_close_requested(move || {
             with_app(&w, |app| {
+                app.ui.borrow_mut().guide_place = app.guide_place();
                 // A window that fails to hide stays open; the user can still close it.
                 let _ = app.help.hide();
             })
@@ -32,6 +33,7 @@ impl App {
         let w = weak;
         self.help.window().on_close_requested(move || {
             with_app(&w, |app| {
+                app.ui.borrow_mut().guide_place = app.guide_place();
                 let _ = app.help.hide();
             });
             slint::CloseRequestResponse::HideWindow
@@ -41,6 +43,9 @@ impl App {
     /// Opens the Guide, or brings it to the front when it is open.
     pub fn show_help(&self) {
         let opening = !self.help.window().is_visible();
+        if opening {
+            self.place_guide();
+        }
         if let Err(error) = self.help.show() {
             self.show_window_error(&error);
             return;
@@ -51,6 +56,46 @@ impl App {
         }
         self.help.invoke_take_focus();
         crate::platform::bring_to_front(self.help.window());
+    }
+
+    /// Where the Guide is while it shows, else where it was last.
+    pub(super) fn guide_place(&self) -> Option<WindowPlace> {
+        let window = self.help.window();
+        if !window.is_visible() {
+            return self.ui.borrow().guide_place;
+        }
+        let position = window.position();
+        Some(WindowPlace {
+            x: position.x,
+            y: position.y,
+        })
+    }
+
+    /// Puts the Guide where it was last time, as the Mac does, back on a
+    /// monitor when that place is off every one.
+    fn place_guide(&self) {
+        let Some(place) = self.ui.borrow().guide_place else {
+            return;
+        };
+        let on_a_monitor = crate::platform::is_on_a_monitor(place.x, place.y);
+        // The primary monitor holds the point (0, 0).
+        let (x, y) = if on_a_monitor {
+            (place.x, place.y)
+        } else {
+            (0, 0)
+        };
+        let monitor = crate::platform::monitor_at(f64::from(x), f64::from(y));
+        let window = self.help.window();
+        let size = window.size().to_logical(window.scale_factor());
+        // Before its first showing the window may have no size yet: the Guide's own.
+        let size = if size.width > 0.0 {
+            (f64::from(size.width), f64::from(size.height))
+        } else {
+            (640.0, 600.0)
+        };
+        if let Some(place) = guide_place_to_show(place, size, on_a_monitor, monitor) {
+            window.set_position(slint::PhysicalPosition::new(place.x, place.y));
+        }
     }
 
     /// Show How in the Guide: the guide of the double-audio notice showing now.
@@ -93,7 +138,7 @@ mod tests {
         assert!(!window.is_visible());
         app.main.invoke_help_requested();
         draw_frames();
-        assert!(window.is_visible(), "Help > AudioSync Guide opens it");
+        assert!(window.is_visible(), "AudioSync Guide opens it");
         assert!(
             !app.guide.window().is_visible(),
             "not the double-audio guide"

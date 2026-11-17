@@ -1,4 +1,4 @@
-// File > Check Setup… (S435): what AudioSync needs from Windows, one row per
+// Settings > Check Setup… (S435): what AudioSync needs from Windows, one row per
 // need with its state in words and an icon, and a line under the heading that
 // names the rows needing the user. The network and microphone rows change by
 // themselves while it shows. Escape, Ctrl+W or Close closes it.
@@ -160,7 +160,7 @@ component SetupRow inherits Rectangle {
 
             Text {
                 text: root.title;
-                font-weight: 600;
+                font-weight: Fluent.weight-semibold;
                 color: Tokens.text;
                 wrap: word-wrap;
                 accessible-role: none;
@@ -230,7 +230,7 @@ export component SetupWindow inherits Window {
     callback open-network-settings();
     callback open-privacy-settings();
     callback close-requested();
-    // Ctrl+Q, File > Exit from this window.
+    // Ctrl+Q, the gear's Exit, from this window.
     callback exit-requested();
 
     public pure function network-status(network: SetupNetwork) -> string {
@@ -262,6 +262,7 @@ export component SetupWindow inherits Window {
     min-width: 360px;
     preferred-width: 520px;
     default-font-family: Fluent.font;
+    default-font-weight: Fluent.weight-regular;
     default-font-size: Tokens.font-size-body;
     // Key events go to the focused item, so Escape needs the scope focused.
     forward-focus: keys;
@@ -298,7 +299,7 @@ export component SetupWindow inherits Window {
                         text: Strings.setup-title;
                         font-family: Fluent.display-font;
                         font-size: Tokens.font-size-title2;
-                        font-weight: 600;
+                        font-weight: Fluent.weight-semibold;
                         color: Tokens.text;
                     }
 

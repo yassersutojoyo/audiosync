@@ -11,7 +11,7 @@
 //! device.
 
 use audiosync_core::eq::{self, CurveMatch, EqSettings, UserCurve};
-use audiosync_core::policy::device_volume::Hint;
+use audiosync_core::policy::device_volume::{DeviceVolume, Hint};
 #[cfg(any(test, feature = "mock-backend"))]
 use audiosync_core::policy::presets as policy_presets;
 use audiosync_core::policy::presets::{Preset, Scene, SpeakerNow};
@@ -272,6 +272,9 @@ pub struct Speaker {
     /// A local output that is on, whose own volume in Windows is low or
     /// muted (spec S196): the hint under its volume slider, with the fix.
     pub device_volume: Option<Hint>,
+    /// A local output's own volume and mute in Windows as last read, while
+    /// it is on: the reference row's System value and slider (spec S197).
+    pub system_volume: Option<DeviceVolume>,
     /// Why a speaker that is on can't play right now, while streaming is
     /// on; it plays again by itself. `None` while it plays or is off.
     pub waiting: Option<Waiting>,
@@ -286,7 +289,7 @@ pub struct Speaker {
     pub in_target: Option<InTarget>,
 }
 
-/// A speaker hidden with Hide Speaker, as Speakers > Hidden Speakers lists it.
+/// A speaker hidden with Hide Speaker, as Settings > Hidden Speakers lists it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HiddenSpeaker {
     /// The ID its row had, its speaker key.
@@ -1095,7 +1098,7 @@ pub struct AppState {
     pub airplay_searching: bool,
     /// What a session does when the app it captures quits (spec S227).
     pub when_source_quits: WhenSourceQuits,
-    /// File > Resume Playback After Sleep (spec S465).
+    /// Settings > Resume Playback After Sleep (spec S465).
     pub resume_after_sleep: bool,
     /// The speaker list's note about Google Cast discovery.
     pub cast_list: CastList,
@@ -1516,16 +1519,23 @@ impl AppState {
     }
 
     /// A section's speakers split into its full rows and, after them, the
-    /// compact rows of those in a zone, each with its zone; order kept.
+    /// compact rows of those in a zone, each with its zone, grouped by zone
+    /// in the order of each zone's first row, as the Mac's; order kept.
     pub fn split_zoned<'a>(
         &'a self,
         section: Vec<&'a Speaker>,
     ) -> (Vec<&'a Speaker>, Vec<(&'a Speaker, &'a Zone)>) {
         let mut full = Vec::new();
-        let mut zoned = Vec::new();
+        let mut zoned: Vec<(&Speaker, &Zone)> = Vec::new();
         for speaker in section {
             match self.zone_of(&speaker.id) {
-                Some(zone) => zoned.push((speaker, zone)),
+                Some(zone) => {
+                    let after = zoned
+                        .iter()
+                        .rposition(|(_, z)| z.id == zone.id)
+                        .map_or(zoned.len(), |last| last + 1);
+                    zoned.insert(after, (speaker, zone));
+                }
                 None => full.push(speaker),
             }
         }
@@ -1774,6 +1784,13 @@ pub trait Backend {
     /// (spec S197).
     fn fix_device_volume(&mut self, _id: &str) {}
 
+    /// The reference row's System slider moved by the user: sets output
+    /// `id`'s own volume in Windows to `level`, 0 to 1 (spec S197).
+    /// Whether Windows took the write.
+    fn set_system_volume(&mut self, _id: &str, _level: f64) -> bool {
+        true
+    }
+
     /// The PIN the user typed for the pairing with speaker `id`.
     fn submit_pin(&mut self, _id: &str, _pin: &str) {}
 
@@ -1841,6 +1858,12 @@ pub trait Backend {
         false
     }
 
+    /// Holds out at once the outputs an app that just started or resumed
+    /// plays on, and hands back those it left (S470); the UI calls it when
+    /// Windows reports a new audio session or one changing state.
+    #[cfg_attr(any(test, not(windows)), allow(dead_code))]
+    fn follow_new_sessions(&mut self) {}
+
     /// While an input device is captured, the largest sample magnitude
     /// since the last call (1 is full scale), for the level meter; `None`
     /// for any other source and while stopped. The UI calls it every
@@ -1882,6 +1905,11 @@ pub trait Backend {
     /// backend drops.
     #[cfg_attr(not(windows), allow(dead_code))]
     fn shut_down(&mut self) {}
+
+    /// Puts Windows' default output back as Windows asks to end the
+    /// session (S469).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    fn restore_default_output(&mut self) {}
 }
 
 /// Where the main window was and how big: the position of its outer frame
@@ -1896,6 +1924,13 @@ pub struct WindowFrame {
     pub height: f64,
     #[serde(default)]
     pub maximized: bool,
+}
+
+/// Where a window's outer frame was, in physical pixels.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct WindowPlace {
+    pub x: i32,
+    pub y: i32,
 }
 
 /// How the main window shows when its frame is remembered.
@@ -1930,19 +1965,21 @@ pub fn frame_to_keep(shows: MainWindowShows, saved: Option<WindowFrame>) -> Opti
 /// What the windows themselves keep across restarts.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ViewSettings {
-    /// View > Show Virtual Devices.
+    /// Settings > Show Virtual Devices.
     pub show_virtual_devices: bool,
     /// The main window's Presets list is open (spec S259).
     pub presets_list_open: bool,
-    /// View > Appearance.
+    /// Settings > Appearance.
     pub appearance: Appearance,
     /// The main window's place and size, once it has been shown.
     pub window: Option<WindowFrame>,
-    /// View > Web Remote.
+    /// The Guide's place, once it has been shown.
+    pub guide: Option<WindowPlace>,
+    /// Web Remote.
     pub remote: crate::remote::RemoteSettings,
-    /// File > Check for Updates Automatically.
+    /// Settings > Check for Updates Automatically.
     pub check_updates_automatically: bool,
-    /// Speakers > Volume Keys Control AudioSync.
+    /// Settings > Volume Keys Control AudioSync.
     pub volume_keys: bool,
     /// The last update check that read the appcast, Unix seconds.
     pub last_update_check: Option<u64>,
@@ -2055,6 +2092,9 @@ pub struct MockBackend {
     pub includes: std::rc::Rc<std::cell::RefCell<Vec<(String, bool)>>>,
     /// Each volume slider hold (true) or release (false), by speaker key.
     pub volume_editing: std::rc::Rc<std::cell::RefCell<Vec<(String, bool)>>>,
+    /// Writes to an output's own volume fail, as on a device that refuses
+    /// them.
+    pub refuses_system_volume: bool,
     /// Window settings the next poll takes in, as a settings file read
     /// after launch brings them.
     pub late_view: std::rc::Rc<std::cell::RefCell<Option<ViewSettings>>>,
@@ -2124,6 +2164,7 @@ impl MockBackend {
             refused_for_code: false,
             own_volume: None,
             device_volume: None,
+            system_volume: None,
             waiting: None,
             cast: None,
             group: None,
@@ -2186,6 +2227,10 @@ impl MockBackend {
         speakers[2].auto_connect = true;
         // The PC's speakers left at 13 % in Windows.
         speakers[0].device_volume = Some(Hint::Low { percent: 13 });
+        speakers[0].system_volume = Some(DeviceVolume {
+            volume: Some(0.13),
+            muted: Some(false),
+        });
         let state = AppState {
             running: false,
             no_speaker_on: false,
@@ -2254,6 +2299,7 @@ impl MockBackend {
             calibrate_all_phase: std::rc::Rc::default(),
             includes: std::rc::Rc::default(),
             volume_editing: std::rc::Rc::default(),
+            refuses_system_volume: false,
             late_view: std::rc::Rc::default(),
             saved_views: std::rc::Rc::default(),
             input_peak_reads: std::rc::Rc::default(),
@@ -2356,6 +2402,14 @@ impl MockBackend {
         if let Some(input) = self.state.sources.iter_mut().find(|s| s.id == "input:line") {
             input.name = name.into();
             input.unplugged = true;
+        }
+    }
+
+    /// Names source `id` `name`.
+    #[cfg(test)]
+    pub fn rename_source(&mut self, id: &str, name: &str) {
+        if let Some(source) = self.state.sources.iter_mut().find(|s| s.id == id) {
+            source.name = name.into();
         }
     }
 
@@ -2944,6 +2998,7 @@ impl Backend for MockBackend {
                 refused_for_code: false,
                 own_volume: None,
                 device_volume: None,
+                system_volume: None,
                 waiting: None,
                 cast: Some(CastRow {
                     state: CastState::Idle,
@@ -3113,6 +3168,20 @@ impl Backend for MockBackend {
 
     fn refresh_devices(&mut self) {
         self.refreshes.set(self.refreshes.get() + 1);
+    }
+
+    /// As Windows would report it once the level is written.
+    fn set_system_volume(&mut self, id: &str, level: f64) -> bool {
+        if self.refuses_system_volume {
+            return false;
+        }
+        if let Some(volume) = self
+            .speaker_mut(id)
+            .and_then(|speaker| speaker.system_volume.as_mut())
+        {
+            volume.volume = Some(level);
+        }
+        true
     }
 
     /// As Windows would report it once the fix is written.
@@ -3420,6 +3489,7 @@ mod tests {
             refused_for_code: false,
             own_volume: None,
             device_volume: None,
+            system_volume: None,
             waiting: None,
             cast: None,
             group: None,
@@ -3784,6 +3854,21 @@ mod tests {
         assert!(!ids(&full).contains(&"airplay:bedroom".to_owned()));
         assert_eq!(zoned.len(), 1);
         assert_eq!(zoned[0].0.id, "airplay:bedroom");
+    }
+
+    #[test]
+    fn the_compact_rows_group_by_zone_in_the_order_of_each_zones_first_row() {
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:a", "Upstairs", &["airplay:bedroom", "airplay:living"]);
+        backend.add_zone("zone:b", "Downstairs", &["airplay:kitchen"]);
+        let state = backend.snapshot();
+        let (_, connected) = state.layout();
+        let (_, zoned) = state.split_zoned(connected);
+        let ids: Vec<&str> = zoned.iter().map(|(s, _)| s.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["airplay:bedroom", "airplay:living", "airplay:kitchen"]
+        );
     }
 
     // covers: S246

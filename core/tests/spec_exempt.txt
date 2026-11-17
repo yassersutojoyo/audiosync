@@ -212,7 +212,7 @@ S443 Windows host only: Add by Address in the main window while Cast runs; the d
 S444 Windows host only: the order inside the main window's Connected Speakers; the desktop tests marked S444 check it.
 S445 Windows host only: the AirPlay Delay row shown only with an AirPlay speaker; the desktop tests marked S445 check it.
 S446 Windows host only: the In zones link's tooltip; the desktop tests marked S446 check it.
-S447 Windows host only: a speaker's name tooltip while its switch has the keyboard focus; the desktop tests marked S447 check it.
+S447 Windows host only: no name tooltip from a speaker switch's keyboard focus; the desktop tests marked S447 check it.
 S448 Windows host only: the source picker's input marker; the desktop tests marked S448 check it.
 S449 Windows host only: Web Remote in the View menu; the desktop tests marked S449 check it.
 S450 Windows host only: the main window's look; the desktop tests marked S450 check it.
@@ -233,3 +233,7 @@ S465 Mac, Windows and Linux hosts only: Resume Playback After Sleep (Sources/Aud
 S466 Mac host only: the main window's Play/Pause icon morph (Sources/AudioSync/WindowRules.swift PlayPauseMorph, Sources/AudioSync/MainWindow.swift SymbolMorph); the Mac logic suite checks it.
 S467 Mac host only: a Now Playing cover's colours measured where it is decoded (Sources/AudioSync/NowPlaying.swift CoverBands); the Mac logic suite checks it.
 S468 Mac host only: a Now Playing song change's main-thread work (Sources/AudioSync/NowPlaying.swift ArtFetches, ArtPushDelay, cover; Sources/AudioSync/AppDelegate+AirPlay.swift, Sources/AudioSync/AppDelegate+Cast.swift); the Mac logic suite checks it.
+S469 Windows host only: moving Windows' default output to a silent endpoint while the whole system streams, and restoring it (docs/WINDOWS_AUDIO_ROUTING.md, "Moving the default output while streaming"); the desktop tests check it with a fake of the default-endpoint seam.
+S470 Windows host only: no copy on Windows' default output when S469 can't move it; the desktop tests check it.
+S471 Windows host only: moving one captured app's own output to a silent endpoint and putting each app's earlier choice back; the desktop tests check it with a fake of the per-app seam.
+S472 Windows host only: the remembered Windows level of each local output; the desktop tests check it with the mock backend.

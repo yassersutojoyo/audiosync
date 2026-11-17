@@ -1,17 +1,17 @@
-//! Add by Address…: the dialog that lists a Google Cast speaker by its
-//! address when discovery can't find it (spec C18). An address that is
+//! Add by Address…: the main window's sheet that lists a Google Cast speaker
+//! by its address when discovery can't find it (spec C18). An address that is
 //! turned down keeps it open with the reason; it closes once the speaker is
-//! added, or on Cancel, Escape or the close button. The check of whether
-//! something answers runs on its own thread, so the windows keep responding.
+//! added, or on Cancel or Escape. The check of whether something answers runs
+//! on its own thread, so the windows keep responding.
 
 use std::rc::{Rc, Weak};
 use std::sync::mpsc::{self, TryRecvError};
 use std::thread;
 use std::time::Duration;
 
-use slint::{ComponentHandle, SharedString, Timer, TimerMode};
+use slint::{ComponentHandle, SharedString, TimerMode};
 
-use super::{App, grow_to_fit, with_app};
+use super::{App, CastSheet, with_app};
 use crate::audio::cast_address::CastAddress;
 use crate::ui_model::CastAddressError;
 
@@ -22,45 +22,33 @@ pub(super) type CheckAnswer = (CastAddress, bool);
 const CHECK_POLL: Duration = Duration::from_millis(50);
 
 impl App {
-    pub(super) fn connect_cast_address_dialog(self: &Rc<Self>) {
-        self.follow_frame(
-            |app| app.cast_address_dialog.window(),
-            "cast address dialog",
-        );
-        let weak = Rc::downgrade(self);
-        let w = weak.clone();
-        self.cast_address_dialog
-            .on_confirmed(move |text| with_app(&w, |app| app.confirm_cast_address(&w, &text)));
-        self.cast_address_dialog
-            .on_blank(|text| text.trim().is_empty());
-        let w = weak.clone();
-        self.cast_address_dialog
-            .on_cancelled(move || with_app(&w, App::close_cast_address));
-        let w = weak;
-        self.cast_address_dialog
-            .window()
-            .on_close_requested(move || {
-                with_app(&w, App::close_cast_address);
-                slint::CloseRequestResponse::HideWindow
-            });
+    pub(super) fn cast_sheet(&self) -> CastSheet<'_> {
+        self.main.global::<CastSheet>()
     }
 
-    /// Speakers > Add by Address…, or the link under the note that no
+    pub(super) fn connect_cast_address_dialog(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        let w = weak.clone();
+        self.cast_sheet()
+            .on_confirmed(move |text| with_app(&w, |app| app.confirm_cast_address(&w, &text)));
+        self.cast_sheet().on_blank(|text| text.trim().is_empty());
+        let w = weak;
+        self.cast_sheet()
+            .on_cancelled(move || with_app(&w, App::close_cast_address));
+    }
+
+    /// The speaker list's Add by Address… link, or the one under the note that no
     /// Google Cast speaker was found.
     pub(super) fn ask_cast_address(&self) {
         self.stop_cast_check();
-        let dialog = &self.cast_address_dialog;
-        dialog.set_address(SharedString::new());
-        dialog.set_error(SharedString::new());
-        dialog.set_refusals(0);
-        if let Err(error) = dialog.show() {
-            self.show_window_error(&error);
-            return;
-        }
-        dialog.invoke_prepare();
-        grow_to_fit(dialog.window(), dialog.get_fit_height());
-        crate::platform::bring_to_front(dialog.window());
-        self.log.log(|| "cast address dialog: opened".to_owned());
+        let sheet = self.cast_sheet();
+        sheet.set_address(SharedString::new());
+        sheet.set_error(SharedString::new());
+        sheet.set_refusals(0);
+        sheet.set_shown(true);
+        sheet.invoke_prepare();
+        crate::platform::bring_to_front(self.main.window());
+        self.log.log(|| "cast address sheet: opened".to_owned());
     }
 
     /// Add or Enter: the backend takes the address, a thread checks that
@@ -86,7 +74,7 @@ impl App {
             return self.turn_down_cast_address(CastAddressError::NotFound);
         }
         *self.cast_check.borrow_mut() = Some(receiver);
-        self.cast_address_dialog.set_checking(true);
+        self.cast_sheet().set_checking(true);
         let weak = weak.clone();
         self.cast_check_timer
             .start(TimerMode::Repeated, CHECK_POLL, move || {
@@ -119,7 +107,7 @@ impl App {
     fn stop_cast_check(&self) {
         self.cast_check_timer.stop();
         self.cast_check.borrow_mut().take();
-        self.cast_address_dialog.set_checking(false);
+        self.cast_sheet().set_checking(false);
     }
 
     /// Keeps the dialog open with why `error` turned the address down.
@@ -129,25 +117,18 @@ impl App {
             CastAddressError::Invalid => strings.get_cast_address_invalid(),
             CastAddressError::NotFound => strings.get_cast_address_not_found(),
         };
-        let dialog = &self.cast_address_dialog;
-        dialog.set_error(reason);
-        dialog.set_refusals(dialog.get_refusals() % 2 + 1);
-        dialog.invoke_prepare();
-        // The reason's row is built after this event, so its height counts
-        // only then.
-        let dialog = dialog.as_weak();
-        Timer::single_shot(Duration::ZERO, move || {
-            if let Some(dialog) = dialog.upgrade() {
-                grow_to_fit(dialog.window(), dialog.get_fit_height());
-            }
-        });
+        let sheet = self.cast_sheet();
+        sheet.set_error(reason);
+        sheet.set_refusals(sheet.get_refusals() % 2 + 1);
+        sheet.invoke_prepare();
     }
 
     fn close_cast_address(&self) {
         self.stop_cast_check();
-        let _ = self.cast_address_dialog.hide();
-        self.cast_address_dialog.set_address(SharedString::new());
-        self.cast_address_dialog.set_error(SharedString::new());
-        self.cast_address_dialog.set_refusals(0);
+        let sheet = self.cast_sheet();
+        sheet.set_shown(false);
+        sheet.set_address(SharedString::new());
+        sheet.set_error(SharedString::new());
+        sheet.set_refusals(0);
     }
 }

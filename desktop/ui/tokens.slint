@@ -53,6 +53,18 @@ export global Tokens {
     // Card borders and dividers (decorative, no contrast requirement).
     out property <color> separator: root.dark ? #3d3d3d : #d9dedd;
 
+    // The Settings window's neutral grey, as the Mac's.
+    out property <color> settings-window: root.dark ? #2a2a2a : #efeeed;
+
+    // Settings' boxes: white on light, a step darker than the window on dark, as the Mac's.
+    out property <color> settings-card: root.dark ? #1f1f1f : #ffffff;
+
+    // A chosen segment of a segmented control, as the Mac's tinted one: white text on it is 5.85:1.
+    out property <color> segment-chosen: #147167;
+
+    // The text of a chosen segment.
+    out property <color> segment-chosen-text: #ffffff;
+
     // Keyboard focus ring (3:1 against the surface and the background).
     out property <color> focus: root.dark ? #63dac2 : #147167;
 
@@ -82,14 +94,14 @@ export global Tokens {
     out property <float> brand-tracking: -0.02;
     out property <length> font-size-wordmark: 21px;
     out property <length> font-size-pairing-code: 28px;
-    out property <length> font-size-title2: 17px;
-    out property <length> font-size-title3: 15px;
-    out property <length> font-size-headline: 13px;
-    out property <length> font-size-body: 13px;
-    out property <length> font-size-callout: 12px;
-    out property <length> font-size-subheadline: 11px;
-    out property <length> font-size-caption: 10px;
-    out property <length> font-size-caption2: 10px;
+    out property <length> font-size-title2: Platform.os == OperatingSystemType.windows ? 18px : 17px;
+    out property <length> font-size-title3: Platform.os == OperatingSystemType.windows ? 16px : 15px;
+    out property <length> font-size-headline: Platform.os == OperatingSystemType.windows ? 14px : 13px;
+    out property <length> font-size-body: Platform.os == OperatingSystemType.windows ? 14px : 13px;
+    out property <length> font-size-callout: Platform.os == OperatingSystemType.windows ? 13px : 12px;
+    out property <length> font-size-subheadline: Platform.os == OperatingSystemType.windows ? 12px : 11px;
+    out property <length> font-size-caption: Platform.os == OperatingSystemType.windows ? 11px : 10px;
+    out property <length> font-size-caption2: Platform.os == OperatingSystemType.windows ? 11px : 10px;
 
     // Distances in points (macOS) and logical pixels (Windows), as the Mac main window uses them.
     out property <length> spacing-window-margin: 20px;
