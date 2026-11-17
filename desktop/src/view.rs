@@ -8574,7 +8574,7 @@ mod tests {
         app.follow_ambient(&weak);
         assert!(app.ambient_timer.running());
         let frame = |fps: f64| Duration::from_secs_f64(1.0 / fps);
-        assert_eq!(app.ambient_timer.interval(), frame(15.0), "the breath");
+        assert_eq!(app.ambient_timer.interval(), frame(30.0), "the breath");
         let look = app.main.get_now_playing_ambient();
         assert_eq!(look.strands.row_count(), 3);
 
@@ -8635,7 +8635,7 @@ mod tests {
         }
         assert_eq!(
             app.ambient_timer.interval(),
-            Duration::from_secs_f64(1.0 / 15.0),
+            Duration::from_secs_f64(1.0 / 30.0),
             "the breath's frame rate"
         );
         let strands = app.main.get_now_playing_ambient().strands;

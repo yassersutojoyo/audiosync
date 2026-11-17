@@ -11359,7 +11359,7 @@ mod tests {
     fn the_now_playing_art_rests_whenever_streaming_is_off() {
         use crate::ambient::{Driver, NO_COVER, WINDOW_DENSITY, WINDOW_SLOT};
         use crate::window_rules::ambient_breath::OPACITY;
-        let idle = Some(std::time::Duration::from_secs_f64(1.0 / 15.0));
+        let idle = Some(std::time::Duration::from_secs_f64(1.0 / 30.0));
         let mut backend = backend();
         let mut art = Driver::default();
         let frames = |backend: &mut MockBackend, art: &mut Driver, seconds: f64| {

@@ -328,7 +328,7 @@ pub mod ambient_breath {
         if !on_screen || reduce_motion {
             return None;
         }
-        Some(if live > 0.0 { 1.0 / 60.0 } else { 1.0 / 15.0 })
+        Some(if live > 0.0 { 1.0 / 60.0 } else { 1.0 / 30.0 })
     }
 
     pub fn contrast(a: Rgb, b: Rgb) -> f64 {
@@ -819,7 +819,11 @@ mod tests {
         use ambient_breath::frame_interval;
         assert_eq!(frame_interval(false, false, 1.0), None);
         assert_eq!(frame_interval(true, true, 1.0), None);
-        assert!(frame_interval(true, false, 0.0).unwrap_or(0.0) >= 1.0 / 20.0);
+        assert_eq!(
+            frame_interval(true, false, 0.0),
+            Some(1.0 / 30.0),
+            "the Mac's idle sway"
+        );
         assert!(frame_interval(true, false, 1.0).unwrap_or(1.0) <= 1.0 / 30.0);
     }
 
