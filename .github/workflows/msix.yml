@@ -15,9 +15,17 @@ permissions:
 
 env:
   SLINT_COMPILER_DENY_WARNINGS: '1'
+  # Skia built with the static C runtime, restored from the cache skia.yml
+  # fills; the app builds skia-bindings with no-compile, so it never compiles Skia.
+  SKIA_BINARIES_URL: file://${{ github.workspace }}/skia-cache/{tag}/skia-binaries-{key}.tar.gz
 
 jobs:
+  skia:
+    name: Skia
+    uses: ./.github/workflows/skia.yml
+
   msix:
+    needs: skia
     name: Unsigned MSIX (x64)
     runs-on: windows-latest
     timeout-minutes: 45
@@ -35,6 +43,17 @@ jobs:
           rustup default 1.99.1
           rustup target add x86_64-pc-windows-msvc
           rustc --version
+
+      - name: Skia cache key
+        id: skia
+        run: echo "key=$(bash scripts/skia_cache_key.sh x86_64-pc-windows-msvc)" >> "$GITHUB_OUTPUT"
+
+      - name: Skia (stored by skia.yml)
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: skia-cache
+          key: ${{ steps.skia.outputs.key }}
+          fail-on-cache-miss: true
 
       # Left unmarked as a release build, so the updater stays off: the Store
       # delivers updates to a packaged install.
