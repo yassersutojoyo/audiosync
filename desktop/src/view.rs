@@ -12354,7 +12354,7 @@ mod tests {
         );
         let source = include_str!("../ui/main.slint");
         let line = &source[source
-            .find("header-status := SecondaryText {")
+            .find("header-status := QuietText {")
             .expect("the status")..];
         let line = &line[..line.find('}').expect("its end")];
         assert!(line.contains("overflow: elide;"), "a long name elides");
@@ -12376,8 +12376,10 @@ mod tests {
             app.main.invoke_power_toggled(on);
             assert_ne!(app.main.get_status(), before, "the state changes");
             draw_frames();
-            advance_clock(Duration::from_millis(half));
-            draw_frames();
+            for _ in 0..half / 16 {
+                advance_clock(Duration::from_millis(16));
+                draw_frames();
+            }
             let (fade_in, fade_out) = (
                 app.main.get_status_fade_in(),
                 app.main.get_status_fade_out(),
@@ -12386,8 +12388,10 @@ mod tests {
                 (0.3..0.7).contains(&fade_in) && (0.3..0.7).contains(&fade_out),
                 "half way through, on {on}, motion {motion}: {fade_in} in, {fade_out} out"
             );
-            advance_clock(Duration::from_millis(300));
-            draw_frames();
+            for _ in 0..30 {
+                advance_clock(Duration::from_millis(16));
+                draw_frames();
+            }
             assert_eq!(app.main.get_status_fade_in(), 1.0, "the new state shows");
             assert_eq!(app.main.get_status_fade_out(), 0.0, "the old one is gone");
         }
