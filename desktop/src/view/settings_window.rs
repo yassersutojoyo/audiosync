@@ -60,16 +60,21 @@ impl App {
         self.settings.global::<Motion>().set_on(motion);
         if fading {
             self.settings.set_revealed(false);
+            crate::platform::set_cloaked(self.settings.window(), true);
         }
         if let Err(error) = self.settings.show() {
             self.show_window_error(&error);
             return;
         }
         if fading {
+            // Cloaked again once shown: a first opening has no native window
+            // to cloak before it, and would show a black frame.
+            crate::platform::set_cloaked(self.settings.window(), true);
             // The fade starts only from a drawn frame, as the flyout's does.
             let settings = self.settings.as_weak();
             slint::Timer::single_shot(FLYOUT_FIRST_FRAME, move || {
                 if let Some(settings) = settings.upgrade() {
+                    crate::platform::set_cloaked(settings.window(), false);
                     settings.set_revealed(true);
                 }
             });

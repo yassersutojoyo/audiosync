@@ -745,11 +745,38 @@ pub fn repaint_frame(window: &slint::Window, menu_bar: bool, dark: bool) {
 #[cfg(not(windows))]
 pub fn repaint_frame(_window: &slint::Window, _menu_bar: bool, _dark: bool) {}
 
+#[cfg(test)]
+thread_local! {
+    static CLOAKED: std::cell::RefCell<Vec<usize>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Whether `set_cloaked` last hid `window`, for headless tests, where no
+/// native window exists to cloak.
+#[cfg(test)]
+pub fn is_cloaked(window: &slint::Window) -> bool {
+    let id = std::ptr::from_ref(window) as usize;
+    CLOAKED.with(|cloaked| cloaked.borrow().contains(&id))
+}
+
+#[cfg(test)]
+fn note_cloaked(window: &slint::Window, cloaked: bool) {
+    let id = std::ptr::from_ref(window) as usize;
+    CLOAKED.with(|all| {
+        let mut all = all.borrow_mut();
+        all.retain(|other| *other != id);
+        if cloaked {
+            all.push(id);
+        }
+    });
+}
+
 /// Hides a window from the screen while it stays shown and draws, or lets it
 /// be seen again. A reopened window is cloaked until its first new frame:
 /// DWM otherwise composes the frame it kept from before it was hidden.
 #[cfg(windows)]
 pub fn set_cloaked(window: &slint::Window, cloaked: bool) {
+    #[cfg(test)]
+    note_cloaked(window, cloaked);
     use slint::winit_030::WinitWindowAccessor;
     use slint::winit_030::winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::Foundation::HWND;
@@ -779,7 +806,10 @@ pub fn set_cloaked(window: &slint::Window, cloaked: bool) {
 }
 
 #[cfg(not(windows))]
-pub fn set_cloaked(_window: &slint::Window, _cloaked: bool) {}
+pub fn set_cloaked(_window: &slint::Window, _cloaked: bool) {
+    #[cfg(test)]
+    note_cloaked(_window, _cloaked);
+}
 
 /// Whether a WM_SETTINGCHANGE names `area` "ImmersiveColorSet", the one
 /// Windows sends when it switches between light and dark.

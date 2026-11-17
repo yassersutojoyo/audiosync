@@ -10037,6 +10037,44 @@ mod tests {
         assert_eq!(shown(), 1.0, "at once with animation effects off");
     }
 
+    /// Each time Settings opens, the second time too, it stays off the screen
+    /// until it drew its content hidden, then fades in once: Windows otherwise
+    /// shows the frame it kept from the last opening, or a black one.
+    #[test]
+    fn settings_stays_off_the_screen_until_its_first_hidden_frame_on_every_open() {
+        use i_slint_backend_testing::ElementHandle;
+        hold_clock();
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        draw_frames();
+        let shown = || {
+            ElementHandle::find_by_element_id(&app.settings, "SettingsWindow::fade")
+                .map(|content| content.computed_opacity())
+                .fold(0.0, f32::max)
+        };
+        let cloaked = || crate::platform::is_cloaked(app.settings.window());
+        for opening in ["first", "second"] {
+            app.main.invoke_settings_requested();
+            assert!(cloaked(), "{opening}: off the screen as it shows");
+            draw_frames();
+            assert_eq!(shown(), 0.0, "{opening}: its first frame is hidden");
+            assert!(cloaked(), "{opening}: off the screen until that frame drew");
+            advance_clock(Duration::from_millis(60));
+            draw_frames();
+            assert!(!cloaked(), "{opening}: on the screen after it");
+            advance_clock(Duration::from_millis(90));
+            draw_frames();
+            let fading = shown();
+            assert!(
+                0.0 < fading && fading < 1.0,
+                "{opening}: it fades in: {fading}"
+            );
+            advance_clock(Duration::from_millis(700));
+            draw_frames();
+            app.settings.hide().expect("Settings hides");
+        }
+    }
+
     /// A Cast speaker's delay is a wait, never below 0, so its row shows it
     /// with no sign, as the Mac's does.
     // covers: S450
