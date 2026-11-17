@@ -4033,9 +4033,12 @@ export component SpeakerRow inherits Rectangle {
                                         spacing: 4px;
                                         alignment: center;
 
+                                        // Skia draws the 12 px number 2 px under its box's middle;
+                                        // the timer drops as far to stay level with it, as on the Mac.
                                         Glyph {
                                             glyph: Glyphs.timer;
                                             font-size: 12px;
+                                            vertical-alignment: bottom;
                                             color: root.item.sync-open ? Tokens.teal-text : Tokens.secondary-text;
                                         }
 
