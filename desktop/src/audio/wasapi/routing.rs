@@ -92,21 +92,21 @@ fn volume(device: &IMMDevice) -> Option<EndpointVolume> {
 /// A session peak at or below this (-60 dBFS) carries no sound.
 const SILENT_PEAK: f32 = 0.001;
 
-/// A session carrying sound whose peak is at least this share of the
-/// endpoint's own peak, read right after it, reads the endpoint's whole mix.
-const MIX_SHARE: f32 = 0.99;
+/// A session carrying sound whose peak is within this share of the
+/// endpoint's own peak, read right after it, reads the mix's level.
+const MIX_TOLERANCE: f32 = 0.01;
 
 /// The IDs of the processes with an active audio session on the endpoint,
 /// sorted, those of them whose every active session reads a peak at or
 /// below [`SILENT_PEAK`], and those whose every session carrying sound reads
-/// the endpoint's whole mix ([`MIX_SHARE`]), as a recorder of the endpoint
-/// does. The system sounds session and sessions that aren't active (paused,
-/// or expired) are left out, and so is a session that fails; a peak that
+/// the level of the endpoint's whole mix ([`MIX_TOLERANCE`]), as a recorder
+/// of the endpoint does. The system sounds session and sessions that aren't
+/// active (paused, or expired) are left out, and so is a session that fails; a peak that
 /// can't be read counts as sound, and not as the mix.
 fn session_pids(device: &IMMDevice) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
     let mut pids = Vec::new();
     let mut sounding = Vec::new();
-    let mut below_mix = Vec::new();
+    let mut off_mix = Vec::new();
     // SAFETY: calls on live COM objects this function owns; only reads.
     unsafe {
         let Ok(manager) = device.Activate::<IAudioSessionManager2>(CLSCTX_ALL, None) else {
@@ -152,9 +152,9 @@ fn session_pids(device: &IMMDevice) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
                         .and_then(|meter| meter.GetPeakValue().ok());
                     if !peak
                         .zip(mix)
-                        .is_some_and(|(peak, mix)| peak >= mix * MIX_SHARE)
+                        .is_some_and(|(peak, mix)| (peak - mix).abs() <= mix * MIX_TOLERANCE)
                     {
-                        below_mix.push(pid);
+                        off_mix.push(pid);
                     }
                 }
             }
@@ -170,7 +170,7 @@ fn session_pids(device: &IMMDevice) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
     let mix = pids
         .iter()
         .copied()
-        .filter(|pid| sounding.contains(pid) && !below_mix.contains(pid))
+        .filter(|pid| sounding.contains(pid) && !off_mix.contains(pid))
         .collect();
     (pids, silent, mix)
 }

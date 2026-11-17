@@ -88,8 +88,8 @@ pub struct EndpointAudio {
     /// Those of `active_pids` whose active sessions carry no sound: open
     /// streams playing silence, or recording what the endpoint plays.
     pub silent_pids: Vec<u32>,
-    /// Those of `active_pids` whose sessions carrying sound read the
-    /// endpoint's whole mix, as a recorder of what it plays does.
+    /// Those of `active_pids` whose sessions carrying sound read the level
+    /// of the endpoint's whole mix, as a recorder of what it plays does.
     pub mix_pids: Vec<u32>,
 }
 
@@ -204,16 +204,16 @@ fn played_on(
         .iter()
         .filter(|endpoint| {
             let sounding = |pid: &u32| !endpoint.silent_pids.contains(pid);
-            // A session reading the mix there is a recorder when AudioSync's
-            // own copy is part of that mix: a player's session reads less.
-            let own_copy_sounds = endpoint
-                .active_pids
+            // When AudioSync's own copy reads the mix's level, the mix is that
+            // copy alone, and another session at that level only records it.
+            let mix_is_own_copy = endpoint
+                .mix_pids
                 .iter()
                 .any(|pid| !captured.captures(*pid) && sounding(pid));
             endpoint.active_pids.iter().any(|pid| {
                 captured.captures(*pid)
                     && !(whole_system
-                        && (!sounding(pid) || (own_copy_sounds && endpoint.mix_pids.contains(pid))))
+                        && (!sounding(pid) || (mix_is_own_copy && endpoint.mix_pids.contains(pid))))
             })
         })
         .map(|endpoint| endpoint.id.as_str())
@@ -597,7 +597,7 @@ mod tests {
     fn a_recorder_of_audiosyncs_copy_isnt_heard() {
         const RECORDER: u32 = 4000;
         let mut speakers = endpoint("speakers", &[OWN, RECORDER]);
-        speakers.mix_pids = vec![RECORDER];
+        speakers.mix_pids = vec![OWN, RECORDER];
         let mut headphones = endpoint("headphones", &[OTHER]);
         headphones.silent_pids = vec![OTHER];
         let answer = check(
@@ -625,6 +625,17 @@ mod tests {
                 ("tv", DirectReason::Session)
             ]
         );
+    }
+
+    // covers: S382
+    #[test]
+    fn an_app_that_audiosyncs_copy_partly_cancels_is_heard() {
+        // The delayed copy cancels part of the app's sound, so the app's
+        // session reads the mix's level while the copy's reads louder.
+        let mut speakers = endpoint("speakers", &[OWN, OTHER]);
+        speakers.mix_pids = vec![OTHER];
+        let answer = check(&whole_system(), &[speakers], &ids(&["speakers"]), &[]);
+        assert_eq!(heard(&answer), [("speakers", DirectReason::Session)]);
     }
 
     // covers: S382, S470
