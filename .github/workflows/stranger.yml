@@ -134,9 +134,11 @@ jobs:
           else
             rpm=$(basename "$(ls dist/AudioSync-*.rpm)")
             echo "package: $rpm" | tee -a "$WORK/env.pkg.txt"
-            # The repository at its own path, so the session writes where the host reads.
+            # The repository at its own path, so the session writes where the host reads;
+            # what root writes there goes back to the runner's user for the upload.
             docker run --rm --network host -v "$PWD:$PWD:ro" -v "$WORK:$WORK" -w "$PWD" \
-              -e RPM="$rpm" -e WORK="$WORK" -e STUB="$stub" fedora:43 bash -euo pipefail -c '
+              -e RPM="$rpm" -e WORK="$WORK" -e STUB="$stub" -e OWNER="$(id -u):$(id -g)" fedora:43 bash -euo pipefail -c '
+                trap "chown -R $OWNER $WORK" EXIT
                 dnf install -y -q "dist/$RPM" pipewire wireplumber pipewire-pulseaudio pipewire-utils \
                   pulseaudio-utils xorg-x11-server-Xvfb dbus-daemon python3 procps-ng findutils \
                   libxkbcommon-x11 libXcursor libXi libXrandr libX11-xcb dejavu-sans-fonts
