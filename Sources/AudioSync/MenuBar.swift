@@ -192,6 +192,8 @@ final class AppModel: ObservableObject {
         var permissionNotNow: (Permission) -> Void = { _ in }
         var toggleZone: (String) -> Void = { _ in }
         var deleteZone: (String) -> Void = { _ in }
+        /// Asks before Delete Zone deletes the zone of this name; true on Delete.
+        var confirmDeleteZone: (String) -> Bool = { _ in false }
         /// Zone ID, the name typed (`ZoneEdit.renaming`).
         var renameZone: (String, String) -> Void = { _, _ in }
         /// Calibrate Zone… for zone `id` (S255).
@@ -571,8 +573,9 @@ final class AppModel: ObservableObject {
         AccessibilityNotification.Announcement(text.speakerMovedToZone(member.name, zone: zone.name)).post()
     }
 
-    /// Delete Zone: its members go back to the plain lists, without asking.
+    /// Delete Zone: once the user confirms, its members go back to the plain lists.
     func delete(_ zone: Zone) {
+        guard actions.confirmDeleteZone(zone.name) else { return }
         actions.deleteZone(zone.id)
         AccessibilityNotification.Announcement(text.zoneDeleted(zone.name)).post()
     }

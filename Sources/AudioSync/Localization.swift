@@ -1279,6 +1279,10 @@ struct UIStrings {
     let renameZone = "Rename…"
     func renameMessage(_ name: String) -> String { "Enter a new name for “\(name)”." }
     let deleteZone = "Delete Zone"
+    /// The question Delete Zone asks first, as Windows asks it.
+    func deleteZoneTitle(_ name: String) -> String { "Delete “\(name)”?" }
+    let deleteZoneMessage = "Its speakers go back to the speaker list."
+    let deleteZoneConfirm = "Delete"
     /// A zone header's count; `zoneWaiting` follows it when a member waits.
     func zoneCount(on: Int, of total: Int) -> String { "\(on) of \(total) on" }
     func zoneWaiting(_ n: Int) -> String { ", \(n) waiting" }

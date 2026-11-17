@@ -17980,6 +17980,18 @@ do {
           "zone header: both focusable parts take Left and Right through ZoneHeaderHit.arrowFolds, in the panel and the main window")
 }
 
+// MARK: Delete Zone asks first (MenuBar.swift, AppDelegate+Windows.swift)
+do {
+    let findingsBar = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
+    let findingsAlerts = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+Windows.swift", encoding: .utf8)) ?? ""
+    check(findingsBar.contains("guard actions.confirmDeleteZone(zone.name) else { return }")
+            && findingsAlerts.contains("a.confirmDeleteZone = ")
+            && findingsAlerts.contains("let cancel = prompt.addButton(withTitle: text.cancel)\n        cancel.keyEquivalent = \"\\r\"\n        prompt.addButton(withTitle: text.deleteZoneConfirm).hasDestructiveAction = true")
+            && findingsAlerts.contains("guard event.keyCode == 53 else { return event }")
+            && findingsAlerts.contains("cancel.performClick(nil)"),
+          "Delete Zone: asks first, Return and Escape press Cancel (AppKit gives a Cancel title only Escape), Delete is destructive")
+}
+
 // MARK: A delay pane closed while its field has the focus leaves no ring on a neighbour (MainWindow.swift, PanelZoneHeader.swift)
 do {
     let ringWindow = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
