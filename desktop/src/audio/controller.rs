@@ -4476,6 +4476,33 @@ impl<D: Driver> Controller<D> {
         }
     }
 
+    /// A new session may be the app starting to play: checked at once, so
+    /// its output is held out or the app moved before its first note.
+    /// Returns whether Windows reported one since the last call.
+    fn take_new_sessions(&mut self, now: Instant) -> bool {
+        if !self.driver.new_audio_sessions() {
+            return false;
+        }
+        self.check_routing(now);
+        self.sync_app_output(true);
+        // The app may be leaving the outputs it just opened its session on
+        // for its move, as at the start (S471).
+        if self.app_redirect.record().is_some() {
+            let mut added = false;
+            for played in &self.routing.played_on {
+                if played.idle_checks == 0 && !self.routing.at_start.contains(&played.endpoint_id) {
+                    self.routing.at_start.push(played.endpoint_id.clone());
+                    added = true;
+                }
+            }
+            if added {
+                self.hold_at_start_briefly();
+                self.routing.at_start_until = Some(now + START_ROUTING_WINDOW);
+            }
+        }
+        true
+    }
+
     fn routing_interval(&self, now: Instant) -> Duration {
         let following = !self.routing.at_start.is_empty()
             && self.routing.at_start_until.is_some_and(|until| now < until);
@@ -5496,6 +5523,16 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
     }
 
+    fn follow_new_sessions(&mut self) {
+        if !self.take_new_sessions(Instant::now()) {
+            return;
+        }
+        let failures = self.sync_outputs();
+        self.report_failures(failures);
+        self.release_held_leads(false);
+        self.retime();
+    }
+
     fn poll(&mut self) -> Vec<BackendEvent> {
         self.polls += 1;
         self.follow_power();
@@ -5701,25 +5738,9 @@ impl<D: Driver> AudioBackend for Controller<D> {
         // Before the outputs, so one a captured app plays on is held out in
         // this pass (S470).
         let now = Instant::now();
-        // A new session may be the app starting to play: checked at once,
-        // so its output is held out or the app moved before its first note.
-        let new_session = self.driver.new_audio_sessions();
-        if new_session {
-            self.check_routing(now);
-        } else {
+        if !self.take_new_sessions(now) {
             self.check_routing_if_due(now);
-        }
-        self.sync_app_output(new_session);
-        // The app may be leaving the outputs it just opened its session on
-        // for its move, as at the start (S471).
-        if new_session && self.app_redirect.record().is_some() {
-            for played in &self.routing.played_on {
-                if played.idle_checks == 0 && !self.routing.at_start.contains(&played.endpoint_id) {
-                    self.routing.at_start.push(played.endpoint_id.clone());
-                }
-            }
-            self.hold_at_start_briefly();
-            self.routing.at_start_until = Some(now + START_ROUTING_WINDOW);
+            self.sync_app_output(false);
         }
         let failures = self.sync_outputs();
         self.release_held_leads(true);
@@ -6849,6 +6870,29 @@ mod tests {
         backend.poll();
         assert_eq!(player_output(&apps), render_interface(switch_fakes::CABLE));
         assert_eq!(playing(&backend), [HEADPHONES]);
+    }
+
+    // covers: S470, S471
+    #[test]
+    fn a_session_turning_active_holds_its_output_out_before_the_next_poll() {
+        let mut backend = backend();
+        with_switch(&mut backend);
+        backend.set_default_output(SPEAKERS);
+        backend.list_outputs().unwrap();
+        let (apps, _) = with_app_outputs(&mut backend, None);
+        apps.0.borrow_mut().sessionless.push(PLAYER_PID);
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.poll();
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        apps.0.borrow_mut().sessionless.clear();
+        backend.open_session(PLAYER_PID, SPEAKERS);
+        backend.follow_new_sessions();
+        assert_eq!(playing(&backend), [HEADPHONES]);
+        assert_eq!(player_output(&apps), render_interface(switch_fakes::CABLE));
     }
 
     /// The backend of [`backend`] moving the default and apps' outputs, with

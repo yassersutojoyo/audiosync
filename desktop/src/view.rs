@@ -924,6 +924,22 @@ thread_local! {
     static VOLUME_KEY_APP: RefCell<Weak<App>> = const { RefCell::new(Weak::new()) };
 }
 
+/// Runs on Windows' audio session thread: hands the new session to the UI
+/// thread, which holds out the outputs the app plays on (S470).
+#[cfg(all(windows, not(test)))]
+fn deliver_new_session() {
+    let _ = slint::invoke_from_event_loop(|| {
+        VOLUME_KEY_APP.with(|app| {
+            with_app(&app.borrow(), |app| {
+                // Busy only inside a nested loop; the next poll takes it then.
+                if let Ok(mut backend) = app.backend.try_borrow_mut() {
+                    backend.follow_new_sessions();
+                }
+            });
+        });
+    });
+}
+
 /// Runs on the keyboard hook's thread: hands the key to the UI thread.
 #[cfg(all(windows, not(test)))]
 fn deliver_volume_key(key: VolumeKey) {
@@ -1363,6 +1379,8 @@ impl App {
         });
         #[cfg(all(windows, not(test)))]
         VOLUME_KEY_APP.with(|slot| *slot.borrow_mut() = Rc::downgrade(&app));
+        #[cfg(all(windows, not(test)))]
+        crate::audio::wasapi::on_new_session(deliver_new_session);
         let sessions = i32::try_from(audiosync_airplay::sender::AIRPLAY2_SESSIONS);
         app.main
             .global::<Strings>()

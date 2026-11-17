@@ -5953,6 +5953,10 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.audio.sound_bands()
     }
 
+    fn follow_new_sessions(&mut self) {
+        self.audio.follow_new_sessions();
+    }
+
     /// Also writes the settings file when anything changed since the last
     /// poll, so a slider drag is saved about twice a second at most.
     fn poll(&mut self) -> bool {

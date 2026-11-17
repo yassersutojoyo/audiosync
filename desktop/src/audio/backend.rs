@@ -1269,6 +1269,11 @@ pub trait AudioBackend {
     /// about twice a second.
     fn poll(&mut self) -> Vec<BackendEvent>;
 
+    /// Runs what [`AudioBackend::poll`] does for an audio session created or
+    /// turned active since the last call, at once instead of at the next poll
+    /// (S470, S471); the UI calls it when Windows reports one.
+    fn follow_new_sessions(&mut self) {}
+
     /// Quit's teardown: the outputs fade out, the AirPlay and Cast senders
     /// stop. A later call, or the drop, does nothing more.
     #[cfg_attr(not(windows), allow(dead_code))]

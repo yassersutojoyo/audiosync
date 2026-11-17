@@ -3,7 +3,7 @@
 //! app starts or resumes playing (S471) instead of at the next interval.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use windows::Win32::Foundation::{S_OK, WAIT_TIMEOUT};
 use windows::Win32::Media::Audio::{
@@ -91,6 +91,7 @@ fn watch(created: &Arc<AtomicBool>, stop: &Event, ready: Ready) {
     };
     let object = ComObject::new(SessionListener {
         created: Arc::clone(created),
+        wake: wake_registered,
         followed: Mutex::default(),
     });
     let followed = &object.followed;
@@ -147,6 +148,22 @@ fn watch(created: &Arc<AtomicBool>, stop: &Event, ready: Ready) {
 }
 
 const PRUNE_EVERY_MS: u32 = 10_000;
+
+static WAKE: OnceLock<fn()> = OnceLock::new();
+
+/// Has `wake` called on Windows' thread when a session is created or turns
+/// active and none was waiting to be taken, so the outputs the app plays on
+/// are held out then rather than at the next poll (S470). The first call wins.
+#[cfg_attr(test, allow(dead_code))]
+pub fn on_new_session(wake: fn()) {
+    let _ = WAKE.set(wake);
+}
+
+fn wake_registered() {
+    if let Some(wake) = WAKE.get() {
+        wake();
+    }
+}
 
 /// Registers `events` for the state changes of `session`, kept in `followed`
 /// for the unregistering at the end.
@@ -234,11 +251,21 @@ impl<S> Followed<S> {
 
 /// Raises the flag when a session is created or turns active: a paused app
 /// that plays on resumes its old session. Windows calls it on its own thread
-/// and asks it to return quickly, so it only marks and registers.
+/// and asks it to return quickly, so it only marks, wakes and registers.
 #[implement(IAudioSessionNotification, IAudioSessionEvents)]
 struct SessionListener {
     created: Arc<AtomicBool>,
+    wake: fn(),
     followed: Mutex<Followed<IAudioSessionControl>>,
+}
+
+impl SessionListener {
+    /// One wake per flag raised: the first taker handles every session since.
+    fn mark(&self) {
+        if !self.created.swap(true, Ordering::AcqRel) {
+            (self.wake)();
+        }
+    }
 }
 
 impl IAudioSessionNotification_Impl for SessionListener_Impl {
@@ -246,7 +273,7 @@ impl IAudioSessionNotification_Impl for SessionListener_Impl {
         &self,
         session: windows_core::Ref<IAudioSessionControl>,
     ) -> windows_core::Result<()> {
-        self.created.store(true, Ordering::Release);
+        self.mark();
         if let Ok(session) = session.ok() {
             follow(&self.to_interface(), &self.followed, session);
         }
@@ -257,7 +284,7 @@ impl IAudioSessionNotification_Impl for SessionListener_Impl {
 impl IAudioSessionEvents_Impl for SessionListener_Impl {
     fn OnStateChanged(&self, state: AudioSessionState) -> windows_core::Result<()> {
         if state == AudioSessionStateActive {
-            self.created.store(true, Ordering::Release);
+            self.mark();
         }
         Ok(())
     }
@@ -308,10 +335,15 @@ mod tests {
 
     // covers: S471
     #[test]
-    fn a_session_turning_active_counts_as_a_new_one() {
+    fn a_session_turning_active_counts_as_a_new_one_and_wakes_once() {
+        static WOKEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        fn woken() {
+            WOKEN.fetch_add(1, Ordering::AcqRel);
+        }
         let created = Arc::new(AtomicBool::new(false));
         let listener: IAudioSessionNotification = SessionListener {
             created: Arc::clone(&created),
+            wake: woken,
             followed: Mutex::default(),
         }
         .into();
@@ -322,6 +354,14 @@ mod tests {
         // SAFETY: as above.
         unsafe { events.OnStateChanged(AudioSessionStateActive) }.unwrap();
         assert!(created.load(Ordering::Acquire));
+        assert_eq!(WOKEN.load(Ordering::Acquire), 1);
+        // SAFETY: as above.
+        unsafe { events.OnStateChanged(AudioSessionStateActive) }.unwrap();
+        assert_eq!(
+            WOKEN.load(Ordering::Acquire),
+            1,
+            "not taken yet: no second wake"
+        );
     }
 
     // covers: S471

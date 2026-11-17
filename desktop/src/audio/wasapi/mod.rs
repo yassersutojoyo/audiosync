@@ -47,6 +47,8 @@ use crate::debug_log::DebugLog;
 pub use app_output::WasapiAppOutputs;
 pub use default_output::WasapiDefaults;
 pub use media_sessions::read_media_sessions;
+#[cfg_attr(test, allow(unused_imports))]
+pub use sessions::on_new_session;
 
 /// The platform calls of the Windows backend.
 pub struct WasapiDriver {

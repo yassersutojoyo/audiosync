@@ -1862,6 +1862,12 @@ pub trait Backend {
         false
     }
 
+    /// Holds out at once the outputs an app that just started or resumed
+    /// plays on (S470); the UI calls it when Windows reports a new or newly
+    /// active audio session.
+    #[cfg_attr(any(test, not(windows)), allow(dead_code))]
+    fn follow_new_sessions(&mut self) {}
+
     /// While an input device is captured, the largest sample magnitude
     /// since the last call (1 is full scale), for the level meter; `None`
     /// for any other source and while stopped. The UI calls it every
