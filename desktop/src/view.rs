@@ -5399,6 +5399,7 @@ impl App {
         let flyout = self.flyout.as_weak();
         slint::Timer::single_shot(FLYOUT_FIRST_FRAME, move || {
             if let Some(flyout) = flyout.upgrade() {
+                crate::platform::set_cloaked(flyout.window(), false);
                 flyout.set_revealed(true);
             }
         });

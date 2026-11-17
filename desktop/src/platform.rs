@@ -745,6 +745,42 @@ pub fn repaint_frame(window: &slint::Window, menu_bar: bool, dark: bool) {
 #[cfg(not(windows))]
 pub fn repaint_frame(_window: &slint::Window, _menu_bar: bool, _dark: bool) {}
 
+/// Hides a window from the screen while it stays shown and draws, or lets it
+/// be seen again. A reopened window is cloaked until its first new frame:
+/// DWM otherwise composes the frame it kept from before it was hidden.
+#[cfg(windows)]
+pub fn set_cloaked(window: &slint::Window, cloaked: bool) {
+    use slint::winit_030::WinitWindowAccessor;
+    use slint::winit_030::winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Dwm::{DWMWA_CLOAK, DwmSetWindowAttribute};
+    use windows::core::BOOL;
+
+    window.with_winit_window(|window| {
+        let Ok(handle) = window.window_handle() else {
+            return;
+        };
+        let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+            return;
+        };
+        let hwnd = HWND(handle.hwnd.get() as *mut core::ffi::c_void);
+        let value = BOOL::from(cloaked);
+        // SAFETY: `hwnd` is this thread's live window, and `value` is a
+        // 4-byte BOOL that lives through the call.
+        let _ = unsafe {
+            DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_CLOAK,
+                (&raw const value).cast(),
+                size_of::<BOOL>() as u32,
+            )
+        };
+    });
+}
+
+#[cfg(not(windows))]
+pub fn set_cloaked(_window: &slint::Window, _cloaked: bool) {}
+
 /// Whether a WM_SETTINGCHANGE names `area` "ImmersiveColorSet", the one
 /// Windows sends when it switches between light and dark.
 #[cfg(any(windows, test))]

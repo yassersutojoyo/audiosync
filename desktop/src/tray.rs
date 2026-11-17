@@ -453,6 +453,7 @@ fn on_menu_event(id: MenuId) {
 fn show_flyout(app: &App, icon: Bounds) {
     let flyout = app.flyout.window();
     app.prepare_flyout_open(platform::animation_effects());
+    platform::set_cloaked(flyout, true);
     if flyout.show().is_err() {
         return;
     }
