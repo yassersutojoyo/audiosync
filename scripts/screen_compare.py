@@ -12,13 +12,15 @@ Elements match by key (id or accessibility label); repeated keys are numbered
 top to bottom, left to right. A row is printed for each element whose frame
 moves more than 1 pt, whose font differs, or whose colour differs by more
 than one step in a channel, for each element on one side only, and for each
-state on one side only. A field that is null on either side is not compared.
+state on one side only, with the reason the other side's not-set-up.txt
+gives for it (`ID: reason` or `ID theme: reason` per line). A field that is null on either side is not compared.
 
 Usage: python -I scripts/screen_compare.py <mac-dir> <other-dir>
        python -I scripts/screen_compare.py --self-test
 Exits 1 when it printed a row.
 """
 
+import io
 import json
 import os
 import sys
@@ -36,6 +38,26 @@ def load(folder):
             with open(os.path.join(folder, name), encoding="utf-8") as file:
                 states[name[: -len(".json")]] = json.load(file)
     return states
+
+
+def not_set_up(folder):
+    """Reasons from the folder's not-set-up.txt, by `ID` or `ID theme`."""
+    reasons = {}
+    path = os.path.join(folder, "not-set-up.txt")
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as file:
+            for line in file:
+                named, _, reason = line.strip().partition(": ")
+                if reason:
+                    reasons[named] = reason
+    return reasons
+
+
+def missing(state, present, absent):
+    base, _, theme = state.rpartition("-")
+    reasons = not_set_up(absent)
+    reason = reasons.get(f"{base} {theme}") or reasons.get(base)
+    return f"not set up in {absent}: {reason}" if reason else f"only in {present}"
 
 
 def keyed(elements):
@@ -76,10 +98,10 @@ def compare(left_dir, right_dir):
     rows = []
     for state in sorted(set(left) | set(right)):
         if state not in right:
-            rows.append(f"{state}\t-\tonly in {left_dir}")
+            rows.append(f"{state}\t-\t{missing(state, left_dir, right_dir)}")
             continue
         if state not in left:
-            rows.append(f"{state}\t-\tonly in {right_dir}")
+            rows.append(f"{state}\t-\t{missing(state, right_dir, left_dir)}")
             continue
         a, b = keyed(left[state]["elements"]), keyed(right[state]["elements"])
         for key in sorted(set(a) | set(b)):
@@ -105,7 +127,8 @@ def self_test():
         "MAIN-IDLE-terang\tKitchen#2\tfg #1d1d1f vs #3a3a3c",
         "MAIN-IDLE-terang\tSpeakers\tonly in mac",
         "MAIN-IDLE-terang\tStreaming to\tfont SF Pro 13 vs Segoe UI 13",
-        "TRAY-IDLE-gelap\t-\tonly in other",
+        "MAIN-IDLE-terang\t−170\tonly in mac",
+        "TRAY-IDLE-gelap\t-\tnot set up in mac: the panel is not drawn here",
     ]
     if got != want:
         print("FAIL screen_compare self-test")
@@ -116,6 +139,20 @@ def self_test():
         return 1
     if compare(mac, mac):
         print("FAIL screen_compare: a folder differs from itself")
+        return 1
+    # A Windows console's stdout is cp1252, which has no U+2212 minus sign.
+    console = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+    shown, sys.stdout = sys.stdout, console
+    try:
+        main([mac, other])
+        console.flush()
+        failed = "−170".encode() not in console.buffer.getvalue()
+    except UnicodeEncodeError as error:
+        failed = error
+    finally:
+        sys.stdout = shown
+    if failed:
+        print(f"FAIL screen_compare: rows are not written as UTF-8 on a cp1252 console ({failed})")
         return 1
     print("ok screen_compare self-test")
     return 0
@@ -128,8 +165,10 @@ def main(argv):
         print(__doc__.strip().split("\n\n")[-1], file=sys.stderr)
         return 2
     rows = compare(argv[0], argv[1])
-    for row in rows:
-        print(row)
+    # `python -I` ignores PYTHONIOENCODING, and keys carry U+2212.
+    sys.stdout.flush()
+    sys.stdout.buffer.write("".join(row + "\n" for row in rows).encode("utf-8"))
+    sys.stdout.flush()
     print(f"{len(rows)} differences", file=sys.stderr)
     return 1 if rows else 0
 

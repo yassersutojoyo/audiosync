@@ -3,5 +3,6 @@
  {"key": "Kitchen", "frame": [20, 140, 200, 22], "font": null, "fg": "#1d1d1f", "bg": "#ffffff"},
  {"key": "Kitchen", "frame": [20, 100, 200, 22], "font": null, "fg": "#1d1d1f", "bg": "#ffffff"},
  {"key": "Speakers", "frame": [20, 180, 200, 22], "font": null, "fg": "#1d1d1f", "bg": "#ffffff"},
+ {"key": "−170", "frame": [380, 300, 74, 24], "font": null, "fg": null, "bg": null},
  {"key": "Volume", "frame": [300, 100, 120, 20], "font": null, "fg": "#0a84ff", "bg": null}
 ]}

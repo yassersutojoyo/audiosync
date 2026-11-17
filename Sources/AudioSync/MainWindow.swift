@@ -403,6 +403,7 @@ struct MainView: View {
         .background(MenuAnchor(box: gearAnchor).accessibilityHidden(true))
         .fixedSize()
         .accessibilityLabel(t.moreOptions)
+        .layarKey(t.moreOptions)
         .accessibilityHint(t.moreOptionsHint)
         .help(t.moreOptions)
     }
@@ -510,6 +511,7 @@ struct MainView: View {
         .buttonStyle(.plain)
         .foregroundStyle(.primary)
         .accessibilityLabel(label)
+        .layarKey(label)
         .help(label)
     }
 
@@ -526,6 +528,7 @@ struct MainView: View {
         .buttonStyle(.plain)
         .foregroundStyle(on ? Brand.tealText : Color.secondary)
         .accessibilityLabel(label)
+        .layarKey(label)
         .accessibilityValue(value)
         .help(label)
     }
@@ -572,6 +575,7 @@ struct MainView: View {
         .buttonStyle(.plain)
         .modifier(QuickRow())
         .accessibilityLabel(t.equalizer)
+        .layarKey(t.equalizer)
         .accessibilityValue(model.equalizerOn ? t.equalizerCardOn(model.equalizerCurve) : t.off)
     }
 
@@ -677,6 +681,7 @@ struct MainView: View {
                     .lineLimit(1)
                     .fixedSize()
                     .accessibilityLabel(model.text.inZones)
+                    .layarKey(model.text.inZones)
                     .accessibilityAddTraits(.isHeader)
                 Rectangle()
                     .fill(Color(nsColor: .separatorColor))
@@ -817,6 +822,7 @@ struct ScrollingTitle: View {
             .onChange(of: text) { line.start = .now }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(text)
+            .layarKey(text)
     }
 }
 
@@ -920,6 +926,7 @@ private struct PresetsRow: View {
             .modifier(QuickRow())
             .help(open ? t.hidePresetList : t.showPresetList)
             .accessibilityLabel(t.presets)
+            .layarKey(t.presets)
             .accessibilityValue(line ?? t.choosePreset)
             .accessibilityHint(open ? t.hidePresetList : t.showPresetList)
             PresetList(model: model, draft: draft)
@@ -1066,6 +1073,7 @@ private struct PresetListRow: View {
                 .buttonStyle(.plain)
                 .contentShape(.focusEffect, RoundedRectangle(cornerRadius: 6))
                 .accessibilityLabel(row.name)
+                .layarKey(row.name)
                 .accessibilityValue(value(t))
 
                 Menu { menuItems(t) } label: {
@@ -1076,6 +1084,7 @@ private struct PresetListRow: View {
                 .menuIndicator(.hidden)
                 .fixedSize()
                 .accessibilityLabel(t.presetOptions(name: row.name))
+                .layarKey(t.presetOptions(name: row.name))
                 .help(t.presetOptions(name: row.name))
                 .focused($optionsFocused)
                 .modifier(Reveal(shown: hover.isHovered || optionsFocused || voiceOver))
@@ -1165,6 +1174,7 @@ private struct PresetNameField: View {
         TextField(placeholder, text: $draft.text)
             .textFieldStyle(.roundedBorder)
             .accessibilityLabel(text.presetFieldLabel)
+            .layarKey(text.presetFieldLabel)
             .accessibilityHint(text.zoneNameFieldHint)
             .focused($focused)
             .onSubmit { draft.finish(returned: true) }
@@ -1930,6 +1940,7 @@ private struct ZoneCard: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(zone.name)
+        .layarKey(zone.name)
     }
 
     private func hit(_ area: ZoneHeaderHit.Area) {
@@ -1960,6 +1971,7 @@ private struct ZoneCard: View {
             .buttonStyle(.plain)
             .foregroundStyle(Brand.secondaryText)
             .accessibilityLabel(expanded ? t.hideZoneSpeakers(zone.name) : t.showZoneSpeakers(zone.name))
+            .layarKey(expanded ? t.hideZoneSpeakers(zone.name) : t.showZoneSpeakers(zone.name))
             .accessibilityValue(nonePresent ? model.countText(of: zone) : "")
             .help(expanded ? t.hideZoneSpeakers(zone.name) : t.showZoneSpeakers(zone.name))
             // With nothing to switch the chevron speaks for the header, so it has the action too.
@@ -1977,6 +1989,7 @@ private struct ZoneCard: View {
             .accessibilityHidden(nonePresent)
             .modifier(SkipsFocus(skip: nonePresent))
             .accessibilityLabel(t.zoneLabel(zone.name))
+            .layarKey(t.zoneLabel(zone.name))
             .accessibilityValue(nonePresent ? model.countText(of: zone)
                                 : t.zoneValue(on: zone.on, of: zone.total, waiting: zone.waiting))
             .accessibilityHint(t.rowHint(state, note: waitNote))
@@ -2017,6 +2030,7 @@ private struct ZoneCard: View {
                     .frame(minWidth: 100, maxWidth: 140)
                     .disabled(zone.total == 0)
                     .accessibilityLabel(t.volume(of: zone.name))
+                    .layarKey(t.volume(of: zone.name))
                     .accessibilityValue(t.volumeValue(zone.volume))
                     .help(t.volume(of: zone.name))
             }
@@ -2029,6 +2043,7 @@ private struct ZoneCard: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .accessibilityLabel(t.speakerOptions(name: zone.name))
+            .layarKey(t.speakerOptions(name: zone.name))
             .help(t.speakerOptions(name: zone.name))
             .focused($optionsFocused)
             .modifier(Reveal(shown: hover.isHovered || optionsFocused || voiceOver))
@@ -2134,6 +2149,7 @@ private struct ZoneMemberCompactRow: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(t.inZoneLabel(speaker.name, zone: zone.name))
+            .layarKey(t.inZoneLabel(speaker.name, zone: zone.name))
             .accessibilityValue(t.rowValue(state, offline: speaker.unannounced))
             .accessibilityHint(t.rowHint(state, note: note))
             .accessibilityAction(named: t.renameSpeaker) { model.startRename(speaker, in: .inZones) }
@@ -2173,6 +2189,7 @@ private struct ZoneMemberCompactRow: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(t.goToZoneLabel(zone.name))
+                    .layarKey(t.goToZoneLabel(zone.name))
                     .help(t.goToZoneLabel(zone.name))
                 }
                 if let note {
@@ -2192,6 +2209,7 @@ private struct ZoneMemberCompactRow: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .accessibilityLabel(t.speakerOptions(name: speaker.name))
+            .layarKey(t.speakerOptions(name: speaker.name))
             .help(t.speakerOptions(name: speaker.name))
         }
         .padding(.vertical, ZoneLook.compactPaddingY)
@@ -2223,6 +2241,7 @@ private struct InlineNameField: View {
             .textFieldStyle(.roundedBorder)
             .frame(maxWidth: 220)
             .accessibilityLabel(label)
+            .layarKey(label)
             .accessibilityHint(hint)
             .focused($focused)
             .onSubmit { model.commitRename(id: id) }
@@ -2260,6 +2279,7 @@ private struct ZoneMemberPlaceholder: View {
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(member.name)
+            .layarKey(member.name)
             .accessibilityValue(member.note ?? "")
             Spacer(minLength: 0)
             // One that plays as part of a target changes through Use <target> Instead (S247).
@@ -2272,6 +2292,7 @@ private struct ZoneMemberPlaceholder: View {
                 .menuIndicator(.hidden)
                 .fixedSize()
                 .accessibilityLabel(text.speakerOptions(name: member.name))
+                .layarKey(text.speakerOptions(name: member.name))
                 .help(text.speakerOptions(name: member.name))
                 .focused($optionsFocused)
                 .modifier(Reveal(shown: hover.isHovered || optionsFocused || voiceOver))
@@ -2361,6 +2382,8 @@ struct SpeakerRow: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(t.speakerLabel(name: speaker.name, tag: tag,
                                                    renamedFrom: speaker.renamedFrom))
+                .layarKey(t.speakerLabel(name: speaker.name, tag: tag,
+                                                   renamedFrom: speaker.renamedFrom))
                 .accessibilityValue(t.rowValue(state, offline: speaker.unannounced))
                 .accessibilityHint(t.rowHint(state, note: note ?? t.availability(speaker.availability)))
                 .accessibilityAction(named: t.renameSpeaker) { model.startRename(speaker) }
@@ -2410,6 +2433,7 @@ struct SpeakerRow: View {
                                 .foregroundStyle(Brand.tealText)
                                 .help(t.autoConnect)
                                 .accessibilityLabel(t.autoConnect)
+                                .layarKey(t.autoConnect)
                         }
                         Spacer()
                         // No delay field on AirPlay rows, nor on the reference's (S181).
@@ -2444,6 +2468,7 @@ struct SpeakerRow: View {
                             .controlSize(.small)
                             .disabled(volumeLocked != nil)
                             .accessibilityLabel(t.volume(of: speaker.name))
+                            .layarKey(t.volume(of: speaker.name))
                             .accessibilityValue(t.volumeValue(speaker.volume))
                             .hintAndHelp(volumeLocked)
                             .modifier(CastVolumeKeys(step: speaker.isCast
@@ -2636,6 +2661,7 @@ struct SpeakerRow: View {
         .buttonStyle(.plain)
         .fixedSize()
         .accessibilityLabel(t.castButtonLabel(title, name: speaker.name))
+        .layarKey(t.castButtonLabel(title, name: speaker.name))
         .accessibilityHint(help)
         .help(help)
     }
@@ -2649,6 +2675,7 @@ struct SpeakerRow: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .accessibilityLabel(t.speakerOptions(name: speaker.name))
+        .layarKey(t.speakerOptions(name: speaker.name))
         .help(t.speakerOptions(name: speaker.name))
     }
 
@@ -2788,6 +2815,7 @@ private struct DelayValueButton: View {
         .focused(focus)
         .help(t.syncAdjust)
         .accessibilityLabel(expanded ? t.hideDelayControls(label) : t.showDelayControls(label))
+        .layarKey(expanded ? t.hideDelayControls(label) : t.showDelayControls(label))
         .accessibilityValue(value)
         .onChange(of: value) { _, now in DebugTrace.log(DelayBadge.traceLine(id: id, shows: now)) }
         // Only for the field being typed in, which keeps VoiceOver's focus;
@@ -2825,6 +2853,7 @@ private struct SystemVolumeButton: View {
         .focused(focus)
         .help(t.systemVolumeHelp(name: name))
         .accessibilityLabel(t.systemVolumeButton)
+        .layarKey(t.systemVolumeButton)
         .accessibilityValue(model.builtInMuted ? t.deviceVolumeHint(.muted) : t.percent(percent))
         .accessibilityHint(t.systemVolumeHelp(name: name))
     }
@@ -2856,6 +2885,7 @@ private struct SystemVolumePanel: View {
                     .controlSize(.small)
                     .focused(focus)
                     .accessibilityLabel(t.systemVolumeSlider(of: name))
+                    .layarKey(t.systemVolumeSlider(of: name))
                     .accessibilityValue(t.percent(percent))
                 Text(t.percent(percent))
                     .font(.subheadline.monospacedDigit())
@@ -3473,6 +3503,7 @@ struct SyncControls: View {
             }
         }
             .accessibilityLabel(text.delayStepAccessibility(delta))
+            .layarKey(text.delayStepAccessibility(delta))
             .controlSize(.small)
             .font(.caption.monospacedDigit())
             // Caption-size text needs the primary color: the window's teal tint
