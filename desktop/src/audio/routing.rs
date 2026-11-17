@@ -18,7 +18,8 @@
 //!   and any other endpoint where a process outside AudioSync's tree plays.
 //!
 //! The source plays on an endpoint while it has an active audio session
-//! there, and for [`HOLD_CHECKS`] checks after its last one: sessions turn
+//! there that carries sound (an active session can be an open stream playing
+//! silence, or a recorder of what the endpoint plays), and for [`HOLD_CHECKS`] checks after its last one: sessions turn
 //! inactive whenever an app pauses or goes quiet for a moment, and the
 //! answer shouldn't flip with them. One app that is silent everywhere (most
 //! likely paused) keeps counting on the endpoints AudioSync doesn't play to
@@ -82,6 +83,9 @@ pub struct EndpointAudio {
     pub volume: Option<EndpointVolume>,
     /// The processes with an active audio session on it.
     pub active_pids: Vec<u32>,
+    /// Those of `active_pids` whose active sessions carry no sound: open
+    /// streams playing silence, or recording what the endpoint plays.
+    pub silent_pids: Vec<u32>,
 }
 
 impl EndpointAudio {
@@ -196,7 +200,7 @@ fn played_on(
             endpoint
                 .active_pids
                 .iter()
-                .any(|&pid| captured.captures(pid))
+                .any(|&pid| captured.captures(pid) && !endpoint.silent_pids.contains(&pid))
         })
         .map(|endpoint| endpoint.id.as_str())
         .collect();
@@ -253,6 +257,7 @@ mod tests {
                 level: 0.5,
             }),
             active_pids: active_pids.to_vec(),
+            silent_pids: Vec::new(),
         }
     }
 
@@ -549,6 +554,27 @@ mod tests {
             "sorted by endpoint ID"
         );
         assert!(answer.paths[1].audiosync_plays_here);
+    }
+
+    // covers: S382
+    #[test]
+    fn a_session_that_carries_no_sound_isnt_heard() {
+        let mut speakers = endpoint("speakers", &[OWN, OTHER]);
+        speakers.silent_pids = vec![OTHER];
+        let mut headphones = endpoint("headphones", &[OTHER]);
+        headphones.silent_pids = vec![OTHER];
+        let cable = EndpointAudio {
+            virtual_device: true,
+            ..default_endpoint("cable", &[OTHER])
+        };
+        let answer = check(
+            &whole_system(),
+            &[cable, headphones, speakers],
+            &ids(&["speakers"]),
+            &[],
+        );
+        assert!(answer.paths.is_empty(), "{answer:?}");
+        assert_eq!(answer.played_on, played(&[("cable", 0)]));
     }
 
     // covers: S382

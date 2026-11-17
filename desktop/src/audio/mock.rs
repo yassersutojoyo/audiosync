@@ -755,6 +755,7 @@ impl Driver for MockDriver {
                     virtual_device: output.kind == OutputKind::Virtual,
                     volume: self.volume_of(&output.id),
                     active_pids,
+                    silent_pids: Vec::new(),
                 }
             })
             .collect())
