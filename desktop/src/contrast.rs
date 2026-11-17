@@ -579,7 +579,7 @@ fn custom_controls_are_accessible_and_show_focus() {
 }
 
 /// The delay steps and the light Appearance track look like the Mac's AppKit
-/// controls: white with a hairline and a soft shadow in light, a grey fill in
+/// controls: white with a soft shadow in light, a grey fill in
 /// dark that keeps the text at 4.5:1 on the window and on a card.
 #[test]
 fn delay_steps_and_the_appearance_track_look_like_the_macs_native_controls() {
@@ -615,6 +615,30 @@ fn delay_steps_and_the_appearance_track_look_like_the_macs_native_controls() {
             "text on the grey control over {under}: {value:.2}:1"
         );
     }
+}
+
+/// In light the delay steps and both delay fields are white with a soft shadow
+/// and no border, as the Mac's; a field shows its border again on focus.
+#[test]
+fn delay_steps_and_fields_draw_no_border_in_light() {
+    let widgets = include_str!("../ui/widgets.slint");
+    assert!(
+        !component_body(widgets, "DelayStep").contains("border-width"),
+        "a delay step draws no border"
+    );
+    let field = component_body(widgets, "TextField");
+    for needle in [
+        "root.raised && !Tokens.dark && !input.has-focus ? 0px",
+        "input.has-focus || (root.raised && !Tokens.dark) ? Tokens.surface",
+        "drop-shadow-color: root.raised ? Fluent.native-control-shadow",
+    ] {
+        assert!(field.contains(needle), "the text field has {needle}");
+    }
+    assert_eq!(
+        widgets.matches("raised: true;").count(),
+        2,
+        "both delay fields are raised"
+    );
 }
 
 /// The text of `component`'s definition in `source`, up to the next one.
