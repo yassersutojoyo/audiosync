@@ -3943,8 +3943,9 @@ export component SpeakerRow inherits Rectangle {
                                         }
                                     }
 
+                                    // Right edge on the delay chip's, as on the Mac.
                                     system-text := Text {
-                                        x: (parent.width - self.width) / 2;
+                                        x: parent.width - self.width - 6px;
                                         height: parent.height;
                                         text: Strings.system-volume-value(root.item.system-volume, root.item.system-muted);
                                         font-size: Tokens.font-size-subheadline;
@@ -3963,7 +3964,7 @@ export component SpeakerRow inherits Rectangle {
                                 }
 
                                 if root.item.has-delay: Rectangle {
-                                    min-width: delay-row.preferred-width + 12px;
+                                    min-width: delay-row.preferred-width + 6px;
                                     height: 16px;
                                     opacity: root.item.delay-ms != 0 || root.item.sync-open ? 1 : root.delay-reveal;
                                     border-radius: Fluent.radius-control;
@@ -4020,7 +4021,7 @@ export component SpeakerRow inherits Rectangle {
                                     // At its 12% peak the tint keeps the readable teal
                                     // at 4.5:1 or better, as on the Mac.
                                     delay-flash := Rectangle {
-                                        x: (parent.width - self.width) / 2;
+                                        x: parent.width - self.width - 3px;
                                         y: -3px;
                                         width: delay-row.preferred-width + 6px;
                                         height: parent.height + 6px;
@@ -4029,16 +4030,18 @@ export component SpeakerRow inherits Rectangle {
                                         opacity: 0.12 * delay-roll.tint;
                                     }
 
+                                    // The Mac's 5 px ink gap: the timer's drawing is inset in its box.
                                     delay-row := HorizontalLayout {
-                                        spacing: 4px;
-                                        alignment: center;
+                                        spacing: 2px;
+                                        padding-right: 6px;
+                                        alignment: end;
 
-                                        // Skia draws the 12 px number 2 px under its box's middle;
+                                        // Skia draws the 12 px number 1 px under its box's middle;
                                         // the timer drops as far to stay level with it, as on the Mac.
                                         Glyph {
+                                            padding-top: 2px;
                                             glyph: Glyphs.timer;
                                             font-size: 12px;
-                                            vertical-alignment: bottom;
                                             color: root.item.sync-open ? Tokens.teal-text : Tokens.secondary-text;
                                         }
 
