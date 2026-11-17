@@ -159,7 +159,7 @@ jobs:
             stranger-work/*.out
             stranger-work/*.wav
             stranger-work/*.stamps
-            stranger-work/tmp/**/*debug.log
+            stranger-work/state/**/*debug.log
           if-no-files-found: warn
           retention-days: 7
 

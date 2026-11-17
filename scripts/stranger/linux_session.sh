@@ -74,7 +74,7 @@ status=0
 log=
 for _ in $(seq 1 30); do
   sleep 1
-  log=$(find "$TMPDIR" -name '*debug.log' -print -quit)
+  log=$(find "$XDG_STATE_HOME" -name '*debug.log' -print -quit)
   if [ -n "$log" ] && grep -q 'tray icon: shown' "$log" && grep -q '^registered ' "$work/watcher.out"; then break; fi
 done
 if [ -z "$log" ] || ! grep -q 'tray icon: shown' "$log" || ! grep -q '^registered ' "$work/watcher.out"; then
