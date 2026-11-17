@@ -18065,6 +18065,17 @@ do {
           "master volume: a wheel notch moves it by the volume keys' step, 10 trackpad points by one, within 0 and 100")
 }
 
+// MARK: The menu bar icon's menu (MenuBar.swift)
+do {
+    let statusMenuBar = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
+    check(!statusMenuBar.contains(".popUp(under: button)")
+            && statusMenuBar.contains("statusItem.menu = menu")
+            && statusMenuBar.contains("button.performClick(nil)"),
+          "menu bar icon menu: AppKit places it as the status item's own menu, so no scroll arrow hides Open AudioSync")
+    check(statusMenuBar.contains("menu.appearance = NSApp.effectiveAppearance"),
+          "menu bar icon menu: it takes the app's theme, not the menu bar's")
+}
+
 // MARK: A delay pane closed while its field has the focus leaves no ring on a neighbour (MainWindow.swift, PanelZoneHeader.swift)
 do {
     let ringWindow = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""

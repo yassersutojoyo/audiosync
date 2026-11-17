@@ -931,10 +931,18 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         if presented { dismiss() }
         let actions = model.actions
         MainActor.assumeIsolated {
-            StatusItemMenu.make(text: model.text, running: model.running, launchAtLogin: model.launchAtLogin,
-                                open: actions.openMainWindow, setPower: actions.setPower,
-                                setLaunchAtLogin: actions.setLaunchAtLogin, quit: actions.quit)
-                .popUp(under: button)
+            let menu = StatusItemMenu.make(text: model.text, running: model.running,
+                                           launchAtLogin: model.launchAtLogin, open: actions.openMainWindow,
+                                           setPower: actions.setPower, setLaunchAtLogin: actions.setLaunchAtLogin,
+                                           quit: actions.quit)
+            // The app's theme, not the menu bar's.
+            menu.appearance = NSApp.effectiveAppearance
+            menu.keepUntilNextPopUp()
+            // As the status item's own menu AppKit places it under the menu bar; a
+            // pop-up at the button reached into the bar and scrolled its first item away.
+            statusItem.menu = menu
+            button.performClick(nil)
+            statusItem.menu = nil
         }
     }
 
