@@ -4352,7 +4352,7 @@ export component SpeakerRow inherits Rectangle {
                             }
                         }
 
-                        if root.item.system-refused: Text {
+                        if root.item.system-refused: refusal := Text {
                             text: Strings.system-volume-refused;
                             font-size: Tokens.font-size-caption;
                             color: Tokens.secondary-text;

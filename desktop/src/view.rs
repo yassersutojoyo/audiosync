@@ -110,6 +110,8 @@ struct UiState {
     system_shown: Option<f64>,
     /// Windows refused the System slider's last write.
     system_refused: bool,
+    /// The reference whose System panel is open.
+    system_panel: Option<String>,
     /// What is typed in each speaker's delay field, by speaker ID.
     delay_drafts: HashMap<String, TypedDelay>,
     airplay_delay_draft: TypedDelay,
@@ -2462,6 +2464,23 @@ impl App {
                 .retain(|id| state.zones.iter().any(|zone| zone.id == *id));
             ui.flyout_collapsed
                 .retain(|id| state.zones.iter().any(|zone| zone.id == *id));
+            // A panel that folds or goes, its row or reading gone, lets go
+            // of its slider and its refusal, as the Mac's as it disappears.
+            let panel = state
+                .speakers
+                .iter()
+                .find(|s| {
+                    s.is_reference()
+                        && s.system_volume.and_then(|v| v.percent()).is_some()
+                        && ui.sync_open.contains(&s.id)
+                })
+                .map(|s| s.id.clone());
+            if panel != ui.system_panel {
+                ui.system_held = false;
+                ui.system_shown = None;
+                ui.system_refused = false;
+                ui.system_panel = panel;
+            }
         }
         let move_zones = self.sync_move_zones(&state);
         let move_zones_of = |zone_id: &str| move_zones.get(zone_id).cloned().unwrap_or_default();
@@ -10334,6 +10353,52 @@ mod tests {
         );
     }
 
+    /// Folding the System panel mid-drag lets go of the slider, as the
+    /// Mac's panel does as it disappears, and clears a refusal: open again,
+    /// it shows what Windows reports and no refusal line.
+    // covers: S197
+    #[test]
+    fn folding_the_system_panel_lets_go_of_the_slider_and_its_refusal() {
+        use i_slint_backend_testing::ElementHandle;
+        let mut mock = MockBackend::new();
+        mock.refuses_system_volume = true;
+        let app = app_over(mock);
+        app.main.show().expect("the main window shows");
+        draw_frames();
+        let reference = app
+            .snapshot()
+            .speakers
+            .into_iter()
+            .find(ui_model::Speaker::is_reference)
+            .expect("the reference");
+        let button = || {
+            ElementHandle::find_by_accessible_label(&app.main, "System volume")
+                .next()
+                .expect("the System value")
+        };
+        // The line under the slider, not the announcement's copy.
+        let refused = || element(&app, "SpeakerRow::refusal").is_some();
+        button().invoke_accessible_default_action();
+        draw_frames();
+        let id = SharedString::from(reference.id.as_str());
+        app.main
+            .invoke_system_volume_editing_requested(id.clone(), true);
+        app.main.invoke_system_volume_requested(id, 40.0);
+        draw_frames();
+        assert!(refused());
+        assert_eq!(button().accessible_value().as_deref(), Some("40%"));
+        button().invoke_accessible_default_action();
+        draw_frames();
+        button().invoke_accessible_default_action();
+        draw_frames();
+        assert_eq!(
+            button().accessible_value().as_deref(),
+            Some("13%"),
+            "what Windows reports"
+        );
+        assert!(!refused(), "no refusal line once the panel folded");
+    }
+
     /// The System panel reads its value as "13%", as the Mac's; a write
     /// Windows refuses shows the Mac's line under the slider; while the
     /// slider is held, Windows' reports wait, and the latest shows on release.
@@ -10393,9 +10458,9 @@ mod tests {
         let (app, reference) = open(mock);
         let refused = "This output didn't accept the new volume.";
         let line = || {
-            ElementHandle::find_by_accessible_label(&app.main, refused)
-                .next()
-                .is_some()
+            element(&app, "SpeakerRow::refusal")
+                .and_then(|line| line.accessible_label())
+                .is_some_and(|label| label == refused)
         };
         assert!(!line());
         app.main

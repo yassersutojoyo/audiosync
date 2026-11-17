@@ -410,9 +410,17 @@ impl<D: Driver> Controller<D> {
         if self.device_volumes.reading(id).is_none() || !level.is_finite() {
             return false;
         }
-        let result = self
-            .driver
-            .set_endpoint_level(id, level.clamp(0.0, 1.0) as f32);
+        let level = level.clamp(0.0, 1.0);
+        let result = self.driver.set_endpoint_level(id, level as f32);
+        if let Err(error) = &result {
+            self.log.log(|| {
+                format!(
+                    "output {} System slider: volume set to {}%: failed: {error}",
+                    label(&self.names, id),
+                    (level * 100.0).round()
+                )
+            });
+        }
         self.stalls(id, &result);
         result.is_ok()
     }
@@ -561,6 +569,34 @@ mod tests {
             code: 0x8000_4005_u32 as i32,
         }));
         assert!(!backend.set_device_volume(SPEAKERS, 0.6), "a refused write");
+    }
+
+    /// A System slider write Windows refuses logs one line, as the fix's do.
+    // covers: S197, S201
+    #[test]
+    fn a_refused_system_slider_write_logs_a_line() {
+        let dir = test_dir("controller-device-volume-slider-refused");
+        let log = DebugLog::new(Some(dir.join(FILE_NAME)));
+        let mut backend = MockBackend::empty();
+        backend.set_debug_log(log.clone());
+        backend.connect_output(SPEAKERS, "Speakers");
+        backend.list_outputs().unwrap();
+        backend.set_output_enabled(SPEAKERS, true).unwrap();
+        backend.poll();
+        backend.refuse_volume_writes(Some(BackendError::NotResponding));
+        assert!(!backend.set_device_volume(SPEAKERS, 0.6));
+        let lines: Vec<String> = logged(&log, &dir)
+            .into_iter()
+            .filter(|message| message.contains("System slider"))
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                "output \"Speakers\" (speakers) System slider: volume set to 60%: failed: \
+                 Windows audio didn't answer in time."
+            ]
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     // covers: S195, S202
