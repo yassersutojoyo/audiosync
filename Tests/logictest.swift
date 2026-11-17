@@ -9285,6 +9285,10 @@ do {
             && sliderSource.contains("case .rightArrow, .upArrow: return .up") && sliderSource.contains("case .leftArrow, .downArrow: return .down")
             && sliderSource.contains("default: return nil"),
           "master slider: arrows step 1, Page Up and Down 10, Home and End go to either end", "\(keyed)")
+    check(sliderSource.contains(".focusable(interactions: click.clicked ? .edit : .activate)")
+            && sliderSource.contains("click.clicked = true")
+            && sliderSource.contains(".focusEffectDisabled(!NSApp.isFullKeyboardAccessEnabled)"),
+          "master slider source: a click or drag takes the arrow keys without a focus ring under keyboard navigation off, Tab reaches it with keyboard navigation on")
     // covers: S403
     check(rowsSource.contains(".clipShape(FoldClip(moving: zoneDisclosure.moving))") && mainSource.contains("moving = true"),
           "menu bar panel source: a fold clips each zone to its own moving edge, so the rows and the footer below never slide over its fading rows")
@@ -18661,6 +18665,8 @@ do {
           "equalizer band: a click gives the band keyboard focus, with keyboard navigation off too")
     check(inBandSlider(".focusable(interactions: click.clicked ? .edit : .activate)") == 1,
           "equalizer band: Tab reaches a band it was not clicked into only with keyboard navigation on")
+    check(inBandSlider(".focusEffectDisabled(!NSApp.isFullKeyboardAccessEnabled)") == 1,
+          "equalizer band: a click shows no focus ring with keyboard navigation off")
     check(inBandSlider(".accessibilityRepresentation {") == 1 && inBandSlider("Slider(value:") == 1,
           "equalizer band: the accessibility API sees a slider, not an unknown element")
 }
