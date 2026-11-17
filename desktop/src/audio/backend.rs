@@ -1270,7 +1270,7 @@ pub trait AudioBackend {
     fn poll(&mut self) -> Vec<BackendEvent>;
 
     /// Runs what [`AudioBackend::poll`] does for an audio session created or
-    /// turned active since the last call, at once instead of at the next poll
+    /// changing state since the last call, at once instead of at the next poll
     /// (S470, S471); the UI calls it when Windows reports one.
     fn follow_new_sessions(&mut self) {}
 

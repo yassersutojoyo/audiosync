@@ -417,7 +417,7 @@ pub trait Driver {
     /// output changes.
     fn endpoint_audio(&mut self) -> Result<Vec<EndpointAudio>, BackendError>;
 
-    /// Whether an audio session was created or turned active on a render
+    /// Whether an audio session was created or changed state on a render
     /// endpoint since the last call (S470). The notification runs on a system thread and only
     /// marks.
     fn new_audio_sessions(&mut self) -> bool {

@@ -1,15 +1,16 @@
-//! Noticing an audio session created or turning active on any active render
+//! Noticing an audio session created, or changing state, on any active render
 //! endpoint, so the double-audio check and the app's move run at once when an
-//! app starts or resumes playing (S471) instead of at the next interval.
+//! app starts, resumes or leaves an output (S470, S471) instead of at the next
+//! interval.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use windows::Win32::Foundation::{S_OK, WAIT_TIMEOUT};
 use windows::Win32::Media::Audio::{
-    AudioSessionDisconnectReason, AudioSessionState, AudioSessionStateActive, DEVICE_STATE_ACTIVE,
-    IAudioSessionControl, IAudioSessionControl2, IAudioSessionEvents, IAudioSessionEvents_Impl,
-    IAudioSessionManager2, IAudioSessionNotification, IAudioSessionNotification_Impl, eRender,
+    AudioSessionDisconnectReason, AudioSessionState, DEVICE_STATE_ACTIVE, IAudioSessionControl,
+    IAudioSessionControl2, IAudioSessionEvents, IAudioSessionEvents_Impl, IAudioSessionManager2,
+    IAudioSessionNotification, IAudioSessionNotification_Impl, eRender,
 };
 use windows::Win32::System::Com::CLSCTX_ALL;
 use windows::Win32::System::Threading::WaitForSingleObject;
@@ -54,7 +55,7 @@ impl SessionWatcher {
         })
     }
 
-    /// Whether a session was created or turned active since the last call.
+    /// Whether a session was created or changed state since the last call.
     pub(super) fn take_created(&self) -> bool {
         self.created.swap(false, Ordering::AcqRel)
     }
@@ -151,9 +152,10 @@ const PRUNE_EVERY_MS: u32 = 10_000;
 
 static WAKE: OnceLock<fn()> = OnceLock::new();
 
-/// Has `wake` called on Windows' thread when a session is created or turns
-/// active and none was waiting to be taken, so the outputs the app plays on
-/// are held out then rather than at the next poll (S470). The first call wins.
+/// Has `wake` called on Windows' thread when a session is created or changes
+/// state and none was waiting to be taken, so the outputs the app plays on
+/// are held out, and those it left handed back, then rather than at the next
+/// poll (S470). The first call wins.
 #[cfg_attr(test, allow(dead_code))]
 pub fn on_new_session(wake: fn()) {
     let _ = WAKE.set(wake);
@@ -249,8 +251,9 @@ impl<S> Followed<S> {
     }
 }
 
-/// Raises the flag when a session is created or turns active: a paused app
-/// that plays on resumes its old session. Windows calls it on its own thread
+/// Raises the flag when a session is created or changes state: a paused app
+/// that plays on resumes its old session, and an app moved to another output
+/// leaves its session on the old one. Windows calls it on its own thread
 /// and asks it to return quickly, so it only marks, wakes and registers.
 #[implement(IAudioSessionNotification, IAudioSessionEvents)]
 struct SessionListener {
@@ -282,10 +285,8 @@ impl IAudioSessionNotification_Impl for SessionListener_Impl {
 }
 
 impl IAudioSessionEvents_Impl for SessionListener_Impl {
-    fn OnStateChanged(&self, state: AudioSessionState) -> windows_core::Result<()> {
-        if state == AudioSessionStateActive {
-            self.mark();
-        }
+    fn OnStateChanged(&self, _: AudioSessionState) -> windows_core::Result<()> {
+        self.mark();
         Ok(())
     }
 
@@ -321,6 +322,7 @@ impl IAudioSessionEvents_Impl for SessionListener_Impl {
     }
 
     fn OnSessionDisconnected(&self, _: AudioSessionDisconnectReason) -> windows_core::Result<()> {
+        self.mark();
         Ok(())
     }
 }
@@ -329,7 +331,8 @@ impl IAudioSessionEvents_Impl for SessionListener_Impl {
 mod tests {
     use super::*;
     use windows::Win32::Media::Audio::{
-        AudioSessionStateActive, AudioSessionStateInactive, IAudioSessionEvents,
+        AudioSessionStateActive, AudioSessionStateExpired, AudioSessionStateInactive,
+        DisconnectReasonDeviceRemoval, IAudioSessionEvents,
     };
     use windows_core::Interface;
 
@@ -349,9 +352,6 @@ mod tests {
         .into();
         let events: IAudioSessionEvents = listener.cast().expect("follows session states");
         // SAFETY: calls on a live listener this test owns.
-        unsafe { events.OnStateChanged(AudioSessionStateInactive) }.unwrap();
-        assert!(!created.load(Ordering::Acquire), "a pause is no start");
-        // SAFETY: as above.
         unsafe { events.OnStateChanged(AudioSessionStateActive) }.unwrap();
         assert!(created.load(Ordering::Acquire));
         assert_eq!(WOKEN.load(Ordering::Acquire), 1);
@@ -362,6 +362,33 @@ mod tests {
             1,
             "not taken yet: no second wake"
         );
+    }
+
+    // covers: S470
+    #[test]
+    fn a_session_turning_inactive_expiring_or_disconnecting_wakes_the_check() {
+        static WOKEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        fn woken() {
+            WOKEN.fetch_add(1, Ordering::AcqRel);
+        }
+        let created = Arc::new(AtomicBool::new(false));
+        let listener: IAudioSessionNotification = SessionListener {
+            created: Arc::clone(&created),
+            wake: woken,
+            followed: Mutex::default(),
+        }
+        .into();
+        let events: IAudioSessionEvents = listener.cast().expect("follows session states");
+        // SAFETY: calls on a live listener this test owns.
+        unsafe { events.OnStateChanged(AudioSessionStateInactive) }.unwrap();
+        assert!(created.swap(false, Ordering::AcqRel), "inactive");
+        // SAFETY: as above.
+        unsafe { events.OnStateChanged(AudioSessionStateExpired) }.unwrap();
+        assert!(created.swap(false, Ordering::AcqRel), "expired");
+        // SAFETY: as above.
+        unsafe { events.OnSessionDisconnected(DisconnectReasonDeviceRemoval) }.unwrap();
+        assert!(created.swap(false, Ordering::AcqRel), "disconnected");
+        assert_eq!(WOKEN.load(Ordering::Acquire), 3);
     }
 
     // covers: S471

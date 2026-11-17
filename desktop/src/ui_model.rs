@@ -1863,8 +1863,8 @@ pub trait Backend {
     }
 
     /// Holds out at once the outputs an app that just started or resumed
-    /// plays on (S470); the UI calls it when Windows reports a new or newly
-    /// active audio session.
+    /// plays on, and hands back those it left (S470); the UI calls it when
+    /// Windows reports a new audio session or one changing state.
     #[cfg_attr(any(test, not(windows)), allow(dead_code))]
     fn follow_new_sessions(&mut self) {}
 
