@@ -334,7 +334,9 @@ struct VerticalSlider: View {
                 if !click.clicked { click.clicked = true }
                 let v = Double((mid - g.location.y) / (h / 2 - 8)) * range
                 onChange((max(-range, min(range, v)) * 2).rounded() / 2)   // 0.5 dB steps
-            })
+            }
+            // The mouse-down drops the focus asked for in onChanged; a still click has no later event to ask again.
+            .onEnded { _ in click.clicked = true; focused = true })
             .onTapGesture(count: 2) { onChange(0) }
         }
     }
