@@ -21866,6 +21866,55 @@ mod tests {
         assert!(tip.is_some(), "a tooltip on the icon button");
     }
 
+    /// A row's switch keeps its look under the pointer, as the Mac's
+    /// SpeakerBadge, which has no hover look; a press hides its tooltip
+    /// until the pointer leaves, as AppKit hides a control's help on click.
+    #[test]
+    fn a_rows_switch_has_no_hover_look_and_a_press_hides_its_tip() {
+        let app = narrow_app(MockBackend::new());
+        let window = app.main.window();
+        let badges: Vec<_> = i_slint_backend_testing::ElementHandle::find_by_element_id(
+            &app.main,
+            "SpeakerRow::badge",
+        )
+        .take(3)
+        .collect();
+        assert!(!badges.is_empty());
+        for badge in &badges {
+            let (at, size) = (badge.absolute_position(), badge.size());
+            let (x, y) = (at.x + 3.0, at.y + size.height / 2.0);
+            // Past the 250 ms fade, before the tooltip shows over the disc.
+            let rest = |position| {
+                window.dispatch_event(WindowEvent::PointerMoved { position });
+                advance_clock(Duration::from_millis(300));
+                draw_frames_at(776, 680);
+                pixels(window)(x, y)
+            };
+            let beside = rest(slint::LogicalPosition::new(at.x + 60.0, y));
+            let on = rest(slint::LogicalPosition::new(at.x + size.width / 2.0, y));
+            assert_eq!(on, beside, "the switch at {at:?} under the pointer");
+        }
+
+        let badge = &badges[0];
+        let (at, size) = (badge.absolute_position(), badge.size());
+        let position =
+            slint::LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0);
+        let nudged = slint::LogicalPosition::new(position.x + 1.0, position.y);
+        let tip_after = |position| {
+            window.dispatch_event(WindowEvent::PointerMoved { position });
+            advance_clock(Duration::from_secs(2));
+            slint::platform::update_timers_and_animations();
+            element(&app, "SpeakerBadge::tip").is_some()
+        };
+        assert!(tip_after(position), "its tooltip under the pointer");
+        let button = PointerEventButton::Left;
+        window.dispatch_event(WindowEvent::PointerPressed { position, button });
+        window.dispatch_event(WindowEvent::PointerReleased { position, button });
+        assert!(!tip_after(nudged), "a press hides its tooltip");
+        tip_after(slint::LogicalPosition::new(at.x + 200.0, position.y));
+        assert!(tip_after(position), "back once the pointer left");
+    }
+
     /// A speaker's volume has a 16 px knob, as the master volume's and as
     /// measured on the Mac's window.
     #[test]

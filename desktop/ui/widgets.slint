@@ -1328,15 +1328,20 @@ export component SpeakerBadge inherits Rectangle {
     // As the Mac's (Badge in src/window_rules.rs): a grey disc while off, a
     // faint teal disc in a teal ring while it is on and waits, a dark teal
     // disc while it plays. The disc grows in; with animation effects off it fades in.
-    property <bool> hovered: touch.has-hover && root.enabled;
+    // No hover look, as the Mac's.
     property <bool> waits: !root.plays && root.state != RowState.off;
     property <float> fill: root.plays ? 1 : 0;
     animate fill {
         duration: Motion.on ? 250ms : 150ms;
         easing: Motion.on ? ease-in-out : linear;
     }
-    background: root.bare || root.plays ? transparent : root.waits ? Tokens.teal.with-alpha(0.14) : root.hovered ? #80808042 : #8080802e;
-    animate background { duration: Motion.on ? 250ms : 150ms; }
+    background: root.bare || root.plays ? transparent : root.waits ? Tokens.teal.with-alpha(0.14) : #8080802e;
+    animate background {
+        duration: Motion.on ? 250ms : 150ms;
+        easing: Motion.on ? ease-in-out : linear;
+    }
+    // A press hides the tooltip until the pointer leaves, as AppKit's help.
+    property <bool> tip-allowed: true;
     opacity: root.enabled ? 1 : Tokens.disabled-opacity;
     forward-focus: focus;
     // A toggle button, not a switch: see ToggleSwitch.
@@ -1390,9 +1395,19 @@ export component SpeakerBadge inherits Rectangle {
         clicked => {
             root.toggled();
         }
+        changed has-hover => {
+            if !self.has-hover {
+                root.tip-allowed = true;
+            }
+        }
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down {
+                root.tip-allowed = false;
+            }
+        }
 
-        if root.help != "": Tooltip {
-            LabelTip {
+        if root.help != "" && root.tip-allowed: Tooltip {
+            tip := LabelTip {
                 text: root.help;
                 max-tip-width: 240px;
             }
@@ -1415,7 +1430,7 @@ export component SpeakerBadge inherits Rectangle {
         width: root.width * (Motion.on ? 0.6 + 0.4 * root.fill : 1);
         height: self.width;
         border-radius: self.width / 2;
-        background: root.hovered ? #147167.darker(0.15) : #147167;
+        background: #147167;
         opacity: root.fill;
     }
 
