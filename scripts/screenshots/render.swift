@@ -367,8 +367,21 @@ func layarElements(in view: NSView, rep: NSBitmapImageRep, top: CGFloat, behind:
 
 /// The main window's content as MainWindowController sets it up
 /// (MainWindow.swift:22-38), at its default 696 x 600 points or at `size`.
-func layarMain(_ model: AppModel, look: Look, size: NSSize = NSSize(width: 696, height: 600)) -> (NSWindow, NSView) {
-    let host = NSHostingController(rootView: MainView(model: model).layarRecorded())
+/// A `sheet` is laid over the content's top centre, where macOS attaches it:
+/// a real sheet opens a window of its own, which cacheDisplay leaves out.
+func layarMain(_ model: AppModel, look: Look, size: NSSize = NSSize(width: 696, height: 600),
+               sheet: AnyView? = nil) -> (NSWindow, NSView) {
+    let host = NSHostingController(rootView: MainView(model: model)
+        .overlay(alignment: .top) {
+            if let sheet {
+                // The radius and shadow are this file's window frame's (`framed`).
+                sheet
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: windowCornerRadius))
+                    .shadow(color: Color(nsColor: look.shadow), radius: 18, y: 6)
+            }
+        }
+        .layarRecorded())
     host.sizingOptions = [.minSize]
     let window = ShotWindow(contentRect: NSRect(x: 0, y: 0, width: 696, height: 600),
                             styleMask: [.titled, .resizable, .closable, .miniaturizable],
@@ -473,6 +486,110 @@ func layarRename(_ model: AppModel, _ id: String) {
 }
 
 let layarSmallest = NSSize(width: 696, height: 460)   // MainWindow.swift:320
+
+/// The Calibrate All sheet over the main window, as MainView presents it
+/// (MainWindow.swift:352-355, its tint `accent` at :136).
+func layarCalibrateSheet(_ model: AppModel, look: Look, size: NSSize = NSSize(width: 696, height: 600)) -> (NSWindow, NSView) {
+    layarMain(model, look: look, size: size,
+              sheet: AnyView(CalibrateAllSheetView(model: model, room: size.height).tint(Brand.teal)))
+}
+
+/// The desktop's Calibrate All example (layar_shots.rs `calibrate_all`):
+/// Desk Speaker and Headset on, and the reference's 13 % under "Before you start".
+func layarCalibrateAll(_ change: (AppModel) -> Void = { _ in }) -> AppModel {
+    layarModel { model in
+        layarEdit(model, "desk") { $0.enabled = true }
+        layarEdit(model, "headset") { $0.enabled = true }
+        model.calibrateAll.volume = CalibrationVolumeCheck(DeviceVolumeReading(volume: 0.13, muted: false))
+        change(model)
+    }
+}
+
+/// The desktop's four result rows (layar_shots.rs `results`): the reference,
+/// two clear measurements and an unclear one, AirPlay spread by 23 ms.
+func layarResults(_ names: [String]) -> CalibrateAllSheet {
+    func row(_ index: Int, _ kind: CalibrateAllKind, _ result: CalibrateAllSheet.Result) -> CalibrateAllSheet.Row {
+        CalibrateAllSheet.Row(index: index, speaker: CalibrateAllSpeaker(id: "row\(index)", name: names[index], kind: kind,
+                                                                         offsetMs: 2000, latencyMs: 0),
+                              oldMs: 2000, result: result)
+    }
+    return CalibrateAllSheet(rows: [
+        row(0, .local, .reference),
+        row(1, .local, .certain(newMs: 132, uncertaintyMs: 1.2, clamped: false)),
+        row(2, .airPlay, .certain(newMs: 2040, uncertaintyMs: 1.2, clamped: false)),
+        row(3, .airPlay, .uncertain(newMs: 2040, uncertaintyMs: 14)),
+    ], airPlay: CalibrateAllSheet.AirPlay(state: .spread, oldMs: 2000, newMs: 2040, spreadMs: 23, certainRows: 1))
+}
+
+let layarSheetNames = ["Speakers", "Desk Speaker", "Kitchen", "Bedroom"]
+
+/// The headphones on and left out of Calibrate All (layar_shots.rs
+/// `left_out`); `only`: they and the reference are the only speakers on.
+func layarLeftOut(included: Bool, only: Bool = false, long: Bool = false) -> AppModel {
+    layarModel { model in
+        if long { layarRename(model, "headphones") }
+        layarEdit(model, "headphones") { $0.enabled = true }
+        if only {
+            for at in model.local.indices { model.local[at].enabled = ["speakers", "headphones"].contains(model.local[at].id) }
+            for at in model.airplay.indices { model.airplay[at].enabled = false }
+            model.calibrateAll.blocker = .onlyLeftOut
+        } else {
+            layarEdit(model, "desk") { $0.enabled = true }
+        }
+        model.calibrateAll.volume = CalibrationVolumeCheck(DeviceVolumeReading(volume: 0.13, muted: false))
+        model.calibrateAll.leftOut = [CalibrateAllLeftOut(id: "headphones", name: long ? layarLong : "Headphones",
+                                                          reason: .headphones, included: included)]
+    }
+}
+
+/// Desk Speaker on with its delay controls open, calibrating in `phase`
+/// (layar_shots.rs `calibrating`).
+func layarRowCalibration(_ phase: CalibrationPhase) -> AppModel {
+    layarModel { model in
+        layarEdit(model, "desk") { $0.enabled = true }
+        model.calibration = CalibrationStatus(uid: "desk", phase: phase, holdsOutputs: phase.isRunning)
+        model.toggleDelayPanel("desk")
+    }
+}
+
+/// The Settings window as SettingsWindowController.makeWindow sets it up
+/// (SettingsWindow.swift:33-46), as tall as its content.
+func layarSettings(_ model: AppModel, look: Look) -> (NSWindow, NSView) {
+    let host = NSHostingController(rootView: SettingsView(model: model, updates: UpdateChecks(), setUpPermissions: {},
+                                                          onHeight: { _ in }).layarRecorded())
+    host.sizingOptions = []
+    let window = ShotWindow(contentViewController: host)
+    window.appearance = look.appearance
+    window.title = model.text.settingsTitle
+    window.styleMask = [.titled, .closable]
+    window.setContentSize(NSSize(width: SettingsView.width, height: host.sizeThatFits(in: PanelTopLayout.measuring).height))
+    guard let content = window.contentView else { fatalError("The Settings window has no content view") }
+    return (window, content)
+}
+
+/// The Web Remote window as WebRemoteWindowController.show sets it up
+/// (WebRemoteWindow.swift:21-28), on the desktop's port 8770.
+func layarRemote(look: Look, _ configure: (WebRemoteSettings) -> Void = { _ in }) -> (NSWindow, NSView) {
+    let settings = WebRemoteSettings(enabled: false, port: 8770)
+    configure(settings)
+    let text = UIStrings()
+    let window = ShotWindow(contentViewController: NSHostingController(rootView: WebRemoteView(
+        settings: settings, text: text, announcer: WebRemoteAnnouncer()).layarRecorded()))
+    window.appearance = look.appearance
+    window.title = text.webRemoteTitle
+    window.styleMask = [.titled, .closable]
+    guard let content = window.contentView else { fatalError("The Web Remote window has no content view") }
+    return (window, content)
+}
+
+/// The desktop's three presets (ui_model.rs `presets_preview`), Evening in use.
+func layarPresets(_ model: AppModel) {
+    model.presets = [
+        PresetRow(id: "preset:1", name: "Evening", current: true, picked: true, speakers: 2, master: model.master),
+        PresetRow(id: "preset:2", name: "Movie Night", speakers: 2, master: model.master),
+        PresetRow(id: "preset:3", name: "Whole House", speakers: 5, master: model.master),
+    ]
+}
 
 /// The LAYAR rows (notes IDs, shared with the desktop's layar_shots), each set
 /// up as the desktop's row of the same ID sets up its example.
@@ -588,6 +705,126 @@ let layarRows: [(id: String, draw: (Look) -> (NSWindow, NSView))] = [
         $0.notices.post($0.text.sourceTerminated(name: "Music Player"), subject: Notice.source)
     }, look: $0) }),
     ("EQ-WINDOW", { layarEqualizer(look: $0) }),
+    ("CAL-SHEET", { layarCalibrateSheet(layarCalibrateAll(), look: $0) }),
+    ("CAL-SHEET-RUNNING", { layarCalibrateSheet(layarCalibrateAll {
+        $0.calibrateAll.progress = .listening(name: "Desk Speaker", sweep: 1)
+        $0.calibrateAll.holdsOutputs = true
+    }, look: $0) }),
+    ("CAL-SHEET-RESULT", { layarCalibrateSheet(layarCalibrateAll { $0.calibrateAll.sheet = layarResults(layarSheetNames) },
+                                               look: $0) }),
+    ("CAL-SHEET-FAILED", { layarCalibrateSheet(layarCalibrateAll {
+        var sheet = layarResults(layarSheetNames)
+        for at in 1..<sheet.rows.count { sheet.rows[at].result = .notMeasured }
+        sheet.airPlay = nil
+        sheet.ended = .failed(.sourceSilent)
+        $0.calibrateAll.sheet = sheet
+        $0.calibrateAll.line = .ended(.failed(.sourceSilent))
+    }, look: $0) }),
+    ("CAL-SHEET-LEFTOUT", { layarCalibrateSheet(layarLeftOut(included: false), look: $0) }),
+    ("CAL-SHEET-INCLUDED", { layarCalibrateSheet(layarLeftOut(included: true), look: $0) }),
+    ("CAL-SHEET-ONLY-LEFTOUT", { layarCalibrateSheet(layarLeftOut(included: false, only: true), look: $0) }),
+    ("CAL-SHEET-LEFTOUT-LONG", { layarCalibrateSheet(layarLeftOut(included: false, long: true), look: $0) }),
+    ("CAL-SHEET-SMALLEST", { layarCalibrateSheet(layarCalibrateAll { $0.calibrateAll.sheet = layarResults(layarSheetNames) },
+                                                 look: $0, size: layarSmallest) }),
+    ("MAIN-CALIBRATE-SHEET-NARROW", { layarCalibrateSheet(layarCalibrateAll {
+        $0.calibrateAll.sheet = layarResults(layarSheetNames)
+    }, look: $0, size: layarSmallest) }),
+    ("CAL-SHEET-LONGNAME", { layarCalibrateSheet(layarCalibrateAll {
+        $0.calibrateAll.sheet = layarResults(["Speakers", layarLong, "Kitchen", layarLong])
+    }, look: $0) }),
+    ("MAIN-ROW-CAL-RUNNING", { layarMain(layarRowCalibration(.running(.measuring(.chosen))), look: $0) }),
+    ("MAIN-ROW-CAL-DONE", { layarMain(layarRowCalibration(.done(offsetMs: 132, clamped: false)), look: $0) }),
+    ("MAIN-ROW-CAL-FAILED", { layarMain(layarRowCalibration(.failed(.sourceSilent)), look: $0) }),
+    ("MAIN-ADD-ADDRESS", { look in
+        let model = layarModel()
+        return layarMain(model, look: look, sheet: AnyView(CastAddressSheet(model: model).tint(Brand.teal)))
+    }),
+    // Each notice as the Mac posts it for the desktop NoticeMessage of the
+    // row (AppDelegate+Engine, +NativeAirPlay, +Cast, +Outputs, +Presets, +Zones).
+    ("NOTICE-START", { layarMain(layarModel {
+        $0.notices.post($0.text.chooseSpeakerBeforeStart, subject: Notice.start, shortName: $0.text.noSpeakerNoticeName)
+    }, look: $0) }),
+    ("NOTICE-CAPTURE", { layarMain(layarModel {
+        $0.notices.post($0.text.captureNotWorking(nil), subject: Notice.capture)
+    }, look: $0) }),
+    ("NOTICE-LOGIN", { layarMain(layarModel {
+        $0.notices.post(Notice.loginRefused(turningOn: true, $0.text), subject: Notice.login,
+                        shortName: $0.text.launchAtLoginNoticeName(turningOn: true))
+    }, look: $0) }),
+    ("NOTICE-AIRPLAY-SENDER", { layarMain(layarModel {
+        $0.notices.post($0.text.nativeAirPlayStopped, subject: Notice.airplaySender,
+                        shortName: $0.text.airPlayStoppedNoticeName)
+    }, look: $0) }),
+    ("NOTICE-AIRPLAY-PTP", { layarMain(layarModel {
+        $0.notices.post($0.text.nativeAirPlayPtpPortsTaken, subject: Notice.airplayPtp, shortName: $0.text.ptpPortsNoticeName)
+    }, look: $0) }),
+    ("NOTICE-PAIRINGS", { layarMain(layarModel {
+        $0.notices.post($0.text.nativeAirPlayPairingsNotSaved, subject: Notice.pairings,
+                        shortName: $0.text.pairingsNotSavedNoticeName)
+    }, look: $0) }),
+    ("NOTICE-PAIRINGS-IGNORED", { layarMain(layarModel {
+        $0.notices.post($0.text.nativeAirPlayPairingsIgnored, subject: Notice.pairingsIgnored,
+                        shortName: $0.text.pairingsIgnoredNoticeName)
+    }, look: $0) }),
+    ("NOTICE-ZONES", { layarMain(layarModel {
+        $0.notices.post($0.text.groupsBecameZones, subject: Notice.zones, shortName: $0.text.groupsBecameZonesNoticeName,
+                        info: true)
+    }, look: $0) }),
+    ("NOTICE-PRESETS", { layarMain(layarModel {
+        let leftOff = [PresetNotice.LeftOff(name: "Patio", reason: .notFound)]
+        $0.notices.post(PresetNotice.message(preset: "Whole House", leftOff: leftOff, nothingChanged: false, text: $0.text) ?? "",
+                        subject: Notice.presets, title: PresetNotice.title(nothingChanged: false, text: $0.text),
+                        shortName: $0.text.presetLeftOffNoticeName)
+    }, look: $0) }),
+    ("NOTICE-CAST-SENDER", { layarMain(layarModel {
+        $0.notices.post($0.text.castProblem(.busy, name: "Porch"), subject: Notice.cast("porch"),
+                        shortName: $0.text.cantPlayNoticeName("Porch"))
+    }, look: $0) }),
+    ("NOTICE-AIRPLAY-AHEAD", { layarMain(layarModel {
+        $0.notices.post($0.text.airPlayAheadOfCast(tenths: 4, speaker: "Porch"), subject: Notice.airPlayAhead("porch"),
+                        shortName: $0.text.airPlayAheadNoticeName("Porch"))
+    }, look: $0) }),
+    ("NOTICE-PERMISSION", { layarMain(layarModel {
+        $0.notices.post($0.text.microphoneDenied, subject: Notice.start, shortName: $0.text.microphoneNoticeName,
+                        settings: .microphone)
+    }, look: $0) }),
+    ("NOTICE-STACK", { layarMain(layarModel {
+        $0.notices.post($0.text.sourceTerminated(name: "Music Player"), subject: Notice.source)
+        $0.notices.post($0.text.captureNotWorking(nil), subject: Notice.capture)
+        $0.notices.post($0.text.nativeAirPlayPtpPortsTaken, subject: Notice.airplayPtp, shortName: $0.text.ptpPortsNoticeName)
+        $0.notices.post($0.text.groupsBecameZones, subject: Notice.zones, shortName: $0.text.groupsBecameZonesNoticeName,
+                        info: true)
+    }, look: $0) }),
+    ("NOTICE-LONG", { layarMain(layarModel {
+        $0.notices.post($0.text.nativeAirPlayTooManyAirPlay2(name: layarLong),
+                        subject: SpeakerKey.make(id: "kitchen", airplay: true),
+                        title: $0.text.nativeAirPlayWaitingTitle(name: layarLong))
+    }, look: $0) }),
+    ("MAIN-SETTINGS", { layarSettings(layarModel(), look: $0) }),
+    ("SETTINGS-SWITCH-OFF", { layarSettings(layarModel {
+        $0.launchAtLogin = false
+        $0.resumesAfterSleep = false
+        $0.volumeKeys = false
+    }, look: $0) }),
+    ("WEBREMOTE-OFF", { layarRemote(look: $0) }),
+    ("WEBREMOTE-RUNNING", { layarRemote(look: $0) {
+        $0.enabled = true
+        $0.status = .running(port: 8770)
+        $0.addresses = RemoteAddresses(localHostName: "den", ipv4: "192.0.2.10")
+        $0.code = "4821"
+        $0.deviceCount = 1
+    } }),
+    ("WEBREMOTE-FAILED", { layarRemote(look: $0) {
+        $0.enabled = true
+        // ASC_REMOTE_ERROR_CONFIG, which the window words as the desktop's generic "couldn't start".
+        $0.status = .failed(error: 1, port: 8770)
+    } }),
+    ("MAIN-PRESETS", { layarMain(layarModel { layarPresets($0) }, look: $0) }),
+    ("MAIN-PRESET-LIST", { layarMain(layarModel {
+        layarPresets($0)
+        $0.presetsListOpen = true
+    }, look: $0) }),
+    ("MAIN-PRESETS-EMPTY", { layarMain(layarModel { $0.presetsListOpen = true }, look: $0) }),
 ]
 
 /// The desktop's rows the Mac renderer does not set up, and why; written to
@@ -604,24 +841,17 @@ let layarNotSetUp: [(ids: [String], reason: String)] = [
      "a popover, which opens in its own window on a click the renderer does not make"),
     (["MAIN-ROW-RENAME", "MAIN-ZONE-RENAME", "MAIN-PRESET-RENAME", "MAIN-DELAY-EDIT"],
      "needs typing in a field the renderer does not drive"),
-    (["CAL-SHEET", "CAL-SHEET-RUNNING", "CAL-SHEET-RESULT", "CAL-SHEET-FAILED", "CAL-SHEET-LEFTOUT",
-      "CAL-SHEET-INCLUDED", "CAL-SHEET-ONLY-LEFTOUT", "CAL-SHEET-SMALLEST", "CAL-SHEET-LONGNAME",
-      "CAL-SHEET-LEFTOUT-LONG", "MAIN-CALIBRATE-SHEET-NARROW", "MAIN-ROW-CAL-RUNNING", "MAIN-ROW-CAL-DONE",
-      "MAIN-ROW-CAL-FAILED", "MAIN-ADD-ADDRESS", "MAIN-ADD-ADDRESS-ERROR"],
-     "a sheet or calibration state the Mac renderer does not mock yet"),
-    (["MAIN-ZONE-CARD", "MAIN-ZONE-COLLAPSED", "TRAY-ZONE-HEADER", "MAIN-PRESETS", "MAIN-PRESET-LIST",
-      "MAIN-PRESETS-EMPTY"],
-     "the desktop's zones_preview and presets_preview examples are not mirrored here yet"),
+    (["MAIN-ADD-ADDRESS-ERROR"],
+     "the reason shows only after Add looked the address up; the sheet keeps it in its own CastAddressDraft"),
+    (["MAIN-ZONE-CARD", "MAIN-ZONE-COLLAPSED", "TRAY-ZONE-HEADER"],
+     "the desktop's zones_preview example (a stereo pair, a Cast speaker, three zones) is not mirrored here yet"),
     (["MAIN-DELAY-LONGNAME", "MAIN-ROW-LOWVOL-LONGNAME", "MAIN-ROW-THISPC-LONG", "MAIN-ROW-HINT-LONG",
       "MAIN-ROW-HINT-TALL", "MAIN-ROW-CANTPLAY"],
      "not mirrored here yet"),
-    (["NOTICE-START", "NOTICE-CAPTURE", "NOTICE-LOGIN", "NOTICE-AIRPLAY-SENDER", "NOTICE-AIRPLAY-PTP",
-      "NOTICE-PAIRINGS", "NOTICE-PAIRINGS-IGNORED", "NOTICE-ZONES", "NOTICE-PRESETS", "NOTICE-CAST-SENDER",
-      "NOTICE-AIRPLAY-AHEAD", "NOTICE-PERMISSION", "NOTICE-STACK", "NOTICE-LONG"],
-     "the notice's Mac text is not matched to the desktop's NoticeMessage here yet"),
-    (["MAIN-SETTINGS", "SETTINGS-UPDATES", "SETTINGS-SWITCH-OFF", "GUIDE-WINDOW", "GUIDE-SCROLLED",
-      "WEBREMOTE-OFF", "WEBREMOTE-RUNNING", "WEBREMOTE-ANDROID", "WEBREMOTE-FAILED"],
-     "the Mac renderer does not draw this window yet"),
+    (["SETTINGS-UPDATES"], "the Updates box shows only while the updater runs (AppUpdater.isRunning), which the renderer does not start"),
+    (["GUIDE-WINDOW", "GUIDE-SCROLLED"],
+     "the Guide is an AppKit text view that AppDelegate's private makeGuideWindow builds, with no layarKey marks"),
+    (["WEBREMOTE-ANDROID"], "the phone choice is the view's own PhoneChoice, which only a click sets"),
     (["MAIN-AIRPLAY-DELAY-FOLDED"], "the desktop folds the row when it has no AirPlay delay; the Mac model always holds one (airPlayDelayMs)"),
     (["EQ-SMALLEST"], "the Mac equalizer window has one size (EqualizerWindow.swift:25, not resizable)"),
 ]
