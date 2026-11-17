@@ -5,13 +5,14 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use windows::Win32::Foundation::{S_OK, WAIT_TIMEOUT};
 use windows::Win32::Media::Audio::{
     AudioSessionDisconnectReason, AudioSessionState, AudioSessionStateActive, DEVICE_STATE_ACTIVE,
-    IAudioSessionControl, IAudioSessionEvents, IAudioSessionEvents_Impl, IAudioSessionManager2,
-    IAudioSessionNotification, IAudioSessionNotification_Impl, eRender,
+    IAudioSessionControl, IAudioSessionControl2, IAudioSessionEvents, IAudioSessionEvents_Impl,
+    IAudioSessionManager2, IAudioSessionNotification, IAudioSessionNotification_Impl, eRender,
 };
 use windows::Win32::System::Com::CLSCTX_ALL;
-use windows::Win32::System::Threading::{INFINITE, WaitForSingleObject};
+use windows::Win32::System::Threading::WaitForSingleObject;
 use windows_core::{ComObject, GUID, IUnknownImpl, Interface, PCWSTR, implement};
 
 use super::com::{
@@ -19,6 +20,7 @@ use super::com::{
     system_error,
 };
 use super::devices::enumerator;
+use super::processes::ProcessWatch;
 use crate::audio::backend::BackendError;
 
 /// Follows the render endpoints active when it starts; a thread of its own
@@ -126,32 +128,107 @@ fn watch(created: &Arc<AtomicBool>, stop: &Event, ready: Ready) {
     if !ready.ok(()) {
         return;
     }
+    // Sessions of apps that exited are let go here, never in a callback,
+    // so the list doesn't grow while the app runs for days.
     // SAFETY: waits on an event that outlives this thread's use of it.
-    unsafe { WaitForSingleObject(stop.raw(), INFINITE) };
+    while unsafe { WaitForSingleObject(stop.raw(), PRUNE_EVERY_MS) } == WAIT_TIMEOUT {
+        let gone = followed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take_gone(process_gone);
+        unfollow(&events, gone);
+    }
     for manager in registered {
         // SAFETY: unregisters the listener registered on this manager.
         let _ = unsafe { manager.UnregisterSessionNotification(&listener) };
     }
-    let sessions = std::mem::take(&mut *followed.lock().unwrap_or_else(|e| e.into_inner()));
-    for session in sessions {
-        // SAFETY: unregisters the listener registered on this session.
-        let _ = unsafe { session.UnregisterAudioSessionNotification(&events) };
-    }
+    let sessions = followed.lock().unwrap_or_else(|e| e.into_inner()).stop();
+    unfollow(&events, sessions);
 }
+
+const PRUNE_EVERY_MS: u32 = 10_000;
 
 /// Registers `events` for the state changes of `session`, kept in `followed`
 /// for the unregistering at the end.
 fn follow(
     events: &IAudioSessionEvents,
-    followed: &Mutex<Vec<IAudioSessionControl>>,
+    followed: &Mutex<Followed<IAudioSessionControl>>,
     session: &IAudioSessionControl,
 ) {
-    // SAFETY: registers a live listener on a live session.
-    if unsafe { session.RegisterAudioSessionNotification(events) }.is_ok() {
-        followed
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(session.clone());
+    followed
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .follow(|| {
+            // SAFETY: registers a live listener on a live session.
+            unsafe { session.RegisterAudioSessionNotification(events) }
+                .ok()
+                .map(|()| session.clone())
+        });
+}
+
+/// Unregisters `events` from each of `sessions` and lets them go.
+fn unfollow(events: &IAudioSessionEvents, sessions: Vec<IAudioSessionControl>) {
+    for session in sessions {
+        // SAFETY: unregisters the listener registered on this session.
+        let _ = unsafe { session.UnregisterAudioSessionNotification(events) };
+    }
+}
+
+/// Whether the process of `session` has exited. A session of the system
+/// sounds or one whose process can't be read is kept.
+fn process_gone(session: &IAudioSessionControl) -> bool {
+    let Ok(session) = session.cast::<IAudioSessionControl2>() else {
+        return false;
+    };
+    // SAFETY: calls on a live session.
+    if unsafe { session.IsSystemSoundsSession() } == S_OK {
+        return false;
+    }
+    // SAFETY: as above.
+    unsafe { session.GetProcessId() }
+        .is_ok_and(|pid| matches!(ProcessWatch::open(pid), Err(BackendError::SourceGone)))
+}
+
+/// The sessions followed for their state changes, until the watcher stops.
+struct Followed<S> {
+    sessions: Vec<S>,
+    stopped: bool,
+}
+
+impl<S> Default for Followed<S> {
+    fn default() -> Self {
+        Followed {
+            sessions: Vec::new(),
+            stopped: false,
+        }
+    }
+}
+
+impl<S> Followed<S> {
+    /// Keeps the session `register` gives; registers nothing once stopped,
+    /// when nothing would unregister it.
+    fn follow(&mut self, register: impl FnOnce() -> Option<S>) {
+        if self.stopped {
+            return;
+        }
+        if let Some(session) = register() {
+            self.sessions.push(session);
+        }
+    }
+
+    /// Takes out the sessions `gone` says are over.
+    fn take_gone(&mut self, gone: impl Fn(&S) -> bool) -> Vec<S> {
+        let (over, kept) = std::mem::take(&mut self.sessions)
+            .into_iter()
+            .partition(|session| gone(session));
+        self.sessions = kept;
+        over
+    }
+
+    /// Takes out every session, and keeps none after.
+    fn stop(&mut self) -> Vec<S> {
+        self.stopped = true;
+        std::mem::take(&mut self.sessions)
     }
 }
 
@@ -161,7 +238,7 @@ fn follow(
 #[implement(IAudioSessionNotification, IAudioSessionEvents)]
 struct SessionListener {
     created: Arc<AtomicBool>,
-    followed: Mutex<Vec<IAudioSessionControl>>,
+    followed: Mutex<Followed<IAudioSessionControl>>,
 }
 
 impl IAudioSessionNotification_Impl for SessionListener_Impl {
@@ -245,5 +322,18 @@ mod tests {
         // SAFETY: as above.
         unsafe { events.OnStateChanged(AudioSessionStateActive) }.unwrap();
         assert!(created.load(Ordering::Acquire));
+    }
+
+    // covers: S471
+    #[test]
+    fn a_session_whose_process_is_gone_is_let_go_and_none_is_kept_after_the_stop() {
+        let mut followed = Followed::default();
+        followed.follow(|| Some(1));
+        followed.follow(|| Some(2));
+        followed.follow(|| None);
+        assert_eq!(followed.take_gone(|&pid| pid == 1), [1]);
+        assert_eq!(followed.stop(), [2]);
+        followed.follow(|| panic!("registered after the stop"));
+        assert!(followed.stop().is_empty());
     }
 }
