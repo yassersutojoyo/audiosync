@@ -5842,12 +5842,13 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.take_events();
     }
 
-    fn set_system_volume(&mut self, id: &str, level: f64) {
+    fn set_system_volume(&mut self, id: &str, level: f64) -> bool {
         let Some(SpeakerKey::Local(endpoint_id)) = SpeakerKey::parse(id) else {
-            return;
+            return false;
         };
-        self.audio.set_device_volume(&endpoint_id, level);
+        let taken = self.audio.set_device_volume(&endpoint_id, level);
         self.take_events();
+        taken
     }
 
     /// The speakers that were on come back as they do after a launch: the

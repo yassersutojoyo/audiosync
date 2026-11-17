@@ -2058,6 +2058,8 @@ export component VolumeSlider inherits HorizontalLayout {
     in property <float> step: 1;
     in property <brush> track <=> slider.track;
     in property <bool> shows-value: true;
+    // Its value reads "60%" rather than "60".
+    in property <bool> percent;
     in property <bool> small <=> slider.small;
     callback changed(float);
     // True from the first move of a drag or key press to its release.
@@ -2097,7 +2099,7 @@ export component VolumeSlider inherits HorizontalLayout {
                 enabled: root.enabled;
                 accessible-label: root.label;
                 accessible-description: root.description;
-                accessible-value: Strings.volume-value(self.value);
+                accessible-value: root.percent ? Strings.system-volume-percent(round(self.value)) : Strings.volume-value(self.value);
                 changed(value) => {
                     if !root.is-editing {
                         root.is-editing = true;
@@ -2125,9 +2127,9 @@ export component VolumeSlider inherits HorizontalLayout {
     }
 
     if root.shows-value: QuietText {
-        text: Strings.volume-value(slider.value);
+        text: root.percent ? Strings.system-volume-percent(round(slider.value)) : Strings.volume-value(slider.value);
         color: root.is-editing || slider.held ? Tokens.text : Tokens.secondary-text;
-        width: 26px;
+        width: root.percent ? 34px : 26px;
         horizontal-alignment: right;
         // One line, centered on the track: a wrapped label is taller than
         // the slider and drops below it.
@@ -3452,6 +3454,8 @@ export component SpeakerRow inherits Rectangle {
     callback device-volume-fix();
     // The System slider moved by the user, 0 to 100.
     callback system-volume-changed(float);
+    // The System slider is held (true) or let go (false).
+    callback system-volume-editing(bool);
     // Rename… in its menu, or a double-click on its name: edit the name here.
     callback rename-requested();
     callback rename-edited(string);
@@ -4322,11 +4326,22 @@ export component SpeakerRow inherits Rectangle {
 
                         VolumeSlider {
                             small: true;
+                            percent: true;
                             volume: max(root.item.system-volume, 0);
                             label: Strings.system-volume-slider(root.item.name);
                             changed(value) => {
                                 root.system-volume-changed(value);
                             }
+                            editing(on) => {
+                                root.system-volume-editing(on);
+                            }
+                        }
+
+                        if root.item.system-refused: Text {
+                            text: Strings.system-volume-refused;
+                            font-size: Tokens.font-size-caption;
+                            color: Tokens.secondary-text;
+                            wrap: word-wrap;
                         }
                     }
                 }

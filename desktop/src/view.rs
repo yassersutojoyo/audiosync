@@ -104,6 +104,12 @@ enum RenamePlace {
 #[derive(Default)]
 struct UiState {
     sync_open: HashSet<String>,
+    /// The System slider is held: Windows' reports wait, and the reference
+    /// row shows the level last set, as on the Mac.
+    system_held: bool,
+    system_shown: Option<f64>,
+    /// Windows refused the System slider's last write.
+    system_refused: bool,
     /// What is typed in each speaker's delay field, by speaker ID.
     delay_drafts: HashMap<String, TypedDelay>,
     airplay_delay_draft: TypedDelay,
@@ -2493,6 +2499,12 @@ impl App {
                 row.renaming = true;
                 row.name_text = text.as_str().into();
             }
+            if row.system_volume >= 0 {
+                if let Some(level) = ui.system_shown.filter(|_| ui.system_held) {
+                    row.system_volume = level.round() as i32;
+                }
+                row.system_refused = ui.system_refused;
+            }
             row.calibration_status = calibration_status(&strings, &state, speaker);
             row.calibration_left_out = speaker
                 .mic_left_out
@@ -3389,7 +3401,30 @@ impl App {
         let w = weak.clone();
         main.on_system_volume_requested(move |id, value| {
             with_app(&w, |app| {
-                app.update(|b| b.set_system_volume(&id, f64::from(value) / 100.0));
+                let mut taken = true;
+                app.update(|b| taken = b.set_system_volume(&id, f64::from(value) / 100.0));
+                let was_refused = {
+                    let mut ui = app.ui.borrow_mut();
+                    ui.system_shown = Some(f64::from(value));
+                    std::mem::replace(&mut ui.system_refused, !taken)
+                };
+                if !taken && !was_refused {
+                    app.announce(app.strings().get_system_volume_refused());
+                }
+                app.refresh();
+            });
+        });
+        let w = weak.clone();
+        main.on_system_volume_editing_requested(move |_, on| {
+            with_app(&w, |app| {
+                {
+                    let mut ui = app.ui.borrow_mut();
+                    ui.system_held = on;
+                    if !on {
+                        ui.system_shown = None;
+                    }
+                }
+                app.refresh();
             });
         });
         let w = weak.clone();
@@ -5976,6 +6011,8 @@ pub fn speaker_item(
         system_volume: system.map_or(-1, |(percent, _)| percent as i32),
         system_muted: system.is_some_and(|(_, muted)| muted),
         system_open: sync_open && system.is_some(),
+        // Set by the caller from the slider's last write (`App::refresh`).
+        system_refused: false,
         cast: speaker.cast.is_some(),
         cast_state: speaker
             .cast
@@ -10295,6 +10332,76 @@ mod tests {
             find("System volume").accessible_value().as_deref(),
             Some("23%")
         );
+    }
+
+    /// The System panel reads its value as "13%", as the Mac's; a write
+    /// Windows refuses shows the Mac's line under the slider; while the
+    /// slider is held, Windows' reports wait, and the latest shows on release.
+    // covers: S197
+    #[test]
+    fn the_system_panel_reads_percent_says_a_refusal_and_holds_its_value() {
+        use i_slint_backend_testing::ElementHandle;
+        let shown = |app: &App| {
+            ElementHandle::find_by_accessible_label(&app.main, "System volume")
+                .next()
+                .and_then(|button| button.accessible_value())
+                .map(|value| value.to_string())
+        };
+        let open = |mock: MockBackend| {
+            let app = app_over(mock);
+            app.main.show().expect("the main window shows");
+            draw_frames();
+            let reference = app
+                .snapshot()
+                .speakers
+                .into_iter()
+                .find(ui_model::Speaker::is_reference)
+                .expect("the reference");
+            ElementHandle::find_by_accessible_label(&app.main, "System volume")
+                .next()
+                .expect("the System value")
+                .invoke_accessible_default_action();
+            draw_frames();
+            (app, reference)
+        };
+
+        let (app, reference) = open(MockBackend::new());
+        let slider = ElementHandle::find_by_accessible_label(
+            &app.main,
+            &format!("Windows volume of {}", reference.name),
+        )
+        .next()
+        .expect("the slider");
+        assert_eq!(slider.accessible_value().as_deref(), Some("13%"));
+
+        let id = SharedString::from(reference.id.as_str());
+        app.main
+            .invoke_system_volume_editing_requested(id.clone(), true);
+        app.main.invoke_system_volume_requested(id.clone(), 40.0);
+        // Windows reports another level while the slider is held.
+        app.update(|b| {
+            b.set_system_volume(&reference.id, 0.7);
+        });
+        draw_frames();
+        assert_eq!(shown(&app).as_deref(), Some("40%"), "held");
+        app.main.invoke_system_volume_editing_requested(id, false);
+        draw_frames();
+        assert_eq!(shown(&app).as_deref(), Some("70%"), "the latest on release");
+
+        let mut mock = MockBackend::new();
+        mock.refuses_system_volume = true;
+        let (app, reference) = open(mock);
+        let refused = "This output didn't accept the new volume.";
+        let line = || {
+            ElementHandle::find_by_accessible_label(&app.main, refused)
+                .next()
+                .is_some()
+        };
+        assert!(!line());
+        app.main
+            .invoke_system_volume_requested(reference.id.as_str().into(), 40.0);
+        draw_frames();
+        assert!(line(), "{refused}");
     }
 
     /// A Cast speaker's delay is a wait, never below 0, so its row shows it

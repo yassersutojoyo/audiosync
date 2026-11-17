@@ -1790,7 +1790,10 @@ pub trait Backend {
 
     /// The reference row's System slider moved by the user: sets output
     /// `id`'s own volume in Windows to `level`, 0 to 1 (spec S197).
-    fn set_system_volume(&mut self, _id: &str, _level: f64) {}
+    /// Whether Windows took the write.
+    fn set_system_volume(&mut self, _id: &str, _level: f64) -> bool {
+        true
+    }
 
     /// The PIN the user typed for the pairing with speaker `id`.
     fn submit_pin(&mut self, _id: &str, _pin: &str) {}
@@ -2087,6 +2090,9 @@ pub struct MockBackend {
     pub includes: std::rc::Rc<std::cell::RefCell<Vec<(String, bool)>>>,
     /// Each volume slider hold (true) or release (false), by speaker key.
     pub volume_editing: std::rc::Rc<std::cell::RefCell<Vec<(String, bool)>>>,
+    /// Writes to an output's own volume fail, as on a device that refuses
+    /// them.
+    pub refuses_system_volume: bool,
     /// Window settings the next poll takes in, as a settings file read
     /// after launch brings them.
     pub late_view: std::rc::Rc<std::cell::RefCell<Option<ViewSettings>>>,
@@ -2291,6 +2297,7 @@ impl MockBackend {
             calibrate_all_phase: std::rc::Rc::default(),
             includes: std::rc::Rc::default(),
             volume_editing: std::rc::Rc::default(),
+            refuses_system_volume: false,
             late_view: std::rc::Rc::default(),
             saved_views: std::rc::Rc::default(),
             input_peak_reads: std::rc::Rc::default(),
@@ -3162,13 +3169,17 @@ impl Backend for MockBackend {
     }
 
     /// As Windows would report it once the level is written.
-    fn set_system_volume(&mut self, id: &str, level: f64) {
+    fn set_system_volume(&mut self, id: &str, level: f64) -> bool {
+        if self.refuses_system_volume {
+            return false;
+        }
         if let Some(volume) = self
             .speaker_mut(id)
             .and_then(|speaker| speaker.system_volume.as_mut())
         {
             volume.volume = Some(level);
         }
+        true
     }
 
     /// As Windows would report it once the fix is written.

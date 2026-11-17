@@ -196,6 +196,8 @@ export struct SpeakerItem {
     system-volume: int,
     system-muted: bool,
     system-open: bool,
+    // Windows refused the System slider's last write.
+    system-refused: bool,
     // A Google Cast speaker: its delay is the offset the user measured, and
     // while it connects or plays it offers Mute and Resync.
     cast: bool,

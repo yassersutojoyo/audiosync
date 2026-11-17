@@ -4928,8 +4928,8 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.fix_followed_device_volume(id);
     }
 
-    fn set_device_volume(&mut self, id: &str, level: f64) {
-        self.set_followed_device_level(id, level);
+    fn set_device_volume(&mut self, id: &str, level: f64) -> bool {
+        self.set_followed_device_level(id, level)
     }
 
     fn set_master_volume(&mut self, position: f64) {

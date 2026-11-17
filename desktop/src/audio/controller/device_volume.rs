@@ -405,14 +405,16 @@ impl<D: Driver> Controller<D> {
 
     /// The System slider's write (S197), to an output that is followed only.
     /// The row follows what Windows reports afterwards, as after the fix.
-    pub(super) fn set_followed_device_level(&mut self, id: &str, level: f64) {
+    /// Whether Windows took the write.
+    pub(super) fn set_followed_device_level(&mut self, id: &str, level: f64) -> bool {
         if self.device_volumes.reading(id).is_none() || !level.is_finite() {
-            return;
+            return false;
         }
         let result = self
             .driver
             .set_endpoint_level(id, level.clamp(0.0, 1.0) as f32);
         self.stalls(id, &result);
+        result.is_ok()
     }
 
     /// Lets go of every output's own volume: AudioSync quits.
@@ -552,8 +554,13 @@ mod tests {
         backend.poll();
         assert_eq!(device_volume(&backend, SPEAKERS), at(0.4_f32.into(), false));
         backend.set_output_enabled(HEADPHONES, false).unwrap();
-        backend.set_device_volume(HEADPHONES, 0.9);
+        assert!(!backend.set_device_volume(HEADPHONES, 0.9));
         assert_eq!(record.writes().len(), 1, "an output that is off");
+        backend.refuse_volume_writes(Some(BackendError::System {
+            call: "IAudioEndpointVolume::SetMasterVolumeLevelScalar",
+            code: 0x8000_4005_u32 as i32,
+        }));
+        assert!(!backend.set_device_volume(SPEAKERS, 0.6), "a refused write");
     }
 
     // covers: S195, S202

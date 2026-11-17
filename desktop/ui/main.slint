@@ -424,6 +424,7 @@ component SpeakerRows inherits VerticalLayout {
     callback forget-pairing(string);
     callback device-volume-fix(string);
     callback system-volume-changed(string, float);
+    callback system-volume-editing(string, bool);
     callback rename-requested(string);
     callback rename-edited(string, string);
     callback rename-committed(string);
@@ -504,6 +505,9 @@ component SpeakerRows inherits VerticalLayout {
             }
             system-volume-changed(value) => {
                 root.system-volume-changed(speaker.id, value);
+            }
+            system-volume-editing(on) => {
+                root.system-volume-editing(speaker.id, on);
             }
             rename-requested => {
                 root.rename-requested(speaker.id);
@@ -587,6 +591,7 @@ component ZoneCard inherits VerticalLayout {
     callback forget-pairing <=> rows.forget-pairing;
     callback device-volume-fix <=> rows.device-volume-fix;
     callback system-volume-changed <=> rows.system-volume-changed;
+    callback system-volume-editing <=> rows.system-volume-editing;
     callback rename-requested <=> rows.rename-requested;
     callback rename-edited <=> rows.rename-edited;
     callback rename-committed <=> rows.rename-committed;
@@ -697,6 +702,7 @@ component SpeakerSection inherits VerticalLayout {
     callback forget-pairing <=> rows.forget-pairing;
     callback device-volume-fix <=> rows.device-volume-fix;
     callback system-volume-changed <=> rows.system-volume-changed;
+    callback system-volume-editing <=> rows.system-volume-editing;
     callback rename-requested <=> rows.rename-requested;
     callback rename-edited <=> rows.rename-edited;
     callback rename-committed <=> rows.rename-committed;
@@ -2756,6 +2762,8 @@ export component MainWindow inherits Window {
     callback device-volume-fix-requested(string);
     // The reference row's System slider moved by the user, 0 to 100.
     callback system-volume-requested(string, float);
+    // That slider is held (true) or let go (false).
+    callback system-volume-editing-requested(string, bool);
     // A Google Cast speaker's Mute or Unmute, and its Resync.
     callback cast-muted-requested(string, bool);
     callback cast-resync-requested(string);
@@ -3478,6 +3486,9 @@ export component MainWindow inherits Window {
                         system-volume-changed(id, value) => {
                             root.system-volume-requested(id, value);
                         }
+                        system-volume-editing(id, on) => {
+                            root.system-volume-editing-requested(id, on);
+                        }
                         rename-requested(id) => {
                             root.speaker-rename-requested(id);
                         }
@@ -3631,6 +3642,9 @@ export component MainWindow inherits Window {
                             system-volume-changed(id, value) => {
                                 root.system-volume-requested(id, value);
                             }
+                            system-volume-editing(id, on) => {
+                                root.system-volume-editing-requested(id, on);
+                            }
                             rename-requested(id) => {
                                 root.speaker-rename-requested(id);
                             }
@@ -3754,6 +3768,9 @@ export component MainWindow inherits Window {
                         }
                         system-volume-changed(id, value) => {
                             root.system-volume-requested(id, value);
+                        }
+                        system-volume-editing(id, on) => {
+                            root.system-volume-editing-requested(id, on);
                         }
                         rename-requested(id) => {
                             root.speaker-rename-requested(id);
