@@ -12374,7 +12374,7 @@ mod tests {
         );
         let source = include_str!("../ui/main.slint");
         let line = &source[source
-            .find("header-status := SecondaryText {")
+            .find("header-status := QuietText {")
             .expect("the status")..];
         let line = &line[..line.find('}').expect("its end")];
         assert!(line.contains("overflow: elide;"), "a long name elides");
@@ -12396,8 +12396,10 @@ mod tests {
             app.main.invoke_power_toggled(on);
             assert_ne!(app.main.get_status(), before, "the state changes");
             draw_frames();
-            advance_clock(Duration::from_millis(half));
-            draw_frames();
+            for _ in 0..half / 16 {
+                advance_clock(Duration::from_millis(16));
+                draw_frames();
+            }
             let (fade_in, fade_out) = (
                 app.main.get_status_fade_in(),
                 app.main.get_status_fade_out(),
@@ -12406,10 +12408,47 @@ mod tests {
                 (0.3..0.7).contains(&fade_in) && (0.3..0.7).contains(&fade_out),
                 "half way through, on {on}, motion {motion}: {fade_in} in, {fade_out} out"
             );
-            advance_clock(Duration::from_millis(300));
-            draw_frames();
+            for _ in 0..30 {
+                advance_clock(Duration::from_millis(16));
+                draw_frames();
+            }
             assert_eq!(app.main.get_status_fade_in(), 1.0, "the new state shows");
             assert_eq!(app.main.get_status_fade_out(), 0.0, "the old one is gone");
+        }
+    }
+
+    /// Switching on starts the engine on the UI thread (about 190 ms in the
+    /// debug log of 2026-11-17), so the first frames of the fade come late.
+    /// A clock-driven fade was mostly over by then and read as a jump; the
+    /// fade goes on from where the last frame left it, as the Mac's does
+    /// while its main thread is busy (maintainer 2026-11-17).
+    #[test]
+    fn a_busy_start_does_not_eat_the_header_state_cross_fade() {
+        hold_clock();
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows headless");
+        draw_frames();
+        for on in [true, false] {
+            app.main.invoke_power_toggled(on);
+            draw_frames();
+            advance_clock(Duration::from_millis(190));
+            draw_frames();
+            let fade_in = app.main.get_status_fade_in();
+            assert!(fade_in < 0.3, "after the stall, on {on}: {fade_in} in");
+            for _ in 0..30 {
+                advance_clock(Duration::from_millis(16));
+                draw_frames();
+            }
+            assert_eq!(
+                app.main.get_status_fade_in(),
+                1.0,
+                "on {on}: the new state shows"
+            );
+            assert_eq!(
+                app.main.get_status_fade_out(),
+                0.0,
+                "on {on}: the old one is gone"
+            );
         }
     }
 
