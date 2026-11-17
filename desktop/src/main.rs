@@ -63,6 +63,8 @@ mod remote;
 #[cfg(any(windows, test))]
 #[cfg_attr(all(test, not(windows)), allow(dead_code))]
 mod renderer_choice;
+#[cfg(windows)]
+mod restore_guard;
 mod settings;
 mod setup_check;
 #[cfg(any(os_backend, target_os = "linux", test))]
@@ -156,6 +158,12 @@ fn main() -> ExitCode {
     // never claims the instance the waiting copy holds.
     if let Some(code) = updater::elevated::from_command_line() {
         std::process::exit(code);
+    }
+    // Before the single instance: the guard runs beside the copy holding it.
+    #[cfg(windows)]
+    if let Some(command) = restore_guard::command(std::env::args_os()) {
+        restore_guard::run(command);
+        return ExitCode::SUCCESS;
     }
     // After Restart Now the quitting copy still holds the single instance;
     // claiming it first would hand this launch over to that copy.

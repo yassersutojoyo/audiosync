@@ -1,0 +1,7 @@
+{"window": [696, 600], "elements": [
+ {"key": "Streaming to", "frame": [20, 40, 90, 16], "font": {"name": "SF Pro", "size": 13}, "fg": "#1d1d1f", "bg": "#ffffff"},
+ {"key": "Kitchen", "frame": [20, 140, 200, 22], "font": null, "fg": "#1d1d1f", "bg": "#ffffff"},
+ {"key": "Kitchen", "frame": [20, 100, 200, 22], "font": null, "fg": "#1d1d1f", "bg": "#ffffff"},
+ {"key": "Speakers", "frame": [20, 180, 200, 22], "font": null, "fg": "#1d1d1f", "bg": "#ffffff"},
+ {"key": "Volume", "frame": [300, 100, 120, 20], "font": null, "fg": "#0a84ff", "bg": null}
+]}

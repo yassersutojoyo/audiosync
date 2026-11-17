@@ -802,6 +802,8 @@ pub enum NoticeMessage {
         speaker: String,
         problem: CastProblem,
     },
+    /// The Google Cast sender stopped working with `speaker` on, so it is off.
+    CastSenderStopped { speaker: String },
     /// The AirPlay speakers can't wait long enough for the Google Cast
     /// speaker that is on, so they play about `tenths` tenths of a second
     /// ahead of it. Clears itself once they keep up again.
@@ -1176,6 +1178,9 @@ pub enum AllPhase {
     /// Measure Again couldn't start: streaming, the reference or the named
     /// row's speaker is off.
     CannotMeasureAgain(String, Missing),
+    /// Measure Again of the named row's speaker couldn't start, or stopped
+    /// midway, so its row stayed.
+    AgainFailed(String, Failure),
     /// A delay changed after the run, so its results went.
     Stale,
     /// A whole run stopped before it measured any speaker but the reference.
@@ -1206,8 +1211,8 @@ pub struct SheetState {
     pub ended: Option<EndReason>,
     /// The microphone or the capture stopped the run.
     pub failure: Option<Failure>,
-    /// The last Measure Again ended early, so its row stayed.
-    pub again_ended: Option<EndReason>,
+    /// The last Measure Again ended early, so the named speaker's row stayed.
+    pub again_ended: Option<(String, EndReason)>,
     pub can_apply: bool,
     pub applied: bool,
     /// Undo restores what Apply replaced, in one step.

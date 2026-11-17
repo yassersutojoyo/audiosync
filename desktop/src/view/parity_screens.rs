@@ -352,21 +352,22 @@ fn the_tray_panel_is_300_wide_with_the_macs_padding_and_rows() {
 }
 
 #[test]
-fn presets_equalizer_and_calibrate_are_36_high_rows_6_apart_with_no_border() {
+fn presets_equalizer_and_calibrate_are_28_high_rows_6_apart_with_no_border() {
     let source = include_str!("../../ui/main.slint").replace("\r\n", "\n");
     let quick = component(&source, "QuickRow");
     let equalizer = component(&source, "EqualizerCard");
     let presets = component(&source, "PresetsCard");
     let presets = &presets[..presets.find("list := FoldPane").unwrap()];
+    // The Mac's QuickRow.height (MainWindow.swift:1175).
     for row in [quick, equalizer, presets] {
-        assert!(row.contains("min-height: 36px;"));
+        assert!(row.contains("min-height: 28px;"));
         assert!(
             !row.lines().any(|line| line.starts_with("    border-width")),
             "no border"
         );
         assert!(
             !row.contains("padding-top: 6px;\n"),
-            "both lines inside the 36"
+            "both lines inside the row"
         );
     }
     assert!(quick.contains("border-radius: Fluent.radius-control;"));

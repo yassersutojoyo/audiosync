@@ -50,6 +50,8 @@ const WAIT_CURVE: Curve = (0.25, 0.6, 0.35, 1.0);
 const SLIDE_CURVE: Curve = (0.2, 0.8, 0.2, 1.0);
 const SETTLE_CURVE: Curve = (0.0, 0.0, 0.58, 1.0);
 const BREATHE_CURVE: Curve = (0.42, 0.0, 0.58, 1.0);
+/// Core Animation's easeInEaseOut, the Mac's cover fade (MainWindow.swift:1520).
+const COVER_FADE_CURVE: Curve = (0.42, 0.0, 0.58, 1.0);
 
 /// The cubic Bezier `curve`'s value at `t`, 0 to 1 of its time.
 pub fn eased(curve: Curve, t: f64) -> f64 {
@@ -377,7 +379,7 @@ impl TrackSlide {
             old_dim: dim + (RECEDE_DIM - dim) * slid,
             old_fade: breath + (1.0 - breath) * slid,
             cover_fade: slide.cover_at.map_or(0.0, |at| {
-                1.0 - (seconds_between(at, now) / COVER_FADE).min(1.0)
+                1.0 - eased(COVER_FADE_CURVE, seconds_between(at, now) / COVER_FADE)
             }),
             old_text_offset: -travel * TEXT_AWAY * out,
             old_text_fade: 1.0 - (1.0 - text_dim) * (1.0 - out),
@@ -622,6 +624,36 @@ mod tests {
         assert!(moving, "the slide waits for the fade");
         assert!(look.sliding);
         assert!(!slide.look(at(start, 0.76)).1);
+    }
+
+    // The Mac fades the cover in on Core Animation's easeInEaseOut
+    // (MainWindow.swift:1519-1520), which a check at half the fade can't tell
+    // from a linear one.
+    // covers: S463
+    #[test]
+    fn a_cover_that_comes_mid_slide_fades_in_on_the_macs_ease_in_ease_out() {
+        let a = track("Spotify.exe", "A", "Band", true);
+        let b = track("Spotify.exe", "B", "Band", true);
+        let mut b_cover = b.clone();
+        b_cover.artwork = Some(crate::now_playing_card::CardArtwork::new(
+            1,
+            vec![0u8, 0, 0, 255],
+        ));
+        let start = Instant::now();
+        let mut slide = TrackSlide::new(Place::Window);
+        assert!(slide.change(Some(&a), Some(&b), true, false, start));
+        assert!(!slide.change(Some(&b), Some(&b_cover), true, false, at(start, 0.5)));
+        for quarter in [1.0, 3.0] {
+            let fade = slide
+                .look(at(start, 0.5 + 0.25 * quarter / 4.0))
+                .0
+                .cover_fade;
+            let mac = 1.0 - eased((0.42, 0.0, 0.58, 1.0), quarter / 4.0);
+            assert!(
+                close(fade, mac),
+                "{quarter}/4 into the fade: {fade}, the Mac {mac}"
+            );
+        }
     }
 
     // covers: S463

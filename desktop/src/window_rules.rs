@@ -264,14 +264,15 @@ pub mod ambient_breath {
         breath + live * (env - breath).max(0.0)
     }
 
-    /// Points each way of the resting swing, in a slot of any height.
-    pub const SWAY: f64 = 3.0;
+    /// The resting swing's reach each way as a share of the slot's height: 37.5% peak
+    /// to peak, 8.25 pt in the main window's 22 pt and 6 pt in the panel's 16.
+    pub const SWAY: f64 = 0.1875;
     /// `(amplitude, length, offset)` of each strand's ripple.
     pub const WAVES: [(f64, f64, f64); 3] = [(7.0, 92.0, 0.0), (5.0, 61.0, 1.7), (3.2, 137.0, 3.1)];
 
     /// Strand `index`'s offset from the middle at `x` (0 to 1 across), before the
     /// taper, in a 22 pt slot drawn `slot` points high; `idle` is 1 at rest, 0 with the sound.
-    pub fn lift(index: usize, x: f64, time: f64, spread: f64, idle: f64, slot: f64) -> f64 {
+    pub fn lift(index: usize, x: f64, time: f64, spread: f64, idle: f64, _slot: f64) -> f64 {
         use std::f64::consts::{PI, TAU};
         let (amplitude, length, offset) = WAVES[index];
         let strand = index as f64;
@@ -280,7 +281,7 @@ pub mod ambient_breath {
         let swing = (TAU * time / PERIOD + strand * TAU / 3.0 + PI * x).sin();
         amplitude * spread * angle.sin()
             + (strand - 1.0) * 2.2 * spread
-            + idle * SWAY * 22.0 / slot * swing
+            + idle * SWAY * 22.0 * swing
     }
 
     /// `(breath, sound)` opacities: the breath's line cross-fades into the sound's strands.
@@ -674,7 +675,7 @@ mod tests {
     }
 
     #[test]
-    fn ambient_rest_sways_three_points_each_way_with_three_strands_out_of_step() {
+    fn ambient_rest_sways_its_slot_with_three_strands_out_of_step() {
         use ambient_breath::*;
         use std::f64::consts::PI;
         let times: Vec<f64> = (0..100).map(|i| PERIOD * i as f64 / 100.0).collect();
@@ -688,7 +689,10 @@ mod tests {
                     .iter()
                     .flat_map(|t| (0..=20).map(move |s| drawn(strand, s as f64 / 20.0, *t).abs()))
                     .fold(0.0, f64::max);
-                assert!((3.0..=5.5).contains(&peak), "{slot} {strand} {peak}");
+                assert!(
+                    (3.0..=SWAY * slot + 2.5).contains(&peak),
+                    "{slot} {strand} {peak}"
+                );
             }
             for (a, b) in [(0, 1), (0, 2), (1, 2)] {
                 let apart = times
@@ -700,6 +704,18 @@ mod tests {
             }
         }
         assert_eq!(lift(1, 0.5, 1.3, 0.0, 0.0, 16.0), 0.0);
+    }
+
+    #[test]
+    fn ambient_rest_swings_37_and_a_half_percent_of_its_slot() {
+        use ambient_breath::*;
+        // WindowRules.swift:206: 8.25 pt in the main window's 22 pt slot, 6 pt in the panel's 16.
+        for (slot, swing) in [(22.0, 8.25), (16.0, 6.0)] {
+            let reach = (0..400)
+                .map(|i| lift(1, 0.5, PERIOD * i as f64 / 400.0, 0.0, 1.0, slot) * slot / 22.0)
+                .fold(0.0, |a: f64, y| a.max(y.abs()));
+            assert!((2.0 * reach - swing).abs() < 0.01, "{slot} {reach}");
+        }
     }
 
     #[test]
@@ -912,28 +928,22 @@ mod tests {
         }
     }
 
-    /// Segoe UI Variable sets smaller than the Mac's system font, so on
-    /// Windows each Mac style is 14/13 of its point size; Inter keeps it.
+    /// Every OS takes each Mac style at its point size (DECISIONS 2026-11-14).
     #[test]
     fn text_sizes_are_the_macs_text_styles_in_logical_pixels() {
         let tokens = include_str!("../ui/tokens.slint");
-        for (style, windows, mac) in [
-            ("caption", 11, 10),
-            ("caption2", 11, 10),
-            ("subheadline", 12, 11),
-            ("callout", 13, 12),
-            ("body", 14, 13),
-            ("headline", 14, 13),
-            ("title3", 16, 15),
-            ("title2", 18, 17),
+        for (style, size) in [
+            ("caption", 10),
+            ("caption2", 10),
+            ("subheadline", 11),
+            ("callout", 12),
+            ("body", 13),
+            ("headline", 13),
+            ("title3", 15),
+            ("title2", 17),
+            ("wordmark", 21),
+            ("pairing-code", 28),
         ] {
-            let line = format!(
-                "out property <length> font-size-{style}: \
-                 Platform.os == OperatingSystemType.windows ? {windows}px : {mac}px;"
-            );
-            assert!(tokens.contains(&line), "{line}");
-        }
-        for (style, size) in [("wordmark", 21), ("pairing-code", 28)] {
             let line = format!("out property <length> font-size-{style}: {size}px;");
             assert!(tokens.contains(&line), "{line}");
         }

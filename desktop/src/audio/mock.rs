@@ -44,6 +44,7 @@ use super::outputs::{
 use super::process::{ProcessEntry, ProcessTable};
 use super::render::{Stall, StallSlot};
 use super::routing::{EndpointAudio, EndpointVolume};
+use super::test_cells::SyncRefCell;
 
 /// AudioSync's process ID in the mock.
 pub const MOCK_OWN_PID: u32 = 1000;
@@ -251,6 +252,7 @@ pub struct MockRenderer {
     setup: StreamSetup,
     invalidated: Arc<AtomicBool>,
     parts: Arc<Mutex<StreamParts>>,
+    on_stop: Option<fn()>,
 }
 
 impl Drop for MockRenderer {
@@ -328,6 +330,9 @@ impl RendererHandle for MockRenderer {
         if !self.stop_requested {
             self.stop_requested = true;
             self.faded.fetch_add(1, Ordering::Relaxed);
+            if let Some(on_stop) = self.on_stop {
+                on_stop();
+            }
         }
     }
 
@@ -406,6 +411,8 @@ pub struct MockDriver {
     faded: Arc<AtomicUsize>,
     hold_fades: Arc<AtomicBool>,
     captures_started: Vec<CaptureTarget>,
+    /// A log shared with other fakes, so a test sees what came first.
+    capture_log: Option<Arc<SyncRefCell<Vec<String>>>>,
     renderers_started: Vec<String>,
     start_gains: Vec<(String, f32)>,
     /// Every capture start asked for, refused ones included.
@@ -422,6 +429,8 @@ pub struct MockDriver {
     hang_cost: Duration,
     /// How long each capture start holds the caller, as Windows' does.
     capture_wait: Duration,
+    /// Runs as each output is asked to stop.
+    output_stop_hook: Option<fn()>,
     /// The endpoint ID of every output start asked for, refused ones
     /// included.
     renderer_attempts: Vec<String>,
@@ -482,6 +491,7 @@ impl MockDriver {
             faded: Arc::new(AtomicUsize::new(0)),
             hold_fades: Arc::new(AtomicBool::new(false)),
             captures_started: Vec::new(),
+            capture_log: None,
             renderers_started: Vec::new(),
             start_gains: Vec::new(),
             capture_attempts: 0,
@@ -491,6 +501,7 @@ impl MockDriver {
             awake_clock: Duration::ZERO,
             hang_cost: Duration::ZERO,
             capture_wait: Duration::ZERO,
+            output_stop_hook: None,
         }
     }
 
@@ -690,8 +701,8 @@ impl Driver for MockDriver {
         Ok(self.session_pids.clone())
     }
 
-    fn window_pids(&mut self) -> Vec<u32> {
-        self.window_pids.clone()
+    fn window_pids(&mut self) -> Option<Vec<u32>> {
+        Some(self.window_pids.clone())
     }
 
     fn outputs(&mut self) -> Result<Listing, BackendError> {
@@ -862,6 +873,9 @@ impl Driver for MockDriver {
             return Err(BackendError::InputGone);
         }
         self.captures_started.push(target.clone());
+        if let Some(log) = &self.capture_log {
+            log.borrow_mut().push(format!("capture {target:?}"));
+        }
         self.next_capture_error = self.later_capture_error.take();
         let watch_refused = refused_watch(&target, &self.unwatchable);
         let link = Arc::new(Mutex::new(CaptureLink {
@@ -947,6 +961,7 @@ impl Driver for MockDriver {
             },
             invalidated,
             parts,
+            on_stop: self.output_stop_hook,
         })
     }
 }
@@ -976,9 +991,15 @@ impl Controller<MockDriver> {
         backend
     }
 
-    /// Starts an app with an audio session, started by Explorer.
+    /// Writes each capture start into `log`, next to other fakes' calls.
+    pub fn log_captures_to(&mut self, log: &Arc<SyncRefCell<Vec<String>>>) {
+        self.driver_mut().capture_log = Some(Arc::clone(log));
+    }
+
+    /// Starts an app with a window and an audio session, started by Explorer.
     pub fn add_app(&mut self, pid: u32, executable: &str) {
         self.add_process(pid, EXPLORER_PID, executable, true);
+        self.driver_mut().window_pids.push(pid);
     }
 
     /// Starts a helper process of `parent_pid` that holds the app's audio
@@ -1419,6 +1440,11 @@ impl Controller<MockDriver> {
     /// Makes each capture start hold the caller for `span`.
     pub fn slow_capture_starts(&mut self, span: Duration) {
         self.driver_mut().capture_wait = span;
+    }
+
+    /// Runs `hook` as each output started from now on is asked to stop.
+    pub fn on_output_stop(&mut self, hook: fn()) {
+        self.driver_mut().output_stop_hook = Some(hook);
     }
 
     /// Makes the running capture fail with `error`.

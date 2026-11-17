@@ -198,31 +198,49 @@ fn fluent_color(name: &str) -> [[f64; 4]; 2] {
     [parse(light), parse(dark)]
 }
 
-/// The focus ring is Windows' two-tone ring: its outer line stands out from
-/// what it's drawn on (3:1 for graphics) in both themes, and its inner line
-/// keeps it visible on a control filled in the outer line's color.
+/// The focus ring is the Mac's teal line (Brand.swift:25-26,
+/// HouseButtonStyle.swift:60, 2 px): it stands out from what it's drawn on
+/// (3:1 for graphics) in both themes, the main window and its hero included.
 // covers: S452
 #[test]
-fn the_two_tone_focus_ring_reaches_3_to_1() {
-    let [outer, inner] = [fluent_color("focus-outer"), fluent_color("focus-inner")];
+fn the_teal_focus_ring_reaches_3_to_1() {
+    let ring = include_str!("../ui/widgets.slint");
+    let ring = &ring[ring.find("export component FocusRing").expect("FocusRing")..];
+    let ring = &ring[..ring.find("\n}").expect("its end")];
+    assert!(ring.contains("border-width: root.drawn ? 2px : 0px;"));
+    assert!(ring.contains("border-color: Tokens.focus;"));
+    assert_eq!(
+        ring.matches("Rectangle {").count(),
+        1,
+        "one line, as the Mac's"
+    );
+    let window = fluent_color("main-window");
     for (index, appearance) in [Appearance::Light, Appearance::Dark]
         .into_iter()
         .enumerate()
     {
-        for background in ["background", "surface", "playingRow"] {
-            let under = srgb(background, appearance);
-            let [r, g, b, a] = outer[index];
-            let ring = [0, 1, 2].map(|i| [r, g, b][i] * a + under[i] * (1.0 - a));
-            let value = contrast(ring, under);
+        let focus = srgb("focus", appearance);
+        let [r, g, b, _] = window[index];
+        let page = [r, g, b];
+        let text = srgb("text", appearance);
+        let hero_alpha = fluent_fill_alpha("hero");
+        let hero = [0, 1, 2].map(|i| text[i] * hero_alpha + page[i] * (1.0 - hero_alpha));
+        let mut unders = vec![("mainWindow", page), ("mainWindow+hero", hero)];
+        for name in [
+            "background",
+            "surface",
+            "playingRow",
+            "notice",
+            "settingsWindow",
+            "settingsCard",
+        ] {
+            unders.push((name, srgb(name, appearance)));
+        }
+        for (name, under) in unders {
+            let value = contrast(focus, under);
             assert!(
                 value >= MIN_GRAPHIC_CONTRAST,
-                "outer ring on {background} ({appearance:?}): {value:.2}:1"
-            );
-            let [r, g, b, a] = inner[index];
-            let inside = [0, 1, 2].map(|i| [r, g, b][i] * a + ring[i] * (1.0 - a));
-            assert!(
-                contrast(inside, ring) >= MIN_GRAPHIC_CONTRAST,
-                "inner line against the outer ({appearance:?})"
+                "ring on {name} ({appearance:?}): {value:.2}:1"
             );
         }
     }
@@ -380,7 +398,7 @@ fn the_master_volume_draws_its_levels_waves_and_a_3_to_1_track() {
     assert!(master.contains("color: Tokens.text;"));
     let slider = component_body(&widgets, "LevelSlider");
     assert!(
-        slider.contains("background: root.idle ? (Tokens.dark ? #363533 : #f7f7f7) : root.track;")
+        slider.contains("property <brush> track-look: root.idle ? (Tokens.dark ? #ffffff0e : #00000008) : root.small ? (Tokens.dark ? #ffffff1b : #0000000e) : root.track;")
     );
     assert!(slider.contains("border-width: root.small && Tokens.dark ? 0px : 1px;"));
 }
@@ -641,6 +659,27 @@ fn delay_steps_and_fields_draw_no_border_in_light() {
         2,
         "both delay fields are raised"
     );
+}
+
+/// A zone header's "2 of 3 on" is in the readable teal while a member is on,
+/// its waiting part and note grey, as the Mac's (MainWindow.swift:2042-2048);
+/// "tealText" keeps 4.5:1 through its pairs on the window, card and row.
+#[test]
+fn a_zones_on_count_is_teal_and_its_waiting_part_grey() {
+    let widgets = include_str!("../ui/widgets.slint");
+    assert!(
+        widgets.contains("count-text := ZoneCount {"),
+        "the zone header draws its count in two runs"
+    );
+    let count = component_body(widgets, "ZoneCount");
+    for needle in [
+        "color: root.on > 0 ? Tokens.teal-text : Tokens.secondary-text;",
+        "text: root.rest;",
+        "color: Tokens.secondary-text;",
+    ] {
+        assert!(count.contains(needle), "the zone count has {needle}");
+    }
+    assert!(CONTRAST_PAIRS.contains(&("tealText", "surface")));
 }
 
 /// The text of `component`'s definition in `source`, up to the next one.
@@ -978,9 +1017,20 @@ fn no_text_promises_airplay() {
         );
     }
     assert!(strings.contains("connected-none: @tr(\"No connected speakers\")"));
+    // Localization.swift virtualDevicesHidden and connectedEmpty: the switch
+    // lives in Settings, and the network note follows on its own line.
+    assert!(strings.contains(
+        "connected-none-virtual-hidden: @tr(\"Virtual devices are hidden. To list them, choose Settings… in the gear menu and turn on Show Virtual Devices.\");"
+    ));
+    assert!(
+        include_str!("../ui/main.slint").contains(
+            "root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden + \"\\n\" + self.none-found : self.none-found"
+        ),
+        "the network note follows the hidden virtual devices' note on its own line"
+    );
     assert!(
         include_str!("../ui/main.slint")
-            .contains("root.connected.length > 0 || root.connected-zoned.length > 0 ? \"\" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.airplay-searching ? (root.cast-list == CastList.none-found || root.cast-list == CastList.failed ? Strings.looking-for-airplay-speakers : Strings.looking-for-speakers) : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;"),
+            .contains("root.connected.length > 0 || root.connected-zoned.length > 0 ? \"\" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.airplay-searching ? (root.cast-list == CastList.none-found || root.cast-list == CastList.failed ? Strings.looking-for-airplay-speakers : Strings.looking-for-speakers) : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden + \"\\n\" + Strings.connected-none : Strings.connected-none;"),
         "the empty Connected Speakers list says it looks while AirPlay searches, then uses the plain note"
     );
     assert!(
@@ -1103,7 +1153,7 @@ fn accessible_names_start_with_the_visible_text() {
         let (text, label) = (tr_text(strings, text), tr_text(strings, label));
         assert!(label.starts_with(text), "`{label}` starts with `{text}`");
     }
-    assert_eq!(buttons, 6, "the check found the buttons");
+    assert_eq!(buttons, 4, "the check found the buttons");
 }
 
 /// Retry on the notice that AirPlay stopped: the button shows only on a
@@ -1970,11 +2020,16 @@ fn a_preset_rows_second_line_reaches_4_5_to_1_under_its_fills() {
         Some("color: Tokens.secondary-text;")
     );
     assert!(
-        main.contains("    background: Tokens.surface;\n    default-font-family: Fluent.font;")
+        main.contains("    background: Fluent.main-window;\n    default-font-family: Fluent.font;")
     );
-    for appearance in [Appearance::Light, Appearance::Dark] {
-        let window = "surface";
-        let under = srgb(window, appearance);
+    let page = fluent_color("main-window");
+    for (index, appearance) in [Appearance::Light, Appearance::Dark]
+        .into_iter()
+        .enumerate()
+    {
+        let window = "main-window";
+        let [r, g, b, _] = page[index];
+        let under = [r, g, b];
         let text = srgb("text", appearance);
         // Over the open list's own tint.
         let open = fluent_fill_alpha("open-row");
@@ -2186,18 +2241,23 @@ fn the_line_above_add_by_address_keeps_to_the_note() {
 }
 
 /// An off speaker's slider is drawn dimmed as the Mac's, measured on its
-/// window at 2x (17 Nov 21.24, sRGB): no fill, the whole track #363533 on
-/// dark and #f7f7f7 on light, an opaque knob #464543 on dark and white on
-/// light, so the track never shows through it. It still takes no drag, as
-/// the Mac's .disabled slider (MainWindow.swift:2424).
+/// window at 2x on a plain and a hovered row: no fill, a see-through track (white at 5 % on
+/// dark, black at 3 % on light) and knob (white at 13 % and 56 %), which
+/// the track stops at. It still takes no drag, as the Mac's .disabled
+/// slider (MainWindow.swift:2424).
 #[test]
 fn an_off_speakers_slider_is_dimmed_as_the_macs() {
-    let widgets = include_str!("../ui/widgets.slint").replace("\r\n", "\n");
+    let widgets = include_str!("../ui/widgets.slint").replace(
+        "
+", "
+",
+    );
     let slider = component_body(&widgets, "LevelSlider");
     for look in [
-        "background: root.idle ? (Tokens.dark ? #363533 : #f7f7f7) : root.track;",
-        "background: root.idle ? transparent : root.small && Tokens.dark ? Tokens.text.with-alpha(0.26) : Tokens.text;",
-        "background: #464543;\n            opacity: root.idle && Tokens.dark ? 1 : 0;",
+        "root.idle ? (Tokens.dark ? #ffffff0e : #00000008)",
+        "background: root.idle ? transparent : root.small ? (Tokens.dark ? #ffffff42 : #000000f5) : Tokens.text;",
+        "(Tokens.dark ? #ffffff22 : #ffffff90).mix(",
+        "width: root.vertical ? root.thickness : max(0px, piece == 0 ? root.span * root.ratio - root.knob / 2 : root.span * (1 - root.ratio) - root.knob / 2);",
     ] {
         assert!(slider.contains(look), "{look}");
     }
@@ -2526,6 +2586,16 @@ fn shuffle_and_repeat_match_the_mac() {
     }
     assert!(mac.contains("static let side: CGFloat = 21"));
     assert!(mac.contains("lineWidth: 2 * unit"));
+    // The on dot hangs from the glyph's bottom 7 px down (MainWindow.swift:507-508),
+    // so its 4 px sit 3 px clear under the 21 px glyph.
+    assert!(swift.contains(
+        ".overlay(alignment: .bottom) {\n                    Circle().frame(width: 4, height: 4).offset(y: 7)"
+    ));
+    let button = component_body(widgets, "IconButton");
+    assert!(
+        button.contains("y: (root.height + root.glyph-size) / 2 + 3px;"),
+        "{button}"
+    );
     let glyph = component_body(widgets, "Glyph");
     assert!(glyph.contains("viewbox-width: Glyphs.bold(root.glyph) ? 20 : 16;"));
     assert!(glyph.contains("Glyphs.bold(root.glyph) ? root.font-size / 10"));

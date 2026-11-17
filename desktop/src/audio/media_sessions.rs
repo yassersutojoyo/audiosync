@@ -434,6 +434,8 @@ struct Reader<L> {
     /// not asked again for [`MISS_RETRY`], so an app that hangs costs the
     /// thread one wait per track, not one per poll.
     misses: HashMap<String, Instant>,
+    /// The last track logged as having no thumbnail, so it is said once.
+    uncovered: Option<String>,
     /// The last listing failed, and said so.
     failing: bool,
     /// The last tracks read, for the log.
@@ -459,6 +461,7 @@ impl<L: SessionList> Reader<L> {
             jpegs: HashMap::new(),
             tiles: ArtworkCache::default(),
             misses: HashMap::new(),
+            uncovered: None,
             failing: false,
             last_track: None,
             last_card: None,
@@ -579,6 +582,20 @@ impl<L: SessionList> Reader<L> {
                 tile
             }),
         };
+        if artwork.is_none()
+            && self.tiles.get(&key).is_none()
+            && !self.tiles.failed(&key)
+            && !self.misses.contains_key(&key)
+            && self.uncovered.as_ref() != Some(&key)
+        {
+            log.log(|| {
+                format!(
+                    "now playing card: \"{}\" has no cover yet: the session gives no thumbnail",
+                    session.title
+                )
+            });
+            self.uncovered = Some(key.clone());
+        }
         let cover_failed = artwork.is_none()
             && (self.tiles.failed(&key)
                 || self
@@ -1010,6 +1027,30 @@ mod tests {
         let card = card.expect("the card shows");
         assert_eq!(card.artwork, None);
         assert!(!card.cover_failed, "a cover may come a moment later");
+    }
+
+    /// Windows debug log, 2026-11-17 18:21: Spotify's "Bouncin'" went up
+    /// without a cover and the log said nothing about why.
+    #[test]
+    fn a_track_whose_session_gives_no_thumbnail_is_logged_once() {
+        let dir = crate::debug_log::test_dir("card-no-thumbnail");
+        let path = dir.join("log.txt");
+        let log = DebugLog::new(Some(path.clone()));
+        let (fake, _) = fake(Thumbnail::Empty);
+        let mut reader = Reader::new(fake);
+        for _ in 0..3 {
+            let mut listing = reader.listing(&log);
+            let _ = reader.card(&mut listing, &Follow::AnyApp, &log);
+        }
+        assert!(log.flush(Duration::from_secs(5)));
+        let said = crate::debug_log::read_messages(&path)
+            .into_iter()
+            .filter(|line| line.contains("no cover"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            said,
+            ["now playing card: \"Song\" has no cover yet: the session gives no thumbnail"]
+        );
     }
 
     #[test]

@@ -34,12 +34,15 @@ use self::other as imp;
 #[cfg(windows)]
 use self::windows as imp;
 
+#[cfg(windows)]
+pub use engine::restore_records;
 #[cfg(os_backend)]
 pub use imp::data_base;
 #[cfg(feature = "mock-backend")]
 pub use imp::start_with;
 pub use imp::{
-    Instance, Media, claim_instance, computer_name, create_tray, notice_time, sealer, start,
+    Instance, Media, claim_instance, computer_name, create_tray, log_time, notice_time, sealer,
+    start,
 };
 
 /// What [`start`] opened.

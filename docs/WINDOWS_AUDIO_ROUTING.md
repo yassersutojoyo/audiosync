@@ -120,7 +120,7 @@ The capture doesn't depend on the endpoint the app plays on, so moving one app's
 
 ## Detection
 
-While AudioSync streams, it looks at every active output every 3 seconds: its mute and volume (`IAudioEndpointVolume`) and the apps with an active session on it (`IAudioSessionManager2`). It only reads. It never changes a mute, a volume or the default output. On Windows the check shows no notice since 17 November 2026: AudioSync moves the default output and holds back copies itself (see [Moving the default output while streaming](#moving-the-default-output-while-streaming)), and the answer only goes to the debug log and to rule 8.
+While AudioSync streams, it looks at every active output every 3 seconds: its mute and volume (`IAudioEndpointVolume`) and the apps with an active session on it (`IAudioSessionManager2`). It only reads. It never changes a mute, a volume or the default output. On Windows the check shows the notice only when there's no silent endpoint to move the sound to, or the whole system streams without the default moved: otherwise AudioSync moves the default output and holds back copies itself (see [Moving the default output while streaming](#moving-the-default-output-while-streaming)), and the answer only goes to the debug log and to rule 8.
 
 The rule: while AudioSync plays to at least one output, the source is heard twice from any output that isn't muted or at volume 0 where
 
@@ -186,7 +186,7 @@ Windows has no documented call for this. These facts come from EarTrumpet ([repo
 
 Checked on build 26300 (Windows 11 26H2) with an ignored test, `the_per_app_output_reads_back_on_this_pc` in `desktop/src/audio/wasapi/app_output.rs`, on the test's own process, which holds a stream of silence on the default output so it has a session: the read gave an empty string before any change (so empty means the default), the set to the silent endpoint read back as that endpoint in the wrapped form, and setting the empty string read back empty again. This PC runs only the later variant, so the earlier IID and its HSTRING argument are untested.
 
-What AudioSync doesn't do yet: no notice in the window says why the app is also heard on the PC (no silent endpoint, the endpoint gone, a stream that didn't move); the debug log says it once per stream. An app that picks its own output device ignores the per-app choice.
+With no silent endpoint at all, the double-audio notice says the app is also heard on the PC; for the endpoint gone or a stream that didn't move, only the debug log says it, once per stream. An app that picks its own output device ignores the per-app choice.
 
 ## AirPlay on Windows
 

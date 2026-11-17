@@ -226,6 +226,30 @@ pub fn computer_name() -> Option<String> {
     String::from_utf16(&buffer).ok()
 }
 
+/// The local time now with date, seconds and offset, for the debug log,
+/// whatever the user's format.
+pub fn log_time() -> String {
+    use windows::Win32::Foundation::SYSTEMTIME;
+    use windows::Win32::System::SystemInformation::{GetLocalTime, GetSystemTime};
+
+    let seconds = |t: SYSTEMTIME| {
+        crate::platform::civil_seconds(
+            t.wYear.into(),
+            t.wMonth.into(),
+            t.wDay.into(),
+            t.wHour.into(),
+            t.wMinute.into(),
+            t.wSecond.into(),
+        )
+    };
+    // SAFETY: both only read the clock.
+    let (utc, local) = unsafe { (GetSystemTime(), GetLocalTime()) };
+    let utc = seconds(utc);
+    // Rounded to whole minutes: the second may tick between the two reads.
+    let offset = ((seconds(local) - utc) as f64 / 60.0).round() as i64 * 60;
+    crate::platform::log_clock_at(utc, offset)
+}
+
 /// The local time now, in the user's short time format ("09.40", "9:40 AM"):
 /// when a notice was posted. Hours and minutes when the format can't be read.
 pub fn notice_time() -> String {

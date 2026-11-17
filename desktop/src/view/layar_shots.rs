@@ -1,7 +1,8 @@
 //! The Windows photos of the LAYAR rows a headless window can show, to set
 //! beside the Mac's. Each row's scene is built on a fresh App over example
 //! data, once light and once dark, and saved as `<ROW-ID>-terang.png` and
-//! `<ROW-ID>-gelap.png`.
+//! `<ROW-ID>-gelap.png`, each with a `.json` list of its labelled elements
+//! for scripts/screen_compare.py.
 //!
 //! `cargo test --release layar_photos -- --ignored --nocapture`, with
 //! `AUDIOSYNC_LAYAR_BATCH=B03` (or `B01,B05`) for some batches only and
@@ -299,7 +300,8 @@ impl Scene {
         render(window);
     }
 
-    fn photo(&self, Win(shown, size): Win) -> Result<Vec<u8>, String> {
+    /// The photo as a PNG and its elements as the JSON screen_compare.py reads.
+    fn photo(&self, Win(shown, size): Win) -> Result<(Vec<u8>, String), String> {
         let window = self.window(shown);
         settle(window);
         match shown {
@@ -307,8 +309,95 @@ impl Scene {
             _ => self.size(window, size),
         }
         let shot = window.take_snapshot().map_err(|error| error.to_string())?;
-        Ok(png(shot.width(), shot.height(), shot.as_bytes()))
+        let elements = match shown {
+            Shown::Main => ElementQuery::from_root(&self.app.main).find_all(),
+            Shown::Flyout => ElementQuery::from_root(&self.app.flyout).find_all(),
+            Shown::Equalizer => ElementQuery::from_root(&self.app.equalizer).find_all(),
+            Shown::Settings => ElementQuery::from_root(&self.app.settings).find_all(),
+            Shown::Guide => ElementQuery::from_root(&self.app.help).find_all(),
+            Shown::Remote => ElementQuery::from_root(&self.app.remote_window).find_all(),
+        };
+        let listed = elements_json(&elements, &shot, window.scale_factor());
+        Ok((png(shot.width(), shot.height(), shot.as_bytes()), listed))
     }
+}
+
+/// The labelled elements a photo shows. Slint's test API reads no fonts, so
+/// `font` is null; the colours are sampled from the photo as the Mac renderer
+/// samples its own (scripts/screenshots/render.swift, `sampledColours`).
+fn elements_json(elements: &[ElementHandle], shot: &Snapshot, scale: f32) -> String {
+    let (width, height) = (shot.width() as f32 / scale, shot.height() as f32 / scale);
+    let listed: Vec<serde_json::Value> = elements
+        .iter()
+        .filter_map(|element| {
+            let label = element
+                .accessible_label()
+                .filter(|label| !label.trim().is_empty())?;
+            let (at, size) = (element.absolute_position(), element.size());
+            let shown = size.width > 0.0
+                && size.height > 0.0
+                && element.computed_opacity() > 0.0
+                && at.x < width
+                && at.y < height
+                && at.x + size.width > 0.0
+                && at.y + size.height > 0.0;
+            shown.then(|| {
+                let (fg, bg) = sampled_colours(shot, scale, at, size);
+                serde_json::json!({
+                    "key": label.as_str(),
+                    "frame": [at.x, at.y, size.width, size.height],
+                    "font": null,
+                    "fg": fg,
+                    "bg": bg,
+                })
+            })
+        })
+        .collect();
+    serde_json::json!({ "window": [width, height], "elements": listed }).to_string()
+}
+
+type Snapshot = slint::SharedPixelBuffer<slint::Rgba8Pixel>;
+
+/// The commonest pixel inside the frame as the background, and the commonest
+/// one whose channels differ from it by more than 96 in sum as the foreground.
+fn sampled_colours(
+    shot: &Snapshot,
+    scale: f32,
+    at: LogicalPosition,
+    size: LogicalSize,
+) -> (Option<String>, Option<String>) {
+    let span = |start: f32, length: f32, limit: u32| {
+        let first = (start * scale).max(0.0) as u32;
+        let end = (((start + length) * scale).max(0.0) as u32).min(limit);
+        first..end
+    };
+    let pixels = shot.as_slice();
+    let mut counts = std::collections::HashMap::<[u8; 3], u32>::new();
+    for y in span(at.y, size.height, shot.height()) {
+        for x in span(at.x, size.width, shot.width()) {
+            let pixel = pixels[(y * shot.width() + x) as usize];
+            *counts.entry([pixel.r, pixel.g, pixel.b]).or_default() += 1;
+        }
+    }
+    let commonest = |keep: &dyn Fn(&[u8; 3]) -> bool| {
+        counts
+            .iter()
+            .filter(|(rgb, _)| keep(rgb))
+            .max_by_key(|(rgb, count)| (**count, **rgb))
+            .map(|(rgb, _)| *rgb)
+    };
+    let Some(bg) = commonest(&|_| true) else {
+        return (None, None);
+    };
+    let far = |rgb: &[u8; 3]| {
+        rgb.iter()
+            .zip(bg)
+            .map(|(a, b)| u32::from(a.abs_diff(b)))
+            .sum::<u32>()
+            > 96
+    };
+    let hex = |[r, g, b]: [u8; 3]| format!("#{r:02x}{g:02x}{b:02x}");
+    (commonest(&far).map(hex), Some(hex(bg)))
 }
 
 /// Draws a frame of `window`, which builds the list rows a change added.
@@ -1482,9 +1571,11 @@ fn layar_photos_of_the_headless_rows() {
         ] {
             let scene = Scene::new(appearance);
             match (row.setup)(&scene).and_then(|win| scene.photo(win)) {
-                Ok(file) => {
+                Ok((file, elements)) => {
                     let path = dir.join(format!("{}-{theme}.png", row.id));
                     std::fs::write(path, file).expect("the photo is written");
+                    let path = dir.join(format!("{}-{theme}.json", row.id));
+                    std::fs::write(path, elements).expect("the element list is written");
                     taken += 1;
                 }
                 Err(why) => missed.push(format!("{} {theme}: {why}", row.id)),
@@ -1561,4 +1652,69 @@ fn png(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
     chunk(&mut out, b"IDAT", &zlib);
     chunk(&mut out, b"IEND", &[]);
     out
+}
+
+/// One frame of a 60 Hz display on Slint's held clock.
+const FRAME: Duration = Duration::from_micros(16_667);
+
+/// Draws `frames` frames of the main window 1/60 s apart on the held clock,
+/// saving each as `<dir>/<name>/NN.png`, and returns a line per frame: its
+/// time, the gap since the one before, and how long the UI thread took to
+/// lay it out and draw it.
+fn record(scene: &Scene, dir: &Path, name: &str, frames: u32) -> Vec<String> {
+    let folder = dir.join(name);
+    std::fs::create_dir_all(&folder).expect("the frame folder is made");
+    let window = scene.app.main.window();
+    let mut lines = vec![format!("{name}: frame, time ms, gap ms, UI thread ms")];
+    for index in 0..frames {
+        if index > 0 {
+            super::tests::advance_clock(FRAME);
+        }
+        let started = std::time::Instant::now();
+        slint::platform::update_timers_and_animations();
+        let shot = window.take_snapshot().expect("the frame is drawn");
+        let took = started.elapsed();
+        let path = folder.join(format!("{index:02}.png"));
+        std::fs::write(path, png(shot.width(), shot.height(), shot.as_bytes()))
+            .expect("the frame is written");
+        let gap = if index == 0 {
+            0.0
+        } else {
+            FRAME.as_secs_f64() * 1000.0
+        };
+        lines.push(format!(
+            "{index:02}  {:7.1}  {gap:5.1}  {:6.1}",
+            f64::from(index) * FRAME.as_secs_f64() * 1000.0,
+            took.as_secs_f64() * 1000.0
+        ));
+    }
+    lines
+}
+
+#[test]
+#[ignore = "writes motion frames: run with --ignored, AUDIOSYNC_LAYAR_DIR picks the folder"]
+fn motion_frames_of_a_song_change_and_a_speaker_switched_off() {
+    let dir = photo_dir().join("motion");
+    let scene = Scene::new(ui_model::Appearance::Light);
+    scene.app.main.global::<Motion>().set_on(true);
+    scene
+        .speaker(SPEAKERS, |speaker| speaker.enabled = true)
+        .expect("the example speakers");
+    scene.play(track(true, true));
+    settle(scene.app.main.window());
+    scene.app.main.invoke_now_playing_transport(2);
+    let mut lines = record(&scene, &dir, "next-press", 12);
+    let mut next = track(true, true);
+    next.title = "Another title".into();
+    next.artist = "Another artist".into();
+    scene.media.read(Some(next));
+    scene.app.main.invoke_now_playing_read();
+    lines.extend(record(&scene, &dir, "song-change", 40));
+    scene
+        .speaker(SPEAKERS, |speaker| speaker.enabled = false)
+        .expect("the example speakers");
+    lines.extend(record(&scene, &dir, "speaker-off", 20));
+    std::fs::write(dir.join("frames.txt"), lines.join("\n") + "\n")
+        .expect("the frame list is written");
+    println!("{}", lines.join("\n"));
 }

@@ -142,7 +142,7 @@ impl Engine {
     /// Takes the backend back from its start, waiting for it with `wait`,
     /// then applies a switch-off asked meanwhile. Whether it is here.
     fn come_back(&self, wait: bool) -> bool {
-        let mut backend = {
+        let backend = {
             // Borrowed means here: an away backend is only borrowed in here.
             let Ok(held) = self.held.try_borrow() else {
                 return true;
@@ -161,11 +161,63 @@ impl Engine {
                 Err(TryRecvError::Disconnected) => panic!("the streaming start panicked"),
             }
         };
-        if self.asked.take() == Some(false) {
-            backend.set_running(false);
-        }
         *self.held.borrow_mut() = Held::Movable(backend);
         self.shown.take();
+        // Held, not away, during the stop: its COM calls can pump messages
+        // whose handlers ask for the backend and must find it busy.
+        if self.asked.take() == Some(false) {
+            present_mut(&mut self.held.borrow_mut()).set_running(false);
+        }
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    use super::*;
+    use crate::audio::backend::AudioBackend as _;
+
+    thread_local! {
+        static STOPPING: RefCell<Option<Rc<Engine>>> = const { RefCell::new(None) };
+        static BUSY_WHILE_STOPPING: Cell<Option<bool>> = const { Cell::new(None) };
+    }
+
+    /// An output's stop can pump window messages on the UI thread, whose
+    /// handlers ask the engine for the backend again.
+    fn ask_for_the_backend() {
+        STOPPING.with(|engine| {
+            if let Some(engine) = engine.borrow().as_ref() {
+                let here = engine.is_here();
+                let busy = engine.try_borrow_mut().is_none();
+                BUSY_WHILE_STOPPING.set(Some(here && busy));
+            }
+        });
+    }
+
+    #[test]
+    fn a_switch_off_during_the_start_stops_while_the_windows_ask_for_the_backend() {
+        let mut audio = crate::audio::mock::MockBackend::empty();
+        audio.connect_output("speakers", "Speakers");
+        audio.add_app(2000, "Spotify.exe");
+        audio
+            .set_output_enabled("speakers", true)
+            .expect("switched on");
+        audio.slow_capture_starts(Duration::from_millis(200));
+        audio.on_output_stop(ask_for_the_backend);
+        let adapter = crate::adapter::AudioAdapter::new(
+            audio,
+            || "09.41".to_owned(),
+            crate::debug_log::DebugLog::default(),
+        );
+        let engine = Rc::new(Engine::movable(Box::new(adapter)));
+        STOPPING.with(|stopping| *stopping.borrow_mut() = Some(Rc::clone(&engine)));
+        assert!(engine.set_running(true));
+        assert!(!engine.set_running(false));
+        assert!(!engine.borrow().snapshot().running);
+        STOPPING.with(|stopping| stopping.borrow_mut().take());
+        assert_eq!(BUSY_WHILE_STOPPING.get(), Some(true));
     }
 }

@@ -166,6 +166,8 @@ export component SettingsWindow inherits Window {
     in property <bool> launch-at-login;
     in property <bool> resume-after-sleep;
     in property <bool> switch-source-on-quit;
+    // Linux only: Windows switches as the Mac does.
+    in property <bool> switch-source-on-quit-available;
     in property <bool> volume-keys-available;
     in property <bool> volume-keys;
     in property <bool> show-virtual-devices;
@@ -188,6 +190,16 @@ export component SettingsWindow inherits Window {
     callback setup-requested();
     callback close-requested();
     callback exit-requested();
+    // Ctrl+1 to Ctrl+9: recall the preset in that place (spec S261).
+    callback preset-shortcut(int);
+    // F1, Ctrl+N and F5: the main window's menu items of those shortcuts.
+    callback help-requested();
+    callback new-zone-requested();
+    callback refresh-devices();
+    // Ctrl+, Ctrl+E and Ctrl+0: Settings, the Equalizer and the main window.
+    callback settings-requested();
+    callback equalizer-requested();
+    callback main-window-requested();
 
     title: Strings.settings-title;
     icon: @image-url("../res/audiosync-256.png");
@@ -217,6 +229,34 @@ export component SettingsWindow inherits Window {
             }
             if event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text.to-lowercase() == "q" {
                 root.exit-requested();
+                return accept;
+            }
+            if event.text == Key.F1 && !event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta {
+                root.help-requested();
+                return accept;
+            }
+            if event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text.to-lowercase() == "n" {
+                root.new-zone-requested();
+                return accept;
+            }
+            if (event.text == Key.F5 && !event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta) || (event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text.to-lowercase() == "r") {
+                root.refresh-devices();
+                return accept;
+            }
+            if event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text == "," {
+                root.settings-requested();
+                return accept;
+            }
+            if event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text.to-lowercase() == "e" {
+                root.equalizer-requested();
+                return accept;
+            }
+            if event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text == "0" {
+                root.main-window-requested();
+                return accept;
+            }
+            if event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text.character-count == 1 && event.text.is-float() && event.text.to-float() >= 1 {
+                root.preset-shortcut(event.text.to-float());
                 return accept;
             }
             return reject;
@@ -321,9 +361,9 @@ export component SettingsWindow inherits Window {
                             }
                         }
 
-                        Divider { }
+                        if root.switch-source-on-quit-available: Divider { }
 
-                        SwitchRow {
+                        if root.switch-source-on-quit-available: SwitchRow {
                             text: Strings.switch-source-on-quit;
                             checked: root.switch-source-on-quit;
                             toggled(on) => {

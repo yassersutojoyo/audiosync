@@ -10,8 +10,9 @@
 //! has no track ([`fields`]). With one app as the source, a player counts
 //! when its process is the source's process or one of its parents, else
 //! when its desktop entry or bus name names the source's executable
-//! ([`owner`]). Artwork is read from `file://` URLs only: fetching a web
-//! URL would have AudioSync open connections on its own. Without a session
+//! ([`owner`]). Artwork is read from `file://` URLs, and fetched from
+//! `https:` ones within the thumbnail's wait, as Spotify's cover is on the
+//! Mac. Without a session
 //! bus every reading is no track, and the failure is logged once.
 
 #[cfg(target_os = "linux")]

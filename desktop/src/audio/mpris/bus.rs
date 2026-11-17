@@ -30,11 +30,13 @@ use crate::audio::now_playing::{
     FittedArtwork, Follow, MediaSession, POLL_INTERVAL, RawTimeline, pick,
 };
 use crate::debug_log::DebugLog;
-use crate::now_playing_card::{CardArtwork, MPRIS_PREFIX, Transport};
+use crate::now_playing_card::{CardArtwork, MPRIS_PREFIX, PlayModes, Transport};
+use crate::updater::fetch::{Tls, user_agent};
 
 pub(super) const OBJECT_PATH: &str = "/org/mpris/MediaPlayer2";
 const ROOT_INTERFACE: &str = "org.mpris.MediaPlayer2";
 const PLAYER_INTERFACE: &str = "org.mpris.MediaPlayer2.Player";
+const PROPERTIES_INTERFACE: &str = "org.freedesktop.DBus.Properties";
 
 /// Starts the thread that reads the MPRIS players for both readers.
 pub fn read_media_sessions(log: DebugLog) -> (MediaSessionReader, MediaCardReader) {
@@ -220,9 +222,16 @@ impl SessionList for Players {
         pick(&described, &Follow::AnyApp).map(|found| mine[found])
     }
 
-    fn thumbnail(&self, entry: &Entry, _deadline: Instant) -> Result<Option<Vec<u8>>, String> {
-        let Some(path) = entry.player.art_url.as_deref().and_then(fields::art_path) else {
+    fn thumbnail(&self, entry: &Entry, deadline: Instant) -> Result<Option<Vec<u8>>, String> {
+        let Some(url) = entry.player.art_url.as_deref() else {
             return Ok(None);
+        };
+        let Some(path) = fields::art_path(url) else {
+            // Spotify's cover is an https URL, which the Mac fetches too.
+            let tls = Tls {
+                user_agent: user_agent("Linux", env!("CARGO_PKG_VERSION"), std::env::consts::ARCH),
+            };
+            return fields::web_art(url, |url, sink| tls.get_until(url, Some(deadline), sink));
         };
         // Opening a FIFO would wait for a writer, maybe for good.
         if !fs::metadata(&path).map_err(message)?.is_file() {
@@ -238,6 +247,10 @@ impl SessionList for Players {
         Ok((!image.is_empty()).then_some(image))
     }
 
+    fn modes(&self, entry: &Entry) -> PlayModes {
+        entry.player.controls.modes
+    }
+
     fn timeline(&self, entry: &Entry) -> Result<RawTimeline, String> {
         entry
             .player
@@ -250,12 +263,28 @@ impl SessionList for Players {
         if !entry.player.controls.allows(command) {
             return Ok(false);
         }
+        let set = |property: &str, value: Value<'static>| {
+            entry.connection.call_method(
+                Some(entry.name.as_str()),
+                OBJECT_PATH,
+                Some(PROPERTIES_INTERFACE),
+                "Set",
+                &(PLAYER_INTERFACE, property, value),
+            )
+        };
         let method = match command {
             Transport::Previous => "Previous",
             Transport::PlayPause => "PlayPause",
             Transport::Play => "Play",
             Transport::Next => "Next",
-            Transport::Shuffle(_) | Transport::Repeat(_) => return Ok(false),
+            Transport::Shuffle(on) => {
+                set("Shuffle", Value::from(on)).map_err(message)?;
+                return Ok(true);
+            }
+            Transport::Repeat(mode) => {
+                set("LoopStatus", Value::from(fields::loop_status(mode))).map_err(message)?;
+                return Ok(true);
+            }
         };
         entry
             .connection

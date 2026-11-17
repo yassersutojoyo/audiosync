@@ -127,7 +127,7 @@ fn a_notice_opens_and_closes_on_the_macs_320_ms_with_no_slide() {
     assert!(!stack.contains("6px * (1 - slot.shown)"), "no slide");
     let view = include_str!("../view.rs").replace("\r\n", "\n");
     assert!(
-        view.contains("get_on() {\n        320\n"),
+        view.contains("get_on() {\n            320\n"),
         "dismissed after the room shuts"
     );
 }

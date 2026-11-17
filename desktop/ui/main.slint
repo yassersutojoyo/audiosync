@@ -256,6 +256,8 @@ component SourceMenu inherits Rectangle {
                     for app[index] in root.mix-expanded ? root.mix-apps : []: MenuRow {
                         index: panel.sources + 3 + index;
                         text: app.name;
+                        icon: app.icon;
+                        icon-glyph: Glyphs.display;
                         checks: true;
                         checked: app.checked;
                         nested: true;
@@ -311,6 +313,7 @@ component GearButton inherits IconButton {
 
     glyph: Glyphs.gear;
     label: Strings.more-options;
+    accessible-description: Strings.more-options-hint;
     clicked => {
         root.open-menu();
     }
@@ -1316,7 +1319,7 @@ component PresetsCard inherits Rectangle {
 
     VerticalLayout {
         Rectangle {
-            min-height: 36px;
+            min-height: 28px;
             border-radius: Fluent.radius-control;
             background: touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : transparent;
             animate background { duration: Fluent.fast; }
@@ -1324,13 +1327,9 @@ component PresetsCard inherits Rectangle {
             accessible-role: button;
             accessible-label: Strings.presets;
             accessible-value: root.presets.length == 0 ? Strings.no-presets : root.current != "" ? root.current : Strings.choose-preset;
-            accessible-expandable: true;
-            accessible-expanded: root.open;
+            accessible-description: root.open ? Strings.hide-preset-list : Strings.show-preset-list;
             accessible-action-default => {
                 root.open = !root.open;
-            }
-            accessible-action-expand => {
-                root.open = true;
             }
 
             touch := TouchArea {
@@ -1341,7 +1340,7 @@ component PresetsCard inherits Rectangle {
                 focus := FocusScope {
                     focus-on-click: false;
                     key-pressed(event) => {
-                        if event.text == " " || event.text == Key.Return || (event.text == Key.Escape && root.open) {
+                        if event.text == " " || event.text == Key.Return {
                             root.open = !root.open;
                             return accept;
                         }
@@ -1416,11 +1415,6 @@ component PresetsCard inherits Rectangle {
 
         list := FoldPane {
             open: root.open;
-            escape-folds: true;
-            fold => {
-                root.open = false;
-                focus.focus();
-            }
 
             // Above five presets the list scrolls inside its card, half a row
             // past the fifth showing that it goes on; a new one, or the name
@@ -1620,7 +1614,7 @@ component EqualizerCard inherits Rectangle {
     callback focus-changed(bool);
 
     // A row on the window: the whole row is the button.
-    min-height: 36px;
+    min-height: 28px;
     background: touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : transparent;
     animate background { duration: Fluent.fast; }
     border-radius: Fluent.radius-control;
@@ -1727,7 +1721,7 @@ component QuickRow inherits Rectangle {
     callback clicked();
     callback focus-changed(bool);
 
-    min-height: 36px;
+    min-height: 28px;
     border-radius: Fluent.radius-control;
     background: !root.enabled ? transparent : touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.row-hover : transparent;
     animate background {
@@ -1859,7 +1853,7 @@ component CalibrationCard inherits VerticalLayout {
     callback fix-volume(bool);
 
     accessible-role: groupbox;
-    accessible-label: Strings.calibrate-all-title;
+    accessible-label: Strings.calibrate-all;
 
     public function focus-row() {
         calibrate-button.focus();
@@ -1922,8 +1916,8 @@ component CalibrationCard inherits VerticalLayout {
                 changed has-focus => {
                     root.focus-changed(self.has-focus);
                 }
-                text: Strings.notice-open-privacy;
-                accessible-label: Strings.notice-open-privacy-label;
+                text: Strings.open-microphone-settings;
+                accessible-label: Strings.open-microphone-settings;
                 clicked => {
                     root.privacy-requested();
                 }
@@ -2075,6 +2069,8 @@ component CalibrateAllSheet inherits FocusScope {
     in property <string> zone;
     // How the run or the last action on its results ended.
     in property <string> outcome;
+    // The outcome is a failure or a refused Apply.
+    in property <bool> outcome-problem;
     in property <bool> can-apply;
     in property <bool> applied;
     in property <bool> can-undo;
@@ -2219,20 +2215,88 @@ component CalibrateAllSheet inherits FocusScope {
                         VerticalLayout {
                             spacing: 2px;
                             horizontal-stretch: 1;
+                            accessible-role: text;
+                            accessible-label: row.name + ", " + row.detail;
 
-                            Text {
-                                text: row.name;
-                                font-size: Tokens.font-size-body;
-                                font-weight: Fluent.weight-semibold;
-                                color: Tokens.text;
-                                wrap: word-wrap;
+                            HorizontalLayout {
+                                spacing: 6px;
+
+                                Text {
+                                    text: row.name;
+                                    font-size: Tokens.font-size-body;
+                                    font-weight: Fluent.weight-semibold;
+                                    color: Tokens.text;
+                                    overflow: elide;
+                                    vertical-alignment: center;
+                                    accessible-role: none;
+                                }
+
+                                if row.kind != "": Text {
+                                    text: row.kind;
+                                    font-size: Tokens.font-size-caption;
+                                    color: Tokens.secondary-text;
+                                    vertical-alignment: center;
+                                    accessible-role: none;
+                                }
+
+                                if row.chip != "": VerticalLayout {
+                                    alignment: center;
+
+                                    Rectangle {
+                                        background: (row.chip-warn ? Tokens.warn : Tokens.teal).with-alpha(0.15);
+                                        border-radius: self.height / 2;
+                                        border-width: row.chip-warn ? 1px : 0px;
+                                        border-color: Tokens.warn;
+
+                                        HorizontalLayout {
+                                            padding-left: 7px;
+                                            padding-right: 7px;
+                                            padding-top: 1px;
+                                            padding-bottom: 1px;
+
+                                            Text {
+                                                text: row.chip;
+                                                font-size: Tokens.font-size-caption;
+                                                font-weight: Fluent.weight-semibold;
+                                                color: row.chip-warn ? Tokens.text : Tokens.teal-text;
+                                                accessible-role: none;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                }
                             }
 
-                            Text {
-                                text: row.detail;
-                                font-size: Tokens.font-size-body;
-                                color: Tokens.secondary-text;
+                            if row.value != "": HorizontalLayout {
+                                spacing: 6px;
+
+                                Text {
+                                    text: row.value;
+                                    font-size: 15px;
+                                    font-weight: Fluent.weight-semibold;
+                                    color: row.clear ? Tokens.text : Tokens.secondary-text;
+                                    accessible-role: none;
+                                }
+
+                                Text {
+                                    text: row.was;
+                                    font-size: Tokens.font-size-body;
+                                    color: Tokens.secondary-text;
+                                    vertical-alignment: TextVerticalAlignment.bottom;
+                                    horizontal-stretch: 1;
+                                    accessible-role: none;
+                                }
+                            }
+
+                            if row.note != "": Text {
+                                text: row.note;
+                                font-size: Tokens.font-size-caption;
+                                color: row.refused ? Tokens.error-text : Tokens.secondary-text;
                                 wrap: word-wrap;
+                                accessible-role: none;
                             }
                         }
 
@@ -2303,7 +2367,7 @@ component CalibrateAllSheet inherits FocusScope {
             if root.outcome != "": Text {
                 text: root.outcome;
                 font-size: Tokens.font-size-body;
-                color: Tokens.secondary-text;
+                color: root.outcome-problem ? Tokens.error-text : Tokens.secondary-text;
                 wrap: word-wrap;
             }
 
@@ -2741,6 +2805,7 @@ export component MainWindow inherits Window {
     in property <bool> show-virtual-devices;
     in property <Appearance> appearance;
     in property <bool> switch-source-on-quit;
+    in property <bool> switch-source-on-quit-available;
     in property <bool> resume-after-sleep;
     // Settings > Launch at Sign-In: what the Run key says, read again by Rust.
     in property <bool> launch-at-login;
@@ -2806,6 +2871,7 @@ export component MainWindow inherits Window {
     in property <string> calibrate-all-airplay;
     in property <string> calibrate-all-zone;
     in property <string> calibrate-all-outcome;
+    in property <bool> calibrate-all-outcome-problem;
     in property <bool> calibrate-all-can-apply;
     in property <bool> calibrate-all-applied;
     in property <bool> calibrate-all-can-undo;
@@ -3052,6 +3118,10 @@ export component MainWindow inherits Window {
             root.close-requested();
             return true;
         }
+        if text == "r" {
+            root.refresh-devices();
+            return true;
+        }
         if text == "q" {
             root.exit-requested();
             return true;
@@ -3080,8 +3150,7 @@ export component MainWindow inherits Window {
     min-height: 440px;
     preferred-width: 696px;
     preferred-height: 680px;
-    // White in light mode, as the Mac's window.
-    background: Tokens.surface;
+    background: Fluent.main-window;
     default-font-family: Fluent.font;
     default-font-weight: Fluent.weight-regular;
     default-font-size: Tokens.font-size-body;
@@ -3922,7 +3991,7 @@ export component MainWindow inherits Window {
                         // sentence when neither finds a speaker.
                         property <bool> both-none: root.airplay-none-found && root.cast-list == CastList.none-found;
                         property <string> none-found: self.both-none ? Strings.network-none-found : Strings.airplay-none-found;
-                        property <string> list-note: root.airplay-none-found ? (root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden + " " + self.none-found : self.none-found) : root.connected.length > 0 || root.connected-zoned.length > 0 ? "" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.airplay-searching ? (root.cast-list == CastList.none-found || root.cast-list == CastList.failed ? Strings.looking-for-airplay-speakers : Strings.looking-for-speakers) : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;
+                        property <string> list-note: root.airplay-none-found ? (root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden + "\n" + self.none-found : self.none-found) : root.connected.length > 0 || root.connected-zoned.length > 0 ? "" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.airplay-searching ? (root.cast-list == CastList.none-found || root.cast-list == CastList.failed ? Strings.looking-for-airplay-speakers : Strings.looking-for-speakers) : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden + "\n" + Strings.connected-none : Strings.connected-none;
                         property <string> cast-note: self.both-none || self.list-note == Strings.looking-for-speakers ? "" : Strings.cast-list(root.cast-list);
                         note: self.cast-note == "" ? self.list-note : self.list-note == "" || self.list-note == Strings.connected-none ? self.cast-note : self.list-note + " " + self.cast-note;
                         toggled(id) => {
@@ -4060,7 +4129,7 @@ export component MainWindow inherits Window {
         size: MainColumns.left(root.columns-width) - 28px;
         surface-width: root.width;
         corner: 10px;
-        base: Tokens.surface;
+        base: Fluent.main-window;
         fill: Tokens.text.with-alpha(Tokens.secondary-text-opacity * 0.15);
         has-artwork: root.now-playing-has-artwork;
         artwork: root.now-playing-artwork;
@@ -4116,6 +4185,7 @@ export component MainWindow inherits Window {
             airplay: root.calibrate-all-airplay;
             zone: root.calibrate-all-zone;
             outcome: root.calibrate-all-outcome;
+            outcome-problem: root.calibrate-all-outcome-problem;
             can-apply: root.calibrate-all-can-apply;
             applied: root.calibrate-all-applied;
             can-undo: root.calibrate-all-can-undo;

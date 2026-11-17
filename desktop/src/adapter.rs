@@ -138,8 +138,8 @@ struct KeptSheet {
     microphone: Option<MicrophoneId>,
     /// The microphone or the capture stopped the run.
     failure: Option<Failure>,
-    /// The last Measure Again ended early, so its row stayed.
-    again_ended: Option<EndReason>,
+    /// The last Measure Again ended early, so the named speaker's row stayed.
+    again_ended: Option<(String, EndReason)>,
     /// What Apply wrote, kept for Undo while every value still holds.
     applied: Option<Applied>,
     /// The AirPlay adjustment A before and after Apply. Undo and the check
@@ -897,7 +897,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
         // A pair chosen while the file was held (S212) stays unless the file names that input.
         self.input_pairs.extend(saved.input_pairs.clone());
-        self.when_source_quits = WhenSourceQuits::from_stored(Some(&saved.when_source_quits));
+        // Windows switches as the Mac does and ignores a stored `stop` (S227).
+        self.when_source_quits = if cfg!(windows) {
+            WhenSourceQuits::SwitchToSystem
+        } else {
+            WhenSourceQuits::from_stored(Some(&saved.when_source_quits))
+        };
         self.audio.set_when_source_quits(self.when_source_quits);
         self.resume_after_sleep = saved.resume_after_sleep;
         self.audio.set_resume_after_sleep(self.resume_after_sleep);
@@ -1033,6 +1038,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.airplay2_at_launch =
             crate::audio::airplay::airplay2_on(self.airplay2_switch_env.as_deref());
         self.saved = saved;
+        // Windows ignores the stored value, which alone is no change to write (S227).
+        if cfg!(windows) {
+            self.saved.when_source_quits = self.when_source_quits.stored().to_owned();
+        }
     }
 
     /// The speakers' settings to save: the saved ones, updated with what the
@@ -1453,11 +1462,18 @@ impl<A: AudioBackend> AudioAdapter<A> {
         rate: u32,
         microphone: Option<MicrophoneId>,
     ) {
+        let name = again
+            .and_then(|row| members.get(row))
+            .map(|member| self.member_name(member));
         let all = &mut self.calibrate_all;
         all.endings += 1;
         let Finished { sheet, failure } = finished;
+        let failed = |failure| match &name {
+            Some(name) => AllPhase::AgainFailed(name.clone(), failure),
+            None => AllPhase::Failed(failure),
+        };
         let Some(sheet) = sheet else {
-            all.phase = AllPhase::Failed(failure.unwrap_or(Failure::Unfinished));
+            all.phase = failed(failure.unwrap_or(Failure::Unfinished));
             return;
         };
         if again.is_none()
@@ -1486,7 +1502,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             });
             return;
         }
-        all.phase = failure.map_or(AllPhase::Idle, AllPhase::Failed);
+        all.phase = failure.map_or(AllPhase::Idle, failed);
         let Some(kept) = all.sheet.as_mut() else {
             return;
         };
@@ -1495,7 +1511,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
             // An off row measured now keeps the values it was measured from (S255).
             kept.members = members;
         } else if failure.is_none() {
-            kept.again_ended = Some(ended.unwrap_or(EndReason::Cancelled));
+            kept.again_ended = Some((
+                name.unwrap_or_default(),
+                ended.unwrap_or(EndReason::Cancelled),
+            ));
         }
     }
 
@@ -1837,7 +1856,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             airplay: sheet.airplay().copied(),
             ended: sheet.ended(),
             failure: kept.failure,
-            again_ended: kept.again_ended,
+            again_ended: kept.again_ended.clone(),
             can_apply: !busy && sheet.changes().is_ok(),
             applied: sheet.applied(),
             can_undo: !busy && kept.applied.is_some(),
@@ -4483,6 +4502,24 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.note_speakers();
             }
             BackendEvent::CastFailed { id, problem } => self.cast_cant_play(&id, problem),
+            BackendEvent::CastSenderFailed { was_on } => {
+                // Its speakers left the list, so what was said about them no longer holds.
+                let about_cast: Vec<NoticeSubject> = self
+                    .notices
+                    .iter()
+                    .filter(|(subject, _)| matches!(subject, NoticeSubject::Cast(_)))
+                    .map(|(subject, _)| subject.clone())
+                    .collect();
+                self.notices.clear(&about_cast);
+                if let Some(id) = was_on {
+                    let speaker = self.cast_name(&id);
+                    self.post(
+                        NoticeSubject::CastSender,
+                        NoticeMessage::CastSenderStopped { speaker },
+                    );
+                }
+                self.stop_if_idle();
+            }
             BackendEvent::CastUnauthenticated { id } => {
                 let speaker = self.cast_name(&id);
                 let problem = ui_model::CastProblem::Unauthenticated;
@@ -6105,7 +6142,8 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                     (Failure::NotPlaying(missing), Some(name)) => {
                         AllPhase::CannotMeasureAgain(name, missing)
                     }
-                    (failure, _) => AllPhase::Failed(failure),
+                    (failure, Some(name)) => AllPhase::AgainFailed(name, failure),
+                    (failure, None) => AllPhase::Failed(failure),
                 };
                 self.calibrate_all.endings += 1;
             }
@@ -7896,6 +7934,8 @@ mod tests {
     #[test]
     fn an_app_that_quits_stops_streaming_and_stays_chosen() {
         let mut adapter = adapter();
+        // Linux's Stop, which Windows no longer has (S142).
+        adapter.set_when_source_quits(WhenSourceQuits::Stop);
         adapter.select_source(&player());
         turn_on(&mut adapter, SPEAKERS);
         assert_eq!(
@@ -8007,11 +8047,12 @@ mod tests {
     #[test]
     fn the_setting_for_a_quitting_app_is_saved_and_restored() {
         let mut adapter = adapter();
-        assert_eq!(
-            adapter.snapshot().when_source_quits,
-            WhenSourceQuits::Stop,
-            "stop by default"
-        );
+        let default = if cfg!(windows) {
+            WhenSourceQuits::SwitchToSystem
+        } else {
+            WhenSourceQuits::Stop
+        };
+        assert_eq!(adapter.snapshot().when_source_quits, default);
         adapter.set_when_source_quits(WhenSourceQuits::SwitchToSystem);
         let saved = adapter.current_settings();
         let mut restored = AudioAdapter::new(
@@ -8024,6 +8065,25 @@ mod tests {
             restored.snapshot().when_source_quits,
             WhenSourceQuits::SwitchToSystem
         );
+    }
+
+    // covers: S142, S227
+    #[test]
+    fn a_quit_on_windows_always_switches_and_a_stored_stop_is_ignored() {
+        let mut adapter = adapter();
+        let mut saved = adapter.current_settings();
+        saved.when_source_quits = WhenSourceQuits::Stop.stored().to_owned();
+        adapter.restore(saved);
+        adapter.select_source(&player());
+        turn_on(&mut adapter, SPEAKERS);
+
+        adapter.audio_mut().quit_app(PLAYER_PID);
+        adapter.poll();
+        adapter.poll();
+        let state = adapter.snapshot();
+        // Linux keeps Stop until its own captures leave no copy.
+        assert_eq!(state.running, cfg!(windows), "{:?}", messages(&adapter));
+        assert_eq!(state.source_id == "system", cfg!(windows));
     }
 
     // covers: S465
@@ -9306,6 +9366,51 @@ mod tests {
         adapter
     }
 
+    /// The adapter of [`adapter`] with the default-output seam faked on a
+    /// PC that has real outputs only, so nothing can be moved off them.
+    fn adapter_with_no_spare_output() -> AudioAdapter<MockBackend> {
+        use crate::audio::default_output::tests as switch_fakes;
+        let mut adapter = adapter();
+        let calls = switch_fakes::Calls::default();
+        let mut fake = switch_fakes::Fake::new(&calls);
+        fake.endpoints
+            .retain(|candidate| candidate.kind != OutputKind::Virtual);
+        let store = switch_fakes::Store::new(&calls);
+        let audio = adapter.audio_mut();
+        audio.set_default_switch(Box::new(fake), Box::new(store));
+        audio.connect_output_as(TV, "TV", OutputKind::Hdmi);
+        audio.set_default_output(TV);
+        adapter
+    }
+
+    // covers: S382, S470
+    #[test]
+    fn with_no_spare_output_an_app_heard_from_the_default_output_is_named() {
+        let mut adapter = adapter_with_no_spare_output();
+        adapter.audio_mut().play_on(PLAYER_PID, TV);
+        adapter.refresh_devices();
+        adapter.select_source(&player());
+        turn_on(&mut adapter, SPEAKERS);
+        assert_eq!(heard_twice(&adapter), [twice(Some("Player"), &["TV"], &[])]);
+    }
+
+    // covers: S382, S470
+    #[test]
+    fn with_no_spare_output_the_whole_system_heard_from_the_default_output_is_reported() {
+        let mut adapter = adapter_with_no_spare_output();
+        adapter.refresh_devices();
+        adapter.select_source("system");
+        turn_on(&mut adapter, SPEAKERS);
+        // The TV is the default output, which the guide words as such.
+        let expected = NoticeMessage::HeardTwice {
+            source: None,
+            mute: vec!["TV".to_owned()],
+            shared: vec![],
+            default_output: Some("TV".to_owned()),
+        };
+        assert_eq!(heard_twice(&adapter), [expected]);
+    }
+
     // covers: S382
     #[test]
     fn the_double_audio_notice_names_a_renamed_output_by_its_new_name() {
@@ -9449,6 +9554,7 @@ mod tests {
     fn a_dismissed_double_audio_notice_stays_away_until_the_app_quits() {
         const BUDS: &str = "buds";
         let mut adapter = player_on_the_tv();
+        adapter.set_when_source_quits(WhenSourceQuits::Stop);
         adapter.dismiss_notice(heard_twice_id(&adapter).unwrap());
         // Streaming off and on again.
         adapter.set_running(false);
@@ -13761,6 +13867,8 @@ mod tests {
     #[test]
     fn picking_the_stopped_source_again_keeps_the_notice_that_its_app_quit() {
         let mut adapter = adapter();
+        // Linux's Stop, which Windows no longer has (S142).
+        adapter.set_when_source_quits(WhenSourceQuits::Stop);
         adapter.select_source(&player());
         turn_on(&mut adapter, SPEAKERS);
         adapter.audio_mut().quit_app(PLAYER_PID);
@@ -13948,6 +14056,8 @@ mod tests {
     #[test]
     fn a_mix_that_quits_names_the_app_that_ran_last() {
         let mut adapter = adapter();
+        // Linux's Stop, which Windows no longer has (S142).
+        adapter.set_when_source_quits(WhenSourceQuits::Stop);
         adapter.audio.add_app(3000, "browser.exe");
         adapter.refresh_sources();
         turn_on(&mut adapter, SPEAKERS);
@@ -15150,6 +15260,52 @@ mod tests {
             airplay_adjustment: None,
             undone: false,
         });
+    }
+
+    // The Mac's againEnded(name, .failed(failure)) (AppDelegate+CalibrateAll.swift:260-262).
+    #[test]
+    fn a_measure_again_that_fails_midway_names_its_speaker_and_why() {
+        let mut adapter = AudioAdapter::new(
+            reference_audio(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+        );
+        for id in ["builtin", "bluetooth"] {
+            turn_on(&mut adapter, id);
+        }
+        let (sheet, members, rate) = crate::audio::calibrate_all::tests::local_sheet(&[
+            ("builtin", 0.0, 2010.0),
+            ("bluetooth", 0.0, 2190.0),
+        ]);
+        keep(&mut adapter, (sheet, members.clone(), rate));
+        let name = adapter.member_name(&members[1]);
+        for sheet in [
+            None,
+            Some(
+                crate::audio::calibrate_all::tests::local_sheet(&[
+                    ("builtin", 0.0, 2010.0),
+                    ("bluetooth", 0.0, 2190.0),
+                ])
+                .0,
+            ),
+        ] {
+            adapter.calibrate_all.phase = AllPhase::Idle;
+            adapter.finish_calibrate_all(
+                Finished {
+                    sheet,
+                    failure: Some(Failure::MicrophoneSkipped),
+                },
+                Some(1),
+                members.clone(),
+                rate,
+                None,
+            );
+            let phase = format!("{:?}", adapter.snapshot().calibrate_all.phase);
+            assert!(
+                phase.contains(&name) && phase.contains("MicrophoneSkipped"),
+                "{phase}"
+            );
+        }
     }
 
     // covers: S238
@@ -17200,6 +17356,42 @@ mod tests {
             Some("Study")
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// As on the Mac: the speakers leave the list, the one that was on goes
+    /// off with a notice until AudioSync starts again, and what was said
+    /// about the others goes.
+    #[test]
+    fn a_cast_sender_that_stops_turns_its_speaker_off_with_a_notice() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.set_speaker_enabled(&cc(CAST_LIVING), true);
+        fake.report(HostEvent::Ended {
+            attempt: AttemptId(1),
+            device: cast_device(CAST_LIVING),
+            end: SessionEnd::TakenOver,
+        });
+        adapter.poll();
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        adapter.poll();
+        assert_eq!(messages(&adapter).len(), 1, "{:?}", messages(&adapter));
+
+        fake.state().sender_failed = true;
+        adapter.poll();
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert!(state.speaker(&cc(CAST_KITCHEN)).is_none());
+        assert!(state.speaker(&cc(CAST_LIVING)).is_none());
+        assert_eq!(state.cast_list, CastList::Failed);
+        let stopped = NoticeMessage::CastSenderStopped {
+            speaker: "Kitchen".to_owned(),
+        };
+        assert_eq!(messages(&adapter), [stopped]);
+
+        let (mut adapter, fake) = cast_adapter();
+        fake.state().sender_failed = true;
+        adapter.poll();
+        assert_eq!(adapter.snapshot().cast_list, CastList::Failed);
+        assert_eq!(messages(&adapter), []);
     }
 
     // covers: C18

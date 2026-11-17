@@ -237,3 +237,5 @@ S469 Windows host only: moving Windows' default output to a silent endpoint whil
 S470 Windows host only: no copy on Windows' default output when S469 can't move it; the desktop tests check it.
 S471 Windows host only: moving one captured app's own output to a silent endpoint and putting each app's earlier choice back; the desktop tests check it with a fake of the per-app seam.
 S472 Windows host only: the remembered Windows level of each local output; the desktop tests check it with the mock backend.
+S473 Linux host only: no copy on the default sink while the whole system streams; the desktop tests check it with the mock backend.
+S488 Windows host only: the restore guard process and the uninstaller's restore of S469 and S471; the desktop tests check the guard with a fake of its seam.

@@ -76,6 +76,10 @@ Name: "{autoprograms}\AudioSync"; Filename: "{app}\audiosync.exe"; WorkingDir: "
 ; postinstall entries run as the user who started Setup, never elevated.
 Filename: "{app}\audiosync.exe"; Description: "Open AudioSync"; Flags: nowait postinstall skipifsilent
 
+[UninstallRun]
+; Puts back the outputs a stream moved (S469, S471) while the files are still there (S488).
+Filename: "{app}\audiosync.exe"; Parameters: "--restore-outputs"; Flags: runhidden waituntilterminated; RunOnceId: "RestoreOutputs"
+
 [UninstallDelete]
 ; What the app's updater leaves next to the files above (S301, S304).
 Type: files; Name: "{app}\audiosync.exe.bak"

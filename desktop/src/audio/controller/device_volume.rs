@@ -413,10 +413,17 @@ impl<D: Driver> Controller<D> {
     /// The row follows what Windows reports afterwards, as after the fix.
     /// Whether Windows took the write.
     pub(super) fn set_followed_device_level(&mut self, id: &str, level: f64) -> bool {
-        if self.device_volumes.reading(id).is_none() || !level.is_finite() {
+        let Some(reading) = self.device_volumes.reading(id) else {
+            return false;
+        };
+        if !level.is_finite() {
             return false;
         }
         let level = level.clamp(0.0, 1.0);
+        // The Mac's order: a level set on a muted output alone stays silent.
+        if reading.muted == Some(true) {
+            let _ = self.driver.unmute_endpoint(id);
+        }
         let result = self.driver.set_endpoint_level(id, level as f32);
         if let Err(error) = &result {
             self.log.log(|| {
@@ -575,6 +582,34 @@ mod tests {
             code: 0x8000_4005_u32 as i32,
         }));
         assert!(!backend.set_device_volume(SPEAKERS, 0.6), "a refused write");
+    }
+
+    /// The System slider on a muted output unmutes it first, then sets the
+    /// level, as the Mac does, so it plays at the new level.
+    // covers: S197
+    #[test]
+    fn the_system_slider_unmutes_a_muted_output_before_setting_the_level() {
+        let mut backend = backend();
+        let record = backend.volume_record();
+        backend.set_output_level(SPEAKERS, 0.5);
+        backend.mute_output(SPEAKERS, true);
+        backend.poll();
+        assert!(record.writes().is_empty(), "muting alone writes nothing");
+        assert!(backend.set_device_volume(SPEAKERS, 0.4));
+        assert_eq!(
+            record.writes(),
+            [
+                VolumeWrite::Unmute {
+                    id: SPEAKERS.to_owned()
+                },
+                VolumeWrite::Level {
+                    id: SPEAKERS.to_owned(),
+                    level: 0.4
+                }
+            ]
+        );
+        backend.poll();
+        assert_eq!(device_volume(&backend, SPEAKERS), at(0.4_f32.into(), false));
     }
 
     /// A System slider write Windows refuses logs one line, as the fix's do.

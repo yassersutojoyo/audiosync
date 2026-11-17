@@ -415,7 +415,7 @@ pub(crate) mod tests {
 
     pub(crate) struct Fake {
         calls: Calls,
-        endpoints: Vec<Candidate>,
+        pub(crate) endpoints: Vec<Candidate>,
         pub(crate) console: Option<String>,
         pub(crate) multimedia: Option<String>,
         /// The communications default, which nothing may change.

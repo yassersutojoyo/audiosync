@@ -120,7 +120,53 @@ fn a_playing_speakers_name_keeps_the_regular_weight() {
 #[test]
 fn the_source_block_is_visibly_grey() {
     let fluent = component(include_str!("../../ui/widgets.slint"), "Fluent");
-    assert!(fluent.contains("out property <brush> hero: Tokens.text.with-alpha(0.06);"));
+    assert!(fluent.contains("out property <brush> hero: Tokens.text.with-alpha(0.05);"));
+}
+
+/// Text takes the Mac's text style sizes 1:1 on every OS (BrandTokens.swift
+/// Typography, the macOS styles), with no larger Windows scale.
+// covers: S450
+#[test]
+fn text_sizes_are_the_macs_on_every_os() {
+    let tokens = include_str!("../../ui/tokens.slint");
+    for (style, size) in [
+        ("title2", 17),
+        ("title3", 15),
+        ("headline", 13),
+        ("body", 13),
+        ("callout", 12),
+        ("subheadline", 11),
+        ("caption", 10),
+        ("caption2", 10),
+    ] {
+        assert!(
+            tokens.contains(&format!(
+                "out property <length> font-size-{style}: {size}px;"
+            )),
+            "{style} {size}"
+        );
+    }
+}
+
+/// Cards round at the Mac's 12 (BrandTokens.swift Radius.card).
+// covers: S450
+#[test]
+fn cards_take_the_macs_corner() {
+    let fluent = component(include_str!("../../ui/widgets.slint"), "Fluent");
+    assert!(fluent.contains("out property <length> radius-card: 12px;"));
+}
+
+/// The main window is white in light and the Mac's system window color
+/// (#323232, Brand.swift:17-21, MainWindow.swift:32-36) in dark.
+// covers: S450
+#[test]
+fn the_main_window_is_the_macs_window_color() {
+    let fluent = component(include_str!("../../ui/widgets.slint"), "Fluent");
+    assert!(fluent.contains("out property <color> main-window: Tokens.dark ? #323232 : #ffffff;"));
+    let main = include_str!("../../ui/main.slint").replace("\r\n", "\n");
+    assert!(
+        main.contains("    background: Fluent.main-window;\n    default-font-family: Fluent.font;")
+    );
 }
 
 /// At the smallest window with a song and the Presets list open, the source
@@ -606,4 +652,44 @@ fn a_deleted_zone_stays_leaving_for_the_macs_row_move_and_a_new_one_comes_fresh(
         .invoke_speaker_new_zone_requested("local:headphones".into());
     let fresh = app.models.zones.iter().filter(|zone| zone.fresh).count();
     assert_eq!(fresh, 1, "a new zone comes fresh");
+}
+
+/// The header's streaming switch shows no tooltip (maintainer 2026-11-16,
+/// "tooltip buat apaan sih? remove aja"), as the tray panel's.
+#[test]
+fn the_main_window_streaming_switch_has_no_tooltip() {
+    let switch = component(include_str!("../../ui/widgets.slint"), "PowerSwitch");
+    assert!(!switch.contains("Tooltip"), "none in the switch");
+    let main = include_str!("../../ui/main.slint").replace("\r\n", "\n");
+    let at = main
+        .find("power := PowerSwitch {")
+        .expect("the header switch");
+    let end = main[at..]
+        .find("// The 5 the header moved up")
+        .expect("the header's end");
+    assert!(!main[at..at + end].contains("Tooltip"), "none around it");
+}
+
+/// Each card's corner is the Mac's: the panel hero 12 (MenuBar.swift:2348,
+/// BrandTokens.swift:160), the setup list 8 (SetupWindow.swift:150).
+#[test]
+fn the_cards_have_the_macs_corners() {
+    let tokens = component(include_str!("../../ui/tokens.slint"), "Tokens");
+    assert!(tokens.contains("out property <length> radius-card: 12px;"));
+    let flyout = include_str!("../../ui/flyout.slint").replace("\r\n", "\n");
+    let hero = &flyout[flyout.find("hero-card := Rectangle {").expect("the hero")..];
+    assert_eq!(
+        hero.lines().nth(1).map(str::trim),
+        Some("border-radius: Tokens.radius-card;"),
+        "the panel hero"
+    );
+    let fluent = component(include_str!("../../ui/widgets.slint"), "Fluent");
+    assert!(fluent.contains("out property <length> radius-card: 12px;"));
+    let setup = include_str!("../../ui/setup.slint").replace("\r\n", "\n");
+    assert!(
+        setup.contains(
+            "background: Tokens.surface;\n                    // The Mac's setup list (SetupWindow.swift:150).\n                    border-radius: 8px;"
+        ),
+        "the setup list"
+    );
 }

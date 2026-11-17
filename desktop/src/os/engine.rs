@@ -28,33 +28,12 @@ pub fn backend<D: Driver + 'static>(
     );
     // Before the settings are read, so a record restored now isn't read.
     #[cfg(windows)]
-    audio.set_default_switch(
-        Box::new(audio::wasapi::WasapiDefaults),
-        Box::new(settings::DefaultRecordFile(
-            settings_file.path().map(std::path::Path::to_path_buf),
-        )),
-    );
-    // S471; after S469's restore, so its record's silent endpoint is read.
+    restore_records(&mut audio, log, settings_file.path());
     #[cfg(windows)]
-    match crate::platform::windows_version()
-        .and_then(|version| audio::app_output::variant(version.build))
-    {
-        Some(variant) => {
-            let outputs = audio::wasapi::WasapiAppOutputs(variant);
-            match outputs.probe() {
-                Ok(()) => audio.set_app_output(
-                    Box::new(outputs),
-                    Box::new(settings::AppRecordFile(
-                        settings_file.path().map(std::path::Path::to_path_buf),
-                    )),
-                ),
-                Err(error) => log.log(|| {
-                    format!("app output: apps aren't moved, the per-app interface failed: {error}")
-                }),
-            }
-        }
-        None => log.log(|| "app output: apps aren't moved on this Windows build".to_owned()),
-    }
+    audio.set_restore_guard(crate::restore_guard::keeper());
+    // S473: Linux can't move the default sink, so it gets no copy instead.
+    #[cfg(target_os = "linux")]
+    audio.hold_out_default_sink();
     let read = settings_file.load();
     start_airplay(&mut audio, log);
     let (cast_file, cast_unread) = start_cast(&mut audio, log);
@@ -73,6 +52,42 @@ pub fn backend<D: Driver + 'static>(
     );
     adapter.set_cast_file(cast_file, cast_unread);
     Box::new(adapter)
+}
+
+/// Restores what S469's and S471's records in the settings file at `path`
+/// say and keeps their seams in `audio`: at launch, and in S488's guard.
+#[cfg(windows)]
+pub fn restore_records<D: Driver>(
+    audio: &mut Controller<D>,
+    log: &DebugLog,
+    path: Option<&std::path::Path>,
+) {
+    audio.set_default_switch(
+        Box::new(audio::wasapi::WasapiDefaults),
+        Box::new(settings::DefaultRecordFile(
+            path.map(std::path::Path::to_path_buf),
+        )),
+    );
+    // S471; after S469's restore, so its record's silent endpoint is read.
+    match crate::platform::windows_version()
+        .and_then(|version| audio::app_output::variant(version.build))
+    {
+        Some(variant) => {
+            let outputs = audio::wasapi::WasapiAppOutputs(variant);
+            match outputs.probe() {
+                Ok(()) => audio.set_app_output(
+                    Box::new(outputs),
+                    Box::new(settings::AppRecordFile(
+                        path.map(std::path::Path::to_path_buf),
+                    )),
+                ),
+                Err(error) => log.log(|| {
+                    format!("app output: apps aren't moved, the per-app interface failed: {error}")
+                }),
+            }
+        }
+        None => log.log(|| "app output: apps aren't moved on this Windows build".to_owned()),
+    }
 }
 
 /// What the app hands the backend's media parts once its windows exist: the

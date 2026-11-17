@@ -69,6 +69,7 @@ export struct SourceLook {
 // An app of the several-apps list under the source menu.
 export struct MixAppItem {
     name: string,
+    icon: image,
     // Checked in the mode the list shows.
     checked: bool,
 }
@@ -89,8 +90,22 @@ export struct LeftOutItem {
 // A row of the Calibrate All Speakers results.
 export struct CalibrationRowItem {
     name: string,
-    // Its old and new delay, or why it has none.
+    // The whole card for Narrator: kind, chip, result and current delay.
     detail: string,
+    // "Local speaker", "Google Cast" or "AirPlay"; empty on the reference.
+    kind: string,
+    // "Reference", "Measured clearly" or "Not clear"; chip-warn for the last.
+    chip: string,
+    chip-warn: bool,
+    // The new delay, large, and "± 2 ms · was +12 ms"; empty without one.
+    value: string,
+    was: string,
+    // Under the delay: why it stays, or how it was measured.
+    note: string,
+    // Measured clearly: the new delay in the text color.
+    clear: bool,
+    // Its sweeps were refused: the note in the error color.
+    refused: bool,
     // Measure Again can run for it.
     can-measure-again: bool,
 }
@@ -167,6 +182,8 @@ export struct SpeakerItem {
     // Under the button: what a running calibration does, how the last one
     // ended, or why none can start; empty otherwise.
     calibration-status: string,
+    // That line says how the last calibration failed.
+    calibration-failed: bool,
     // The last calibration found the microphone blocked: Open Privacy
     // Settings goes next to the button.
     calibration-privacy: bool,
@@ -289,7 +306,7 @@ export struct ZoneItem {
 }
 
 // What a notice is about, for its short name (Strings.notice-title).
-export enum NoticeKind { no-speaker, source-quit, source-switched, switch-failed, source-not-running, source-refused, input-not-connected, input-hands-free, input-disconnected, microphone-blocked, capture-failed, capture-lost, waiting-for-audio, speaker-failed, speaker-lost, speaker-busy, speaker-struggling, pair-first, airplay-retrying, airplay-waiting, airplay-cant-play, airplay-stopped, airplay-ptp-ports-taken, settings-not-saved, pairings-not-saved, settings-kept-aside, settings-from-newer, pairings-kept-aside, no-sound-output, heard-twice, launch-at-login-failed, launch-at-login-not-removed, launch-at-login-off-in-settings, cast-cant-play, airplay-ahead-of-cast, remote-public-network, groups-became-zones, presets-left-off, presets-nothing-changed, update }
+export enum NoticeKind { no-speaker, source-quit, source-switched, switch-failed, source-not-running, source-refused, input-not-connected, input-hands-free, input-disconnected, microphone-blocked, capture-failed, capture-lost, waiting-for-audio, speaker-failed, speaker-lost, speaker-busy, speaker-struggling, pair-first, airplay-retrying, airplay-waiting, airplay-cant-play, airplay-stopped, airplay-ptp-ports-taken, settings-not-saved, pairings-not-saved, settings-kept-aside, settings-from-newer, pairings-kept-aside, no-sound-output, heard-twice, launch-at-login-failed, launch-at-login-not-removed, launch-at-login-off-in-settings, cast-cant-play, cast-sender-stopped, airplay-ahead-of-cast, remote-public-network, groups-became-zones, presets-left-off, presets-nothing-changed, update }
 
 // A button of the updater's notice.
 export enum UpdateButton { download, not-now, skip-this-version, cancel, try-again, open-release-page, restart-now }

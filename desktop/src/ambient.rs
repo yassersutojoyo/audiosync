@@ -286,7 +286,11 @@ mod tests {
             }
         }
         assert!(widest > 2.0, "it sways: {widest}");
-        assert!(widest < 6.0, "it stays calm: {widest}");
+        // The Mac's resting swing (WindowRules.swift:206) and the breath on top.
+        assert!(
+            widest < ambient_breath::SWAY * 22.0 + 2.5,
+            "it stays calm: {widest}"
+        );
     }
 
     #[test]

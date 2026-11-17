@@ -396,6 +396,8 @@ pub trait CastLink: Send {
     /// The device announced itself: a reconnect to it goes at once (C81).
     fn announced(&mut self, device: DeviceId);
     fn discovery(&self) -> CastDiscovery;
+    /// Whether the sender's worker ended on its own (C107 covers a panic it survives).
+    fn failed(&self) -> bool;
     /// Browses afresh, keeping the devices listed (S352).
     fn browse_again(&mut self);
     /// Tears down whatever runs within C88's budget; the one call that
@@ -514,6 +516,10 @@ impl CastLink for HostLink {
 
     fn browse_again(&mut self) {
         browse_again(&mut self.browser, MdnsBrowser::new);
+    }
+
+    fn failed(&self) -> bool {
+        !self.host.is_running()
     }
 
     fn clear_device_key(&mut self, device: DeviceId) -> Option<String> {
@@ -1773,6 +1779,9 @@ impl CastSpeakers {
 
     /// Handles what discovery and the sender reported since the last poll.
     pub fn poll(&mut self) -> Vec<BackendEvent> {
+        if self.link.as_ref().is_some_and(|link| link.failed()) {
+            self.sender_failed();
+        }
         for _ in 0..MAX_BROWSE_PER_POLL {
             let Some(event) = self.link.as_mut().and_then(|link| link.poll_browse()) else {
                 break;
@@ -1824,6 +1833,23 @@ impl CastSpeakers {
         self.feed.flush();
         self.sync();
         dedup_changed(std::mem::take(&mut self.pending))
+    }
+
+    /// As on the Mac, the speakers leave the list and the one that was on
+    /// goes off until AudioSync starts again.
+    fn sender_failed(&mut self) {
+        self.log
+            .log(|| "Cast: the sender stopped after an internal error".to_owned());
+        self.link = None;
+        self.attempt = None;
+        self.records = None;
+        self.feed.hand(None);
+        self.saved_on = None;
+        self.list = DeviceList::new();
+        self.manual.clear();
+        let was_on = self.enabled.take().map(|id| id.to_string());
+        self.pending.push(BackendEvent::CastSenderFailed { was_on });
+        self.pending.push(BackendEvent::CastChanged);
     }
 
     /// A browsed device that is on with no session and left the list can't
@@ -2186,6 +2212,8 @@ pub mod tests {
         pub browse: VecDeque<BrowseEvent>,
         /// The mDNS browser ended: discovery reads as failed.
         pub discovery_stopped: bool,
+        /// The sender's worker ended on its own.
+        pub sender_failed: bool,
         pub browses_again: usize,
         next: u64,
     }
@@ -2316,6 +2344,10 @@ pub mod tests {
 
         fn browse_again(&mut self) {
             self.state().browses_again += 1;
+        }
+
+        fn failed(&self) -> bool {
+            self.state().sender_failed
         }
 
         fn shutdown(&mut self) -> bool {
