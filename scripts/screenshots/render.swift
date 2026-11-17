@@ -321,28 +321,54 @@ func sampledColours(_ rep: NSBitmapImageRep, _ rect: CGRect) -> (String?, String
     return (commonest(far).map(hex), hex(bg))
 }
 
-/// Every accessibility element under `view` with a label, title or text value,
-/// as scripts/screen_compare.py reads it. The accessibility tree carries no
-/// font, so `font` is null.
+/// Every accessibility element under `view` with a label, title, text value or
+/// identifier, as scripts/screen_compare.py reads it, in window points from the
+/// top left; the font comes from the element's attributed text where it has one.
 func layarElements(in view: NSView, rep: NSBitmapImageRep) -> [[String: Any]] {
+    // SwiftUI builds its accessibility nodes on the first request and fills them
+    // in on a later update: ask once and let that update run before the walk.
+    _ = view.accessibilityAttributeValue(.children)
+    settle()
     var found: [[String: Any]] = []
     let page = CGRect(origin: .zero, size: view.bounds.size)
+    let screenTop = NSScreen.screens.first?.frame.maxY ?? 0
     func attribute(_ node: NSObject, _ name: String) -> Any? {
         node.accessibilityAttributeValue(NSAccessibility.Attribute(rawValue: name))
     }
+    // SwiftUI's nodes answer AXPosition, from the main screen's top left, but
+    // need not adopt NSAccessibilityElementProtocol.
+    func screenFrame(_ node: NSObject) -> CGRect? {
+        if let position = (attribute(node, "AXPosition") as? NSValue)?.pointValue,
+           let size = (attribute(node, "AXSize") as? NSValue)?.sizeValue {
+            return CGRect(x: position.x, y: screenTop - position.y - size.height, width: size.width, height: size.height)
+        }
+        return (node as? NSAccessibilityElementProtocol)?.accessibilityFrame()
+    }
+    func font(_ node: NSObject) -> Any {
+        guard let count = attribute(node, "AXNumberOfCharacters") as? Int, count > 0,
+              let text = node.accessibilityAttributeValue(
+                  NSAccessibility.ParameterizedAttribute(rawValue: "AXAttributedStringForRange"),
+                  forParameter: NSValue(range: NSRange(location: 0, length: count))) as? NSAttributedString,
+              let described = text.attribute(NSAttributedString.Key(rawValue: "AXFont"), at: 0, effectiveRange: nil)
+                  as? [String: Any],
+              let name = (described["AXFontFamily"] ?? described["AXFontName"]) as? String,
+              let size = (described["AXFontSize"] as? NSNumber)?.doubleValue
+        else { return NSNull() }
+        return ["name": name, "size": size]
+    }
     func walk(_ node: NSObject, depth: Int) {
         guard depth < 64 else { return }
-        let text = ["AXDescription", "AXTitle", "AXValue"].lazy
+        let text = ["AXDescription", "AXTitle", "AXValue", "AXIdentifier"].lazy
             .compactMap { attribute(node, $0) as? String }
             .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        if let text, let element = node as? NSAccessibilityElementProtocol, let window = view.window {
-            var rect = view.convert(window.convertFromScreen(element.accessibilityFrame()), from: nil)
+        if let text, let window = view.window, let onScreen = screenFrame(node) {
+            var rect = view.convert(window.convertFromScreen(onScreen), from: nil)
             if !view.isFlipped { rect.origin.y = view.bounds.height - rect.maxY }
             if rect.width > 0, rect.height > 0, rect.intersects(page) {
                 let (fg, bg) = sampledColours(rep, rect)
                 found.append(["key": text,
                               "frame": [rect.minX, rect.minY, rect.width, rect.height].map { Double($0) },
-                              "font": NSNull(), "fg": (fg as Any?) ?? NSNull(), "bg": (bg as Any?) ?? NSNull()])
+                              "font": font(node), "fg": (fg as Any?) ?? NSNull(), "bg": (bg as Any?) ?? NSNull()])
             }
         }
         for case let child as NSObject in (attribute(node, "AXChildren") as? [Any]) ?? [] {
@@ -354,8 +380,8 @@ func layarElements(in view: NSView, rep: NSBitmapImageRep) -> [[String: Any]] {
 }
 
 /// The main window's content as MainWindowController sets it up
-/// (MainWindow.swift:22-38), at its default 696 x 600 points.
-func layarMain(_ model: AppModel, look: Look) -> (NSWindow, NSView) {
+/// (MainWindow.swift:22-38), at its default 696 x 600 points or at `size`.
+func layarMain(_ model: AppModel, look: Look, size: NSSize = NSSize(width: 696, height: 600)) -> (NSWindow, NSView) {
     let host = NSHostingController(rootView: MainView(model: model))
     host.sizingOptions = [.minSize]
     let window = ShotWindow(contentRect: NSRect(x: 0, y: 0, width: 696, height: 600),
@@ -366,7 +392,7 @@ func layarMain(_ model: AppModel, look: Look) -> (NSWindow, NSView) {
     window.contentViewController = host
     window.titleVisibility = .hidden
     window.titlebarAppearsTransparent = true
-    window.setContentSize(NSSize(width: 696, height: 600))
+    window.setContentSize(size)
     return (window, host.view)
 }
 
@@ -389,63 +415,229 @@ func layarEqualizer(look: Look) -> (NSWindow, NSView) {
     return (window, content)
 }
 
-/// The track the desktop's layar_shots plays, so the card's texts match by key.
-func layarTrack(playing: Bool = true, long: Bool = false) -> NowPlayingMonitor.Track {
+/// The track the desktop's layar_shots plays (`track`, `long_track`), so the
+/// card's texts match by key.
+func layarTrack(playing: Bool = true, art: Bool = true, long: Bool = false, shuffle: Bool = false,
+                repeatMode: NowPlayingMonitor.RepeatMode = .off) -> NowPlayingMonitor.Track {
     NowPlayingMonitor.Track(
         bundleID: "com.example.player", appName: "Player",
         title: long ? "A track title long enough to need more than the two lines the card shows" : "A track title",
         artist: long ? "An artist name long enough to run past the end of its line" : "Artist",
-        album: "Example Album", isPlaying: playing, artwork: Mock.artwork())
+        album: "Example Album", isPlaying: playing, artwork: art ? Mock.artwork() : nil,
+        shuffle: shuffle, repeatMode: repeatMode)
 }
 
-/// Mock.model with no delay panel open and the desktop's track playing.
+/// The desktop's long speaker name (layar_shots.rs `LONG`).
+let layarLong = "Living Room Speaker Next to the Big Window by the Bookshelves"
+
+/// The desktop's MockBackend example (desktop/src/ui_model.rs) as the Mac
+/// shows it, with streaming on and no track, as layar_shots' Scene starts:
+/// the same speaker names, kinds, delays and switches, so both sides key the
+/// same rows. Volumes are the core's defaults (core/src/volume.rs).
 func layarModel(_ configure: (AppModel) -> Void = { _ in }) -> AppModel {
-    Mock.model { model in
-        model.closeDelayPanels()
-        model.nowPlaying = layarTrack()
-        configure(model)
+    let model = AppModel()
+    model.running = true
+    model.sources = [
+        AppModel.Source(id: "", name: model.text.sourceSystem, icon: nil, isInput: false),
+        AppModel.Source(id: "com.example.player", name: "Music Player", icon: nil, isInput: false),
+        AppModel.Source(id: "com.example.browser", name: "Web Browser", icon: nil, isInput: false),
+        AppModel.Source(id: "line-in", name: "Line In", icon: nil, isInput: true),
+    ]
+    model.local = [
+        AppModel.Speaker(id: "speakers", name: "Speakers", tag: .builtIn, enabled: true, volume: 60, offsetMs: nil,
+                         isReference: true),
+        AppModel.Speaker(id: "headphones", name: "Headphones", tag: .builtIn, enabled: false, volume: 60, offsetMs: 0,
+                         calibrationLeftOut: .headphones),
+        AppModel.Speaker(id: "desk", name: "Desk Speaker", tag: .usb, enabled: false, volume: 60, offsetMs: 120),
+        AppModel.Speaker(id: "headset", name: "Headset", tag: .bluetooth, enabled: false, volume: 60, offsetMs: -250),
+    ]
+    model.airplay = [
+        AppModel.Speaker(id: "kitchen", name: "Kitchen", tag: .airplay, enabled: true, volume: 60, offsetMs: nil,
+                         autoConnect: true),
+        AppModel.Speaker(id: "living", name: "Living Room", tag: .airplay, enabled: false, volume: 60, offsetMs: nil,
+                         availability: .needsCode),
+        AppModel.Speaker(id: "bedroom", name: "Bedroom", tag: .airplay, enabled: false, volume: 60, offsetMs: nil),
+    ]
+    // The desktop example's speakers sit at 13 % in the system.
+    model.deviceVolumes = ["speakers": .low(percent: 13)]
+    model.builtInVolume = 0.13
+    model.airPlayDelayMs = 1750
+    configure(model)
+    return model
+}
+
+/// Changes the example speaker `id`, local or AirPlay.
+func layarEdit(_ model: AppModel, _ id: String, _ change: (inout AppModel.Speaker) -> Void) {
+    if let at = model.local.firstIndex(where: { $0.id == id }) { change(&model.local[at]) }
+    if let at = model.airplay.firstIndex(where: { $0.id == id }) { change(&model.airplay[at]) }
+}
+
+/// Gives the example speaker `id` the desktop's long name (layar_shots.rs `rename`).
+func layarRename(_ model: AppModel, _ id: String) {
+    func renamed(_ speaker: AppModel.Speaker) -> AppModel.Speaker {
+        var copy = AppModel.Speaker(id: speaker.id, name: layarLong, tag: speaker.tag, enabled: speaker.enabled,
+                                    volume: speaker.volume, offsetMs: speaker.offsetMs, autoConnect: speaker.autoConnect,
+                                    availability: speaker.availability, systemName: layarLong)
+        copy.isReference = speaker.isReference
+        copy.calibrationLeftOut = speaker.calibrationLeftOut
+        return copy
     }
+    model.local = model.local.map { $0.id == id ? renamed($0) : $0 }
+    model.airplay = model.airplay.map { $0.id == id ? renamed($0) : $0 }
 }
 
-func layarIdle(_ model: AppModel) {
-    model.running = false
-    model.nowPlaying = nil
-}
+let layarSmallest = NSSize(width: 696, height: 460)   // MainWindow.swift:320
 
-func layarNoSpeakers(_ model: AppModel) {
-    model.zones = []
-    model.airplay = []
-    model.local = []
-    model.cast = []
-    model.castList = .noneFound
-    model.nowPlaying = nil
-}
-
-/// The desktop's LONG name on the Kitchen row, and the long track.
-func layarLongNames(_ model: AppModel) {
-    model.airplay[1] = AppModel.Speaker(
-        id: "kitchen", name: "Living Room Speaker Next to the Big Window by the Bookshelves", tag: .airplay,
-        enabled: true, volume: 48, offsetMs: nil, autoConnect: true)
-    model.nowPlaying = layarTrack(long: true)
-}
-
-/// The LAYAR rows (notes IDs, shared with the desktop's layar_shots) that mock
-/// data can set up here.
+/// The LAYAR rows (notes IDs, shared with the desktop's layar_shots), each set
+/// up as the desktop's row of the same ID sets up its example.
 let layarRows: [(id: String, draw: (Look) -> (NSWindow, NSView))] = [
-    ("MAIN-IDLE", { layarMain(layarModel(layarIdle), look: $0) }),
-    ("MAIN-PLAYING", { layarMain(layarModel(), look: $0) }),
-    ("MAIN-HEADER", { layarMain(layarModel(), look: $0) }),
+    ("MAIN-IDLE", { layarMain(layarModel { $0.running = false }, look: $0) }),
+    ("MAIN-PLAYING", { layarMain(layarModel { $0.nowPlaying = layarTrack() }, look: $0) }),
+    ("MAIN-HEADER", { layarMain(layarModel { $0.nowPlaying = layarTrack() }, look: $0) }),
     ("MAIN-HEADER-OFF", { layarMain(layarModel { $0.running = false }, look: $0) }),
-    ("MAIN-VOLUME-ROWS", { layarMain(layarModel(), look: $0) }),
-    ("MAIN-NOWPLAYING-PAUSED", { layarMain(layarModel { $0.nowPlaying = layarTrack(playing: false) }, look: $0) }),
-    ("MAIN-EMPTY", { layarMain(layarModel(layarNoSpeakers), look: $0) }),
-    ("MAIN-LONGNAME", { layarMain(layarModel(layarLongNames), look: $0) }),
-    ("MAIN-DELAY-OPEN", { layarMain(layarModel { $0.toggleDelayPanel("headphones") }, look: $0) }),
-    ("TRAY-IDLE", { layarPanel(layarModel(layarIdle), look: $0) }),
-    ("TRAY-PLAYING", { layarPanel(layarModel(), look: $0) }),
-    ("TRAY-EMPTY", { layarPanel(layarModel(layarNoSpeakers), look: $0) }),
-    ("TRAY-LONGNAME", { layarPanel(layarModel(layarLongNames), look: $0) }),
+    ("MAIN-VOLUME-ROWS", { layarMain(layarModel {
+        layarEdit($0, "desk") { $0.enabled = true }
+        $0.nowPlaying = layarTrack()
+    }, look: $0) }),
+    ("MAIN-AMBIENT-REST", { layarMain(layarModel { $0.nowPlaying = layarTrack(playing: false) }, look: $0) }),
+    ("MAIN-NOWPLAYING-NOART", { layarMain(layarModel { $0.nowPlaying = layarTrack(art: false) }, look: $0) }),
+    ("MAIN-NOWPLAYING-PAUSED", { layarMain(layarModel { $0.nowPlaying = layarTrack(playing: false, art: false) },
+                                           look: $0) }),
+    ("MAIN-SHUFFLE-OFF", { layarMain(layarModel { $0.nowPlaying = layarTrack() }, look: $0) }),
+    ("MAIN-SHUFFLE-ON", { layarMain(layarModel { $0.nowPlaying = layarTrack(shuffle: true) }, look: $0) }),
+    ("MAIN-REPEAT-OFF", { layarMain(layarModel { $0.nowPlaying = layarTrack() }, look: $0) }),
+    ("MAIN-REPEAT-ALL", { layarMain(layarModel { $0.nowPlaying = layarTrack(repeatMode: .all) }, look: $0) }),
+    ("MAIN-REPEAT-ONE", { layarMain(layarModel { $0.nowPlaying = layarTrack(repeatMode: .one) }, look: $0) }),
+    ("MAIN-INPUT-LEVEL", { layarMain(layarModel { $0.sourceID = "line-in" }, look: $0) }),
+    ("MAIN-LIVEINPUT-NOTE", { layarMain(layarModel { $0.sourceID = "line-in" }, look: $0) }),
+    ("MAIN-MASTER-MUTED", { layarMain(layarModel { $0.toggleMasterMute() }, look: $0) }),
+    ("MAIN-NETWORK-DIVIDERS", { layarMain(layarModel { $0.nowPlaying = layarTrack() }, look: $0) }),
+    ("MAIN-LOCALNET-HINT", { layarMain(layarModel {
+        $0.airplay = []
+        $0.airplayFoundNone = true
+        $0.localNetworkHint = .possible
+    }, look: $0) }),
+    ("MAIN-LONGNAME", { layarMain(layarModel {
+        layarRename($0, "kitchen")
+        $0.nowPlaying = layarTrack(long: true)
+    }, look: $0) }),
+    ("MAIN-EMPTY", { layarMain(layarModel {
+        $0.local = []
+        $0.airplay = []
+    }, look: $0) }),
+    ("MAIN-SMALLEST", { layarMain(layarModel(), look: $0, size: layarSmallest) }),
+    ("MAIN-SMALLEST-PLAYING", { layarMain(layarModel { $0.nowPlaying = layarTrack() }, look: $0, size: layarSmallest) }),
+    ("MAIN-SYSVOL-SMALLEST", { layarMain(layarModel { $0.toggleDelayPanel("speakers") }, look: $0, size: layarSmallest) }),
+    ("MAIN-THISPC-NONE", { layarMain(layarModel { $0.local = [] }, look: $0) }),
+    ("MAIN-ROW-OFF", { layarMain(layarModel { layarEdit($0, "kitchen") { $0.enabled = false } }, look: $0) }),
+    ("MAIN-ROW-WILLPLAY", { layarMain(layarModel { $0.running = false }, look: $0) }),
+    ("MAIN-ROW-LOWVOL", { layarMain(layarModel {
+        layarEdit($0, "desk") { $0.enabled = true }
+        $0.deviceVolumes["desk"] = .low(percent: 18)
+    }, look: $0) }),
+    ("MAIN-ROW-LOWVOL-HEADPHONES", { layarMain(layarModel {
+        layarEdit($0, "headphones") { $0.enabled = true }
+        $0.deviceVolumes["headphones"] = .low(percent: 10)
+    }, look: $0) }),
+    ("MAIN-ROW-MUTED-DEVICE", { layarMain(layarModel {
+        layarEdit($0, "desk") { $0.enabled = true }
+        $0.deviceVolumes["desk"] = .muted
+    }, look: $0) }),
+    ("MAIN-ROW-THISPC", { layarMain(layarModel { layarEdit($0, "speakers") { $0.enabled = true } }, look: $0) }),
+    ("MAIN-ROW-THISPC-OFF", { layarMain(layarModel { layarEdit($0, "speakers") { $0.enabled = false } }, look: $0) }),
+    // The desktop's "waiting for the device" and "not on the network" are the
+    // Mac's reconnecting and unannounced AirPlay rows.
+    ("MAIN-ROW-CONNECTING", { layarMain(layarModel { layarEdit($0, "kitchen") { $0.reconnecting = true } }, look: $0) }),
+    ("MAIN-ROW-NEEDSCODE", { layarMain(layarModel(), look: $0) }),
+    ("MAIN-ROW-CODE-EVERYTIME", { layarMain(layarModel {
+        layarEdit($0, "bedroom") { $0.availability = .codeEveryTime }
+    }, look: $0) }),
+    ("MAIN-ROW-PROBLEM", { layarMain(layarModel { layarEdit($0, "kitchen") { $0.unannounced = true } }, look: $0) }),
+    ("MAIN-ROW-DEVICE-TURNED-DOWN", { layarMain(layarModel {
+        layarEdit($0, "desk") { $0.enabled = true }
+        $0.deviceVolumes["desk"] = .mutedAndLow(percent: 5)
+    }, look: $0) }),
+    ("MAIN-DELAY-OPEN", { layarMain(layarModel {
+        layarEdit($0, "desk") { $0.enabled = true }
+        $0.toggleDelayPanel("desk")
+    }, look: $0) }),
+    ("MAIN-DELAY-ROWS", { layarMain(layarModel {
+        layarEdit($0, "desk") { $0.enabled = true }
+        layarEdit($0, "headset") { $0.enabled = true }
+    }, look: $0) }),
+    ("MAIN-AIRPLAY-DELAY-OPEN", { layarMain(layarModel(), look: $0) }),
+    ("MAIN-SYSVOL-FOLDED", { layarMain(layarModel(), look: $0) }),
+    ("MAIN-SYSVOL-OPEN", { layarMain(layarModel { $0.toggleDelayPanel("speakers") }, look: $0) }),
+    ("MAIN-CAST-SEARCHING", { layarMain(layarModel { $0.castList = .searching }, look: $0) }),
+    ("MAIN-CAST-NONEFOUND", { layarMain(layarModel { $0.castList = .noneFound }, look: $0) }),
+    ("MAIN-CAST-FAILED", { layarMain(layarModel { $0.castList = .failed }, look: $0) }),
+    ("NOTICE-SOURCE", { layarMain(layarModel {
+        $0.notices.post($0.text.sourceTerminated(name: "Music Player"), subject: Notice.source)
+    }, look: $0) }),
+    ("TRAY-IDLE", { layarPanel(layarModel { $0.running = false }, look: $0) }),
+    ("TRAY-PLAYING", { layarPanel(layarModel { $0.nowPlaying = layarTrack() }, look: $0) }),
+    ("TRAY-EMPTY", { layarPanel(layarModel {
+        $0.local = []
+        $0.airplay = []
+    }, look: $0) }),
+    ("TRAY-LONGNAME", { layarPanel(layarModel {
+        layarRename($0, "kitchen")
+        $0.nowPlaying = layarTrack(long: true)
+    }, look: $0) }),
+    ("TRAY-ROW-OFF", { layarPanel(layarModel { layarEdit($0, "kitchen") { $0.enabled = false } }, look: $0) }),
+    ("TRAY-ROW-LOWVOL", { layarPanel(layarModel {
+        layarEdit($0, "desk") { $0.enabled = true }
+        $0.deviceVolumes["desk"] = .low(percent: 18)
+    }, look: $0) }),
+    ("TRAY-ROW-THISPC", { layarPanel(layarModel(), look: $0) }),
+    ("TRAY-ROW-HINT-TALL", { layarPanel(layarModel {
+        layarRename($0, "speakers")
+        $0.deviceVolumes["speakers"] = .mutedAndLow(percent: 8)
+    }, look: $0) }),
+    ("TRAY-TRANSPORT", { layarPanel(layarModel { $0.nowPlaying = layarTrack(shuffle: true, repeatMode: .all) },
+                                    look: $0) }),
+    ("TRAY-AMBIENT-REST", { layarPanel(layarModel { $0.nowPlaying = layarTrack(playing: false) }, look: $0) }),
+    ("TRAY-MASTER-MUTED", { layarPanel(layarModel { $0.toggleMasterMute() }, look: $0) }),
+    ("TRAY-NOTICE", { layarPanel(layarModel {
+        $0.notices.post($0.text.sourceTerminated(name: "Music Player"), subject: Notice.source)
+    }, look: $0) }),
     ("EQ-WINDOW", { layarEqualizer(look: $0) }),
+]
+
+/// The desktop's rows the Mac renderer does not set up, and why; written to
+/// not-set-up.txt as layar_shots writes its own, for scripts/screen_compare.py.
+let layarNotSetUp: [(ids: [String], reason: String)] = [
+    (["MAIN-ROW-HOVER", "MAIN-ROW-OFF-HOVER", "MAIN-TRANSPORT-HOVER", "MAIN-EQ-BUTTON-HOVER", "TRAY-HOVER",
+      "TRAY-ROW-OFF-HOVER", "MAIN-ROW-FOCUS", "MAIN-SCROLLED", "MAIN-ZONE-PLACEHOLDER", "EQ-SLIDER-DRAG"],
+     "needs a pointer, keyboard focus or scroll the renderer does not drive"),
+    (["MAIN-ROW-MENU", "MAIN-ROW-MOVE-ZONE-MENU", "MAIN-SOURCE-MENU", "MAIN-SOURCE-MENU-LONG", "MAIN-GEAR-MENU",
+      "MAIN-ZONE-MENU", "MAIN-PRESET-ROW-MENU", "TRAY-SOURCE-MENU", "EQ-CURVE-MENU"],
+     "a native menu, which draws outside the window the renderer photographs"),
+    (["MAIN-SOURCE-APPS", "MAIN-SOURCE-APPS-LONG", "MAIN-SOURCE-APPS-EMPTY", "MAIN-SOURCE-APPS-SMALLEST",
+      "TRAY-SOURCE-APPS", "TRAY-SOURCE-APPS-LONG", "LEVEL-POPUP", "TRAY-PRESET-PICKER"],
+     "a popover, which opens in its own window on a click the renderer does not make"),
+    (["MAIN-ROW-RENAME", "MAIN-ZONE-RENAME", "MAIN-PRESET-RENAME", "MAIN-DELAY-EDIT"],
+     "needs typing in a field the renderer does not drive"),
+    (["CAL-SHEET", "CAL-SHEET-RUNNING", "CAL-SHEET-RESULT", "CAL-SHEET-FAILED", "CAL-SHEET-LEFTOUT",
+      "CAL-SHEET-INCLUDED", "CAL-SHEET-ONLY-LEFTOUT", "CAL-SHEET-SMALLEST", "CAL-SHEET-LONGNAME",
+      "CAL-SHEET-LEFTOUT-LONG", "MAIN-CALIBRATE-SHEET-NARROW", "MAIN-ROW-CAL-RUNNING", "MAIN-ROW-CAL-DONE",
+      "MAIN-ROW-CAL-FAILED", "MAIN-ADD-ADDRESS", "MAIN-ADD-ADDRESS-ERROR"],
+     "a sheet or calibration state the Mac renderer does not mock yet"),
+    (["MAIN-ZONE-CARD", "MAIN-ZONE-COLLAPSED", "TRAY-ZONE-HEADER", "MAIN-PRESETS", "MAIN-PRESET-LIST",
+      "MAIN-PRESETS-EMPTY"],
+     "the desktop's zones_preview and presets_preview examples are not mirrored here yet"),
+    (["MAIN-DELAY-LONGNAME", "MAIN-ROW-LOWVOL-LONGNAME", "MAIN-ROW-THISPC-LONG", "MAIN-ROW-HINT-LONG",
+      "MAIN-ROW-HINT-TALL", "MAIN-ROW-CANTPLAY"],
+     "not mirrored here yet"),
+    (["NOTICE-START", "NOTICE-CAPTURE", "NOTICE-LOGIN", "NOTICE-AIRPLAY-SENDER", "NOTICE-AIRPLAY-PTP",
+      "NOTICE-PAIRINGS", "NOTICE-PAIRINGS-IGNORED", "NOTICE-ZONES", "NOTICE-PRESETS", "NOTICE-CAST-SENDER",
+      "NOTICE-AIRPLAY-AHEAD", "NOTICE-PERMISSION", "NOTICE-STACK", "NOTICE-LONG"],
+     "the notice's Mac text is not matched to the desktop's NoticeMessage here yet"),
+    (["MAIN-SETTINGS", "SETTINGS-UPDATES", "SETTINGS-SWITCH-OFF", "GUIDE-WINDOW", "GUIDE-SCROLLED",
+      "WEBREMOTE-OFF", "WEBREMOTE-RUNNING", "WEBREMOTE-ANDROID", "WEBREMOTE-FAILED"],
+     "the Mac renderer does not draw this window yet"),
+    (["MAIN-AIRPLAY-DELAY-FOLDED"], "the desktop folds the row when it has no AirPlay delay; the Mac model always holds one (airPlayDelayMs)"),
+    (["EQ-SMALLEST"], "the Mac equalizer window has one size (EqualizerWindow.swift:25, not resizable)"),
 ]
 
 /// The fewest keyed elements MAIN-PLAYING may list: its header, source,
@@ -474,6 +666,9 @@ func writeLayar() {
             withExtendedLifetime(window) {}
         }
     }
+    let notSetUp = layarNotSetUp.flatMap { row in row.ids.map { "\($0): \(row.reason)\n" } }.joined()
+    let notSetUpURL = outputDirectory.appendingPathComponent("not-set-up.txt")
+    do { try Data(notSetUp.utf8).write(to: notSetUpURL) } catch { fatalError("Could not write \(notSetUpURL.path): \(error)") }
     guard playingCount >= layarPlayingFloor else {
         FileHandle.standardError.write(Data("MAIN-PLAYING lists \(playingCount) keyed elements, fewer than \(layarPlayingFloor)\n".utf8))
         exit(1)
