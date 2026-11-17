@@ -1734,6 +1734,8 @@ export component LevelSlider inherits Rectangle {
     in property <float> maximum: 100;
     in-out property <float> value;
     in property <float> step: 1;
+    // How far Narrator's Increment and Decrement move it.
+    in property <float> accessible-step: root.step;
     in property <bool> enabled: true;
     in property <Orientation> orientation: Orientation.horizontal;
     in property <brush> track: Tokens.text.with-alpha(0.15);
@@ -1772,11 +1774,11 @@ export component LevelSlider inherits Rectangle {
     accessible-value-maximum: root.maximum;
     accessible-value-step: root.step;
     accessible-action-increment => {
-        root.move-to(root.value + root.step);
+        root.move-to(root.value + root.accessible-step);
         root.released(root.value);
     }
     accessible-action-decrement => {
-        root.move-to(root.value - root.step);
+        root.move-to(root.value - root.accessible-step);
         root.released(root.value);
     }
 
@@ -2089,6 +2091,8 @@ export component VolumeSlider inherits HorizontalLayout {
                 minimum: 0;
                 maximum: 100;
                 step: root.step;
+                // A tenth, as VoiceOver's step on the Mac's sliders.
+                accessible-step: 10;
                 value: root.volume;
                 enabled: root.enabled;
                 accessible-label: root.label;

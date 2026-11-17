@@ -10167,6 +10167,43 @@ mod tests {
         assert_eq!(app.snapshot().zones.len(), zones, "no zone was made");
     }
 
+    /// Narrator's Increment and Decrement move a speaker's and the master
+    /// volume by a tenth, as VoiceOver's do on the Mac; arrow keys stay at 1.
+    #[test]
+    fn narrator_steps_the_volume_sliders_by_a_tenth() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        draw_frames();
+        let speaker = app.snapshot().speakers[0].clone();
+        app.update(|b| b.set_master_volume(50.0));
+        app.update(|b| b.set_speaker_volume(&speaker.id, 50.0));
+        draw_frames();
+        let slider = |label: SharedString| {
+            ElementHandle::find_by_accessible_label(&app.main, &label)
+                .next()
+                .expect("the slider")
+        };
+        let strings = app.strings();
+        let master = slider(strings.get_master_volume());
+        master.invoke_accessible_increment_action();
+        assert_eq!(app.snapshot().master_volume, 60.0);
+        master.invoke_accessible_decrement_action();
+        master.invoke_accessible_decrement_action();
+        assert_eq!(app.snapshot().master_volume, 40.0);
+        let row = slider(strings.invoke_volume_of(speaker.name.as_str().into()));
+        row.invoke_accessible_increment_action();
+        let volume = || {
+            app.snapshot()
+                .speaker(&speaker.id)
+                .expect("the speaker")
+                .volume
+        };
+        assert_eq!(volume(), 60.0);
+        row.invoke_accessible_decrement_action();
+        assert_eq!(volume(), 50.0);
+    }
+
     /// A Cast speaker's delay is a wait, never below 0, so its row shows it
     /// with no sign, as the Mac's does.
     // covers: S450
