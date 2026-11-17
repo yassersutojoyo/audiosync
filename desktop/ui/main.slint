@@ -2740,6 +2740,16 @@ export component MainWindow inherits Window {
     // A click on the window outside every speaker row: apply every typed
     // delay and close the sync controls.
     callback blank-clicked();
+    // For the motion test: the opacity of the state line's new text and of
+    // the text it replaces.
+    out property <float> status-fade-in: root.status-b-front ? header-status-other.opacity : header-status.opacity;
+    out property <float> status-fade-out: root.status-b-front ? header-status.opacity : header-status-other.opacity;
+    // The state line's two texts: a switch flip writes the new state into the
+    // hidden one and fades it in over the other, as the Mac's line does.
+    property <string> status-a;
+    property <string> status-b;
+    property <bool> status-b-front;
+    property <bool> status-was-running;
     // For the layout tests (src/view.rs): the left column's content and its room.
     out property <length> left-content-height: left-column.content-height;
     out property <length> left-visible-height: left-column.visible-height;
@@ -2972,6 +2982,8 @@ export component MainWindow inherits Window {
     // binding on it would loop through the window's own size constraints.
     property <length> columns-width;
     init => {
+        self.status-a = self.status;
+        self.status-was-running = self.running;
         self.columns-width = self.width;
         MenuRoom.width = self.width;
         MenuRoom.height = self.height;
@@ -2991,6 +3003,21 @@ export component MainWindow inherits Window {
     // callback (a change the engine refused doesn't fire these).
     changed running => {
         power.checked = root.running;
+    }
+    changed status => {
+        if root.running != root.status-was-running {
+            root.status-was-running = root.running;
+            if root.status-b-front {
+                root.status-a = root.status;
+            } else {
+                root.status-b = root.status;
+            }
+            root.status-b-front = !root.status-b-front;
+        } else if root.status-b-front {
+            root.status-b = root.status;
+        } else {
+            root.status-a = root.status;
+        }
     }
 
     MenuRepaint { }
@@ -3046,14 +3073,41 @@ export component MainWindow inherits Window {
                     size: Fluent.wordmark;
                 }
 
-                // The Mac's line, as the track's lines.
-                header-status := SecondaryText {
-                    text: root.status;
-                    wrap: no-wrap;
-                    overflow: elide;
-                    font-size: Tokens.font-size-callout;
+                // The Mac's line, as the track's lines; one slot, so the old
+                // and the new state cross-fade in place.
+                Rectangle {
+                    preferred-width: max(header-status.preferred-width, header-status-other.preferred-width);
+                    min-height: header-status.preferred-height;
                     accessible-role: text;
-                    accessible-label: self.text;
+                    accessible-label: root.status;
+
+                    header-status := SecondaryText {
+                        text: root.status-a;
+                        width: parent.width;
+                        height: parent.height;
+                        wrap: no-wrap;
+                        overflow: elide;
+                        font-size: Tokens.font-size-callout;
+                        opacity: root.status-b-front ? 0 : 1;
+                        animate opacity {
+                            duration: Motion.on ? 250ms : 150ms;
+                            easing: Motion.on ? ease-in-out : linear;
+                        }
+                    }
+
+                    header-status-other := SecondaryText {
+                        text: root.status-b;
+                        width: parent.width;
+                        height: parent.height;
+                        wrap: no-wrap;
+                        overflow: elide;
+                        font-size: Tokens.font-size-callout;
+                        opacity: root.status-b-front ? 1 : 0;
+                        animate opacity {
+                            duration: Motion.on ? 250ms : 150ms;
+                            easing: Motion.on ? ease-in-out : linear;
+                        }
+                    }
                 }
             }
 

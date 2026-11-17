@@ -12353,6 +12353,38 @@ mod tests {
         assert!(line.contains("wrap: no-wrap;"), "it stays on one line");
     }
 
+    /// Flipping the switch cross-fades the header's old state into the new
+    /// one in place, both ways, as the Mac's: 250 ms ease-in-out, or 150 ms
+    /// linear with Animation effects off.
+    #[test]
+    fn the_header_state_cross_fades_when_the_switch_flips() {
+        hold_clock();
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows headless");
+        draw_frames();
+        for (on, motion, half) in [(true, true, 125), (false, true, 125), (true, false, 75)] {
+            app.main.global::<Motion>().set_on(motion);
+            let before = app.main.get_status();
+            app.main.invoke_power_toggled(on);
+            assert_ne!(app.main.get_status(), before, "the state changes");
+            draw_frames();
+            advance_clock(Duration::from_millis(half));
+            draw_frames();
+            let (fade_in, fade_out) = (
+                app.main.get_status_fade_in(),
+                app.main.get_status_fade_out(),
+            );
+            assert!(
+                (0.3..0.7).contains(&fade_in) && (0.3..0.7).contains(&fade_out),
+                "half way through, on {on}, motion {motion}: {fade_in} in, {fade_out} out"
+            );
+            advance_clock(Duration::from_millis(300));
+            draw_frames();
+            assert_eq!(app.main.get_status_fade_in(), 1.0, "the new state shows");
+            assert_eq!(app.main.get_status_fade_out(), 0.0, "the old one is gone");
+        }
+    }
+
     /// The open Presets list's tinted box reaches 8 px past the left column
     /// on both sides, as the Mac's open row does, and shows whole: the
     /// column's scrolling view leaves those 8 px uncut.
