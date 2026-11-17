@@ -1424,6 +1424,30 @@ impl<D: Driver> Controller<D> {
         // another executable (a shared web view host) would move every app
         // that uses it.
         let own = table.get(root).map(|entry| entry.executable.clone());
+        // The move reaches every process of the executable, and one outside
+        // the captured tree would then play nowhere.
+        let tree = table.tree(root);
+        let elsewhere = own.as_ref().and_then(|own| {
+            audio
+                .iter()
+                .flat_map(|endpoint| &endpoint.active_pids)
+                .find(|&&pid| {
+                    !tree.contains(&pid)
+                        && table
+                            .get(pid)
+                            .is_some_and(|entry| entry.executable.eq_ignore_ascii_case(own))
+                })
+                .map(|&pid| (own.clone(), pid))
+        });
+        if let Some((exe, pid)) = elsewhere {
+            self.say_once("elsewhere", || {
+                format!(
+                    "app output: {exe} isn't moved, process {pid} runs it outside the captured app"
+                )
+            });
+            self.restore_apps("");
+            return;
+        }
         let (playing, shared): (Vec<Process>, Vec<Process>) =
             playing.into_iter().partition(|process| {
                 own.as_ref()
@@ -6893,6 +6917,32 @@ mod tests {
         backend.follow_new_sessions();
         assert_eq!(playing(&backend), [HEADPHONES]);
         assert_eq!(player_output(&apps), render_interface(switch_fakes::CABLE));
+    }
+
+    // covers: S471
+    #[test]
+    fn a_second_instance_of_the_app_outside_the_captured_tree_is_never_moved_uncaptured() {
+        const OTHER_PID: u32 = PLAYER_PID + 10;
+        let (mut backend, (apps, _)) = player_on_speakers();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.poll();
+        assert_eq!(player_output(&apps), render_interface(switch_fakes::CABLE));
+        backend.add_app(OTHER_PID, "player.exe");
+        backend.open_session(OTHER_PID, SPEAKERS);
+        backend.follow_new_sessions();
+        let captured = match backend.driver().capture_target() {
+            Some(CaptureTarget::Loopback(activation)) => activation.target_pid == OTHER_PID,
+            Some(CaptureTarget::Mix(trees)) => trees
+                .iter()
+                .any(|activation| activation.target_pid == OTHER_PID),
+            _ => false,
+        };
+        let moved = player_output(&apps) == render_interface(switch_fakes::CABLE);
+        assert!(captured || !moved, "the second instance plays nowhere");
     }
 
     /// The backend of [`backend`] moving the default and apps' outputs, with
