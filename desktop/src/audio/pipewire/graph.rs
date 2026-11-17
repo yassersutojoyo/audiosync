@@ -442,6 +442,7 @@ impl Graph {
                     virtual_device: node.virtual_device(),
                     volume: node.volume,
                     active_pids: pids.into_iter().collect(),
+                    silent_pids: Vec::new(),
                 })
             })
             .collect()

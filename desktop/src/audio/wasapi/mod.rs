@@ -10,7 +10,9 @@
 //! atomics cross threads. Calls from the UI thread (listing endpoints,
 //! sessions and processes) use COM in whatever apartment that thread has.
 
+mod app_output;
 mod com;
+mod default_output;
 mod devices;
 mod endpoint;
 mod loopback;
@@ -20,6 +22,7 @@ mod microphone;
 pub(crate) mod power;
 mod processes;
 mod routing;
+mod sessions;
 mod volume;
 
 use std::sync::Arc;
@@ -41,7 +44,11 @@ use super::process::ProcessTable;
 use super::routing::{EndpointAudio, EndpointVolume};
 use crate::debug_log::DebugLog;
 
+pub use app_output::WasapiAppOutputs;
+pub use default_output::WasapiDefaults;
 pub use media_sessions::read_media_sessions;
+#[cfg_attr(test, allow(unused_imports))]
+pub use sessions::on_new_session;
 
 /// The platform calls of the Windows backend.
 pub struct WasapiDriver {
@@ -53,6 +60,8 @@ pub struct WasapiDriver {
     formats: endpoint::FormatReads,
     own_pid: u32,
     power: power::PowerWatch,
+    /// New audio sessions, when the watcher could start.
+    sessions: Option<sessions::SessionWatcher>,
 }
 
 impl WasapiDriver {
@@ -64,6 +73,7 @@ impl WasapiDriver {
             formats: endpoint::FormatReads::default(),
             own_pid: std::process::id(),
             power: power::PowerWatch::start(),
+            sessions: sessions::SessionWatcher::start().ok(),
         })
     }
 }
@@ -82,6 +92,10 @@ impl Driver for WasapiDriver {
 
     fn session_pids(&mut self) -> Result<Vec<u32>, BackendError> {
         processes::audio_session_pids()
+    }
+
+    fn window_pids(&mut self) -> Vec<u32> {
+        processes::window_pids()
     }
 
     fn outputs(&mut self) -> Result<Listing, BackendError> {
@@ -114,6 +128,12 @@ impl Driver for WasapiDriver {
 
     fn endpoint_audio(&mut self) -> Result<Vec<EndpointAudio>, BackendError> {
         routing::endpoint_audio()
+    }
+
+    fn new_audio_sessions(&mut self) -> bool {
+        self.sessions
+            .as_ref()
+            .is_some_and(sessions::SessionWatcher::take_created)
     }
 
     fn watch_endpoint_volume(&mut self, id: &str) -> Result<(), BackendError> {
