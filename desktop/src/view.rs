@@ -21161,6 +21161,41 @@ mod tests {
         );
     }
 
+    /// An open delay panel keeps the delay shown but not the … button,
+    /// which shows only under the pointer or the focus, as on the Mac.
+    #[test]
+    fn an_open_delay_panel_leaves_the_options_button_hidden() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = main_window_over(MockBackend::new());
+        let window = app.main.window();
+        let strings = app.strings();
+        let name = name_of(&app, "local:desk");
+        let opacity = |label: slint::SharedString| {
+            ElementHandle::find_by_accessible_label(&app.main, &label)
+                .next()
+                .expect("the control")
+                .computed_opacity()
+        };
+        hold_clock();
+        app.toggle_sync("local:desk");
+        window.dispatch_event(WindowEvent::PointerExited);
+        app.main.set_focus_speaker_part(RowPart::None);
+        draw_frames();
+        advance_clock(Duration::from_millis(1000));
+        draw_frames();
+        assert!(app.ui.borrow().sync_open.contains("local:desk"));
+        assert_eq!(
+            opacity(strings.invoke_delay_of(name.as_str().into())),
+            1.0,
+            "the delay stays shown"
+        );
+        assert_eq!(
+            opacity(strings.invoke_speaker_options(name.as_str().into())),
+            0.0,
+            "no … without the pointer or the focus"
+        );
+    }
+
     /// A menu opened near the window's bottom or right edge stays whole
     /// inside it, a right-click's menu flipped above the pointer.
     // covers: S449
