@@ -252,7 +252,8 @@ impl SessionList for WindowsSessions {
     }
 
     fn card_artwork(&self, image: &[u8]) -> Result<Option<CardArtwork>, String> {
-        media::card_artwork(image).map_err(|error| error.to_string())
+        media::card_artwork(image, crate::now_playing_card::card_side())
+            .map_err(|error| error.to_string())
     }
 
     fn icon(&self, log: &DebugLog) -> Option<FittedArtwork> {

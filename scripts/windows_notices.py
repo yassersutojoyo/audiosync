@@ -927,10 +927,12 @@ class Notices:
         self.add("", "--- {} ---".format(label), "", text)
 
 
-def find_package(packages, name):
+def find_package(packages, name, required=True):
     for package in packages:
         if package["name"] == name:
             return package
+    if not required:
+        return None
     raise NoticeError("{} isn't in the dependency graph".format(name))
 
 
@@ -1027,6 +1029,32 @@ def write_crates(out, policy, crates, expressions, supplements):
                 out.text(label, text, owner)
 
 
+# Skia and the C++ libraries its Windows build compiles into skia.lib (the
+# args.gn of the skia-bindings build), with the license files copied from
+# Skia's source tree into desktop/res/skia-licenses/.
+SKIA_COMPONENTS = [
+    ("Skia, (c) Google LLC and the Skia authors", "BSD-3-Clause", "https://skia.org",
+     ["skia/LICENSE"]),
+    ("libjpeg-turbo, (c) the libjpeg-turbo Project and the Independent JPEG Group",
+     "IJG AND BSD-3-Clause AND Zlib", "https://libjpeg-turbo.org",
+     ["libjpeg-turbo/LICENSE.md", "libjpeg-turbo/README.ijg"]),
+    ("libpng, (c) the PNG Reference Library Authors", "libpng-2.0", "http://www.libpng.org/pub/png/libpng.html",
+     ["libpng/LICENSE"]),
+    ("zlib (Chromium's copy), (c) Jean-loup Gailly and Mark Adler", "Zlib", "https://zlib.net",
+     ["zlib/LICENSE"]),
+    ("Expat, (c) Thai Open Source Software Center Ltd and Clark Cooper", "MIT", "https://libexpat.github.io",
+     ["expat/COPYING"]),
+    ("Wuffs, (c) The Wuffs Authors", "Apache-2.0", "https://github.com/google/wuffs",
+     ["wuffs/LICENSE"]),
+    ("D3D12 Memory Allocator, (c) Advanced Micro Devices, Inc.", "MIT",
+     "https://github.com/GPUOpen-LibrariesAndSDKs/D3D12MemoryAllocator",
+     ["d3d12allocator/LICENSE.txt", "d3d12allocator/NOTICES.txt"]),
+    ("SPIRV-Cross, (c) The Khronos Group Inc. and Arm Limited", "Apache-2.0 (some files MIT or Khronos)",
+     "https://github.com/KhronosGroup/SPIRV-Cross",
+     ["spirv-cross/LICENSE", "spirv-cross/LicenseRef-KhronosFreeUse.txt", "spirv-cross/MIT.txt"]),
+]
+
+
 def build(target):
     policy = LicensePolicy()
     packages, graph = dependency_packages(target)
@@ -1071,8 +1099,12 @@ def build(target):
         "  2. The Rust standard library",
         "  3. Slint",
         "  4. Fonts and icons",
-        "  5. Rust crates ({})".format(len(crates)),
     )
+    skia = find_package(crates, "skia-bindings", required=False) if not linux else None
+    if skia:
+        out.add("  5. Skia and the libraries built into it")
+    crates_section = "{}. Rust crates ({})".format(6 if skia else 5, len(crates))
+    out.add("  " + crates_section)
 
     out.heading("1. AudioSync")
     app = find_package(local, ROOT_PACKAGE)
@@ -1133,7 +1165,15 @@ def build(target):
                 "icon font Windows 11 ships; the app uses the installed font and doesn't",
                 "include it.")
 
-    out.heading("5. Rust crates ({})".format(len(crates)))
+    if skia:
+        out.heading("5. Skia and the libraries built into it")
+        out.add("", "The renderer of the app's windows, from skia-bindings {} (listed with the".format(skia["version"]),
+                "Rust crates): Skia and the C++ libraries its build compiles in.")
+        for title, license_name, url, files in SKIA_COMPONENTS:
+            out.add("", "", title + ". " + license_name + ".", url)
+            for name in files:
+                out.text(name, read_text(os.path.join(WINDOWS, "res", "skia-licenses", *name.split("/"))), title.split(",")[0])
+    out.heading(crates_section)
     write_crates(out, policy, crates, expressions, supplements)
     out.add("")
     return out.lines, len(crates)
@@ -1161,7 +1201,7 @@ def main():
     newline = "\n" if args.target in LINUX_TARGETS else "\r\n"
     with open(output, "w", encoding="utf-8", newline=newline) as handle:
         handle.write("\n".join(lines))
-    print("Wrote {}: {} crates, the Rust standard library, Slint, fonts and icons".format(
+    print("Wrote {}: {} crates, the Rust standard library, Slint, Skia where built in, fonts and icons".format(
         output, count))
     return 0
 
