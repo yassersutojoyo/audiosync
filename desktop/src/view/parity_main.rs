@@ -389,6 +389,44 @@ fn a_leaving_row_or_zone_takes_no_pointer_or_keyboard_focus() {
     assert!(main.contains("if zone.leaving && part"));
 }
 
+/// A leaving row or zone hands the keyboard focus to its nearest neighbour
+/// that stays, never to one leaving too, so the focus doesn't bounce.
+// covers: S450
+#[test]
+fn a_leaving_row_or_zone_hands_the_focus_to_a_neighbour_that_stays() {
+    let main = include_str!("../../ui/main.slint");
+    for blind in ["root.speakers[index + 1].id", "root.zones[index + 1].id"] {
+        assert!(!main.contains(blind), "{blind}");
+    }
+    let rows = component(main, "SpeakerRows");
+    assert!(rows.contains("root.focus-id = speaker.hand-off;"));
+    assert_eq!(
+        main.matches("root.focus-zone-id = zone.hand-off;").count(),
+        2
+    );
+
+    let row = |id: &str| super::SpeakerItem {
+        id: id.into(),
+        ..super::SpeakerItem::default()
+    };
+    let hand_offs = |rows: &[super::SpeakerItem]| -> Vec<String> {
+        rows.iter().map(|row| row.hand_off.to_string()).collect()
+    };
+    let (rows, _) = super::eased_rows(
+        &[row("a"), row("b"), row("c"), row("d")],
+        vec![row("a"), row("d")],
+    );
+    assert_eq!(
+        hand_offs(&rows),
+        ["", "a", "d", ""],
+        "the nearest, the next one first"
+    );
+    let (rows, _) = super::eased_rows(&rows, vec![row("a")]);
+    assert_eq!(hand_offs(&rows), ["", "a", "a", "a"], "the one before");
+    let (rows, _) = super::eased_rows(&rows, Vec::new());
+    assert_eq!(hand_offs(&rows), ["", "", "", ""], "none stays");
+}
+
 /// While rows ease, an arriving row is marked fresh and a row that left stays
 /// where it was, marked leaving, and is reported once.
 // covers: S450
@@ -451,6 +489,44 @@ fn a_hidden_speakers_row_stays_leaving_for_the_macs_row_move_then_goes() {
     app.main
         .invoke_speaker_unhide_requested("local:desk".into());
     assert_eq!(marks(), Some((true, false)), "it comes back fresh");
+}
+
+/// A row hidden, shown and hidden again within the row move stays for the
+/// whole move of its last hiding: the first hiding's timer leaves it alone.
+// covers: S450
+#[test]
+fn a_row_hidden_again_within_the_row_move_stays_for_its_whole_move() {
+    use slint::{ComponentHandle, Model};
+    use std::time::Duration;
+    let app = app_over(MockBackend::new());
+    app.rows_ease.set(true);
+    app.main.global::<crate::Motion>().set_on(true);
+    app.main.show().expect("the main window shows headless");
+    app.refresh();
+    let marks = || {
+        app.models
+            .connected
+            .iter()
+            .find(|row| row.id == "local:desk")
+            .map(|row| (row.fresh, row.leaving))
+    };
+
+    app.main.invoke_speaker_hide_requested("local:desk".into());
+    std::thread::sleep(Duration::from_millis(50));
+    app.main
+        .invoke_speaker_unhide_requested("local:desk".into());
+    std::thread::sleep(Duration::from_millis(200));
+    app.main.invoke_speaker_hide_requested("local:desk".into());
+    std::thread::sleep(Duration::from_millis(150));
+    slint::platform::update_timers_and_animations();
+    assert_eq!(
+        marks(),
+        Some((false, true)),
+        "the first hiding's 350 ms are up, the second's are not"
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    slint::platform::update_timers_and_animations();
+    assert_eq!(marks(), None, "it goes when its last move ends");
 }
 
 /// Zones come and go as the speaker rows do: the Mac's row move animates on

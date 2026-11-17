@@ -1865,8 +1865,8 @@ export component LevelSlider inherits Rectangle {
         x: root.vertical ? (root.width - self.width) / 2 : root.span * root.ratio;
         y: root.vertical ? root.span * (1 - root.ratio) : (root.height - self.height) / 2;
         border-radius: self.width / 2;
-        // The Mac's small knob on dark is grey (#959595 on its window), darker while disabled.
-        background: root.idle ? (Tokens.dark ? #464543 : #ffffff) : root.small && Tokens.dark ? #959595 : root.small && touch.pressed ? #ebebeb : #ffffff;
+        // The Mac's small knob on dark is grey (#959595 on its window).
+        background: root.small && Tokens.dark ? #959595 : root.small && touch.pressed ? #ebebeb : #ffffff;
         // The Mac's small knob: on light a faint ring and a soft shadow keep it
         // off a white window at 100; on dark the shadow alone.
         border-width: root.small && Tokens.dark ? 0px : 1px;
@@ -1874,6 +1874,18 @@ export component LevelSlider inherits Rectangle {
         drop-shadow-blur: root.small && !Tokens.dark ? 3px : 1.5px;
         drop-shadow-offset-y: root.small && !Tokens.dark ? 1px : 0.5px;
         drop-shadow-color: root.small && !Tokens.dark ? #00000033 : #0000004d;
+
+        // Disabled on dark the Mac's knob darkens to #464543, over its row's 250 ms;
+        // on light it stays white.
+        off-knob := Rectangle {
+            border-radius: parent.border-radius;
+            background: #464543;
+            opacity: root.idle && Tokens.dark ? 1 : 0;
+            animate opacity {
+                duration: Motion.on ? 250ms : 150ms;
+                easing: Motion.on ? ease-in-out : linear;
+            }
+        }
     }
 
     touch := TouchArea {

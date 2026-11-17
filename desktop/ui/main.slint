@@ -592,7 +592,7 @@ component SpeakerRows inherits VerticalLayout {
                     // A leaving row hands the focus on to a neighbour.
                     if speaker.leaving && part != RowPart.none {
                         root.focus-part = part;
-                        root.focus-id = index + 1 < root.speakers.length ? root.speakers[index + 1].id : index > 0 ? root.speakers[index - 1].id : "";
+                        root.focus-id = speaker.hand-off;
                     } else {
                         root.focus-changed(speaker.id, part);
                     }
@@ -3728,7 +3728,7 @@ export component MainWindow inherits Window {
                                     // A leaving zone hands the focus on to a neighbour.
                                     if zone.leaving && part != RowPart.none {
                                         root.focus-zone-part = part;
-                                        root.focus-zone-id = index + 1 < root.zones.length ? root.zones[index + 1].id : index > 0 ? root.zones[index - 1].id : "";
+                                        root.focus-zone-id = zone.hand-off;
                                     } else {
                                         root.zone-focus-changed(zone.id, part);
                                     }
@@ -3811,7 +3811,7 @@ export component MainWindow inherits Window {
                                 focus-changed(id, part) => {
                                     if zone.leaving && part != RowPart.none {
                                         root.focus-zone-part = RowPart.options;
-                                        root.focus-zone-id = index + 1 < root.zones.length ? root.zones[index + 1].id : index > 0 ? root.zones[index - 1].id : "";
+                                        root.focus-zone-id = zone.hand-off;
                                     } else {
                                         root.speaker-focus-changed(id, part);
                                     }

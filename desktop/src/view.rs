@@ -5700,11 +5700,17 @@ fn newest_notices<T: Clone>(notices: &[T], limit: usize) -> Vec<T> {
 /// (`MainMotion.rowMove`, WindowRules.swift:82).
 const ROW_MOVE: Duration = Duration::from_millis(350);
 
+thread_local! {
+    /// How many times each row or zone has left a main-window list.
+    static ROW_LEAVES: RefCell<HashMap<SharedString, u64>> = RefCell::default();
+}
+
 /// A speaker row or zone that eases into and out of a main-window list.
 trait Eased: Clone + PartialEq + 'static {
     fn id(&self) -> &SharedString;
     fn leaving(&self) -> bool;
     fn mark(&mut self, fresh: bool, leaving: bool);
+    fn set_hand_off(&mut self, id: SharedString);
 }
 
 impl Eased for SpeakerItem {
@@ -5716,6 +5722,9 @@ impl Eased for SpeakerItem {
     }
     fn mark(&mut self, fresh: bool, leaving: bool) {
         (self.fresh, self.leaving) = (fresh, leaving);
+    }
+    fn set_hand_off(&mut self, id: SharedString) {
+        self.hand_off = id;
     }
 }
 
@@ -5729,12 +5738,16 @@ impl Eased for ZoneItem {
     fn mark(&mut self, fresh: bool, leaving: bool) {
         (self.fresh, self.leaving) = (fresh, leaving);
     }
+    fn set_hand_off(&mut self, id: SharedString) {
+        self.hand_off = id;
+    }
 }
 
 /// The rows a main-window list shows when it changes from `old` to `items`
 /// while rows ease, and the IDs of the rows that just left: a row not in
 /// `old` comes `fresh`, and one gone from `items` stays `leaving` after the
-/// row it followed until its room has shut.
+/// row it followed until its room has shut, handing the keyboard focus to
+/// its nearest neighbour that stays, the next one first.
 fn eased_rows<T: Eased>(old: &[T], items: Vec<T>) -> (Vec<T>, Vec<SharedString>) {
     let mut rest: Vec<T> = items
         .into_iter()
@@ -5759,6 +5772,19 @@ fn eased_rows<T: Eased>(old: &[T], items: Vec<T>) -> (Vec<T>, Vec<SharedString>)
         }
     }
     rows.extend(rest);
+    let staying: Vec<Option<SharedString>> = rows
+        .iter()
+        .map(|row| (!row.leaving()).then(|| row.id().clone()))
+        .collect();
+    for (at, row) in rows.iter_mut().enumerate() {
+        if row.leaving() {
+            let near = (1..staying.len())
+                .flat_map(|by| [at.checked_add(by), at.checked_sub(by)])
+                .flatten()
+                .find_map(|i| staying.get(i).cloned().flatten());
+            row.set_hand_off(near.unwrap_or_default());
+        }
+    }
     (rows, left)
 }
 
@@ -5775,11 +5801,29 @@ fn sync_rows<T: Eased>(model: &Rc<VecModel<T>>, items: Vec<T>, eased: bool) {
     if left.is_empty() {
         return;
     }
+    // A row that came back and left again is dropped only by its last leave's timer.
+    let left: Vec<(SharedString, u64)> = ROW_LEAVES.with(|leaves| {
+        let mut leaves = leaves.borrow_mut();
+        left.into_iter()
+            .map(|id| {
+                let leave = leaves.entry(id.clone()).or_default();
+                *leave += 1;
+                (id, *leave)
+            })
+            .collect()
+    });
     let model = Rc::clone(model);
     Timer::single_shot(ROW_MOVE, move || {
+        let last = |row: &T| {
+            ROW_LEAVES.with(|leaves| {
+                let leave = leaves.borrow().get(row.id()).copied();
+                left.iter()
+                    .any(|(id, at)| id == row.id() && Some(*at) == leave)
+            })
+        };
         let kept: Vec<T> = model
             .iter()
-            .filter(|row| !row.leaving() || !left.contains(row.id()))
+            .filter(|row| !row.leaving() || !last(row))
             .collect();
         sync_by_id(&model, kept);
     });
@@ -6204,6 +6248,7 @@ pub fn speaker_item(
         // Set by the caller while rows ease (`eased_rows`).
         fresh: false,
         leaving: false,
+        hand_off: SharedString::default(),
     }
 }
 
@@ -10175,7 +10220,7 @@ mod tests {
         assert_eq!(flash(), 0.0, "the flash is gone after a second");
     }
 
-    /// A row switched off dims its volume knob over 250 ms, as the Mac's
+    /// A row switched off darkens its volume knob over 250 ms, as the Mac's
     /// row does, instead of at once.
     #[test]
     fn a_row_switched_off_dims_its_slider_over_250_ms() {
@@ -10190,7 +10235,7 @@ mod tests {
         advance_clock(Duration::from_millis(500));
         draw_frames();
         let dimming = || {
-            ElementHandle::find_by_element_id(&app.main, "LevelSlider::thumb")
+            ElementHandle::find_by_element_id(&app.main, "LevelSlider::off-knob")
                 .map(|knob| knob.computed_opacity())
                 .filter(|opacity| (0.3..0.95).contains(opacity))
                 .count()

@@ -241,6 +241,9 @@ export struct SpeakerItem {
     // and one that left it and stays while its room shuts.
     fresh: bool,
     leaving: bool,
+    // While leaving, the nearest one that stays, which takes its keyboard
+    // focus; empty when none stays.
+    hand-off: string,
 }
 
 // A zone member that plays as part of a stereo pair or home theater: the
@@ -280,6 +283,9 @@ export struct ZoneItem {
     // and one that left it and stays while its room shuts.
     fresh: bool,
     leaving: bool,
+    // While leaving, the nearest one that stays, which takes its keyboard
+    // focus; empty when none stays.
+    hand-off: string,
 }
 
 // What a notice is about, for its short name (Strings.notice-title).
