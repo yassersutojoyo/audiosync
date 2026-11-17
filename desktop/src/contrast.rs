@@ -198,31 +198,49 @@ fn fluent_color(name: &str) -> [[f64; 4]; 2] {
     [parse(light), parse(dark)]
 }
 
-/// The focus ring is Windows' two-tone ring: its outer line stands out from
-/// what it's drawn on (3:1 for graphics) in both themes, and its inner line
-/// keeps it visible on a control filled in the outer line's color.
+/// The focus ring is the Mac's teal line (Brand.swift:25-26,
+/// HouseButtonStyle.swift:60, 2 px): it stands out from what it's drawn on
+/// (3:1 for graphics) in both themes, the main window and its hero included.
 // covers: S452
 #[test]
-fn the_two_tone_focus_ring_reaches_3_to_1() {
-    let [outer, inner] = [fluent_color("focus-outer"), fluent_color("focus-inner")];
+fn the_teal_focus_ring_reaches_3_to_1() {
+    let ring = include_str!("../ui/widgets.slint");
+    let ring = &ring[ring.find("export component FocusRing").expect("FocusRing")..];
+    let ring = &ring[..ring.find("\n}").expect("its end")];
+    assert!(ring.contains("border-width: root.drawn ? 2px : 0px;"));
+    assert!(ring.contains("border-color: Tokens.focus;"));
+    assert_eq!(
+        ring.matches("Rectangle {").count(),
+        1,
+        "one line, as the Mac's"
+    );
+    let window = fluent_color("main-window");
     for (index, appearance) in [Appearance::Light, Appearance::Dark]
         .into_iter()
         .enumerate()
     {
-        for background in ["background", "surface", "playingRow"] {
-            let under = srgb(background, appearance);
-            let [r, g, b, a] = outer[index];
-            let ring = [0, 1, 2].map(|i| [r, g, b][i] * a + under[i] * (1.0 - a));
-            let value = contrast(ring, under);
+        let focus = srgb("focus", appearance);
+        let [r, g, b, _] = window[index];
+        let page = [r, g, b];
+        let text = srgb("text", appearance);
+        let hero_alpha = fluent_fill_alpha("hero");
+        let hero = [0, 1, 2].map(|i| text[i] * hero_alpha + page[i] * (1.0 - hero_alpha));
+        let mut unders = vec![("mainWindow", page), ("mainWindow+hero", hero)];
+        for name in [
+            "background",
+            "surface",
+            "playingRow",
+            "notice",
+            "settingsWindow",
+            "settingsCard",
+        ] {
+            unders.push((name, srgb(name, appearance)));
+        }
+        for (name, under) in unders {
+            let value = contrast(focus, under);
             assert!(
                 value >= MIN_GRAPHIC_CONTRAST,
-                "outer ring on {background} ({appearance:?}): {value:.2}:1"
-            );
-            let [r, g, b, a] = inner[index];
-            let inside = [0, 1, 2].map(|i| [r, g, b][i] * a + ring[i] * (1.0 - a));
-            assert!(
-                contrast(inside, ring) >= MIN_GRAPHIC_CONTRAST,
-                "inner line against the outer ({appearance:?})"
+                "ring on {name} ({appearance:?}): {value:.2}:1"
             );
         }
     }
@@ -379,7 +397,9 @@ fn the_master_volume_draws_its_levels_waves_and_a_3_to_1_track() {
     assert!(master.contains("font-size: Tokens.font-size-body;"));
     assert!(master.contains("color: Tokens.text;"));
     let slider = component_body(&widgets, "LevelSlider");
-    assert!(slider.contains("background: root.idle ? Tokens.text.with-alpha(0.07) : root.track;"));
+    assert!(
+        slider.contains("property <brush> track-look: root.idle ? (Tokens.dark ? #ffffff0e : #00000008) : root.small ? (Tokens.dark ? #ffffff1b : #0000000e) : root.track;")
+    );
     assert!(slider.contains("border-width: root.small && Tokens.dark ? 0px : 1px;"));
 }
 
@@ -641,6 +661,27 @@ fn delay_steps_and_fields_draw_no_border_in_light() {
     );
 }
 
+/// A zone header's "2 of 3 on" is in the readable teal while a member is on,
+/// its waiting part and note grey, as the Mac's (MainWindow.swift:2042-2048);
+/// "tealText" keeps 4.5:1 through its pairs on the window, card and row.
+#[test]
+fn a_zones_on_count_is_teal_and_its_waiting_part_grey() {
+    let widgets = include_str!("../ui/widgets.slint");
+    assert!(
+        widgets.contains("count-text := ZoneCount {"),
+        "the zone header draws its count in two runs"
+    );
+    let count = component_body(widgets, "ZoneCount");
+    for needle in [
+        "color: root.on > 0 ? Tokens.teal-text : Tokens.secondary-text;",
+        "text: root.rest;",
+        "color: Tokens.secondary-text;",
+    ] {
+        assert!(count.contains(needle), "the zone count has {needle}");
+    }
+    assert!(CONTRAST_PAIRS.contains(&("tealText", "surface")));
+}
+
 /// The text of `component`'s definition in `source`, up to the next one.
 fn component_body<'a>(source: &'a str, component: &str) -> &'a str {
     let start = source
@@ -813,7 +854,16 @@ fn every_icon_has_a_drawing_off_windows() {
     assert!(icons > 25, "the check found the icons ({icons})");
 
     let mut drawings = 0;
+    // Shuffle and Repeat are drawn on Glyphs.bold's 20-unit box.
+    let mut grid = 16.0;
     for line in glyphs.lines().map(str::trim) {
+        if let Some(test) = line.strip_prefix("if glyph == root.") {
+            grid = if test.starts_with("shuffle") || test.starts_with("repeat-") {
+                20.0
+            } else {
+                16.0
+            };
+        }
         let Some(commands) = line
             .strip_prefix("return \"")
             .and_then(|rest| rest.strip_suffix("\";"))
@@ -829,14 +879,14 @@ fn every_icon_has_a_drawing_off_windows() {
             "a drawing starts with a move: `{commands}`"
         );
         for token in commands.split_whitespace() {
-            let number = token.trim_start_matches(|c| "MLHVAQZ".contains(c));
+            let number = token.trim_start_matches(|c| "MLHVACQZ".contains(c));
             assert!(
                 token.len() - number.len() <= 1
                     && (number.is_empty()
                         || number
                             .parse::<f32>()
-                            .is_ok_and(|n| (0.0..=16.0).contains(&n))),
-                "`{token}` is not a path command or a coordinate on the 16-unit grid"
+                            .is_ok_and(|n| (0.0..=grid).contains(&n))),
+                "`{token}` is not a path command or a coordinate on the {grid}-unit grid"
             );
         }
     }
@@ -967,9 +1017,20 @@ fn no_text_promises_airplay() {
         );
     }
     assert!(strings.contains("connected-none: @tr(\"No connected speakers\")"));
+    // Localization.swift virtualDevicesHidden and connectedEmpty: the switch
+    // lives in Settings, and the network note follows on its own line.
+    assert!(strings.contains(
+        "connected-none-virtual-hidden: @tr(\"Virtual devices are hidden. To list them, choose Settings… in the gear menu and turn on Show Virtual Devices.\");"
+    ));
+    assert!(
+        include_str!("../ui/main.slint").contains(
+            "root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden + \"\\n\" + self.none-found : self.none-found"
+        ),
+        "the network note follows the hidden virtual devices' note on its own line"
+    );
     assert!(
         include_str!("../ui/main.slint")
-            .contains("root.connected.length > 0 || root.connected-zoned.length > 0 ? \"\" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.airplay-searching ? (root.cast-list == CastList.none-found || root.cast-list == CastList.failed ? Strings.looking-for-airplay-speakers : Strings.looking-for-speakers) : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;"),
+            .contains("root.connected.length > 0 || root.connected-zoned.length > 0 ? \"\" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.airplay-searching ? (root.cast-list == CastList.none-found || root.cast-list == CastList.failed ? Strings.looking-for-airplay-speakers : Strings.looking-for-speakers) : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden + \"\\n\" + Strings.connected-none : Strings.connected-none;"),
         "the empty Connected Speakers list says it looks while AirPlay searches, then uses the plain note"
     );
     assert!(
@@ -1092,7 +1153,7 @@ fn accessible_names_start_with_the_visible_text() {
         let (text, label) = (tr_text(strings, text), tr_text(strings, label));
         assert!(label.starts_with(text), "`{label}` starts with `{text}`");
     }
-    assert_eq!(buttons, 6, "the check found the buttons");
+    assert_eq!(buttons, 4, "the check found the buttons");
 }
 
 /// Retry on the notice that AirPlay stopped: the button shows only on a
@@ -1959,11 +2020,16 @@ fn a_preset_rows_second_line_reaches_4_5_to_1_under_its_fills() {
         Some("color: Tokens.secondary-text;")
     );
     assert!(
-        main.contains("    background: Tokens.surface;\n    default-font-family: Fluent.font;")
+        main.contains("    background: Fluent.main-window;\n    default-font-family: Fluent.font;")
     );
-    for appearance in [Appearance::Light, Appearance::Dark] {
-        let window = "surface";
-        let under = srgb(window, appearance);
+    let page = fluent_color("main-window");
+    for (index, appearance) in [Appearance::Light, Appearance::Dark]
+        .into_iter()
+        .enumerate()
+    {
+        let window = "main-window";
+        let [r, g, b, _] = page[index];
+        let under = [r, g, b];
         let text = srgb("text", appearance);
         // Over the open list's own tint.
         let open = fluent_fill_alpha("open-row");
@@ -2027,6 +2093,61 @@ fn a_zone_header_fills_only_on_hover() {
     );
 }
 
+/// A zone header's volume is a bare slider: the Mac's zone Slider has no
+/// value text beside it (MainWindow.swift:1993-2000).
+#[test]
+fn a_zone_headers_volume_shows_no_number() {
+    let header = component_body(include_str!("../ui/widgets.slint"), "ZoneHeader");
+    let slider = header
+        .find("volume-slider := VolumeSlider {")
+        .expect("the header has its volume");
+    let end = slider + header[slider..].find("changed(value)").unwrap();
+    assert!(
+        header[slider..end].contains("shows-value: false;"),
+        "no number beside the zone's volume"
+    );
+}
+
+/// A zone header shows its volume only while one of its speakers is on, as
+/// the Mac's `if zone.on > 0` (MainWindow.swift:1992); hidden, it takes no room.
+#[test]
+fn a_zone_headers_volume_shows_only_while_a_speaker_is_on() {
+    let header = component_body(include_str!("../ui/widgets.slint"), "ZoneHeader");
+    let slider = header
+        .find("volume-slider := VolumeSlider {")
+        .expect("the header has its volume");
+    let wrap = header[..slider]
+        .rfind("Rectangle {")
+        .expect("the volume sits in its own box");
+    let gate = &header[wrap..slider];
+    assert!(gate.contains("visible: root.item.on > 0;"), "{gate}");
+    assert!(
+        gate.contains("min-width: self.visible ? 100px : 0px;"),
+        "{gate}"
+    );
+    assert!(
+        gate.contains("max-width: self.visible ? 140px : 0px;"),
+        "{gate}"
+    );
+}
+
+/// A hidden zone volume leaves no gap either: the Mac's HStack drops the
+/// slider's spacing with it (MainWindow.swift:1992), so the name keeps the room.
+#[test]
+fn a_hidden_zone_volume_leaves_no_gap() {
+    let header = component_body(include_str!("../ui/widgets.slint"), "ZoneHeader");
+    let slider = header
+        .find("volume-slider := VolumeSlider {")
+        .expect("the header has its volume");
+    let group = header[..slider]
+        .rfind("HorizontalLayout {")
+        .expect("the volume and options share a row");
+    assert!(
+        header[group..slider].contains("spacing: root.item.on > 0 ? 8px : 0px;"),
+        "the gap before the options goes with the volume"
+    );
+}
+
 /// A zone header's hover fill stops 4 px inside each edge, as the Mac's
 /// highlight inset does.
 #[test]
@@ -2040,6 +2161,129 @@ fn a_zone_headers_hover_fill_stops_4_px_inside_each_edge() {
         .expect("a hover fill of its own");
     assert!(fill.contains("x: 4px;"), "{fill}");
     assert!(fill.contains("width: parent.width - 8px;"), "{fill}");
+}
+
+/// Speaker list rows as the Mac draws them (Sources/AudioSync on this
+/// branch): Radius.row is 9 (BrandTokens.swift:161); a speaker row's fill
+/// is its whole box (MainWindow.swift:2494), not the zone header's 4 px
+/// inset (:2021); a compact in-zone row has no fill (:2177-2180); the rule
+/// between rows runs from nameColumn to the edge (:619, :624).
+#[test]
+fn speaker_list_rows_fill_and_rule_as_on_the_mac() {
+    let widgets = include_str!("../ui/widgets.slint").replace("\r\n", "\n");
+    assert!(widgets.contains("out property <length> radius-row: 9px;"));
+    let row = component_body(&widgets, "SpeakerRow");
+    assert!(!row.contains("hover-fill :="), "the whole row fills");
+    assert!(row.contains(
+        "\n    border-radius: Fluent.radius-row;\n    background: !root.grouped && root.plated"
+    ));
+    let member = component_body(&widgets, "ZoneMemberRow");
+    assert!(
+        !member.contains("background: hover.has-hover"),
+        "no hover fill"
+    );
+    let main = include_str!("../ui/main.slint").replace("\r\n", "\n");
+    assert!(
+        component_body(&main, "SpeakerRows")
+            .contains("padding-left: Fluent.name-inset;\n                Divider { }")
+    );
+}
+
+/// A hovered speaker row takes primary at 5 % in both themes, as the Mac's
+/// (MainWindow.swift:2495), not more on dark.
+#[test]
+fn a_speaker_rows_hover_fill_is_the_same_in_both_themes() {
+    let widgets = include_str!("../ui/widgets.slint").replace("\r\n", "\n");
+    assert!(!widgets.contains("row-hover-dark"));
+    assert!(
+        component_body(&widgets, "SpeakerRow")
+            .contains("background: !root.grouped && root.plated ? Fluent.row-hover : transparent;")
+    );
+}
+
+/// The badge stays beside the name and the slider while a hint line grows
+/// the row: its centre sits in the middle of the 5 px gap between them, as
+/// the Mac's badgePin (MainWindow.swift:2331, :2336, :2439 on the rows-tidy
+/// commit), instead of the middle of the whole row, on a whole pixel.
+#[test]
+fn a_speaker_rows_badge_stays_at_the_name_line() {
+    let widgets = include_str!("../ui/widgets.slint").replace("\r\n", "\n");
+    let row = component_body(&widgets, "SpeakerRow");
+    assert!(row.contains("name-line := HorizontalLayout {"));
+    assert!(row.contains(
+        "y: floor((name-line.y + name-line.height + 5px / 2 - self.height / 2) / 1px) * 1px;"
+    ));
+}
+
+/// Both sliders of the reference's row start and end together: the Windows
+/// volume slider moves left by the style's inset as the speaker slider does
+/// (the Mac indents the panel to the slider, MainWindow.swift:2479), and the
+/// speaker's value takes the panel's 34 px column (:2435, :2842).
+#[test]
+fn the_windows_volume_slider_lines_up_with_the_speaker_slider() {
+    let widgets = include_str!("../ui/widgets.slint").replace("\r\n", "\n");
+    let row = component_body(&widgets, "SpeakerRow");
+    assert_eq!(row.matches("x: -Fluent.slider-inset;").count(), 2);
+    assert!(row.contains("value-width: 34px;"));
+    assert!(component_body(&widgets, "VolumeSlider").contains("width: root.value-width;"));
+}
+
+/// Under the network note, the line above Add by Address keeps to the note's
+/// 10 px text inset, with 10 px under it and 6 px under the button, as the
+/// Mac's (MainWindow.swift:655, :664-665 on the rows-tidy commit).
+#[test]
+fn the_line_above_add_by_address_keeps_to_the_note() {
+    let main = include_str!("../ui/main.slint").replace("\r\n", "\n");
+    let section = component_body(&main, "SpeakerSection");
+    assert!(section.contains("padding-left: root.note != \"\" ? 10px : 0px;"));
+    assert!(section.contains("padding-right: root.note != \"\" ? 10px : 0px;"));
+    assert!(section.contains("padding-top: 10px;\n                padding-bottom: 6px;"));
+}
+
+/// An off speaker's slider is drawn dimmed as the Mac's, measured on its
+/// window at 2x on a plain and a hovered row: no fill, a see-through track (white at 5 % on
+/// dark, black at 3 % on light) and knob (white at 13 % and 56 %), which
+/// the track stops at. It still takes no drag, as the Mac's .disabled
+/// slider (MainWindow.swift:2424).
+#[test]
+fn an_off_speakers_slider_is_dimmed_as_the_macs() {
+    let widgets = include_str!("../ui/widgets.slint").replace(
+        "
+", "
+",
+    );
+    let slider = component_body(&widgets, "LevelSlider");
+    for look in [
+        "root.idle ? (Tokens.dark ? #ffffff0e : #00000008)",
+        "background: root.idle ? transparent : root.small ? (Tokens.dark ? #ffffff42 : #000000f5) : Tokens.text;",
+        "(Tokens.dark ? #ffffff22 : #ffffff90).mix(",
+        "width: root.vertical ? root.thickness : max(0px, piece == 0 ? root.span * root.ratio - root.knob / 2 : root.span * (1 - root.ratio) - root.knob / 2);",
+    ] {
+        assert!(slider.contains(look), "{look}");
+    }
+    assert!(!slider.contains("opacity: root.idle && Tokens.dark ? 0.25"));
+    assert!(slider.contains("enabled: root.enabled;"));
+}
+
+/// Calibrate All's left-out list as the Mac's (CalibrateAllViews.swift:422-451):
+/// a small "Left out" heading, then each output's name in body text with
+/// its button on the name's line, and the reason under them.
+#[test]
+fn the_left_out_list_reads_as_the_macs() {
+    let main = include_str!("../ui/main.slint").replace("\r\n", "\n");
+    let card = component_body(&main, "CalibrationCard");
+    let list = &card[card
+        .find("if root.left-out.length > 0")
+        .expect("the left-out list")..];
+    assert!(list.contains("text: Strings.calibrate-all-left-out-title;"));
+    let name = list.find("text: item.name;").expect("the name");
+    let button = list.find("Button {").expect("the button");
+    let reason = list.find("text: item.reason;").expect("the reason");
+    assert!(
+        name < button && button < reason,
+        "name, button, then reason"
+    );
+    assert!(!list[name..button].contains("weight-semibold"));
 }
 
 /// A zone header works like a speaker row's box: only its badge switches the
@@ -2312,4 +2556,61 @@ fn device_icons_sit_on_whole_pixels() {
         "{badge}"
     );
     assert!(!badge.contains("Glyph {"), "{badge}");
+}
+
+/// Shuffle and Repeat are one drawing on every system: the Mac's ModeGlyph
+/// holds the same paths, and both draw them on a 20-unit box at 21 px with
+/// 2-unit strokes (2.1 px).
+#[test]
+fn shuffle_and_repeat_match_the_mac() {
+    let widgets = include_str!("../ui/widgets.slint");
+    let swift = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../Sources/AudioSync/MainWindow.swift"
+    ))
+    .expect("the Mac's main window");
+    let mac = &swift[swift.find("struct ModeGlyph: View {").expect("ModeGlyph")..];
+    for name in [
+        "shuffleLines",
+        "shuffleHeads",
+        "repeatLines",
+        "repeatHeads",
+        "repeatOneDigit",
+    ] {
+        let line = &mac[mac.find(&format!("static let {name} = \"")).expect(name)..];
+        let path = line.split('"').nth(1).expect(name);
+        assert!(
+            widgets.contains(&format!("return \"{path}\";")),
+            "{name} differs between widgets.slint and MainWindow.swift"
+        );
+    }
+    assert!(mac.contains("static let side: CGFloat = 21"));
+    assert!(mac.contains("lineWidth: 2 * unit"));
+    // The on dot hangs from the glyph's bottom 7 px down (MainWindow.swift:507-508),
+    // so its 4 px sit 3 px clear under the 21 px glyph.
+    assert!(swift.contains(
+        ".overlay(alignment: .bottom) {\n                    Circle().frame(width: 4, height: 4).offset(y: 7)"
+    ));
+    let button = component_body(widgets, "IconButton");
+    assert!(
+        button.contains("y: (root.height + root.glyph-size) / 2 + 3px;"),
+        "{button}"
+    );
+    let glyph = component_body(widgets, "Glyph");
+    assert!(glyph.contains("viewbox-width: Glyphs.bold(root.glyph) ? 20 : 16;"));
+    assert!(glyph.contains("Glyphs.bold(root.glyph) ? root.font-size / 10"));
+    let main = include_str!("../ui/main.slint");
+    for glyph in [
+        "glyph: Glyphs.shuffle;",
+        "Glyphs.repeat-one : Glyphs.repeat-all;",
+    ] {
+        let at = main.find(glyph).expect(glyph);
+        assert!(
+            main[at..]
+                .lines()
+                .nth(1)
+                .unwrap()
+                .contains("glyph-size: 21px;")
+        );
+    }
 }

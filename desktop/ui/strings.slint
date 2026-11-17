@@ -46,7 +46,7 @@ export global Strings {
     // Above the speaker lists while streaming with every speaker off.
     out property <string> no-speaker-on: @tr("No speaker is on. The first one you turn on starts playing.");
     // Connected Speakers when its only outputs are virtual ones, hidden.
-    out property <string> connected-none-virtual-hidden: @tr("No connected speakers. Virtual devices are hidden; to list them, choose View > Show Virtual Devices.");
+    out property <string> connected-none-virtual-hidden: @tr("Virtual devices are hidden. To list them, choose Settings… in the gear menu and turn on Show Virtual Devices.");
     // Under Connected Speakers once AirPlay discovery has run for 20 seconds
     // without finding a speaker (a firewall or a Public network blocks it).
     out property <string> airplay-none-found: root.public-network ? @tr("No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it (or set the network to Private).") : Platform.os == OperatingSystemType.linux ? @tr("No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers, and that no firewall on this PC blocks AudioSync.") : @tr("No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it.");
@@ -89,6 +89,8 @@ export global Strings {
     out property <string> notice-retry-label: @tr("Retry, AirPlay");
     out property <string> notice-open-privacy: @tr("Open Privacy Settings");
     out property <string> notice-open-privacy-label: @tr("Open Privacy Settings, Microphone");
+    // A calibration the microphone was blocked for, as on the Mac.
+    out property <string> open-microphone-settings: @tr("Open Microphone Settings");
     // Under a delay field while it holds typing not yet applied; also the
     // field's Narrator description then.
     out property <string> delay-draft-hint: @tr("Press Enter to apply");
@@ -259,6 +261,9 @@ export global Strings {
     out property <string> no-presets-hint: @tr("No presets yet. Turn on the speakers you want, set the volumes and the curve, then save them as a preset.");
     // The Presets row, here and in the flyout, while no preset is current.
     out property <string> choose-preset: @tr("Choose a Preset");
+    // What Invoke on the Presets row does, as the Mac's hint.
+    out property <string> show-preset-list: @tr("Show presets");
+    out property <string> hide-preset-list: @tr("Hide presets");
     // Hidden, busy and offline members in the preset notice.
     out property <string> preset-hidden: @tr("Hidden");
     out property <string> preset-busy: @tr("In use by another app");
@@ -374,6 +379,7 @@ export global Strings {
     // The gear's menu in the main window's header, as the Mac's: its
     // sections Speakers and Windows, then About and Exit (Windows' name for Quit).
     out property <string> more-options: @tr("Options");
+    out property <string> more-options-hint: @tr("Opens a menu of options");
     out property <string> menu-group-windows: @tr("Windows");
     out property <string> menu-exit: @tr("Exit");
     out property <string> menu-speakers: @tr("Speakers");
@@ -819,6 +825,11 @@ export global Strings {
     // by itself while the target is listed, on or off.
     public pure function notice-airplay-plays-in-group(speaker: string, target: string) -> string {
         return @tr("{0} plays as part of {1}, so it stays off by itself.", speaker, target);
+    }
+
+    // The Google Cast sender stopped working with this speaker on.
+    public pure function notice-cast-sender-stopped(speaker: string) -> string {
+        return @tr("Google Cast stopped working in AudioSync, so {} is off. To use Google Cast speakers again, exit AudioSync and open it again.", speaker);
     }
 
     // A member of a stereo pair or home theater group asks for a password,
@@ -1286,6 +1297,9 @@ export global Strings {
         if kind == NoticeKind.cast-cant-play {
             return @tr("{} can't play", name);
         }
+        if kind == NoticeKind.cast-sender-stopped {
+            return @tr("Google Cast stopped");
+        }
         if kind == NoticeKind.airplay-ahead-of-cast {
             return @tr("AirPlay ahead of {}", name);
         }
@@ -1646,6 +1660,20 @@ export global Strings {
         return @tr("{} delay", name);
     }
 
+    // A delay value's Narrator label, which says whether its controls are
+    // open: `label` is delay-of or the AirPlay delay's title.
+    public pure function show-delay-controls(label: string) -> string {
+        return @tr("Show controls for {}", label);
+    }
+
+    public pure function hide-delay-controls(label: string) -> string {
+        return @tr("Hide controls for {}", label);
+    }
+
+    public pure function delay-field-label(label: string) -> string {
+        return @tr("{} in milliseconds", label);
+    }
+
     // Narrator, as a step or Enter applies a delay: `label` is delay-of or
     // the AirPlay delay's title, `value` its new value.
     public pure function delay-set(label: string, value: string) -> string {
@@ -1831,7 +1859,7 @@ export global Strings {
     out property <string> calibration-delay-changed: @tr("This speaker's delay changed after it was measured. Calibrate All again.");
     out property <string> calibration-microphone-changed: @tr("The microphone changed during the calibration. Keep one microphone as the default input, and try again.");
     out property <string> calibration-microphone-skipped: @tr("The microphone dropped audio during the measurement, so its timing can't be trusted. Try again.");
-    out property <string> calibration-hands-free: Platform.os == OperatingSystemType.linux ? @tr("The default microphone is a Bluetooth headset's hands-free input, and recording from it would switch the headset to call mode. Choose another input in Sound settings, and try again.") : @tr("The default microphone is a Bluetooth headset's hands-free input, and recording from it would switch the headset to call mode. Choose another input in Settings > System > Sound, and try again.");
+    out property <string> calibration-hands-free: Platform.os == OperatingSystemType.linux ? @tr("The default input is a Bluetooth headset's hands-free microphone, and recording from it would switch the headset to call mode. Choose another input in Sound settings, and try again.") : @tr("The default input is a Bluetooth headset's hands-free microphone, and recording from it would switch the headset to call mode. Choose another input in Settings > System > Sound, and try again.");
     out property <string> calibration-microphone-in-use: Platform.os == OperatingSystemType.linux ? @tr("Another app has the microphone to itself. Close that app, and try again.") : @tr("Another app has the microphone to itself. Close that app, or under Settings > System > Sound > More sound settings > Recording, open the microphone's Properties and turn off “Allow applications to take exclusive control of this device” on the Advanced tab, and try again.");
     out property <string> calibration-unfinished: @tr("AudioSync couldn't finish working out the delay. Try again.");
     out property <string> calibration-too-short: @tr("The recording was too short. Try again.");
@@ -1916,7 +1944,6 @@ export global Strings {
     // Calibrate All Speakers (spec S235 to S240), a card in the main window:
     // every speaker that is on, measured against the reference, then a list
     // of results to apply.
-    out property <string> calibrate-all-title: @tr("Calibration");
     out property <string> calibrate-all: @tr("Calibrate All Speakers");
     out property <string> calibrate-before-start: @tr("Before you start");
     out property <string> calibrate-all-results: @tr("Results");
@@ -1933,10 +1960,21 @@ export global Strings {
     out property <string> calibrate-all-close-label: @tr("Close the calibration results");
     out property <string> calibrate-all-done-label: @tr("Done with the calibration results");
     out property <string> calibrate-all-again: @tr("Measure Again");
-    out property <string> calibrate-all-reference: @tr("The reference. The other speakers are measured against it.");
+    out property <string> calibrate-all-reference: @tr("The other speakers are measured against it.");
+    // A result card's kind caption, and the reference's chip.
+    out property <string> calibrate-all-kind-reference: @tr("Reference");
+    out property <string> calibrate-all-kind-local: @tr("Local speaker");
+    out property <string> calibrate-all-kind-cast: @tr("Google Cast");
+    out property <string> calibrate-all-kind-airplay: @tr("AirPlay");
+    out property <string> calibrate-all-measured-clearly: @tr("Measured clearly");
+    out property <string> calibrate-all-not-clear: @tr("Not clear");
+    // Narrator's name for a card's stored delay: "Current, +12 ms".
+    out property <string> calibrate-all-current: @tr("Current");
+    out property <string> calibrate-all-clamped: @tr("The end of the range, so this speaker stays a little out of sync.");
+    out property <string> calibrate-all-uncertain: @tr("The two sweeps differ too much, so the delay stays. Click Measure Again.");
     out property <string> calibrate-all-not-measured: @tr("Not measured.");
-    // A delay never stored: "Was none."
-    out property <string> calibrate-all-none: @tr("none");
+    // A delay never stored: "was None".
+    out property <string> calibrate-all-none: @tr("None");
     out property <string> calibrate-all-busy: @tr("Another calibration is still running.");
     out property <string> calibrate-all-nothing-certain: @tr("No speaker was measured clearly, so there is nothing to apply.");
     out property <string> calibrate-all-estimating: @tr("Working out the delays…");
@@ -1951,9 +1989,9 @@ export global Strings {
 
     public pure function calibrate-all-hint(reference: string) -> string {
         if reference == "" {
-            return @tr("Put the microphone where you listen. AudioSync fades the music out, plays a short sweep on the PC's own speakers and then on every other speaker that is on, one at a time, twice each, and fades the music back in. Headphones and virtual outputs are left out. Nothing changes until you choose Apply.");
+            return @tr("Put the microphone where you listen. AudioSync fades the music out, plays a short sweep on the PC's own speakers and then on every other speaker that is on, one at a time, twice each, and fades the music back in. Headphones and virtual outputs are left out. Nothing changes until you click Apply.");
         }
-        return @tr("Put the microphone where you listen. AudioSync fades the music out, plays a short sweep on {} and then on every other speaker that is on, one at a time, twice each, and fades the music back in. Headphones and virtual outputs are left out. Nothing changes until you choose Apply.", reference);
+        return @tr("Put the microphone where you listen. AudioSync fades the music out, plays a short sweep on {} and then on every other speaker that is on, one at a time, twice each, and fades the music back in. Headphones and virtual outputs are left out. Nothing changes until you click Apply.", reference);
     }
 
     // Measure Again was refused: `needs` from calibration-needs, with the row's speaker by its name.
@@ -2005,16 +2043,19 @@ export global Strings {
         return @tr("{} {}", ms, root.milliseconds-unit);
     }
 
-    public pure function calibrate-all-certain(old: string, new: string, uncertainty: int) -> string {
-        return @tr("Was {}. New: {} ± {} ms.", old, new, uncertainty);
+    // A measured delay with its uncertainty: "+50 ms ± 3 ms".
+    public pure function calibrate-all-measured(value: string, uncertainty: int) -> string {
+        return @tr("{} ± {} ms", value, uncertainty);
     }
 
-    public pure function calibrate-all-clamped(old: string, new: string, uncertainty: int) -> string {
-        return @tr("Was {}. New: {} ± {} ms, the end of the range, so this speaker stays a little out of sync.", old, new, uncertainty);
+    // Beside a card's new delay: "± 2 ms · was +12 ms".
+    public pure function calibrate-all-was(uncertainty: int, current: string) -> string {
+        return @tr("± {} ms · was {}", uncertainty, current);
     }
 
-    public pure function calibrate-all-uncertain(old: string, new: string, uncertainty: int) -> string {
-        return @tr("Was {}. Measured {} ± {} ms. The two sweeps differ too much, so the delay stays. Select Measure Again.", old, new, uncertainty);
+    // A card's note when nothing new was measured: "Not measured. · was +12 ms".
+    public pure function calibrate-all-note-was(note: string, current: string) -> string {
+        return @tr("{} · was {}", note, current);
     }
 
     public pure function calibrate-all-refused(reason: string) -> string {
@@ -2047,9 +2088,9 @@ export global Strings {
         return @tr("{} No delay was changed.", reason);
     }
 
-    // A Measure Again that ended early: why, then that its row stays.
-    public pure function calibrate-all-again-stopped(reason: string) -> string {
-        return @tr("{} That row stays as it was.", reason);
+    // A Measure Again that ended early: why, then that the named speaker's row stays.
+    public pure function calibrate-all-again-stopped(reason: string, name: string) -> string {
+        return @tr("{} The row for {} wasn't changed.", reason, name);
     }
 
     public pure function calibrate-all-again-label(name: string) -> string {
@@ -2080,6 +2121,26 @@ export global Strings {
             return @tr("{} of {} on, {} waiting", on, total, waiting);
         }
         return @tr("{} of {} on", on, total);
+    }
+
+    // The zone count's first run, "2 of 3 on", which the header shows in teal;
+    // empty when none of the zone's members is here.
+    public pure function zone-count-on(on: int, total: int, present: int) -> string {
+        if present == 0 || total == 0 {
+            return "";
+        }
+        return @tr("{} of {} on", on, total);
+    }
+
+    // The rest of the zone count after zone-count-on, in grey.
+    public pure function zone-count-rest(on: int, total: int, waiting: int, present: int, in-pair: int, note: string) -> string {
+        if total == 0 {
+            return root.zone-empty;
+        }
+        if present == 0 {
+            return root.speaker-caption(root.zone-count(on, total, waiting, present, in-pair), note);
+        }
+        return (waiting > 0 ? @tr(", {} waiting", waiting) : "") + (note == "" ? "" : @tr(" · {}", note));
     }
 
     // What Narrator reads for a zone header: its name, then its count.

@@ -23,7 +23,7 @@ use crate::view::App;
 pub fn start(log: &DebugLog) -> Result<Started, StartError> {
     log.log(|| "audio: example speakers from the mock backend; nothing plays".to_owned());
     Ok(Started {
-        backend: Box::new(crate::ui_model::MockBackend::new()),
+        backend: crate::view::Engine::here(Box::new(crate::ui_model::MockBackend::new())),
         media: Media,
     })
 }
@@ -40,7 +40,7 @@ pub fn start(_log: &DebugLog) -> Result<Started, StartError> {
 #[cfg(all(feature = "mock-backend", not(target_os = "linux")))]
 pub fn start_with(_log: &DebugLog, backend: Box<dyn crate::ui_model::Backend>) -> Started {
     Started {
-        backend,
+        backend: crate::view::Engine::here(backend),
         media: Media,
     }
 }
@@ -112,6 +112,15 @@ pub fn computer_name() -> Option<String> {
             .as_deref(),
         std::env::var("HOSTNAME").ok(),
     )
+}
+
+/// The time now in UTC with date and seconds, for the debug log.
+#[cfg(not(target_os = "linux"))]
+pub fn log_time() -> String {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| i64::try_from(since.as_secs()).unwrap_or(0));
+    crate::platform::log_clock_at(seconds, 0)
 }
 
 /// The time now in UTC, hours and minutes: std reads no time zone.

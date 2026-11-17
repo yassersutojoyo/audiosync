@@ -8,14 +8,15 @@
 // SwiftUI's ImageRenderer can't draw those. Nothing appears on screen, and the
 // app's settings, engine and devices are never touched.
 //
-// Usage: render <output-dir> <Poppins-Medium.ttf> [--review]
+// Usage: render <output-dir> <Poppins-Medium.ttf> [--review | --layar]
+// --layar writes only the LAYAR states, each as a PNG and a JSON element list.
 
 import AppKit
 import SwiftUI
 
 let arguments = CommandLine.arguments
 guard arguments.count >= 3 else {
-    FileHandle.standardError.write(Data("usage: render <output-dir> <Poppins-Medium.ttf> [--review]\n".utf8))
+    FileHandle.standardError.write(Data("usage: render <output-dir> <Poppins-Medium.ttf> [--review | --layar]\n".utf8))
     exit(2)
 }
 let outputDirectory = URL(fileURLWithPath: arguments[1], isDirectory: true)
@@ -293,10 +294,189 @@ func panelShot(_ model: AppModel, look: Look) -> NSBitmapImageRep {
     return framed(capture(host), cornerRadius: BrandTokens.Radius.panel, look: look, fill: look.panelFill)
 }
 
+// MARK: - LAYAR states
+
+/// The commonest pixel in `rect` (points from the top left) as the background,
+/// and the commonest one whose channels differ from it by more than 96 in sum
+/// as the foreground, one sample per point: the desktop's layar_shots samples
+/// its photos the same way (`sampled_colours`).
+func sampledColours(_ rep: NSBitmapImageRep, _ rect: CGRect) -> (String?, String?) {
+    guard let data = rep.bitmapData else { return (nil, nil) }
+    let perPoint = CGFloat(rep.pixelsWide) / rep.size.width
+    var counts: [UInt32: Int] = [:]
+    for y in stride(from: max(0, Int(rect.minY)), to: min(Int(rep.size.height), Int(rect.maxY)), by: 1) {
+        for x in stride(from: max(0, Int(rect.minX)), to: min(Int(rep.size.width), Int(rect.maxX)), by: 1) {
+            let at = Int((CGFloat(y) + 0.5) * perPoint) * rep.bytesPerRow
+                + Int((CGFloat(x) + 0.5) * perPoint) * (rep.bitsPerPixel / 8)
+            counts[UInt32(data[at]) << 16 | UInt32(data[at + 1]) << 8 | UInt32(data[at + 2]), default: 0] += 1
+        }
+    }
+    func commonest(_ keep: (UInt32) -> Bool) -> UInt32? {
+        counts.filter { keep($0.key) }.max { ($0.value, $0.key) < ($1.value, $1.key) }?.key
+    }
+    guard let bg = commonest({ _ in true }) else { return (nil, nil) }
+    func channels(_ rgb: UInt32) -> [Int] { [Int(rgb >> 16 & 255), Int(rgb >> 8 & 255), Int(rgb & 255)] }
+    let far = { (rgb: UInt32) in zip(channels(rgb), channels(bg)).map { abs($0 - $1) }.reduce(0, +) > 96 }
+    let hex = { (rgb: UInt32) in String(format: "#%06x", rgb) }
+    return (commonest(far).map(hex), hex(bg))
+}
+
+/// Every accessibility element under `view` with a label, title or text value,
+/// as scripts/screen_compare.py reads it. The accessibility tree carries no
+/// font, so `font` is null.
+func layarElements(in view: NSView, rep: NSBitmapImageRep) -> [[String: Any]] {
+    var found: [[String: Any]] = []
+    let page = CGRect(origin: .zero, size: view.bounds.size)
+    func attribute(_ node: NSObject, _ name: String) -> Any? {
+        node.accessibilityAttributeValue(NSAccessibility.Attribute(rawValue: name))
+    }
+    func walk(_ node: NSObject, depth: Int) {
+        guard depth < 64 else { return }
+        let text = ["AXDescription", "AXTitle", "AXValue"].lazy
+            .compactMap { attribute(node, $0) as? String }
+            .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        if let text, let element = node as? NSAccessibilityElementProtocol, let window = view.window {
+            var rect = view.convert(window.convertFromScreen(element.accessibilityFrame()), from: nil)
+            if !view.isFlipped { rect.origin.y = view.bounds.height - rect.maxY }
+            if rect.width > 0, rect.height > 0, rect.intersects(page) {
+                let (fg, bg) = sampledColours(rep, rect)
+                found.append(["key": text,
+                              "frame": [rect.minX, rect.minY, rect.width, rect.height].map { Double($0) },
+                              "font": NSNull(), "fg": (fg as Any?) ?? NSNull(), "bg": (bg as Any?) ?? NSNull()])
+            }
+        }
+        for case let child as NSObject in (attribute(node, "AXChildren") as? [Any]) ?? [] {
+            walk(child, depth: depth + 1)
+        }
+    }
+    walk(view, depth: 0)
+    return found
+}
+
+/// The main window's content as MainWindowController sets it up
+/// (MainWindow.swift:22-38), at its default 696 x 600 points.
+func layarMain(_ model: AppModel, look: Look) -> (NSWindow, NSView) {
+    let host = NSHostingController(rootView: MainView(model: model))
+    host.sizingOptions = [.minSize]
+    let window = ShotWindow(contentRect: NSRect(x: 0, y: 0, width: 696, height: 600),
+                            styleMask: [.titled, .resizable, .closable, .miniaturizable],
+                            backing: .buffered, defer: false)
+    window.appearance = look.appearance
+    window.backgroundColor = look == .dark ? .windowBackgroundColor : .white
+    window.contentViewController = host
+    window.titleVisibility = .hidden
+    window.titlebarAppearsTransparent = true
+    window.setContentSize(NSSize(width: 696, height: 600))
+    return (window, host.view)
+}
+
+func layarPanel(_ model: AppModel, look: Look) -> (NSWindow, NSView) {
+    let host = NSHostingView(rootView: MenuBarView(model: model))
+    host.frame = NSRect(origin: .zero, size: host.fittingSize)
+    let window = ShotWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+    window.appearance = look.appearance
+    window.backgroundColor = look.panelFill
+    window.contentView = host
+    return (window, host)
+}
+
+func layarEqualizer(look: Look) -> (NSWindow, NSView) {
+    let window = ShotWindow(contentViewController: NSHostingController(rootView: EqualizerView(
+        model: Mock.equalizer(), curveName: CurveNameDraft(), curvesFull: {}, askRename: { _ in })))
+    window.appearance = look.appearance
+    window.styleMask = [.titled, .closable]
+    guard let content = window.contentView else { fatalError("The equalizer window has no content view") }
+    return (window, content)
+}
+
+/// The track the desktop's layar_shots plays, so the card's texts match by key.
+func layarTrack(playing: Bool = true, long: Bool = false) -> NowPlayingMonitor.Track {
+    NowPlayingMonitor.Track(
+        bundleID: "com.example.player", appName: "Player",
+        title: long ? "A track title long enough to need more than the two lines the card shows" : "A track title",
+        artist: long ? "An artist name long enough to run past the end of its line" : "Artist",
+        album: "Example Album", isPlaying: playing, artwork: Mock.artwork())
+}
+
+/// Mock.model with no delay panel open and the desktop's track playing.
+func layarModel(_ configure: (AppModel) -> Void = { _ in }) -> AppModel {
+    Mock.model { model in
+        model.closeDelayPanels()
+        model.nowPlaying = layarTrack()
+        configure(model)
+    }
+}
+
+func layarIdle(_ model: AppModel) {
+    model.running = false
+    model.nowPlaying = nil
+}
+
+func layarNoSpeakers(_ model: AppModel) {
+    model.zones = []
+    model.airplay = []
+    model.local = []
+    model.cast = []
+    model.castList = .noneFound
+    model.nowPlaying = nil
+}
+
+/// The desktop's LONG name on the Kitchen row, and the long track.
+func layarLongNames(_ model: AppModel) {
+    model.airplay[1] = AppModel.Speaker(
+        id: "kitchen", name: "Living Room Speaker Next to the Big Window by the Bookshelves", tag: .airplay,
+        enabled: true, volume: 48, offsetMs: nil, autoConnect: true)
+    model.nowPlaying = layarTrack(long: true)
+}
+
+/// The LAYAR rows (notes IDs, shared with the desktop's layar_shots) that mock
+/// data can set up here.
+let layarRows: [(id: String, draw: (Look) -> (NSWindow, NSView))] = [
+    ("MAIN-IDLE", { layarMain(layarModel(layarIdle), look: $0) }),
+    ("MAIN-PLAYING", { layarMain(layarModel(), look: $0) }),
+    ("MAIN-HEADER", { layarMain(layarModel(), look: $0) }),
+    ("MAIN-HEADER-OFF", { layarMain(layarModel { $0.running = false }, look: $0) }),
+    ("MAIN-VOLUME-ROWS", { layarMain(layarModel(), look: $0) }),
+    ("MAIN-NOWPLAYING-PAUSED", { layarMain(layarModel { $0.nowPlaying = layarTrack(playing: false) }, look: $0) }),
+    ("MAIN-EMPTY", { layarMain(layarModel(layarNoSpeakers), look: $0) }),
+    ("MAIN-LONGNAME", { layarMain(layarModel(layarLongNames), look: $0) }),
+    ("MAIN-DELAY-OPEN", { layarMain(layarModel { $0.toggleDelayPanel("headphones") }, look: $0) }),
+    ("TRAY-IDLE", { layarPanel(layarModel(layarIdle), look: $0) }),
+    ("TRAY-PLAYING", { layarPanel(layarModel(), look: $0) }),
+    ("TRAY-EMPTY", { layarPanel(layarModel(layarNoSpeakers), look: $0) }),
+    ("TRAY-LONGNAME", { layarPanel(layarModel(layarLongNames), look: $0) }),
+    ("EQ-WINDOW", { layarEqualizer(look: $0) }),
+]
+
+/// Writes `<ID>-terang|gelap.png` and `.json` per row, unframed, at `scale`.
+func writeLayar() {
+    for (id, draw) in layarRows {
+        for (look, theme) in [(Look.light, "terang"), (Look.dark, "gelap")] {
+            NSApp.appearance = look.appearance
+            let (window, view) = draw(look)
+            let rep = capture(view)
+            write(rep, "\(id)-\(theme).png")
+            let listed: [String: Any] = [
+                "window": [Double(view.bounds.width), Double(view.bounds.height)],
+                "elements": layarElements(in: view, rep: rep),
+            ]
+            let url = outputDirectory.appendingPathComponent("\(id)-\(theme).json")
+            do {
+                try JSONSerialization.data(withJSONObject: listed, options: [.sortedKeys]).write(to: url)
+            } catch { fatalError("Could not write \(url.path): \(error)") }
+            withExtendedLifetime(window) {}
+        }
+    }
+}
+
 // MARK: - Output
 
 try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
 print("Rendering into \(outputDirectory.path)")
+if arguments.dropFirst(3).contains("--layar") {
+    writeLayar()
+    exit(0)
+}
 for look in Look.allCases {
     NSApp.appearance = look.appearance
     write(mainWindowShot(Mock.model(), look: look), "main-window-\(look.suffix).png")

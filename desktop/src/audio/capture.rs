@@ -207,7 +207,7 @@ fn session_apps(
     own_pid: u32,
     keep: impl Fn(&str) -> bool,
 ) -> Vec<u32> {
-    source_list(processes, session_pids, &[], own_pid)
+    source_list(processes, session_pids, None, own_pid)
         .into_iter()
         .filter_map(|source| match source.id {
             SourceId::App { root_pid } if keep(&source.executable) => Some(root_pid),
@@ -296,9 +296,9 @@ pub fn display_name(executable: &str) -> String {
 }
 
 /// Executables whose windows belong to the system shell, to another app they
-/// host, or to a vendor's background helper, so they are never offered for a
-/// window alone.
-const WINDOW_HOSTS: [&str; 7] = [
+/// host, or to a vendor's background helper, so their windows never make them
+/// an app to offer.
+const WINDOW_HOSTS: [&str; 9] = [
     "ApplicationFrameHost.exe",
     "TextInputHost.exe",
     "msedgewebview2.exe",
@@ -306,11 +306,41 @@ const WINDOW_HOSTS: [&str; 7] = [
     "ShellExperienceHost.exe",
     "StartMenuExperienceHost.exe",
     "RazerAppEngine.exe",
+    "explorer.exe",
+    "Taskmgr.exe",
 ];
+
+/// The app a taskbar window of process `pid` stands for: its app's top
+/// process, or the app that started it when it is that app's helper (named
+/// after it, as Steam's `steamwebhelper.exe`) or an embedded web view.
+fn window_app(processes: &ProcessTable, pid: u32) -> u32 {
+    let root = processes.app_root(pid);
+    let stem = |pid: u32| {
+        processes.get(pid).map(|entry| {
+            let name = entry.executable.to_lowercase();
+            name.strip_suffix(".exe").unwrap_or(&name).to_owned()
+        })
+    };
+    match (processes.parent(root), stem(root)) {
+        (Some(parent), Some(own)) if processes.contains(parent) => {
+            let parent_stem = stem(parent).unwrap_or_default();
+            if own == "msedgewebview2" || (!parent_stem.is_empty() && own.starts_with(&parent_stem))
+            {
+                processes.app_root(parent)
+            } else {
+                root
+            }
+        }
+        _ => root,
+    }
+}
 
 /// The sources to offer: the whole system, then one entry per app that owns
 /// one of the audio sessions `session_pids`, and one per executable among
-/// the other apps that show a window (`window_pids`), by name.
+/// the other apps that show a window (`window_pids`), by name. When the
+/// windows are known, only apps with a taskbar window ([`window_app`]) are
+/// offered, as the Mac offers only regular apps; `None` offers every app
+/// with a session.
 ///
 /// Each session's process leads to its app's top process
 /// ([`ProcessTable::app_root`]), so an app with several audio processes is
@@ -320,18 +350,34 @@ const WINDOW_HOSTS: [&str; 7] = [
 pub fn source_list(
     processes: &ProcessTable,
     session_pids: &[u32],
-    window_pids: &[u32],
+    window_pids: Option<&[u32]>,
     own_pid: u32,
 ) -> Vec<SourceInfo> {
+    let regular: Option<Vec<u32>> = window_pids.map(|pids| {
+        pids.iter()
+            .filter(|&&pid| processes.contains(pid))
+            .map(|&pid| window_app(processes, pid))
+            .filter(|&root| {
+                processes.get(root).is_some_and(|entry| {
+                    !WINDOW_HOSTS
+                        .iter()
+                        .any(|host| host.eq_ignore_ascii_case(&entry.executable))
+                })
+            })
+            .collect()
+    });
     let mut apps: Vec<SourceInfo> = Vec::new();
-    let windowed = window_pids.iter().map(|&pid| (pid, false));
+    let windowed = regular.iter().flatten().map(|&pid| (pid, false));
     for (pid, has_session) in session_pids.iter().map(|&pid| (pid, true)).chain(windowed) {
         if !processes.contains(pid) {
             continue;
         }
         let root_pid = processes.app_root(pid);
         let source = SourceId::App { root_pid };
-        if apps.iter().any(|app| app.id == source)
+        if regular
+            .as_ref()
+            .is_some_and(|roots| !roots.contains(&root_pid))
+            || apps.iter().any(|app| app.id == source)
             || decide_activation(&source, own_pid, processes).is_err()
         {
             continue;
@@ -341,12 +387,9 @@ pub fn source_list(
             .map(|entry| entry.executable.clone())
             .unwrap_or_default();
         if !has_session
-            && (apps
+            && apps
                 .iter()
                 .any(|app| app.executable.eq_ignore_ascii_case(&executable))
-                || WINDOW_HOSTS
-                    .iter()
-                    .any(|host| host.eq_ignore_ascii_case(&executable)))
         {
             continue;
         }
@@ -1650,7 +1693,7 @@ mod tests {
                 target_pid: 90,
             })
         );
-        let sources = source_list(&table, &[90], &[], OWN_PID);
+        let sources = source_list(&table, &[90], None, OWN_PID);
         assert_eq!(sources.len(), 2, "offered: {sources:?}");
         assert_eq!(sources[1].id, app(90));
     }
@@ -1683,7 +1726,7 @@ mod tests {
             decide_activation(&app(90), OWN_PID, &table),
             Err(BackendError::ContainsAudioSync)
         );
-        assert_eq!(source_list(&table, &[90], &[], OWN_PID).len(), 1);
+        assert_eq!(source_list(&table, &[90], None, OWN_PID).len(), 1);
     }
 
     // covers: S380
@@ -1713,7 +1756,7 @@ mod tests {
             decide_activation(&app(200), OWN_PID, &table),
             Err(BackendError::ContainsAudioSync)
         );
-        assert_eq!(source_list(&table, &[200], &[], OWN_PID).len(), 1);
+        assert_eq!(source_list(&table, &[200], None, OWN_PID).len(), 1);
         assert!(decide_activation(&SourceId::WholeSystem, OWN_PID, &table).is_ok());
     }
 
@@ -1731,7 +1774,7 @@ mod tests {
     // covers: S211 (the whole system's entry)
     #[test]
     fn the_source_list_starts_with_the_whole_system() {
-        let sources = source_list(&desktop(), &[], &[], OWN_PID);
+        let sources = source_list(&desktop(), &[], None, OWN_PID);
         assert_eq!(
             sources,
             vec![SourceInfo {
@@ -1747,7 +1790,7 @@ mod tests {
     // covers: S380
     #[test]
     fn an_app_with_several_audio_processes_is_listed_once_by_its_top_process() {
-        let sources = source_list(&desktop(), &[202, 201, 200], &[], OWN_PID);
+        let sources = source_list(&desktop(), &[202, 201, 200], None, OWN_PID);
         assert_eq!(sources.len(), 2);
         assert_eq!(sources[1].id, app(200));
         assert_eq!(sources[1].name, "Browser");
@@ -1757,14 +1800,14 @@ mod tests {
     // covers: S380
     #[test]
     fn audiosync_its_helpers_and_its_ancestors_are_not_offered() {
-        let sources = source_list(&desktop(), &[OWN_PID, 401, 300, 100], &[], OWN_PID);
+        let sources = source_list(&desktop(), &[OWN_PID, 401, 300, 100], None, OWN_PID);
         assert_eq!(sources.len(), 1, "{sources:?}");
     }
 
     // covers: S380
     #[test]
     fn sessions_of_processes_that_quit_are_skipped() {
-        let sources = source_list(&desktop(), &[9999, 0], &[], OWN_PID);
+        let sources = source_list(&desktop(), &[9999, 0], None, OWN_PID);
         assert_eq!(sources.len(), 1);
     }
 
@@ -1894,11 +1937,41 @@ mod tests {
             entry(30, 1, None, "mid.exe"),
             entry(99, 1, None, "audiosync.exe"),
         ]);
-        let names: Vec<String> = source_list(&table, &[10, 20, 30], &[], 99)
+        let names: Vec<String> = source_list(&table, &[10, 20, 30], None, 99)
             .into_iter()
             .map(|source| source.name)
             .collect();
         assert_eq!(names, ["All System Audio", "Alpha", "Mid", "Zebra"]);
+    }
+
+    // covers: S12
+    #[test]
+    fn only_apps_with_a_taskbar_window_are_offered_as_the_mac_offers_regular_apps() {
+        let table = ProcessTable::new([
+            entry(1, 0, None, "wininit.exe"),
+            entry(3, 0, None, "svchost.exe"),
+            entry(5, 1, None, "dwm.exe"),
+            entry(10, 0, None, "explorer.exe"),
+            entry(20, 10, None, "Discord.exe"),
+            entry(21, 20, None, "Discord.exe"),
+            entry(30, 10, None, "Spotify.exe"),
+            entry(40, 10, None, "steam.exe"),
+            entry(41, 40, None, "steamwebhelper.exe"),
+            entry(50, 3, None, "sunshine.exe"),
+            entry(60, 10, None, "Voicemod.exe"),
+            entry(70, 10, None, "Taskmgr.exe"),
+            entry(80, 10, None, "ATK HUB.exe"),
+            entry(90, 3, None, "PhoneExperienceHost.exe"),
+            entry(99, 3, None, "audiosync.exe"),
+        ]);
+        // Steam's window belongs to its web helper; the rest play from the tray.
+        let sessions = [5, 10, 21, 30, 40, 41, 50, 60, 80, 90];
+        let windows = [10, 20, 30, 41, 70];
+        let names: Vec<String> = source_list(&table, &sessions, Some(&windows), 99)
+            .into_iter()
+            .map(|source| source.name)
+            .collect();
+        assert_eq!(names, ["All System Audio", "Discord", "Spotify", "Steam"]);
     }
 
     // covers: S380

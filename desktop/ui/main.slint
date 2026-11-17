@@ -152,10 +152,24 @@ component SourceMenu inherits Rectangle {
         property <length> room: MenuRoom.width - root.absolute-position.x - 10px - 20px + 2 * MenuRoom.margin;
         width: MenuRoom.width > 0px ? min(max(270px + 2 * MenuRoom.margin, panel.preferred-width), max(270px + 2 * MenuRoom.margin, self.room)) : max(270px + 2 * MenuRoom.margin, panel.preferred-width);
         close-policy: close-on-click-outside;
+        // The window cuts a popup at its edge, so a long list stops 8 px
+        // above the window's bottom and its rows scroll.
+        height: MenuRoom.height > 0px ? min(panel.preferred-height, MenuRoom.height - root.absolute-position.y - root.height - 12px + 2 * MenuRoom.margin) : panel.preferred-height;
 
         panel := MenuPanel {
             property <int> sources: root.sources.length;
             count: self.sources + 1 + (root.mix-expanded ? 2 + root.mix-apps.length : 0);
+            // A row the keys pick scrolls into view: 24 px rows, the 9 px divider after the sources.
+            changed current => {
+                if self.current >= 0 {
+                    let top = self.current * 24px + (self.current >= self.sources ? 9px : 0px);
+                    if top < -list.content-y {
+                        list.content-y = -top;
+                    } else if top + 24px > list.visible-height - list.content-y {
+                        list.content-y = list.visible-height - top - 24px;
+                    }
+                }
+            }
             close-requested(refocus) => {
                 menu.close();
                 if refocus {
@@ -163,92 +177,104 @@ component SourceMenu inherits Rectangle {
                 }
             }
 
-            for name[i] in root.sources: SourceMenuRow {
-                index: i;
-                text: name;
-                checked: i == root.index;
-                look: root.looks[i];
-                above: root.looks[max(i - 1, 0)].kind;
-                current <=> panel.current;
-                keyboard <=> panel.keyboard;
-                pulse: panel.pulse;
-                done <=> panel.done;
-                activated => {
-                    root.chosen(i);
+            list := OverlayScrollView {
+                preferred-width: rows.preferred-width;
+                preferred-height: rows.preferred-height;
+                content-height: rows.preferred-height;
+
+                rows := VerticalLayout {
+                    width: list.visible-width;
+
+                    for name[i] in root.sources: SourceMenuRow {
+                        index: i;
+                        text: name;
+                        checked: i == root.index;
+                        look: root.looks[i];
+                        above: root.looks[max(i - 1, 0)].kind;
+                        current <=> panel.current;
+                        keyboard <=> panel.keyboard;
+                        pulse: panel.pulse;
+                        done <=> panel.done;
+                        activated => {
+                            root.chosen(i);
+                        }
+                    }
+
+                    MenuDivider { }
+
+                    MenuRow {
+                        height: 24px;
+                        index: panel.sources;
+                        text: Strings.source-mix-title;
+                        checks: true;
+                        submenu: true;
+                        expanded: root.mix-expanded;
+                        current <=> panel.current;
+                        keyboard <=> panel.keyboard;
+                        pulse: panel.pulse;
+                        done <=> panel.done;
+                        activated => {
+                            root.mix-expanded = !root.mix-expanded;
+                        }
+                    }
+
+                    if root.mix-expanded: MenuRow {
+                        index: panel.sources + 1;
+                        text: Strings.source-mix-only;
+                        checks: true;
+                        checked: !root.mix-all-except;
+                        nested: true;
+                        current <=> panel.current;
+                        keyboard <=> panel.keyboard;
+                        pulse: panel.pulse;
+                        done <=> panel.done;
+                        activated => {
+                            root.mix-mode-selected(false);
+                        }
+                    }
+
+                    if root.mix-expanded: MenuRow {
+                        index: panel.sources + 2;
+                        text: Strings.source-mix-all-except;
+                        checks: true;
+                        checked: root.mix-all-except;
+                        nested: true;
+                        current <=> panel.current;
+                        keyboard <=> panel.keyboard;
+                        pulse: panel.pulse;
+                        done <=> panel.done;
+                        activated => {
+                            root.mix-mode-selected(true);
+                        }
+                    }
+
+                    if root.mix-expanded && root.mix-apps.length == 0: MenuNote {
+                        text: Strings.source-mix-empty;
+                        nested: true;
+                    }
+
+                    for app[index] in root.mix-expanded ? root.mix-apps : []: MenuRow {
+                        index: panel.sources + 3 + index;
+                        text: app.name;
+                        icon: app.icon;
+                        icon-glyph: Glyphs.display;
+                        checks: true;
+                        checked: app.checked;
+                        nested: true;
+                        current <=> panel.current;
+                        keyboard <=> panel.keyboard;
+                        pulse: panel.pulse;
+                        done <=> panel.done;
+                        activated => {
+                            root.mix-app-toggled(index);
+                        }
+                    }
+
+                    if root.mix-expanded && root.mix-apps.length > 0 && root.mix-all-except && Strings.source-mix-all-except-note != "": MenuNote {
+                        text: Strings.source-mix-all-except-note;
+                        nested: true;
+                    }
                 }
-            }
-
-            MenuDivider { }
-
-            MenuRow {
-                height: 24px;
-                index: panel.sources;
-                text: Strings.source-mix-title;
-                checks: true;
-                submenu: true;
-                expanded: root.mix-expanded;
-                current <=> panel.current;
-                keyboard <=> panel.keyboard;
-                pulse: panel.pulse;
-                done <=> panel.done;
-                activated => {
-                    root.mix-expanded = !root.mix-expanded;
-                }
-            }
-
-            if root.mix-expanded: MenuRow {
-                index: panel.sources + 1;
-                text: Strings.source-mix-only;
-                checks: true;
-                checked: !root.mix-all-except;
-                nested: true;
-                current <=> panel.current;
-                keyboard <=> panel.keyboard;
-                pulse: panel.pulse;
-                done <=> panel.done;
-                activated => {
-                    root.mix-mode-selected(false);
-                }
-            }
-
-            if root.mix-expanded: MenuRow {
-                index: panel.sources + 2;
-                text: Strings.source-mix-all-except;
-                checks: true;
-                checked: root.mix-all-except;
-                nested: true;
-                current <=> panel.current;
-                keyboard <=> panel.keyboard;
-                pulse: panel.pulse;
-                done <=> panel.done;
-                activated => {
-                    root.mix-mode-selected(true);
-                }
-            }
-
-            if root.mix-expanded && root.mix-apps.length == 0: MenuNote {
-                text: Strings.source-mix-empty;
-                nested: true;
-            }
-
-            for app[index] in root.mix-expanded ? root.mix-apps : []: MenuRow {
-                index: panel.sources + 3 + index;
-                text: app.name;
-                checks: true;
-                checked: app.checked;
-                nested: true;
-                current <=> panel.current;
-                keyboard <=> panel.keyboard;
-                pulse: panel.pulse;
-                done <=> panel.done;
-                activated => {
-                    root.mix-app-toggled(index);
-                }
-            }
-
-            if root.mix-expanded && root.mix-apps.length > 0 && root.mix-all-except && Strings.source-mix-all-except-note != "": MenuNote {
-                text: Strings.source-mix-all-except-note;
-                nested: true;
             }
         }
     }
@@ -287,6 +313,7 @@ component GearButton inherits IconButton {
 
     glyph: Glyphs.gear;
     label: Strings.more-options;
+    accessible-description: Strings.more-options-hint;
     clicked => {
         root.open-menu();
     }
@@ -407,6 +434,42 @@ component GearButton inherits IconButton {
     }
 }
 
+// A list item that comes or goes: it opens or shuts its room and fades with
+// it over the Mac's row move, a 0.35 s ease-out (MainWindow.swift:305-307,
+// WindowRules.swift:82 and 213), at once with animation effects off.
+component ListEase inherits Rectangle {
+    in property <bool> fresh;
+    in property <bool> leaving;
+    property <float> open: root.fresh || root.leaving ? 0 : 1;
+    init => {
+        if !root.leaving {
+            root.open = 1;
+        }
+    }
+    changed leaving => {
+        root.open = root.leaving ? 0 : 1;
+    }
+    animate open {
+        duration: Motion.on ? 350ms : 0ms;
+        easing: ease-out;
+    }
+    height: root.open * content.preferred-height;
+    // Clipped only while it moves, so a focus ring may pass its edge at rest.
+    clip: root.open < 1;
+
+    content := Rectangle {
+        y: 0px;
+        width: parent.width;
+        height: self.preferred-height;
+        opacity: root.open;
+
+        @children
+    }
+
+    // Over a leaving item, so no click or hover reaches it.
+    if root.leaving: TouchArea { }
+}
+
 // Speaker rows with a line between them, in a section's or a zone's card.
 component SpeakerRows inherits VerticalLayout {
     in property <[SpeakerItem]> speakers;
@@ -448,117 +511,128 @@ component SpeakerRows inherits VerticalLayout {
     in-out property <string> focus-id;
     in-out property <RowPart> focus-part;
 
-    for speaker[index] in root.speakers: VerticalLayout {
-        if index > 0: HorizontalLayout {
-            padding-left: Fluent.name-inset;
-            Divider { }
-        }
+    for speaker[index] in root.speakers: ListEase {
+        fresh: speaker.fresh;
+        leaving: speaker.leaving;
 
-        SpeakerRow {
-            item: speaker;
-            grouped: root.grouped;
-            init => {
-                if speaker.id == root.focus-id {
-                    root.focus-id = "";
-                    self.take-focus(root.focus-part);
+        VerticalLayout {
+            if index > 0: HorizontalLayout {
+                padding-left: Fluent.name-inset;
+                Divider { }
+            }
+
+            SpeakerRow {
+                item: speaker;
+                grouped: root.grouped;
+                init => {
+                    if speaker.id == root.focus-id {
+                        root.focus-id = "";
+                        self.take-focus(root.focus-part);
+                    }
                 }
-            }
-            property <bool> focus-asked: speaker.id == root.focus-id;
-            changed focus-asked => {
-                if self.focus-asked {
-                    root.focus-id = "";
-                    self.take-focus(root.focus-part);
+                property <bool> focus-asked: speaker.id == root.focus-id;
+                changed focus-asked => {
+                    if self.focus-asked {
+                        root.focus-id = "";
+                        self.take-focus(root.focus-part);
+                    }
                 }
-            }
-            toggled => {
-                root.toggled(speaker.id);
-            }
-            volume-changed(value) => {
-                root.volume-changed(speaker.id, value);
-            }
-            volume-editing(on) => {
-                root.volume-editing(speaker.id, on);
-            }
-            sync-toggled => {
-                root.sync-toggled(speaker.id);
-            }
-            delay-stepped(delta) => {
-                root.delay-stepped(speaker.id, delta);
-            }
-            delay-edited(text) => {
-                root.delay-edited(speaker.id, text);
-            }
-            delay-committed => {
-                root.delay-committed(speaker.id);
-            }
-            delay-cancelled => {
-                root.delay-cancelled(speaker.id);
-            }
-            auto-connect-toggled(on) => {
-                root.auto-connect-toggled(speaker.id, on);
-            }
-            forget-pairing => {
-                root.forget-pairing(speaker.id);
-            }
-            device-volume-fix => {
-                root.device-volume-fix(speaker.id);
-            }
-            system-volume-changed(value) => {
-                root.system-volume-changed(speaker.id, value);
-            }
-            system-volume-editing(on) => {
-                root.system-volume-editing(speaker.id, on);
-            }
-            rename-requested => {
-                root.rename-requested(speaker.id);
-            }
-            rename-edited(text) => {
-                root.rename-edited(speaker.id, text);
-            }
-            rename-committed => {
-                root.rename-committed(speaker.id);
-            }
-            rename-cancelled => {
-                root.rename-cancelled(speaker.id);
-            }
-            cast-muted(muted) => {
-                root.cast-muted(speaker.id, muted);
-            }
-            cast-resync => {
-                root.cast-resync(speaker.id);
-            }
-            cast-remove => {
-                root.cast-remove(speaker.id);
-            }
-            hide-requested => {
-                root.hide-requested(speaker.id);
-            }
-            calibrate => {
-                root.calibrate(speaker.id);
-            }
-            move-to-zone(zone) => {
-                root.move-to-zone(speaker.id, zone);
-            }
-            new-zone => {
-                root.new-zone(speaker.id);
-            }
-            remove-from-zone => {
-                root.remove-from-zone(speaker.id);
-            }
-            only-this => {
-                root.only-this(speaker.id);
-            }
-            focus-changed(part) => {
-                root.focus-changed(speaker.id, part);
-            }
-            blank-clicked => {
-                root.blank-clicked();
-            }
-            cancel-calibration => {
-                root.cancel-calibration();
-            }
-            calibration-privacy => {
-                root.calibration-privacy();
+                toggled => {
+                    root.toggled(speaker.id);
+                }
+                volume-changed(value) => {
+                    root.volume-changed(speaker.id, value);
+                }
+                volume-editing(on) => {
+                    root.volume-editing(speaker.id, on);
+                }
+                sync-toggled => {
+                    root.sync-toggled(speaker.id);
+                }
+                delay-stepped(delta) => {
+                    root.delay-stepped(speaker.id, delta);
+                }
+                delay-edited(text) => {
+                    root.delay-edited(speaker.id, text);
+                }
+                delay-committed => {
+                    root.delay-committed(speaker.id);
+                }
+                delay-cancelled => {
+                    root.delay-cancelled(speaker.id);
+                }
+                auto-connect-toggled(on) => {
+                    root.auto-connect-toggled(speaker.id, on);
+                }
+                forget-pairing => {
+                    root.forget-pairing(speaker.id);
+                }
+                device-volume-fix => {
+                    root.device-volume-fix(speaker.id);
+                }
+                system-volume-changed(value) => {
+                    root.system-volume-changed(speaker.id, value);
+                }
+                system-volume-editing(on) => {
+                    root.system-volume-editing(speaker.id, on);
+                }
+                rename-requested => {
+                    root.rename-requested(speaker.id);
+                }
+                rename-edited(text) => {
+                    root.rename-edited(speaker.id, text);
+                }
+                rename-committed => {
+                    root.rename-committed(speaker.id);
+                }
+                rename-cancelled => {
+                    root.rename-cancelled(speaker.id);
+                }
+                cast-muted(muted) => {
+                    root.cast-muted(speaker.id, muted);
+                }
+                cast-resync => {
+                    root.cast-resync(speaker.id);
+                }
+                cast-remove => {
+                    root.cast-remove(speaker.id);
+                }
+                hide-requested => {
+                    root.hide-requested(speaker.id);
+                }
+                calibrate => {
+                    root.calibrate(speaker.id);
+                }
+                move-to-zone(zone) => {
+                    root.move-to-zone(speaker.id, zone);
+                }
+                new-zone => {
+                    root.new-zone(speaker.id);
+                }
+                remove-from-zone => {
+                    root.remove-from-zone(speaker.id);
+                }
+                only-this => {
+                    root.only-this(speaker.id);
+                }
+                focus-changed(part) => {
+                    // A leaving row hands the focus on to a neighbour.
+                    if speaker.leaving && part != RowPart.none {
+                        root.focus-part = part;
+                        root.focus-id = speaker.hand-off;
+                    } else {
+                        root.focus-changed(speaker.id, part);
+                    }
+                }
+                blank-clicked => {
+                    root.blank-clicked();
+                }
+                cancel-calibration => {
+                    root.cancel-calibration();
+                }
+                calibration-privacy => {
+                    root.calibration-privacy();
+                }
             }
         }
     }
@@ -910,12 +984,18 @@ component SpeakerSection inherits VerticalLayout {
         }
 
         if root.show-add-address: VerticalLayout {
-            if root.speakers.length > 0 || root.zoned.length > 0 || root.note != "": Divider { }
+            // Under the note the line keeps to its 10 px text inset, as on the Mac.
+            if root.speakers.length > 0 || root.zoned.length > 0 || root.note != "": HorizontalLayout {
+                padding-left: root.note != "" ? 10px : 0px;
+                padding-right: root.note != "" ? 10px : 0px;
+                Divider { }
+            }
 
-            // On the speaker rows' badge column, as on the Mac.
+            // On the speaker rows' badge column, as on the Mac, 10 px under
+            // the line as the note has above it.
             HorizontalLayout {
                 padding-left: Fluent.row-padding-x;
-                padding-top: 6px;
+                padding-top: 10px;
                 padding-bottom: 6px;
                 alignment: start;
                 SmallButton {
@@ -1239,7 +1319,7 @@ component PresetsCard inherits Rectangle {
 
     VerticalLayout {
         Rectangle {
-            min-height: 36px;
+            min-height: 28px;
             border-radius: Fluent.radius-control;
             background: touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : transparent;
             animate background { duration: Fluent.fast; }
@@ -1247,13 +1327,9 @@ component PresetsCard inherits Rectangle {
             accessible-role: button;
             accessible-label: Strings.presets;
             accessible-value: root.presets.length == 0 ? Strings.no-presets : root.current != "" ? root.current : Strings.choose-preset;
-            accessible-expandable: true;
-            accessible-expanded: root.open;
+            accessible-description: root.open ? Strings.hide-preset-list : Strings.show-preset-list;
             accessible-action-default => {
                 root.open = !root.open;
-            }
-            accessible-action-expand => {
-                root.open = true;
             }
 
             touch := TouchArea {
@@ -1264,7 +1340,7 @@ component PresetsCard inherits Rectangle {
                 focus := FocusScope {
                     focus-on-click: false;
                     key-pressed(event) => {
-                        if event.text == " " || event.text == Key.Return || (event.text == Key.Escape && root.open) {
+                        if event.text == " " || event.text == Key.Return {
                             root.open = !root.open;
                             return accept;
                         }
@@ -1339,11 +1415,6 @@ component PresetsCard inherits Rectangle {
 
         list := FoldPane {
             open: root.open;
-            escape-folds: true;
-            fold => {
-                root.open = false;
-                focus.focus();
-            }
 
             // Above five presets the list scrolls inside its card, half a row
             // past the fifth showing that it goes on; a new one, or the name
@@ -1543,7 +1614,7 @@ component EqualizerCard inherits Rectangle {
     callback focus-changed(bool);
 
     // A row on the window: the whole row is the button.
-    min-height: 36px;
+    min-height: 28px;
     background: touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : transparent;
     animate background { duration: Fluent.fast; }
     border-radius: Fluent.radius-control;
@@ -1650,7 +1721,7 @@ component QuickRow inherits Rectangle {
     callback clicked();
     callback focus-changed(bool);
 
-    min-height: 36px;
+    min-height: 28px;
     border-radius: Fluent.radius-control;
     background: !root.enabled ? transparent : touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.row-hover : transparent;
     animate background {
@@ -1782,7 +1853,7 @@ component CalibrationCard inherits VerticalLayout {
     callback fix-volume(bool);
 
     accessible-role: groupbox;
-    accessible-label: Strings.calibrate-all-title;
+    accessible-label: Strings.calibrate-all;
 
     public function focus-row() {
         calibrate-button.focus();
@@ -1845,8 +1916,8 @@ component CalibrationCard inherits VerticalLayout {
                 changed has-focus => {
                     root.focus-changed(self.has-focus);
                 }
-                text: Strings.notice-open-privacy;
-                accessible-label: Strings.notice-open-privacy-label;
+                text: Strings.open-microphone-settings;
+                accessible-label: Strings.open-microphone-settings;
                 clicked => {
                     root.privacy-requested();
                 }
@@ -1931,28 +2002,33 @@ component CalibrationCard inherits VerticalLayout {
         if root.left-out.length > 0: VerticalLayout {
             padding-left: 8px;
             padding-right: 8px;
-            spacing: 6px;
+            spacing: 8px;
             accessible-role: groupbox;
             accessible-label: Strings.calibrate-all-left-out-title;
 
+            // The group's label says it to Narrator.
+            Text {
+                text: Strings.calibrate-all-left-out-title;
+                font-size: Tokens.font-size-caption;
+                font-weight: Fluent.weight-semibold;
+                color: Tokens.secondary-text;
+                accessible-role: none;
+            }
+
             for item[index] in root.left-out: VerticalLayout {
-                spacing: 2px;
-
-                Text {
-                    text: item.name;
-                    font-size: Tokens.font-size-body;
-                    font-weight: Fluent.weight-semibold;
-                    color: item.included ? Tokens.text : Tokens.secondary-text;
-                    wrap: word-wrap;
-                }
-
-                // The button's description says it already.
-                QuietText {
-                    text: item.reason;
-                }
+                spacing: 1px;
 
                 HorizontalLayout {
-                    alignment: LayoutAlignment.start;
+                    spacing: 10px;
+
+                    Text {
+                        text: item.name;
+                        font-size: Tokens.font-size-body;
+                        color: item.included ? Tokens.text : Tokens.secondary-text;
+                        vertical-alignment: center;
+                        wrap: word-wrap;
+                        horizontal-stretch: 1;
+                    }
 
                     Button {
                         changed has-focus => {
@@ -1966,6 +2042,11 @@ component CalibrationCard inherits VerticalLayout {
                             root.include(item.id, !item.included);
                         }
                     }
+                }
+
+                // The button's description says it already.
+                QuietText {
+                    text: item.reason;
                 }
             }
         }
@@ -1988,11 +2069,15 @@ component CalibrateAllSheet inherits FocusScope {
     in property <string> zone;
     // How the run or the last action on its results ended.
     in property <string> outcome;
+    // The outcome is a failure or a refused Apply.
+    in property <bool> outcome-problem;
     in property <bool> can-apply;
     in property <bool> applied;
     in property <bool> can-undo;
     // The height the sheet may take; only the rows scroll past it.
     in property <length> room;
+    // The window's width, which the sheet keeps a margin inside.
+    in property <length> room-width;
     callback cancel();
     callback measure-again(int);
     callback apply();
@@ -2004,7 +2089,7 @@ component CalibrateAllSheet inherits FocusScope {
     // Two or three rows stay readable in the smallest window.
     property <length> list-cap: max(120px, root.room - top.preferred-height - bottom.preferred-height - 2 * 14px - 2 * 20px);
 
-    width: 600px;
+    width: min(600px, root.room-width - 2 * Fluent.window-margin);
     height: min(layout.preferred-height, root.room);
     focus-on-click: false;
     focus-on-tab-navigation: false;
@@ -2026,8 +2111,7 @@ component CalibrateAllSheet inherits FocusScope {
         background: Tokens.background;
         border-width: 1px;
         border-color: Fluent.stroke;
-        border-bottom-left-radius: Tokens.radius-card;
-        border-bottom-right-radius: Tokens.radius-card;
+        border-radius: Tokens.radius-card;
         drop-shadow-blur: 16px;
         drop-shadow-offset-y: 4px;
         drop-shadow-color: #00000040;
@@ -2112,7 +2196,7 @@ component CalibrateAllSheet inherits FocusScope {
             accessible-label: Strings.calibrate-all-results;
 
             rows-list := VerticalLayout {
-                width: 560px;
+                width: root.width - 40px;
                 spacing: 8px;
 
                 for row[index] in root.rows: Rectangle {
@@ -2131,20 +2215,88 @@ component CalibrateAllSheet inherits FocusScope {
                         VerticalLayout {
                             spacing: 2px;
                             horizontal-stretch: 1;
+                            accessible-role: text;
+                            accessible-label: row.name + ", " + row.detail;
 
-                            Text {
-                                text: row.name;
-                                font-size: Tokens.font-size-body;
-                                font-weight: Fluent.weight-semibold;
-                                color: Tokens.text;
-                                wrap: word-wrap;
+                            HorizontalLayout {
+                                spacing: 6px;
+
+                                Text {
+                                    text: row.name;
+                                    font-size: Tokens.font-size-body;
+                                    font-weight: Fluent.weight-semibold;
+                                    color: Tokens.text;
+                                    overflow: elide;
+                                    vertical-alignment: center;
+                                    accessible-role: none;
+                                }
+
+                                if row.kind != "": Text {
+                                    text: row.kind;
+                                    font-size: Tokens.font-size-caption;
+                                    color: Tokens.secondary-text;
+                                    vertical-alignment: center;
+                                    accessible-role: none;
+                                }
+
+                                if row.chip != "": VerticalLayout {
+                                    alignment: center;
+
+                                    Rectangle {
+                                        background: (row.chip-warn ? Tokens.warn : Tokens.teal).with-alpha(0.15);
+                                        border-radius: self.height / 2;
+                                        border-width: row.chip-warn ? 1px : 0px;
+                                        border-color: Tokens.warn;
+
+                                        HorizontalLayout {
+                                            padding-left: 7px;
+                                            padding-right: 7px;
+                                            padding-top: 1px;
+                                            padding-bottom: 1px;
+
+                                            Text {
+                                                text: row.chip;
+                                                font-size: Tokens.font-size-caption;
+                                                font-weight: Fluent.weight-semibold;
+                                                color: row.chip-warn ? Tokens.text : Tokens.teal-text;
+                                                accessible-role: none;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                }
                             }
 
-                            Text {
-                                text: row.detail;
-                                font-size: Tokens.font-size-body;
-                                color: Tokens.secondary-text;
+                            if row.value != "": HorizontalLayout {
+                                spacing: 6px;
+
+                                Text {
+                                    text: row.value;
+                                    font-size: 15px;
+                                    font-weight: Fluent.weight-semibold;
+                                    color: row.clear ? Tokens.text : Tokens.secondary-text;
+                                    accessible-role: none;
+                                }
+
+                                Text {
+                                    text: row.was;
+                                    font-size: Tokens.font-size-body;
+                                    color: Tokens.secondary-text;
+                                    vertical-alignment: TextVerticalAlignment.bottom;
+                                    horizontal-stretch: 1;
+                                    accessible-role: none;
+                                }
+                            }
+
+                            if row.note != "": Text {
+                                text: row.note;
+                                font-size: Tokens.font-size-caption;
+                                color: row.refused ? Tokens.error-text : Tokens.secondary-text;
                                 wrap: word-wrap;
+                                accessible-role: none;
                             }
                         }
 
@@ -2215,7 +2367,7 @@ component CalibrateAllSheet inherits FocusScope {
             if root.outcome != "": Text {
                 text: root.outcome;
                 font-size: Tokens.font-size-body;
-                color: Tokens.secondary-text;
+                color: root.outcome-problem ? Tokens.error-text : Tokens.secondary-text;
                 wrap: word-wrap;
             }
 
@@ -2442,7 +2594,7 @@ component NowPlayingCard inherits VerticalLayout {
             padding-bottom: 3px;
 
             AmbientArt {
-                height: 16px;
+                height: 22px;
                 look: root.ambient;
             }
         }
@@ -2485,12 +2637,14 @@ component NowPlayingCard inherits VerticalLayout {
 
         // The Mac's centres, 38 px apart with Shuffle and Repeat and 54
         // without; five 32 px buttons then pass the cover by a pixel a side.
+        // The Mac's row is 26 high (WindowRules.swift:62) 6 under the artist
+        // (MainWindow.swift:463); the 32 px buttons sit centred on it.
         Rectangle {
-            height: 32px + 6px;
+            height: 26px + 6px;
 
             transport := HorizontalLayout {
                 x: (parent.width - self.width) / 2;
-                y: 6px;
+                y: 3px;
                 width: self.preferred-width;
                 height: 32px;
                 spacing: root.shuffle >= 0 || root.repeat >= 0 ? 6px : 22px;
@@ -2499,6 +2653,7 @@ component NowPlayingCard inherits VerticalLayout {
                     opacity: root.reveal;
                     glyph-shift: Motion.on ? (1 - root.reveal) * 4px : 0px;
                     glyph: Glyphs.shuffle;
+                    glyph-size: 21px;
                     glyph-color: root.shuffle == 1 ? Tokens.teal-text : Tokens.secondary-text;
                     active: root.shuffle == 1;
                     label: Strings.shuffle;
@@ -2554,6 +2709,7 @@ component NowPlayingCard inherits VerticalLayout {
                     opacity: root.reveal;
                     glyph-shift: Motion.on ? (1 - root.reveal) * 4px : 0px;
                     glyph: root.repeat == 2 ? Glyphs.repeat-one : Glyphs.repeat-all;
+                    glyph-size: 21px;
                     glyph-color: root.repeat > 0 ? Tokens.teal-text : Tokens.secondary-text;
                     active: root.repeat > 0;
                     label: Strings.repeat;
@@ -2649,6 +2805,7 @@ export component MainWindow inherits Window {
     in property <bool> show-virtual-devices;
     in property <Appearance> appearance;
     in property <bool> switch-source-on-quit;
+    in property <bool> switch-source-on-quit-available;
     in property <bool> resume-after-sleep;
     // Settings > Launch at Sign-In: what the Run key says, read again by Rust.
     in property <bool> launch-at-login;
@@ -2691,6 +2848,9 @@ export component MainWindow inherits Window {
     // A Google Cast sender runs, so Add by Address… can list a speaker.
     in property <bool> cast-by-address;
     in property <string> airplay-delay-text;
+    // The AirPlay delay's pane shows its steps and field; its value, beside the name.
+    in property <bool> airplay-delay-open;
+    in property <string> airplay-delay-value;
     // The AirPlay delay field holds typing not yet applied.
     in property <bool> airplay-delay-pending;
     // The AirPlay delay field holds a number out of range: the range and
@@ -2711,6 +2871,7 @@ export component MainWindow inherits Window {
     in property <string> calibrate-all-airplay;
     in property <string> calibrate-all-zone;
     in property <string> calibrate-all-outcome;
+    in property <bool> calibrate-all-outcome-problem;
     in property <bool> calibrate-all-can-apply;
     in property <bool> calibrate-all-applied;
     in property <bool> calibrate-all-can-undo;
@@ -2957,6 +3118,10 @@ export component MainWindow inherits Window {
             root.close-requested();
             return true;
         }
+        if text == "r" {
+            root.refresh-devices();
+            return true;
+        }
         if text == "q" {
             root.exit-requested();
             return true;
@@ -2985,8 +3150,7 @@ export component MainWindow inherits Window {
     min-height: 440px;
     preferred-width: 696px;
     preferred-height: 680px;
-    // White in light mode, as the Mac's window.
-    background: Tokens.surface;
+    background: Fluent.main-window;
     default-font-family: Fluent.font;
     default-font-weight: Fluent.weight-regular;
     default-font-size: Tokens.font-size-body;
@@ -3231,6 +3395,19 @@ export component MainWindow inherits Window {
                 fade-color: root.background;
                 // The Presets and Equalizer rows reach 8 px past the column.
                 bleed: 8px;
+                // Slint scrolls the focused control into view on every resize; the
+                // Mac's scroll view keeps its place, so a resize puts it back.
+                property <length> kept-y;
+                property <length> kept-height;
+                changed content-y => {
+                    if self.visible-height == self.kept-height {
+                        self.kept-y = self.content-y;
+                    }
+                }
+                changed visible-height => {
+                    self.kept-height = self.visible-height;
+                    self.content-y = max(min(0px, self.visible-height - self.content-height), min(0px, self.kept-y));
+                }
 
                 VerticalLayout {
                     alignment: start;
@@ -3618,148 +3795,164 @@ export component MainWindow inherits Window {
                             padding-bottom: 4px;
                         }
 
-                        for zone[index] in root.zones: ZoneCard {
-                            item: zone;
-                            follows-zone: index > 0;
-                            divider-hidden: zone-list.hovered == zone.id || (index > 0 && zone-list.hovered == root.zones[index - 1].id && !root.zones[index - 1].expanded);
-                            changed header-hovered => {
-                                if self.header-hovered {
-                                    zone-list.hovered = zone.id;
-                                } else if zone-list.hovered == zone.id {
-                                    zone-list.hovered = "";
+                        for zone[index] in root.zones: ListEase {
+                            fresh: zone.fresh;
+                            leaving: zone.leaving;
+
+                            ZoneCard {
+                                item: zone;
+                                follows-zone: index > 0;
+                                divider-hidden: zone-list.hovered == zone.id || (index > 0 && zone-list.hovered == root.zones[index - 1].id && !root.zones[index - 1].expanded);
+                                changed header-hovered => {
+                                    if self.header-hovered {
+                                        zone-list.hovered = zone.id;
+                                    } else if zone-list.hovered == zone.id {
+                                        zone-list.hovered = "";
+                                    }
                                 }
-                            }
-                            focus-zone-id <=> root.focus-zone-id;
-                            focus-zone-part <=> root.focus-zone-part;
-                            reveal-zone-id <=> root.reveal-zone-id;
-                            // The card's top at the top of the list.
-                            revealed(y) => {
-                                scroll.content-y = max(min(0px, scroll.visible-height - scroll.content-height), min(0px, speaker-list.absolute-position.y - y));
-                            }
-                            only-this(id) => {
-                                root.speaker-only-this-requested(id);
-                            }
-                            focus-id <=> root.focus-speaker-id;
-                            focus-part <=> root.focus-speaker-part;
-                            zone-toggled => {
-                                root.zone-toggled(zone.id);
-                            }
-                            zone-expanded-changed(open) => {
-                                root.zone-expanded-changed(zone.id, open);
-                            }
-                            zone-volume-changed(value) => {
-                                root.zone-volume-changed(zone.id, value);
-                            }
-                            zone-rename => {
-                                root.zone-rename-requested(zone.id);
-                            }
-                            zone-rename-edited(text) => {
-                                root.zone-rename-edited(zone.id, text);
-                            }
-                            zone-rename-committed => {
-                                root.zone-rename-committed(zone.id);
-                            }
-                            zone-rename-cancelled => {
-                                root.zone-rename-cancelled(zone.id);
-                            }
-                            zone-delete => {
-                                root.zone-deleted(zone.id);
-                            }
-                            zone-calibrate => {
-                                root.zone-calibrate-requested(zone.id);
-                            }
-                            zone-use-target(member) => {
-                                root.zone-use-target-requested(member);
-                            }
-                            zone-focus-changed(part) => {
-                                root.zone-focus-changed(zone.id, part);
-                            }
-                            toggled(id) => {
-                                root.speaker-toggled(id);
-                            }
-                            volume-changed(id, value) => {
-                                root.speaker-volume-changed(id, value);
-                            }
-                            volume-editing(id, on) => {
-                                root.speaker-volume-editing(id, on);
-                            }
-                            sync-toggled(id) => {
-                                root.sync-toggled(id);
-                            }
-                            delay-stepped(id, delta) => {
-                                root.delay-stepped(id, delta);
-                            }
-                            delay-edited(id, text) => {
-                                root.delay-edited(id, text);
-                            }
-                            delay-committed(id) => {
-                                root.delay-committed(id);
-                            }
-                            delay-cancelled(id) => {
-                                root.delay-cancelled(id);
-                            }
-                            auto-connect-toggled(id, on) => {
-                                root.auto-connect-toggled(id, on);
-                            }
-                            forget-pairing(id) => {
-                                root.forget-pairing-requested(id);
-                            }
-                            device-volume-fix(id) => {
-                                root.device-volume-fix-requested(id);
-                            }
-                            system-volume-changed(id, value) => {
-                                root.system-volume-requested(id, value);
-                            }
-                            system-volume-editing(id, on) => {
-                                root.system-volume-editing-requested(id, on);
-                            }
-                            rename-requested(id) => {
-                                root.speaker-rename-requested(id);
-                            }
-                            rename-edited(id, text) => {
-                                root.speaker-rename-edited(id, text);
-                            }
-                            rename-committed(id) => {
-                                root.speaker-rename-committed(id);
-                            }
-                            rename-cancelled(id) => {
-                                root.speaker-rename-cancelled(id);
-                            }
-                            cast-muted(id, muted) => {
-                                root.cast-muted-requested(id, muted);
-                            }
-                            cast-resync(id) => {
-                                root.cast-resync-requested(id);
-                            }
-                            cast-remove(id) => {
-                                root.cast-remove-requested(id);
-                            }
-                            hide-requested(id) => {
-                                root.speaker-hide-requested(id);
-                            }
-                            calibrate(id) => {
-                                root.calibrate-requested(id);
-                            }
-                            move-to-zone(id, zone) => {
-                                root.speaker-move-to-zone-requested(id, zone);
-                            }
-                            new-zone(id) => {
-                                root.speaker-new-zone-requested(id);
-                            }
-                            remove-from-zone(id) => {
-                                root.speaker-remove-from-zone-requested(id);
-                            }
-                            focus-changed(id, part) => {
-                                root.speaker-focus-changed(id, part);
-                            }
-                            blank-clicked => {
-                                root.blank-clicked();
-                            }
-                            cancel-calibration => {
-                                root.cancel-calibration-requested();
-                            }
-                            calibration-privacy => {
-                                root.calibration-privacy-requested();
+                                focus-zone-id <=> root.focus-zone-id;
+                                focus-zone-part <=> root.focus-zone-part;
+                                reveal-zone-id <=> root.reveal-zone-id;
+                                // The card's top at the top of the list.
+                                revealed(y) => {
+                                    scroll.content-y = max(min(0px, scroll.visible-height - scroll.content-height), min(0px, speaker-list.absolute-position.y - y));
+                                }
+                                only-this(id) => {
+                                    root.speaker-only-this-requested(id);
+                                }
+                                focus-id <=> root.focus-speaker-id;
+                                focus-part <=> root.focus-speaker-part;
+                                zone-toggled => {
+                                    root.zone-toggled(zone.id);
+                                }
+                                zone-expanded-changed(open) => {
+                                    root.zone-expanded-changed(zone.id, open);
+                                }
+                                zone-volume-changed(value) => {
+                                    root.zone-volume-changed(zone.id, value);
+                                }
+                                zone-rename => {
+                                    root.zone-rename-requested(zone.id);
+                                }
+                                zone-rename-edited(text) => {
+                                    root.zone-rename-edited(zone.id, text);
+                                }
+                                zone-rename-committed => {
+                                    root.zone-rename-committed(zone.id);
+                                }
+                                zone-rename-cancelled => {
+                                    root.zone-rename-cancelled(zone.id);
+                                }
+                                zone-delete => {
+                                    root.zone-deleted(zone.id);
+                                }
+                                zone-calibrate => {
+                                    root.zone-calibrate-requested(zone.id);
+                                }
+                                zone-use-target(member) => {
+                                    root.zone-use-target-requested(member);
+                                }
+                                zone-focus-changed(part) => {
+                                    // A leaving zone hands the focus on to a neighbour.
+                                    if zone.leaving && part != RowPart.none {
+                                        root.focus-zone-part = part;
+                                        root.focus-zone-id = zone.hand-off;
+                                    } else {
+                                        root.zone-focus-changed(zone.id, part);
+                                    }
+                                }
+                                toggled(id) => {
+                                    root.speaker-toggled(id);
+                                }
+                                volume-changed(id, value) => {
+                                    root.speaker-volume-changed(id, value);
+                                }
+                                volume-editing(id, on) => {
+                                    root.speaker-volume-editing(id, on);
+                                }
+                                sync-toggled(id) => {
+                                    root.sync-toggled(id);
+                                }
+                                delay-stepped(id, delta) => {
+                                    root.delay-stepped(id, delta);
+                                }
+                                delay-edited(id, text) => {
+                                    root.delay-edited(id, text);
+                                }
+                                delay-committed(id) => {
+                                    root.delay-committed(id);
+                                }
+                                delay-cancelled(id) => {
+                                    root.delay-cancelled(id);
+                                }
+                                auto-connect-toggled(id, on) => {
+                                    root.auto-connect-toggled(id, on);
+                                }
+                                forget-pairing(id) => {
+                                    root.forget-pairing-requested(id);
+                                }
+                                device-volume-fix(id) => {
+                                    root.device-volume-fix-requested(id);
+                                }
+                                system-volume-changed(id, value) => {
+                                    root.system-volume-requested(id, value);
+                                }
+                                system-volume-editing(id, on) => {
+                                    root.system-volume-editing-requested(id, on);
+                                }
+                                rename-requested(id) => {
+                                    root.speaker-rename-requested(id);
+                                }
+                                rename-edited(id, text) => {
+                                    root.speaker-rename-edited(id, text);
+                                }
+                                rename-committed(id) => {
+                                    root.speaker-rename-committed(id);
+                                }
+                                rename-cancelled(id) => {
+                                    root.speaker-rename-cancelled(id);
+                                }
+                                cast-muted(id, muted) => {
+                                    root.cast-muted-requested(id, muted);
+                                }
+                                cast-resync(id) => {
+                                    root.cast-resync-requested(id);
+                                }
+                                cast-remove(id) => {
+                                    root.cast-remove-requested(id);
+                                }
+                                hide-requested(id) => {
+                                    root.speaker-hide-requested(id);
+                                }
+                                calibrate(id) => {
+                                    root.calibrate-requested(id);
+                                }
+                                move-to-zone(id, zone) => {
+                                    root.speaker-move-to-zone-requested(id, zone);
+                                }
+                                new-zone(id) => {
+                                    root.speaker-new-zone-requested(id);
+                                }
+                                remove-from-zone(id) => {
+                                    root.speaker-remove-from-zone-requested(id);
+                                }
+                                focus-changed(id, part) => {
+                                    if zone.leaving && part != RowPart.none {
+                                        root.focus-zone-part = RowPart.options;
+                                        root.focus-zone-id = zone.hand-off;
+                                    } else {
+                                        root.speaker-focus-changed(id, part);
+                                    }
+                                }
+                                blank-clicked => {
+                                    root.blank-clicked();
+                                }
+                                cancel-calibration => {
+                                    root.cancel-calibration-requested();
+                                }
+                                calibration-privacy => {
+                                    root.calibration-privacy-requested();
+                                }
                             }
                         }
                     }
@@ -3798,7 +3991,7 @@ export component MainWindow inherits Window {
                         // sentence when neither finds a speaker.
                         property <bool> both-none: root.airplay-none-found && root.cast-list == CastList.none-found;
                         property <string> none-found: self.both-none ? Strings.network-none-found : Strings.airplay-none-found;
-                        property <string> list-note: root.airplay-none-found ? (root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden + " " + self.none-found : self.none-found) : root.connected.length > 0 || root.connected-zoned.length > 0 ? "" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.airplay-searching ? (root.cast-list == CastList.none-found || root.cast-list == CastList.failed ? Strings.looking-for-airplay-speakers : Strings.looking-for-speakers) : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;
+                        property <string> list-note: root.airplay-none-found ? (root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden + "\n" + self.none-found : self.none-found) : root.connected.length > 0 || root.connected-zoned.length > 0 ? "" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.airplay-searching ? (root.cast-list == CastList.none-found || root.cast-list == CastList.failed ? Strings.looking-for-airplay-speakers : Strings.looking-for-speakers) : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden + "\n" + Strings.connected-none : Strings.connected-none;
                         property <string> cast-note: self.both-none || self.list-note == Strings.looking-for-speakers ? "" : Strings.cast-list(root.cast-list);
                         note: self.cast-note == "" ? self.list-note : self.list-note == "" || self.list-note == Strings.connected-none ? self.cast-note : self.list-note + " " + self.cast-note;
                         toggled(id) => {
@@ -3898,6 +4091,11 @@ export component MainWindow inherits Window {
                                 AirPlayDelayControls {
                                     width-given: scroll.width - root.scroll-gutter;
                                     delay-text: root.airplay-delay-text;
+                                    open: root.airplay-delay-open;
+                                    value: root.airplay-delay-value;
+                                    toggled => {
+                                        root.sync-toggled("airplay-delay");
+                                    }
                                     pending: root.airplay-delay-pending;
                                     range-hint: root.airplay-delay-range-hint;
                                     stepped(delta) => {
@@ -3931,7 +4129,7 @@ export component MainWindow inherits Window {
         size: MainColumns.left(root.columns-width) - 28px;
         surface-width: root.width;
         corner: 10px;
-        base: Tokens.surface;
+        base: Fluent.main-window;
         fill: Tokens.text.with-alpha(Tokens.secondary-text-opacity * 0.15);
         has-artwork: root.now-playing-has-artwork;
         artwork: root.now-playing-artwork;
@@ -3976,8 +4174,10 @@ export component MainWindow inherits Window {
 
         CalibrateAllSheet {
             x: (parent.width - self.width) / 2;
-            y: 0;
+            // A gap under the title row, so the sheet's top edge shows.
+            y: Fluent.window-margin / 2;
             room: parent.height - Fluent.window-margin;
+            room-width: parent.width;
             running: root.calibrate-all-running;
             status: root.calibrate-all-status;
             results-shown: root.calibrate-all-results-shown;
@@ -3985,6 +4185,7 @@ export component MainWindow inherits Window {
             airplay: root.calibrate-all-airplay;
             zone: root.calibrate-all-zone;
             outcome: root.calibrate-all-outcome;
+            outcome-problem: root.calibrate-all-outcome-problem;
             can-apply: root.calibrate-all-can-apply;
             applied: root.calibrate-all-applied;
             can-undo: root.calibrate-all-can-undo;

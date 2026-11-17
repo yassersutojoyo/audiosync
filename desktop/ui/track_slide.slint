@@ -47,6 +47,13 @@ export global TrackMotion {
     out property <duration> tick: animation-tick();
 }
 
+// Slint's Skia renderer rounds a text's or image's place to whole pixels
+// while it is only moved, so a slide's slow end steps a pixel at a time; a
+// scale a hair off 1 keeps it gliding between pixels, as Core Animation does.
+global Glide {
+    out property <float> scale: 0.9999;
+}
+
 // A title or artist line: the old one leaves away from the side the cover
 // comes from while the new one comes from that side, inside the column.
 export component SlidLine inherits Rectangle {
@@ -68,6 +75,7 @@ export component SlidLine inherits Rectangle {
 
     if root.sliding: MarqueeText {
         x: root.old-offset * 1px;
+        transform-scale: Glide.scale;
         width: root.width;
         height: root.height;
         text: root.old-text;
@@ -80,6 +88,7 @@ export component SlidLine inherits Rectangle {
 
     line := MarqueeText {
         x: root.offset * 1px;
+        transform-scale: root.sliding ? Glide.scale : 1;
         width: root.width;
         height: root.height;
         text: root.text;
@@ -116,6 +125,7 @@ export component IncomingCover inherits Rectangle {
     height: root.size;
     border-radius: root.corner;
     clip: true;
+    transform-scale: Glide.scale;
     background: root.base;
     opacity: root.look.fades ? root.look.slid : 1;
     accessible-role: none;

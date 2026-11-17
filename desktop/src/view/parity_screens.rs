@@ -261,7 +261,7 @@ fn closing_the_equalizer_drops_a_curve_name_being_typed() {
 }
 
 /// The main window's left column takes the Mac's spacing: the Now Playing
-/// stack 4 apart with the art 16 high and 3 clear, the transport 6 below,
+/// stack 4 apart with the art 22 high and 3 clear, the transport 6 below,
 /// Master Volume 16 under the block, the hairline 11 above and 5 below,
 /// and the rows 6 apart, with no scroll bar on either column.
 // covers: S450
@@ -271,9 +271,16 @@ fn the_left_column_takes_the_macs_spacing() {
     let card = component(&main, "NowPlayingCard");
     assert!(card.contains("padding-top: 2px;\n        spacing: 4px;"));
     assert!(card.contains(
-        "padding-top: 3px;\n            padding-bottom: 3px;\n\n            AmbientArt {\n                height: 16px;"
+        "padding-top: 3px;\n            padding-bottom: 3px;\n\n            AmbientArt {\n                height: 22px;"
     ));
-    assert!(card.contains("y: 6px;"), "the transport 6 under the artist");
+    assert!(
+        card.contains("height: 26px + 6px;"),
+        "the transport's 26 high row 6 under the artist"
+    );
+    assert!(
+        card.contains("y: 3px;"),
+        "its 32 px buttons centred on that row"
+    );
     assert!(card.contains("spacing: root.shuffle >= 0 || root.repeat >= 0 ? 6px : 22px;"));
     assert!(card.contains("glyph-size: 22px;"), "Play and Pause at 22");
     let window = component(&main, "MainWindow");
@@ -345,21 +352,22 @@ fn the_tray_panel_is_300_wide_with_the_macs_padding_and_rows() {
 }
 
 #[test]
-fn presets_equalizer_and_calibrate_are_36_high_rows_6_apart_with_no_border() {
+fn presets_equalizer_and_calibrate_are_28_high_rows_6_apart_with_no_border() {
     let source = include_str!("../../ui/main.slint").replace("\r\n", "\n");
     let quick = component(&source, "QuickRow");
     let equalizer = component(&source, "EqualizerCard");
     let presets = component(&source, "PresetsCard");
     let presets = &presets[..presets.find("list := FoldPane").unwrap()];
+    // The Mac's QuickRow.height (MainWindow.swift:1175).
     for row in [quick, equalizer, presets] {
-        assert!(row.contains("min-height: 36px;"));
+        assert!(row.contains("min-height: 28px;"));
         assert!(
             !row.lines().any(|line| line.starts_with("    border-width")),
             "no border"
         );
         assert!(
             !row.contains("padding-top: 6px;\n"),
-            "both lines inside the 36"
+            "both lines inside the row"
         );
     }
     assert!(quick.contains("border-radius: Fluent.radius-control;"));

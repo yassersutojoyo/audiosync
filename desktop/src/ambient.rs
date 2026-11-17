@@ -22,6 +22,9 @@ pub const FLYOUT_SLOT: f64 = 16.0;
 pub const NO_COVER: [Rgb; 3] = [[0.5; 3]; 3];
 
 const STEPS: usize = 60;
+/// The longest step the art's clock takes between two frames, so a stall
+/// picks up where it stopped instead of jumping (the Mac's `ArtClock.maxStep`).
+const MAX_STEP: f64 = 0.1;
 
 /// One strand as drawn: its path, the breath's line opacity over it, the
 /// sound's own strand in `tone` at `sound`, and the stroke's width.
@@ -56,7 +59,7 @@ impl Driver {
     /// Moves on `dt` seconds; `bands` is the capture's bass, mid and treble
     /// peaks since their last read, `None` while streaming is off.
     pub fn advance(&mut self, dt: f64, bands: impl FnOnce() -> Option<[f32; 3]>) {
-        self.time += dt;
+        self.time += dt.clamp(0.0, MAX_STEP);
         self.since_poll += dt;
         if self.since_poll + 1e-9 < ambient_bands::POLL {
             return;
@@ -193,6 +196,15 @@ mod tests {
     }
 
     #[test]
+    fn a_stalled_frame_moves_the_art_on_a_tenth_of_a_second_as_the_macs_clock_does() {
+        let mut driver = Driver::default();
+        driver.advance(0.5, || None);
+        assert!((driver.time - 0.1).abs() < 1e-9, "{}", driver.time);
+        driver.advance(1.0 / 60.0, || None);
+        assert!((driver.time - (0.1 + 1.0 / 60.0)).abs() < 1e-9);
+    }
+
+    #[test]
     fn held_sound_turns_the_art_live_and_quiet_turns_it_back() {
         let mut driver = Driver::default();
         let frame = 1.0 / 60.0;
@@ -274,7 +286,11 @@ mod tests {
             }
         }
         assert!(widest > 2.0, "it sways: {widest}");
-        assert!(widest < 6.0, "it stays calm: {widest}");
+        // The Mac's resting swing (WindowRules.swift:206) and the breath on top.
+        assert!(
+            widest < ambient_breath::SWAY * 22.0 + 2.5,
+            "it stays calm: {widest}"
+        );
     }
 
     #[test]

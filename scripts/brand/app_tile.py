@@ -5,8 +5,10 @@
         desktop/res/audiosync.ico            the exe's icon (Explorer, the installer)
         desktop/res/audiosync-tile-256.png   the windows' icon (title bar, taskbar, Alt+Tab)
         desktop/msix/Assets/*.png            the MSIX package logos, 44, 150 and 50 px
-      The tile follows the Windows icon grid: inset 3 and rounded 2 on a 48 px
-      canvas, with the mark 30 px wide in its middle. It shades from LIGHT_TEAL at
+      The tile follows the Windows icon grid: inset 3 on a 48 px canvas, with the
+      mark 30 px wide in its middle. Its corners are superellipse arcs of exponent
+      5 that cross the 45 degree line where a radius of 22.5% of the side would,
+      the Mac icon's corner. It shades from LIGHT_TEAL at
       the top left to TEAL at the bottom right, as CSS's 120 degree gradient does.
 
   python -I scripts/brand/app_tile.py --check
@@ -34,7 +36,8 @@ SIZES = (16, 20, 24, 32, 40, 48, 64, 256)
 TEAL = (0x17, 0x8A, 0x7E)
 LIGHT_TEAL = (0x22, 0xAE, 0x9F)
 ANGLE = 120
-GRID, INSET, RADIUS, MARK_WIDTH = 48, 3, 2, 30
+GRID, INSET, MARK_WIDTH = 48, 3, 30
+CORNER, EXPONENT = 0.225, 5
 # Pillow draws shapes without anti-aliasing, so each pixel is drawn 16 x 16
 # times larger and averaged down.
 SUPERSAMPLE = 16
@@ -95,6 +98,21 @@ def gradient():
     return image
 
 
+def squircle(left, top, side):
+    """The tile's outline as a polygon, each corner a superellipse arc."""
+    reach = min(0.5, CORNER * (1 - math.sqrt(0.5)) / (1 - 2 ** (-1 / EXPONENT))) * side
+    points = []
+    for cx, cy, sx, sy, reverse in ((left + side - reach, top + reach, 1, -1, True),
+                                    (left + side - reach, top + side - reach, 1, 1, False),
+                                    (left + reach, top + side - reach, -1, 1, True),
+                                    (left + reach, top + reach, -1, -1, False)):
+        for step in range(65):
+            t = (64 - step if reverse else step) / 64 * math.pi / 2
+            points.append((cx + sx * math.cos(t) ** (2 / EXPONENT) * reach,
+                           cy + sy * math.sin(t) ** (2 / EXPONENT) * reach))
+    return points
+
+
 def tile(size):
     from PIL import Image, ImageDraw
     shapes, width, height = mark_shapes()
@@ -103,8 +121,7 @@ def tile(size):
     # The gradient is smooth, so it is worked out at 256 px and scaled up.
     image = gradient().resize((side, side), Image.Resampling.BILINEAR)
     mask = Image.new('L', (side, side), 0)
-    ImageDraw.Draw(mask).rounded_rectangle(
-        (INSET * unit, INSET * unit, side - INSET * unit - 1, side - INSET * unit - 1), radius=RADIUS * unit, fill=255)
+    ImageDraw.Draw(mask).polygon(squircle(INSET * unit, INSET * unit, side - 2 * INSET * unit), fill=255)
     image.putalpha(mask)
     draw = ImageDraw.Draw(image)
     scale = MARK_WIDTH * unit / width
@@ -175,14 +192,14 @@ def check():
         images[size or 256] = data[offset:offset + length]
     if tuple(sorted(images)) != SIZES:
         sys.exit(f'{ICO}: sizes {sorted(images)}, expected {list(SIZES)}')
-    # The tile's corner is rounded 2 on the 48 px grid: at 256 px the tile starts
-    # at 16 and the curve takes in (20, 20) but not (17, 17).
+    # At 256 px the tile spans 16 to 240 and its corner crosses the diagonal
+    # near 30.5, so (34, 34) is on the tile while (27, 27) and (16, 60) are clear.
     big = png_pixels(images[256])
-    if big[20][20][3] != 255 or big[17][17][3] != 0:
-        sys.exit(f'{ICO}: the 256 px corner is not rounded 2 on the 48 px grid')
+    if big[34][34][3] != 255 or big[27][27][3] != 0 or big[60][16][3] != 0:
+        sys.exit(f'{ICO}: the 256 px corner is not the 22.5% superellipse')
     pixels = png_pixels(images[32])
     # Pixels clear of the mark; a linear gradient averages to its value at a pixel's centre.
-    for x, y in ((16, 4), (4, 28), (28, 28)):
+    for x, y in ((16, 4), (6, 28), (25, 28)):
         u, v = (((n + 0.5) * GRID / 32 - INSET) / (GRID - 2 * INSET) for n in (x, y))
         expected = shade(u, v)
         if any(abs(a - b) > 1 for a, b in zip(pixels[y][x], expected)) or pixels[y][x][3] != 255:

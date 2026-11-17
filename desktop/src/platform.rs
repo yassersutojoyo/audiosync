@@ -71,7 +71,7 @@ pub fn animation_effects() -> bool {
 }
 
 /// Whether the desktop's animations are on, as the settings portal gives
-/// GNOME's `enable-animations`; off until it is read and when it can't be.
+/// GNOME's `enable-animations`; on until it is read and when it can't be.
 /// Read once, off the UI thread: a missing portal can take the bus's
 /// timeout to answer.
 #[cfg(target_os = "linux")]
@@ -93,10 +93,17 @@ pub fn animation_effects() -> bool {
                 let value: zbus::zvariant::OwnedValue = reply.body().deserialize()?;
                 Ok(bool::try_from(value)?)
             };
-            let _ = ON.set(read().unwrap_or(false));
+            let _ = ON.set(animations_read(read().ok()));
         });
     });
-    ON.get().copied().unwrap_or(false)
+    animations_read(ON.get().copied())
+}
+
+/// The Mac moves unless Reduce Motion is on (AmbientArt.swift:99-104), so
+/// only an explicit `false` turns motion off.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn animations_read(enable_animations: Option<bool>) -> bool {
+    enable_animations.unwrap_or(true)
 }
 
 /// Whether a screen reader such as Narrator is running, so controls shown
@@ -175,7 +182,7 @@ pub fn system_summary() -> String {
     };
     format!(
         "{version}{revision}{release}, {machine}, local time {}",
-        notice_time()
+        log_time()
     )
 }
 
@@ -192,7 +199,7 @@ pub fn system_summary() -> String {
         os_release.as_deref(),
         kernel.as_deref(),
         std::env::consts::ARCH,
-        &notice_time(),
+        &log_time(),
     )
 }
 
@@ -202,6 +209,53 @@ pub fn system_summary() -> String {
 pub fn clock_at(seconds: i64, utc_offset: i64) -> String {
     let minutes = (seconds + utc_offset).div_euclid(60).rem_euclid(24 * 60);
     format!("{:02}.{:02}", minutes / 60, minutes % 60)
+}
+
+/// The debug log's local time at `seconds` since the Unix epoch, on a clock
+/// `utc_offset` seconds ahead of UTC, as the Mac writes it, whatever the
+/// user's format: date, seconds and the offset.
+pub fn log_clock_at(seconds: i64, utc_offset: i64) -> String {
+    let local = seconds + utc_offset;
+    let days = local.div_euclid(86_400);
+    let time = local.rem_euclid(86_400);
+    // Days to a civil date, with years counted from March so the leap day ends one.
+    let shifted = days + 719_468;
+    let era = shifted.div_euclid(146_097);
+    let day_of_era = shifted.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let march_month = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * march_month + 2) / 5 + 1;
+    let month = if march_month < 10 {
+        march_month + 3
+    } else {
+        march_month - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    let sign = if utc_offset < 0 { '-' } else { '+' };
+    let offset = utc_offset.abs() / 60;
+    format!(
+        "{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02} {sign}{:02}:{:02}",
+        time / 3600,
+        time / 60 % 60,
+        time % 60,
+        offset / 60,
+        offset % 60
+    )
+}
+
+/// Seconds since the Unix epoch at a date and time of the proleptic
+/// Gregorian calendar.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn civil_seconds(year: i64, month: i64, day: i64, hour: i64, minute: i64, second: i64) -> i64 {
+    let march_year = if month <= 2 { year - 1 } else { year };
+    let era = march_year.div_euclid(400);
+    let year_of_era = march_year.rem_euclid(400);
+    let day_of_year = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146_097 + day_of_era - 719_468;
+    days * 86_400 + hour * 3600 + minute * 60 + second
 }
 
 /// The Linux line of the debug log, from the text of `os-release`, the
@@ -450,7 +504,7 @@ pub fn open_settings(uri: &str) -> bool {
     }
 }
 
-pub use crate::os::notice_time;
+pub use crate::os::{log_time, notice_time};
 
 /// The smallest outer size, in physical pixels, of a window whose inner size
 /// may not go below `min` logical pixels at `dpi`, with a frame (borders,
@@ -1318,6 +1372,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn linux_motion_stays_on_unless_the_desktop_turns_it_off() {
+        assert!(animations_read(None), "missing or unreadable key");
+        assert!(animations_read(Some(true)));
+        assert!(!animations_read(Some(false)));
+    }
+
+    #[test]
     fn a_screen_reader_counts_only_when_windows_reports_it() {
         assert!(screen_reader_read(true, true));
         assert!(!screen_reader_read(true, false));
@@ -1468,6 +1529,31 @@ mod tests {
         assert_eq!(clock_at(20 * 3600, 7 * 3600), "03.00");
         assert_eq!(clock_at(3600, -2 * 3600), "23.00");
         assert_eq!(clock_at(0, 5 * 3600 + 30 * 60), "05.30");
+    }
+
+    #[test]
+    fn the_log_gives_the_local_date_seconds_and_offset_in_a_fixed_form() {
+        assert_eq!(log_clock_at(0, 0), "1970-01-01 00:00:00 +00:00");
+        assert_eq!(
+            log_clock_at(1_794_935_045, 7 * 3600),
+            "2026-11-18 00:04:05 +07:00"
+        );
+        assert_eq!(
+            log_clock_at(951_782_400 - 1, -(3 * 3600 + 30 * 60)),
+            "2000-02-28 20:29:59 -03:30"
+        );
+        assert_eq!(
+            log_clock_at(951_782_400, 5 * 3600 + 45 * 60),
+            "2000-02-29 05:45:00 +05:45"
+        );
+    }
+
+    #[test]
+    fn civil_seconds_counts_from_the_unix_epoch() {
+        assert_eq!(civil_seconds(1970, 1, 1, 0, 0, 0), 0);
+        assert_eq!(civil_seconds(2000, 2, 29, 0, 0, 0), 951_782_400);
+        assert_eq!(civil_seconds(2026, 11, 17, 17, 4, 5), 1_794_935_045);
+        assert_eq!(civil_seconds(1969, 12, 31, 23, 59, 59), -1);
     }
 
     // covers: S170

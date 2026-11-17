@@ -121,6 +121,7 @@ impl App {
         s.set_launch_at_login(m.get_launch_at_login());
         s.set_resume_after_sleep(m.get_resume_after_sleep());
         s.set_switch_source_on_quit(m.get_switch_source_on_quit());
+        s.set_switch_source_on_quit_available(m.get_switch_source_on_quit_available());
         s.set_volume_keys_available(m.get_volume_keys_available());
         s.set_volume_keys(m.get_volume_keys());
         s.set_show_virtual_devices(m.get_show_virtual_devices());

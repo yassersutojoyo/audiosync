@@ -34,18 +34,21 @@ use self::other as imp;
 #[cfg(windows)]
 use self::windows as imp;
 
+#[cfg(windows)]
+pub use engine::restore_records;
 #[cfg(os_backend)]
 pub use imp::data_base;
 #[cfg(feature = "mock-backend")]
 pub use imp::start_with;
 pub use imp::{
-    Instance, Media, claim_instance, computer_name, create_tray, notice_time, sealer, start,
+    Instance, Media, claim_instance, computer_name, create_tray, log_time, notice_time, sealer,
+    start,
 };
 
 /// What [`start`] opened.
 pub struct Started {
     /// What the windows show and drive.
-    pub backend: Box<dyn crate::ui_model::Backend>,
+    pub backend: crate::view::Engine,
     /// What the backend hands the app once its windows exist.
     pub media: Media,
 }

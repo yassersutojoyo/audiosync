@@ -340,6 +340,8 @@ pub enum NoticeSubject {
     SoundOutput,
     /// One Google Cast speaker, by device ID (Windows).
     Cast(String),
+    /// The Google Cast sender stopped working (Windows).
+    CastSender,
     /// The AirPlay speakers play ahead of this Google Cast speaker; apart
     /// from `Cast`, so it never replaces or clears a problem with it (Windows).
     AirPlayAhead(String),

@@ -23,7 +23,7 @@ pub fn start(log: &DebugLog) -> Result<Started, StartError> {
     log.log(|| "audio: the PipeWire backend is open".to_owned());
     let backend = engine::backend(audio, log, &labels, Box::new(track_reader));
     Ok(Started {
-        backend,
+        backend: crate::view::Engine::movable(backend),
         media: Media::new(labels, Box::new(card_reader)),
     })
 }
@@ -34,9 +34,28 @@ pub fn start(log: &DebugLog) -> Result<Started, StartError> {
 pub fn start_with(log: &DebugLog, backend: Box<dyn crate::ui_model::Backend>) -> Started {
     let (_track_reader, card_reader) = audio::mpris::read_media_sessions(log.clone());
     Started {
-        backend,
+        backend: crate::view::Engine::here(backend),
         media: Media::new(SharedLabels::default(), Box::new(card_reader)),
     }
+}
+
+/// The local time now with date, seconds and offset, for the debug log.
+#[allow(
+    clippy::useless_conversion,
+    reason = "time_t and c_long are 32-bit on some targets"
+)]
+pub fn log_time() -> String {
+    // SAFETY: time with a null pointer only returns the time.
+    let now = unsafe { libc::time(std::ptr::null_mut()) };
+    // SAFETY: tm is plain data, which localtime_r fills.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    // SAFETY: both pointers are to live locals of the right types.
+    let offset = if unsafe { libc::localtime_r(&now, &mut tm) }.is_null() {
+        0
+    } else {
+        i64::from(tm.tm_gmtoff)
+    };
+    crate::platform::log_clock_at(i64::from(now), offset)
 }
 
 /// The local time now, hours and minutes, as Windows gives its notices.

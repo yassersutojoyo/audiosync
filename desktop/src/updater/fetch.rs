@@ -177,8 +177,21 @@ pub struct Tls {
 #[cfg(target_os = "linux")]
 impl Fetch for Tls {
     fn get(&self, url: &str, kind: Kind, sink: &mut Sink<'_>) -> Result<(), FetchError> {
-        use std::net::{TcpStream, ToSocketAddrs};
         let deadline = (kind == Kind::Appcast).then(|| Instant::now() + APPCAST_TIMEOUT);
+        self.get_until(url, deadline, sink)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Tls {
+    /// A fetch that ends by `deadline` when given, as a whole.
+    pub fn get_until(
+        &self,
+        url: &str,
+        deadline: Option<Instant>,
+        sink: &mut Sink<'_>,
+    ) -> Result<(), FetchError> {
+        use std::net::{TcpStream, ToSocketAddrs};
         let connector = native_tls::TlsConnector::new()
             .map_err(|error| FetchError::Failed(format!("TLS: {error}")))?;
         follow(url, deadline, &Instant::now, &mut |url, left| {

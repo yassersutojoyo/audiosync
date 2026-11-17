@@ -13,35 +13,44 @@
 #
 # Usage: scripts/screenshots/render.sh [output-dir]
 #        scripts/screenshots/render.sh --review [output-dir]
+#        scripts/screenshots/render.sh --layar output-dir
 #        scripts/screenshots/render.sh --typecheck
 #   output-dir  where the PNGs go (default: docs/images)
 #   --review    also renders states worth checking before a UI change lands
 #               (streaming off with a notice, no speakers) as review-*.png. They
 #               go to a new temporary directory unless output-dir is given, which
 #               must be outside the repository. It skips the social preview.
+#   --layar     renders only the LAYAR states as <ID>-terang|gelap.png, each
+#               with a .json list of its elements for scripts/screen_compare.py
+#               (CI runs this and keeps the folder). output-dir is required.
 #   --typecheck renders nothing: checks that both renderers still compile
 #               against the app sources (CI runs this).
 #
 set -o errexit -o nounset -o pipefail
 
 usage() {
-  echo "usage: scripts/screenshots/render.sh [--review] [output-dir] | --typecheck" >&2
+  echo "usage: scripts/screenshots/render.sh [--review] [output-dir] | --layar output-dir | --typecheck" >&2
   exit 2
 }
 
 review=""
+layar=""
 typecheck=""
 dest=""
 for arg in "$@"; do
   case "$arg" in
     --review) review="--review" ;;
+    --layar) layar="--layar" ;;
     --typecheck) typecheck=1 ;;
     -*) usage ;;
     *) [ -z "$dest" ] || usage; dest="$arg" ;;
   esac
 done
 
-if [ -n "$typecheck" ] && [ -n "$review$dest" ]; then
+if [ -n "$typecheck" ] && [ -n "$review$layar$dest" ]; then
+  usage
+fi
+if [ -n "$layar" ] && { [ -n "$review" ] || [ -z "$dest" ]; }; then
   usage
 fi
 
@@ -89,9 +98,9 @@ swiftc -swift-version 5 "$BUILD/main.swift" "${srcs[@]}" \
   -framework Security -framework CoreFoundation \
   -o "$BUILD/render"
 
-"$BUILD/render" "$dest" brand/fonts/Poppins-Medium.ttf $review
+"$BUILD/render" "$dest" brand/fonts/Poppins-Medium.ttf $review $layar
 
-if [ -z "$review" ]; then
+if [ -z "$review$layar" ]; then
   echo "▶ composing the social preview"
   swiftc -swift-version 5 scripts/screenshots/social-preview.swift -o "$BUILD/social-preview"
   "$BUILD/social-preview" "$dest/main-window-light.png" "$dest/social-preview.png"

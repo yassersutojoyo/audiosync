@@ -94,7 +94,7 @@ pub struct Process {
 }
 
 /// Windows' per-app output, reached through one of the app's processes.
-pub trait AppEndpoints {
+pub trait AppEndpoints: Send {
     /// The app's own output for `role` in device-interface form; empty when
     /// it follows the default.
     fn app_default(&mut self, pid: u32, role: Role) -> Result<String, String>;
@@ -104,7 +104,7 @@ pub trait AppEndpoints {
 }
 
 /// Where the restore record lives: the settings file.
-pub trait AppRecordStore {
+pub trait AppRecordStore: Send {
     fn load(&mut self) -> Result<Option<AppRecord>, String>;
     /// Writes `record`, or deletes the one there with `None`.
     fn save(&mut self, record: Option<&AppRecord>) -> Result<(), String>;
@@ -293,15 +293,15 @@ impl AppRedirect {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::cell::RefCell;
     use std::collections::BTreeMap;
-    use std::rc::Rc;
+    use std::sync::Arc;
 
     use super::*;
+    use crate::audio::test_cells::SyncRefCell;
 
     const SILENT: &str = "{0.0.0.00000000}.{silent}";
 
-    pub(crate) type Calls = Rc<RefCell<Vec<String>>>;
+    pub(crate) type Calls = Arc<SyncRefCell<Vec<String>>>;
 
     /// Windows' per-app outputs, keyed by executable and role.
     pub(crate) struct Fake {
@@ -324,7 +324,7 @@ pub(crate) mod tests {
     impl Fake {
         pub(crate) fn new(calls: &Calls, processes: &[Process]) -> Fake {
             Fake {
-                calls: Rc::clone(calls),
+                calls: Arc::clone(calls),
                 exes: processes.iter().map(|p| (p.pid, p.exe.clone())).collect(),
                 outputs: BTreeMap::new(),
                 failing: None,
@@ -414,7 +414,7 @@ pub(crate) mod tests {
         let calls = Calls::default();
         let fake = Fake::new(&calls, processes);
         let store = Store {
-            calls: Rc::clone(&calls),
+            calls: Arc::clone(&calls),
             record: None,
             failing: false,
         };
@@ -609,11 +609,11 @@ pub(crate) mod tests {
     }
 
     /// A fake shared with the test once the controller holds it.
-    pub(crate) struct Shared<T>(pub(crate) Rc<RefCell<T>>);
+    pub(crate) struct Shared<T>(pub(crate) Arc<SyncRefCell<T>>);
 
     impl<T> Clone for Shared<T> {
         fn clone(&self) -> Self {
-            Shared(Rc::clone(&self.0))
+            Shared(Arc::clone(&self.0))
         }
     }
 

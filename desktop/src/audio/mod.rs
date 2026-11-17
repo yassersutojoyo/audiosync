@@ -73,6 +73,8 @@ pub mod pipewire;
 pub mod process;
 pub mod render;
 pub mod routing;
+#[cfg(test)]
+pub mod test_cells;
 pub mod wake_resume;
 #[cfg(windows)]
 pub mod wasapi;

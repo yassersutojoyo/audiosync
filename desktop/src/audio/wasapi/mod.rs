@@ -94,8 +94,8 @@ impl Driver for WasapiDriver {
         processes::audio_session_pids()
     }
 
-    fn window_pids(&mut self) -> Vec<u32> {
-        processes::window_pids()
+    fn window_pids(&mut self) -> Option<Vec<u32>> {
+        Some(processes::window_pids())
     }
 
     fn outputs(&mut self) -> Result<Listing, BackendError> {

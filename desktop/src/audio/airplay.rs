@@ -121,7 +121,7 @@ const AIRPLAY_RATE: u32 = audiosync_airplay::audio::SAMPLE_RATE;
 const FEED_CHUNK: usize = 1024;
 
 /// The calls the backend makes on the AirPlay sender.
-pub trait AirPlayLink {
+pub trait AirPlayLink: Send {
     /// Adds a speaker, or updates one already added (its delay and volume at
     /// once, its device for its next session). Returns its counters when the
     /// sender keeps them.
@@ -265,7 +265,7 @@ impl StartedSender {
 
 /// Starts a sender: at launch, and when the user retries after one stopped
 /// or couldn't start; `None` when it couldn't start (it logs why).
-pub type SenderStarter = Box<dyn FnMut() -> Option<StartedSender>>;
+pub type SenderStarter = Box<dyn FnMut() -> Option<StartedSender> + Send>;
 
 /// Whether the AirPlay 2 path runs (spec P2, P170): when the environment
 /// variable turns it on without a rebuild.
@@ -4786,11 +4786,9 @@ impl Drop for AirPlaySpeakers {
 
 #[cfg(test)]
 pub mod tests {
-    use std::cell::RefCell;
     use std::collections::VecDeque;
     use std::io::{Read, Write};
     use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
-    use std::rc::Rc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread::{self, JoinHandle};
 
@@ -4806,6 +4804,7 @@ pub mod tests {
     use crate::audio::backend::{AudioBackend, SourceId};
     use crate::audio::explicit_pause::STALE_READING;
     use crate::audio::mock::MockBackend;
+    use crate::audio::test_cells::SyncRefCell;
     use audiosync_core::volume::row_level;
 
     #[test]
@@ -5072,12 +5071,12 @@ pub mod tests {
     /// A fake sender: records every call, and hands out the events a test
     /// queues.
     #[derive(Clone)]
-    pub struct FakeAirPlay(Rc<RefCell<FakeState>>);
+    pub struct FakeAirPlay(Arc<SyncRefCell<FakeState>>);
 
     impl FakeAirPlay {
         /// A fake with the sender's default L.
         pub fn new() -> FakeAirPlay {
-            FakeAirPlay(Rc::new(RefCell::new(FakeState {
+            FakeAirPlay(Arc::new(SyncRefCell::new(FakeState {
                 latency: Duration::from_millis(1750),
                 ..FakeState::default()
             })))
@@ -5101,7 +5100,7 @@ pub mod tests {
         /// Every link handed out was dropped, which tears the sender down.
         #[cfg_attr(not(windows), allow(dead_code))]
         pub fn links_dropped(&self) -> bool {
-            Rc::strong_count(&self.0) == 1
+            Arc::strong_count(&self.0) == 1
         }
 
         /// Queues an event for the backend's next poll.

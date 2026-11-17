@@ -29,7 +29,7 @@ pub fn start(log: &DebugLog) -> Result<Started, StartError> {
     log.log(|| "audio: the WASAPI backend is open".to_owned());
     let backend = engine::backend(audio, log, &labels, Box::new(track_reader));
     Ok(Started {
-        backend,
+        backend: crate::view::Engine::movable(backend),
         media: Media::new(labels, Box::new(card_reader)),
     })
 }
@@ -40,7 +40,7 @@ pub fn start(log: &DebugLog) -> Result<Started, StartError> {
 pub fn start_with(log: &DebugLog, backend: Box<dyn crate::ui_model::Backend>) -> Started {
     let (_track_reader, card_reader) = audio::wasapi::read_media_sessions(log.clone());
     Started {
-        backend,
+        backend: crate::view::Engine::here(backend),
         media: Media::new(SharedLabels::default(), Box::new(card_reader)),
     }
 }
@@ -224,6 +224,30 @@ pub fn computer_name() -> Option<String> {
     .ok()?;
     buffer.truncate(size as usize);
     String::from_utf16(&buffer).ok()
+}
+
+/// The local time now with date, seconds and offset, for the debug log,
+/// whatever the user's format.
+pub fn log_time() -> String {
+    use windows::Win32::Foundation::SYSTEMTIME;
+    use windows::Win32::System::SystemInformation::{GetLocalTime, GetSystemTime};
+
+    let seconds = |t: SYSTEMTIME| {
+        crate::platform::civil_seconds(
+            t.wYear.into(),
+            t.wMonth.into(),
+            t.wDay.into(),
+            t.wHour.into(),
+            t.wMinute.into(),
+            t.wSecond.into(),
+        )
+    };
+    // SAFETY: both only read the clock.
+    let (utc, local) = unsafe { (GetSystemTime(), GetLocalTime()) };
+    let utc = seconds(utc);
+    // Rounded to whole minutes: the second may tick between the two reads.
+    let offset = ((seconds(local) - utc) as f64 / 60.0).round() as i64 * 60;
+    crate::platform::log_clock_at(utc, offset)
 }
 
 /// The local time now, in the user's short time format ("09.40", "9:40 AM"):

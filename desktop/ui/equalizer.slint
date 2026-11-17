@@ -38,9 +38,10 @@ component Band inherits VerticalLayout {
         vertical-stretch: 1;
         focus-on-click: false;
         focus-on-tab-navigation: false;
-        // Home and End would throw the band to -12 or +12 dB in one key.
+        // Home, End, Page Up and Page Down would throw the band far in one
+        // key; the Mac's band ignores them.
         capture-key-pressed(event) => {
-            event.text == Key.Home || event.text == Key.End ? accept : reject
+            event.text == Key.Home || event.text == Key.End || event.text == Key.PageUp || event.text == Key.PageDown ? accept : reject
         }
         key-pressed(event) => {
             if event.modifiers.control || event.modifiers.alt || event.modifiers.shift || event.modifiers.meta
@@ -421,6 +422,10 @@ export component EqualizerWindow inherits Window {
     callback help-requested();
     callback new-zone-requested();
     callback refresh-devices();
+    // Ctrl+, Ctrl+E and Ctrl+0: Settings, the Equalizer and the main window.
+    callback settings-requested();
+    callback equalizer-requested();
+    callback main-window-requested();
 
     title: Strings.equalizer-title;
     icon: @image-url("../res/audiosync-256.png");
@@ -470,8 +475,20 @@ export component EqualizerWindow inherits Window {
                 root.new-zone-requested();
                 return accept;
             }
-            if event.text == Key.F5 && !event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta {
+            if (event.text == Key.F5 && !event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta) || (event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text.to-lowercase() == "r") {
                 root.refresh-devices();
+                return accept;
+            }
+            if event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text == "," {
+                root.settings-requested();
+                return accept;
+            }
+            if event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text.to-lowercase() == "e" {
+                root.equalizer-requested();
+                return accept;
+            }
+            if event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text == "0" {
+                root.main-window-requested();
                 return accept;
             }
             if event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text.character-count == 1 && event.text.is-float() && event.text.to-float() >= 1 {

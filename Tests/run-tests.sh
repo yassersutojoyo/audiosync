@@ -7,7 +7,7 @@
 # if shellcheck isn't installed: brew install shellcheck), the private-reference
 # check, scripts/privacy_check.py, the host spec-marker check,
 # scripts/spec_markers.py, the SwiftUI macro check, scripts/swift_macros.py,
-# and the appcast checker's self-test. The logic and core suites, the soak harness
+# and the appcast checker's and screen comparer's self-tests. The logic and core suites, the soak harness
 # and the engine test link the Rust core, so this builds it first with
 # scripts/build_core.sh (which needs a Rust toolchain).
 # Off macOS (the Windows PC's Git Bash) the Swift suites can't build, so it runs
@@ -136,6 +136,14 @@ if [ -z "$python" ]; then
   status=1
 else
   "$python" -I scripts/check_appcast.py --self-test || status=1
+fi
+
+echo "▶ screen element comparer (scripts/screen_compare.py --self-test)"
+if [ -z "$python" ]; then
+  echo "$no_python"
+  status=1
+else
+  "$python" -I scripts/screen_compare.py --self-test || status=1
 fi
 
 echo "▶ Windows app icon (scripts/brand/app_tile.py --check)"

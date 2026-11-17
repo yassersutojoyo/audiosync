@@ -39,9 +39,7 @@
 //! hangs holds up the reader's thread only, and a failed reading counts as
 //! no track.
 
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use audiosync_airplay::metadata::{Artwork as SenderArtwork, TrackInfo as TrackFields};
@@ -151,15 +149,18 @@ impl ReceiverLabels {
 /// once they do, before any receiver can play. Without them receivers get
 /// nothing.
 #[derive(Clone, Default)]
-pub struct SharedLabels(Rc<RefCell<Option<ReceiverLabels>>>);
+pub struct SharedLabels(Arc<Mutex<Option<ReceiverLabels>>>);
 
 impl SharedLabels {
     pub fn set(&self, labels: ReceiverLabels) {
-        *self.0.borrow_mut() = Some(labels);
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(labels);
     }
 
     fn get(&self) -> Option<ReceiverLabels> {
-        self.0.borrow().clone()
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 }
 
@@ -368,7 +369,7 @@ pub struct Reading {
 }
 
 /// Reads the media sessions.
-pub trait TrackReader {
+pub trait TrackReader: Send {
     /// Reads every [`POLL_INTERVAL`] from now on, for `follow`, or stops
     /// reading (`None`). A reading made for an earlier follow is dropped.
     fn follow(&mut self, follow: Option<Follow>);
@@ -898,14 +899,13 @@ fn describe(now_playing: &NowPlaying, track: Option<&Track>) -> String {
 
 #[cfg(test)]
 pub mod fake {
-    use std::cell::RefCell;
-    use std::rc::Rc;
     use std::sync::Arc;
 
     use super::{
         FittedArtwork, Follow, MediaSession, Reading, ReceiverLabels, SharedLabels, Track,
         TrackReader, Transport,
     };
+    use crate::audio::test_cells::SyncRefCell;
 
     /// Labels unlike the UI's, so a test sees they come from the strings.
     pub fn labels() -> ReceiverLabels {
@@ -937,7 +937,7 @@ pub mod fake {
 
     /// A reader whose readings a test makes.
     #[derive(Clone, Default)]
-    pub struct FakeReader(Rc<RefCell<FakeState>>);
+    pub struct FakeReader(Arc<SyncRefCell<FakeState>>);
 
     impl FakeReader {
         pub fn with_icon(icon: &[u8]) -> FakeReader {

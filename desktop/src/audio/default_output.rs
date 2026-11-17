@@ -53,7 +53,7 @@ pub struct Candidate {
 }
 
 /// Windows' default output per role, and the active render endpoints.
-pub trait DefaultEndpoints {
+pub trait DefaultEndpoints: Send {
     /// The role's default endpoint ID; `None` when no endpoint has the role.
     fn default_id(&mut self, role: Role) -> Result<Option<String>, String>;
     /// Makes `id` the role's default.
@@ -63,7 +63,7 @@ pub trait DefaultEndpoints {
 }
 
 /// Where the restore record lives: the settings file.
-pub trait RecordStore {
+pub trait RecordStore: Send {
     fn load(&mut self) -> Result<Option<Record>, String>;
     /// Writes `record`, or deletes the one there with `None`.
     fn save(&mut self, record: Option<&Record>) -> Result<(), String>;
@@ -401,8 +401,8 @@ impl DefaultSwitch {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use crate::audio::test_cells::SyncRefCell;
+    use std::sync::Arc;
 
     pub(crate) const SPEAKERS: &str = "{0.0.0.00000000}.speakers";
     const HEADSET: &str = "{0.0.0.00000000}.headset";
@@ -411,11 +411,11 @@ pub(crate) mod tests {
     const PHONE: &str = "{0.0.0.00000000}.phone";
 
     /// What happened, in order, across the fake endpoints and store.
-    pub(crate) type Calls = Rc<RefCell<Vec<String>>>;
+    pub(crate) type Calls = Arc<SyncRefCell<Vec<String>>>;
 
     pub(crate) struct Fake {
         calls: Calls,
-        endpoints: Vec<Candidate>,
+        pub(crate) endpoints: Vec<Candidate>,
         pub(crate) console: Option<String>,
         pub(crate) multimedia: Option<String>,
         /// The communications default, which nothing may change.
@@ -429,7 +429,7 @@ pub(crate) mod tests {
     impl Fake {
         pub(crate) fn new(calls: &Calls) -> Fake {
             Fake {
-                calls: Rc::clone(calls),
+                calls: Arc::clone(calls),
                 endpoints: vec![
                     candidate(SPEAKERS, OutputKind::BuiltIn),
                     candidate(HEADSET, OutputKind::Usb),
@@ -485,7 +485,7 @@ pub(crate) mod tests {
     impl Store {
         pub(crate) fn new(calls: &Calls) -> Store {
             Store {
-                calls: Rc::clone(calls),
+                calls: Arc::clone(calls),
                 record: None,
                 fails: false,
             }
@@ -509,11 +509,11 @@ pub(crate) mod tests {
     }
 
     /// A fake shared with the test once the controller holds it.
-    pub(crate) struct Shared<T>(pub(crate) Rc<RefCell<T>>);
+    pub(crate) struct Shared<T>(pub(crate) Arc<SyncRefCell<T>>);
 
     impl<T> Clone for Shared<T> {
         fn clone(&self) -> Self {
-            Shared(Rc::clone(&self.0))
+            Shared(Arc::clone(&self.0))
         }
     }
 

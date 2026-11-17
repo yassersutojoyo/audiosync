@@ -7,7 +7,7 @@
 //! names the newest notice, if any.
 //!
 //! On Linux the icon is a StatusNotifier item: the app's colored icon,
-//! dimmed while streaming is off. A left click opens the flyout at the
+//! dimmed while streaming is off, with a badge while a notice is up. A left click opens the flyout at the
 //! pointer, since the host gives no icon position; a host that only shows
 //! the menu sends no click, and its menu holds Open AudioSync.
 
@@ -117,13 +117,13 @@ impl IconChoice {
 #[derive(Clone, Copy, PartialEq)]
 struct IconChoice {
     running: bool,
+    notice: bool,
 }
 
 #[cfg(target_os = "linux")]
 impl IconChoice {
-    // The panel's icon has no notice badge.
-    fn current(running: bool, _notice: bool) -> IconChoice {
-        IconChoice { running }
+    fn current(running: bool, notice: bool) -> IconChoice {
+        IconChoice { running, notice }
     }
 }
 
@@ -361,6 +361,9 @@ fn load_icon(choice: IconChoice) -> Result<Icon, TrayError> {
     if !choice.running {
         crate::os::tray_watch::dim(&mut rgba);
     }
+    if choice.notice {
+        crate::os::tray_watch::badge(&mut rgba, frame.width, frame.height);
+    }
     Icon::from_rgba(rgba, frame.width, frame.height).map_err(|e| error(&e))
 }
 
@@ -439,7 +442,7 @@ fn on_menu_event(id: MenuId) {
         app.show_main();
     } else if id == MenuIds::TOGGLE {
         let running = app.snapshot().running;
-        app.update(|backend| backend.set_running(!running));
+        app.set_running(!running, &Rc::downgrade(&app));
     } else if id == MenuIds::LOGIN {
         app.set_launch_at_login(!app.launch_at_login());
     } else if id == MenuIds::EXIT {
@@ -562,6 +565,39 @@ mod tests {
     }
 
     use super::show_pending;
+
+    /// The menu's Start starts streaming off the UI thread, as the windows'
+    /// switch does: opening the capture takes Windows about 190 ms.
+    #[test]
+    fn the_menus_start_returns_at_once_while_streaming_starts_elsewhere() {
+        use super::*;
+        use crate::audio::backend::AudioBackend as _;
+        use crate::debug_log::DebugLog;
+        let mut audio = crate::audio::mock::MockBackend::empty();
+        audio.connect_output("speakers", "Speakers");
+        audio.add_app(2000, "Spotify.exe");
+        audio
+            .set_output_enabled("speakers", true)
+            .expect("switched on");
+        audio.slow_capture_starts(Duration::from_millis(500));
+        let adapter =
+            crate::adapter::AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        let _ = slint::platform::set_platform(Box::new(view::tests::Headless));
+        let app = App::new(
+            view::Engine::movable(Box::new(adapter)),
+            DebugLog::new(None),
+        )
+        .expect("headless windows");
+        APP.with(|cell| *cell.borrow_mut() = Rc::downgrade(&app));
+        let pressed = Instant::now();
+        on_menu_event(MenuId::new(MenuIds::TOGGLE));
+        let held = pressed.elapsed();
+        assert!(
+            held < Duration::from_millis(250),
+            "the menu held the UI thread {held:?}"
+        );
+        assert!(app.snapshot().running);
+    }
 
     #[test]
     fn a_tooltip_windows_refuses_is_kept_until_it_is_shown() {

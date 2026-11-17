@@ -127,7 +127,7 @@ fn a_notice_opens_and_closes_on_the_macs_320_ms_with_no_slide() {
     assert!(!stack.contains("6px * (1 - slot.shown)"), "no slide");
     let view = include_str!("../view.rs").replace("\r\n", "\n");
     assert!(
-        view.contains("get_on() {\n        320\n"),
+        view.contains("get_on() {\n            320\n"),
         "dismissed after the room shuts"
     );
 }
@@ -158,7 +158,8 @@ fn add_by_address_is_a_small_bordered_button_on_the_badge_column() {
     let at = section.find("text: Strings.cast-add-address;").unwrap();
     let before = &section[at.saturating_sub(300)..at];
     assert!(before.contains("padding-left: Fluent.row-padding-x;"));
-    assert!(before.contains("padding-top: 6px;") && before.contains("padding-bottom: 6px;"));
+    // 10 px under the line, as the Mac's (MainWindow.swift:664-665 on the rows-tidy commit).
+    assert!(before.contains("padding-top: 10px;") && before.contains("padding-bottom: 6px;"));
 }
 
 #[test]

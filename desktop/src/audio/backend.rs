@@ -723,6 +723,12 @@ pub enum BackendEvent {
         /// Why.
         problem: CastProblem,
     },
+    /// The Google Cast sender stopped working, so its speakers left the
+    /// list until AudioSync starts again.
+    CastSenderFailed {
+        /// The ID of the speaker that was on, now off.
+        was_on: Option<String>,
+    },
     /// A Google Cast speaker didn't prove it's genuine and plays anyway;
     /// posted once, when it is first marked (spec C131).
     CastUnauthenticated {

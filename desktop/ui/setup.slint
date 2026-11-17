@@ -313,7 +313,8 @@ export component SetupWindow inherits Window {
 
                 Rectangle {
                     background: Tokens.surface;
-                    border-radius: Fluent.radius-card;
+                    // The Mac's setup list (SetupWindow.swift:150).
+                    border-radius: 8px;
                     border-width: 1px;
                     border-color: Fluent.stroke;
                     clip: true;

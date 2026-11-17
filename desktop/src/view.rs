@@ -62,7 +62,10 @@ use crate::{
     speaker_names,
 };
 
+mod engine;
 mod help_window;
+#[cfg(test)]
+mod layar_shots;
 #[cfg(test)]
 mod parity_calibrate;
 #[cfg(test)]
@@ -74,6 +77,8 @@ mod parity_screens;
 mod remote_window;
 mod settings_window;
 mod setup_window;
+
+pub use engine::Engine;
 
 /// The digits the PIN field keeps of what was typed: four at most.
 fn pin_digits(text: &str) -> String {
@@ -457,6 +462,9 @@ impl NoticeAnnouncer {
 
 /// How often the backend is polled for what happened on its own.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
+/// How often the windows look whether streaming came back from starting on
+/// its own thread: once a frame.
+const START_CHECK_INTERVAL: Duration = Duration::from_millis(16);
 
 /// A frame of the Now Playing cards' slide.
 const SLIDE_FRAME: Duration = Duration::from_millis(16);
@@ -792,7 +800,7 @@ type RefreshHook = Box<dyn Fn(&AppState)>;
 
 /// The application's windows and the backend behind them.
 pub struct App {
-    backend: RefCell<Box<dyn Backend>>,
+    backend: Engine,
     pub main: MainWindow,
     pub flyout: TrayFlyout,
     pub equalizer: EqualizerWindow,
@@ -860,6 +868,14 @@ pub struct App {
     /// not in the rows, which a refresh may rebuild mid-fade. Each keeps the
     /// text it fades with, so one raised again with new text leaves the fade.
     closing_notices: RefCell<Vec<(u64, NoticeMessage)>>,
+    /// The notices that left the main window's list on their own, kept
+    /// there closing until their fade is over.
+    leaving_notices: RefCell<Vec<NoticeItem>>,
+    /// The app itself, for the timer that ends those fades.
+    me: RefCell<Weak<App>>,
+    /// Rows that come into or leave the main window's lists ease in and out
+    /// (`sync_rows`); the tests' lists change at once unless one turns it on.
+    rows_ease: Cell<bool>,
     /// The calibration ending Narrator was last told about.
     calibration_announced: RefCell<Option<(String, Phase)>>,
     /// The Calibrate All ending Narrator was last told about.
@@ -875,6 +891,8 @@ pub struct App {
     repeat_timer: Timer,
     /// Polls the backend; it stops when the app is dropped.
     poll_timer: Timer,
+    /// Shows the state once streaming came back from starting.
+    start_timer: Timer,
     /// Shows the next song once the Now Playing card's cover hold runs out.
     art_hold_timer: Timer,
     window_slide: RefCell<TrackSlide>,
@@ -884,6 +902,9 @@ pub struct App {
     motion_epoch: std::time::Instant,
     /// Draws the Now Playing cards' slide frames while one moves.
     slide_timer: Timer,
+    /// With the debug log on: what moves, for how long, and the main
+    /// window's frame times since it started.
+    frame_trace: RefCell<Option<(&'static str, Duration, Vec<std::time::Instant>)>>,
     /// Moves a microphone calibration on while one holds the outputs.
     calibration_timer: Timer,
     /// Moves the input level meter while an input device is captured.
@@ -897,6 +918,9 @@ pub struct App {
     ambient_frame_at: Cell<std::time::Instant>,
     /// The cover's top, middle and bottom colours.
     ambient_cover: Cell<[Rgb; 3]>,
+    /// The art's strands in the main window and the tray panel, kept from
+    /// frame to frame so a frame changes their rows instead of rebuilding them.
+    ambient_rows: [Rc<VecModel<AmbientStrand>>; 2],
     /// The image of the cover shown last.
     cover_image: RefCell<CoverImage>,
     /// The still line is drawn for the cover shown now.
@@ -935,7 +959,7 @@ fn deliver_new_session() {
         VOLUME_KEY_APP.with(|app| {
             with_app(&app.borrow(), |app| {
                 // Busy only inside a nested loop; the next poll takes it then.
-                if let Ok(mut backend) = app.backend.try_borrow_mut() {
+                if let Some(mut backend) = app.backend.try_borrow_mut() {
                     backend.follow_new_sessions();
                 }
             });
@@ -1054,14 +1078,8 @@ fn close_main_notices(weak: &Weak<App>, ids: Option<u64>) {
         return;
     }
     app.refresh();
-    // The fade's length in widgets.slint's NoticeStack.
-    let fade = if app.main.global::<Motion>().get_on() {
-        320
-    } else {
-        150
-    };
     let weak = weak.clone();
-    Timer::single_shot(Duration::from_millis(fade), move || {
+    Timer::single_shot(app.notice_fade(), move || {
         with_app(&weak, |app| {
             // One raised again with new text left the fade on that refresh, so
             // it stays even if its text has since changed back.
@@ -1279,7 +1297,7 @@ fn fitted_main_frame(
 
 impl App {
     /// The windows over `backend`; what they do themselves goes to `log`.
-    pub fn new(backend: Box<dyn Backend>, log: DebugLog) -> Result<Rc<App>, slint::PlatformError> {
+    pub fn new(backend: Engine, log: DebugLog) -> Result<Rc<App>, slint::PlatformError> {
         #[cfg(any(windows, all(target_os = "linux", not(test))))]
         let log_for_updater = log.clone();
         crate::platform::set_min_size_log(log.clone());
@@ -1309,7 +1327,7 @@ impl App {
             calibration_left_out: Rc::new(VecModel::default()),
         };
         let app = Rc::new(App {
-            backend: RefCell::new(backend),
+            backend,
             main: MainWindow::new()?,
             flyout: TrayFlyout::new()?,
             equalizer: EqualizerWindow::new()?,
@@ -1346,6 +1364,9 @@ impl App {
             on_refresh: RefCell::new(None),
             notice_announcer: RefCell::default(),
             closing_notices: RefCell::default(),
+            leaving_notices: RefCell::default(),
+            me: RefCell::default(),
+            rows_ease: Cell::new(!cfg!(test)),
             calibration_announced: RefCell::default(),
             calibrate_all_announced: Cell::new(0),
             calibrate_all_measuring: RefCell::default(),
@@ -1353,11 +1374,13 @@ impl App {
             announcement_timer: Timer::default(),
             repeat_timer: Timer::default(),
             poll_timer: Timer::default(),
+            start_timer: Timer::default(),
             art_hold_timer: Timer::default(),
             window_slide: RefCell::new(TrackSlide::new(Place::Window)),
             panel_slide: RefCell::new(TrackSlide::new(Place::Panel)),
             motion_epoch: std::time::Instant::now(),
             slide_timer: Timer::default(),
+            frame_trace: RefCell::default(),
             calibration_timer: Timer::default(),
             meter_timer: Timer::default(),
             meter_level: Cell::new(0.0),
@@ -1365,6 +1388,7 @@ impl App {
             ambient: RefCell::default(),
             ambient_frame_at: Cell::new(std::time::Instant::now()),
             ambient_cover: Cell::new(ambient::NO_COVER),
+            ambient_rows: Default::default(),
             cover_image: RefCell::default(),
             ambient_still_drawn: Cell::new(false),
             login: RefCell::new(LaunchAtLogin::new(
@@ -1381,6 +1405,7 @@ impl App {
             #[cfg(all(windows, not(test)))]
             volume_key_hook: RefCell::default(),
         });
+        *app.me.borrow_mut() = Rc::downgrade(&app);
         #[cfg(all(windows, not(test)))]
         VOLUME_KEY_APP.with(|slot| *slot.borrow_mut() = Rc::downgrade(&app));
         #[cfg(all(windows, not(test)))]
@@ -1422,6 +1447,16 @@ impl App {
             });
         }
         app.refresh();
+        if app.log.enabled() {
+            let weak = Rc::downgrade(&app);
+            let _ = app.main.window().set_rendering_notifier(move |state, _| {
+                if matches!(state, slint::RenderingState::AfterRendering)
+                    && let Some(app) = weak.upgrade()
+                {
+                    app.note_frame();
+                }
+            });
+        }
         let weak = Rc::downgrade(&app);
         app.main.global::<TrackMotion>().on_slide(move |tick| {
             weak.upgrade().map_or_else(SlideLook::default, |app| {
@@ -1487,7 +1522,7 @@ impl App {
 
     /// [`App::snapshot`] with every notice, also those past the capacity.
     fn every_notice(&self) -> AppState {
-        let mut state = self.backend.borrow().snapshot();
+        let mut state = self.backend.snapshot();
         state.notices.extend(self.login.borrow().notice().cloned());
         state.notices.extend(self.remote_public_notice());
         state.notices.extend(self.updater_notice());
@@ -1554,6 +1589,60 @@ impl App {
             || self.dismiss_updater_notice(id)
     }
 
+    /// The fade's length in widgets.slint's NoticeStack.
+    fn notice_fade(&self) -> Duration {
+        Duration::from_millis(if self.main.global::<Motion>().get_on() {
+            320
+        } else {
+            150
+        })
+    }
+
+    /// Keeps each notice gone from `notices` since the last refresh in its
+    /// place, closing, until its fade is over (WindowRules.swift:642-657).
+    /// One dismissed with its X has faded already.
+    fn keep_leaving_notices(&self, notices: &mut Vec<NoticeItem>) {
+        let mut leaving = self.leaving_notices.borrow_mut();
+        leaving.retain(|gone| notices.iter().all(|n| n.id != gone.id));
+        if !self.rows_ease.get() || !self.main.window().is_visible() {
+            leaving.clear();
+            return;
+        }
+        let mut started = Vec::new();
+        for (at, shown) in self.models.notices.iter().enumerate() {
+            if notices.iter().any(|n| n.id == shown.id) {
+                continue;
+            }
+            let gone = match leaving.iter().find(|gone| gone.id == shown.id) {
+                Some(gone) => gone.clone(),
+                None if !shown.closing => {
+                    let gone = NoticeItem {
+                        closing: true,
+                        fresh: false,
+                        ..shown
+                    };
+                    leaving.push(gone.clone());
+                    started.push(gone.id);
+                    gone
+                }
+                None => continue,
+            };
+            notices.insert(at.min(notices.len()), gone);
+        }
+        if started.is_empty() {
+            return;
+        }
+        let me = self.me.borrow().clone();
+        Timer::single_shot(self.notice_fade(), move || {
+            with_app(&me, |app| {
+                app.leaving_notices
+                    .borrow_mut()
+                    .retain(|gone| !started.contains(&gone.id));
+                app.refresh();
+            });
+        });
+    }
+
     /// Dismisses the listed notices only: one that dropped off stays.
     fn dismiss_all_notices(&self) {
         self.dismiss_listed_notices(|_| true);
@@ -1570,7 +1659,25 @@ impl App {
 
     /// Changes the backend, then shows the result everywhere.
     pub fn update(&self, change: impl FnOnce(&mut dyn Backend)) {
-        change(self.backend.borrow_mut().as_mut());
+        change(&mut *self.backend.borrow_mut());
+        self.refresh();
+    }
+
+    /// Switches streaming on or off; a start on the backend's own thread
+    /// shows once it is back.
+    pub fn set_running(&self, on: bool, weak: &Weak<App>) {
+        if self.backend.set_running(on) {
+            let weak = weak.clone();
+            self.start_timer
+                .start(TimerMode::Repeated, START_CHECK_INTERVAL, move || {
+                    with_app(&weak, |app| {
+                        if app.backend.is_here() {
+                            app.start_timer.stop();
+                            app.refresh();
+                        }
+                    });
+                });
+        }
         self.refresh();
     }
 
@@ -1600,7 +1707,7 @@ impl App {
     /// the main window shows; it stops itself when the capture ends, the
     /// source changes or the window hides or is minimized.
     fn follow_input_level(&self, weak: &Weak<App>) {
-        if self.meter_timer.running() {
+        if self.meter_timer.running() || !self.backend.is_here() {
             return;
         }
         if !matches!(self.main_window_shows(), MainWindowShows::Not) {
@@ -1631,6 +1738,9 @@ impl App {
             self.main.set_input_level(0.0);
             self.main.set_input_level_spoken(0);
             return false;
+        }
+        if !self.backend.is_here() {
+            return true;
         }
         let Some(peak) = self.backend.borrow_mut().input_peak() else {
             self.meter_timer.stop();
@@ -1711,9 +1821,11 @@ impl App {
             }
             return;
         }
-        self.ambient
-            .borrow_mut()
-            .advance(dt, || self.backend.borrow_mut().sound_bands());
+        self.ambient.borrow_mut().advance(dt, || {
+            self.backend
+                .try_borrow_mut()
+                .and_then(|mut backend| backend.sound_bands())
+        });
         if let Some(interval) = self.ambient.borrow().interval(true, false)
             && interval != self.ambient_timer.interval()
         {
@@ -1727,6 +1839,7 @@ impl App {
     fn draw_ambient(&self, still: bool) {
         if still || !matches!(self.main_window_shows(), MainWindowShows::Not) {
             self.main.set_now_playing_ambient(self.ambient_look(
+                &self.ambient_rows[0],
                 ambient::WINDOW_DENSITY,
                 ambient::WINDOW_SLOT,
                 still,
@@ -1734,6 +1847,7 @@ impl App {
         }
         if still || self.flyout.window().is_visible() {
             self.flyout.set_now_playing_ambient(self.ambient_look(
+                &self.ambient_rows[1],
                 ambient::FLYOUT_DENSITY,
                 ambient::FLYOUT_SLOT,
                 still,
@@ -1741,7 +1855,13 @@ impl App {
         }
     }
 
-    fn ambient_look(&self, density: f64, slot: f64, still: bool) -> AmbientLook {
+    fn ambient_look(
+        &self,
+        rows: &Rc<VecModel<AmbientStrand>>,
+        density: f64,
+        slot: f64,
+        still: bool,
+    ) -> AmbientLook {
         let cover = self.ambient_cover.get();
         let (light, dark) = ambient::line_colors(&cover, still);
         let color = |[r, g, b]: Rgb| slint::Color::from_rgb_f32(r as f32, g as f32, b as f32);
@@ -1759,8 +1879,15 @@ impl App {
                 width: strand.width as f32,
             })
             .collect();
+        if rows.row_count() == strands.len() {
+            for (row, strand) in strands.into_iter().enumerate() {
+                rows.set_row_data(row, strand);
+            }
+        } else {
+            rows.set_vec(strands);
+        }
         AmbientLook {
-            strands: ModelRc::new(VecModel::from(strands)),
+            strands: ModelRc::from(rows.clone()),
             line_light: color(light),
             line_dark: color(dark),
         }
@@ -1768,6 +1895,10 @@ impl App {
 
     /// Lets the backend take in what happened on its own, and shows it.
     fn poll(&self) {
+        // Streaming is starting on its own thread; App::set_running shows it.
+        if !self.backend.is_here() {
+            return;
+        }
         // Kept before the backend's poll saves, so a crash or a kill keeps
         // where the main window was.
         self.remember_view();
@@ -1892,6 +2023,41 @@ impl App {
         true
     }
 
+    /// With the debug log on, logs the main window's frame times over the
+    /// `lasting` of a motion `what` starts now, so a choppy one shows its
+    /// long frames.
+    fn trace_frames(&self, what: &'static str, lasting: Duration) {
+        if self.log.enabled() {
+            *self.frame_trace.borrow_mut() = Some((what, lasting, vec![std::time::Instant::now()]));
+        }
+    }
+
+    fn note_frame(&self) {
+        let mut trace = self.frame_trace.borrow_mut();
+        let Some((what, lasting, frames)) = trace.as_mut() else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        frames.push(now);
+        if now.duration_since(frames[0]) < *lasting {
+            return;
+        }
+        let gaps: Vec<u128> = frames
+            .windows(2)
+            .map(|pair| pair[1].duration_since(pair[0]).as_millis())
+            .collect();
+        let what = *what;
+        *trace = None;
+        drop(trace);
+        self.log.log(|| {
+            format!(
+                "frames after the {what}: {} drawn, gaps {gaps:?} ms (the first from the {what}), longest {} ms",
+                gaps.len(),
+                gaps.iter().max().copied().unwrap_or_default()
+            )
+        });
+    }
+
     /// Starts or ends the Now Playing cards' slide for a change of song; a
     /// card that is hidden, or with the system's animations off, swaps at once.
     fn slide_change(&self, old: Option<&CardTrack>, new: Option<&CardTrack>) {
@@ -1902,6 +2068,7 @@ impl App {
             .borrow_mut()
             .change(old, new, window_shows, still, now)
         {
+            self.trace_frames("song change", Duration::from_millis(700));
             self.main
                 .set_now_playing_outgoing(outgoing_song(old, &self.cover_image));
         }
@@ -2018,6 +2185,9 @@ impl App {
         {
             let now = self.frame_now();
             let (window_shows, panel_shows, still) = self.slides_shown();
+            if direction.is_some() {
+                self.trace_frames("track button press", Duration::from_millis(600));
+            }
             self.window_slide
                 .borrow_mut()
                 .press(direction, window_shows, still, now);
@@ -2482,7 +2652,7 @@ impl App {
             let mut ui = self.ui.borrow_mut();
             let open = ui.rename.as_ref().map(|(id, _)| id.clone());
             let zone = ui.rename_place == RenamePlace::Zone;
-            let snapshot = self.backend.borrow().snapshot();
+            let snapshot = self.backend.snapshot();
             match open {
                 Some(id) if zone && !snapshot.zones.iter().any(|z| z.id == id) => {
                     ui.rename = None;
@@ -2572,6 +2742,9 @@ impl App {
                 row.system_refused = ui.system_refused;
             }
             row.calibration_status = calibration_status(&strings, &state, speaker);
+            row.calibration_failed = state.calibration.speaker_id.as_deref()
+                == Some(speaker.id.as_str())
+                && matches!(state.calibration.phase, Phase::Failed(_));
             row.calibration_left_out = speaker
                 .mic_left_out
                 .map_or_else(SharedString::default, |kind| {
@@ -2687,6 +2860,7 @@ impl App {
             .airplay_delay_draft
             .text(state.airplay_delay_ms)
             .map(str::to_owned);
+        let airplay_open = ui.sync_open.contains(AIRPLAY_DELAY_FIELD);
         // No window call while `ui` is borrowed: showing a dialog runs Slint's
         // pending change handlers, and the focus ones borrow `ui` mutably (UI
         // Automation focuses and toggles in one turn).
@@ -2901,8 +3075,10 @@ impl App {
             ),
             network_settings: state.airplay_none_found && zones.is_empty() && connected.is_empty(),
         });
+        let mut main_notices = newest_notices(&notices, MAIN_NOTICE_LIMIT);
+        self.keep_leaving_notices(&mut main_notices);
         let main_lists = MainLists {
-            notices: newest_notices(&notices, MAIN_NOTICE_LIMIT),
+            notices: main_notices,
             this_pc,
             connected,
             zones: zones
@@ -2944,6 +3120,16 @@ impl App {
                     } else {
                         strings.invoke_source_not_running(app.name.as_str().into())
                     },
+                    icon: state
+                        .sources
+                        .iter()
+                        .find(|s| {
+                            s.kind == SourceKind::App
+                                && s.id
+                                    .rsplit_once(':')
+                                    .is_some_and(|(_, exe)| exe.eq_ignore_ascii_case(&app.id))
+                        })
+                        .map_or_else(Default::default, |s| self.app_icon(&s.id, icon_size)),
                     checked: app.checked,
                 })
                 .collect(),
@@ -2951,8 +3137,9 @@ impl App {
         self.main.set_mix_all_except(state.mix_all_except);
         sync_model(&m.flyout_this_pc, this_pc.clone());
         sync_model(&m.flyout_connected, connected.clone());
-        sync_model(&m.this_pc, this_pc);
-        sync_model(&m.connected, connected);
+        let eased = self.rows_eased();
+        sync_rows(&m.this_pc, this_pc, eased);
+        sync_rows(&m.connected, connected, eased);
         sync_model(&m.this_pc_zoned, this_pc_zoned);
         sync_model(&m.connected_zoned, connected_zoned);
         self.sync_zones(zones);
@@ -2998,6 +3185,8 @@ impl App {
         self.main
             .set_check_updates_automatically(check_updates_automatically);
         self.main.set_volume_keys_available(cfg!(windows));
+        self.main
+            .set_switch_source_on_quit_available(!cfg!(windows));
         self.main.set_volume_keys(keys_switch);
         self.show_settings_state();
         self.take_volume_keys(volume_keys::keys_taken(
@@ -3014,6 +3203,11 @@ impl App {
         self.main
             .set_airplay_delay_shown(state.airplay_delay_ms.is_some() && airplay_listed);
         let airplay_delay = format_ms(state.airplay_delay_ms.unwrap_or(0.0));
+        self.main.set_airplay_delay_value(
+            strings
+                .invoke_airplay_delay_value(state.airplay_delay_ms.unwrap_or(0.0).round() as i32),
+        );
+        self.main.set_airplay_delay_open(airplay_open);
         let typed = airplay_typed.as_deref();
         let airplay_typed = is_draft(typed, &airplay_delay);
         self.main.set_airplay_delay_pending(airplay_typed);
@@ -3120,6 +3314,7 @@ impl App {
         main.set_calibrate_all_airplay(card.airplay);
         main.set_calibrate_all_zone(card.zone);
         main.set_calibrate_all_outcome(card.outcome);
+        main.set_calibrate_all_outcome_problem(card.outcome_problem);
         main.set_calibrate_all_can_apply(card.can_apply);
         main.set_calibrate_all_applied(card.applied);
         main.set_calibrate_all_can_undo(card.can_undo);
@@ -3188,8 +3383,16 @@ impl App {
                 })
                 .collect()
         };
-        sync_model(&m.zones, items);
+        sync_rows(&m.zones, items, self.rows_eased());
         sync_model(&m.flyout_zones, flyout_items);
+    }
+
+    /// Whether rows and zones that come or go ease in and out: only where
+    /// they can be seen moving.
+    fn rows_eased(&self) -> bool {
+        self.rows_ease.get()
+            && self.main.global::<Motion>().get_on()
+            && self.main.window().is_visible()
     }
 
     /// The shape of the zones' member lists the flyout shows now.
@@ -3337,7 +3540,7 @@ impl App {
         let weak = Rc::downgrade(self);
 
         let w = weak.clone();
-        main.on_power_toggled(move |on| with_app(&w, |app| app.update(|b| b.set_running(on))));
+        main.on_power_toggled(move |on| with_app(&w, |app| app.set_running(on, &w)));
         let w = weak.clone();
         main.on_source_selected(move |index| with_app(&w, |app| app.select_source(index)));
         let w = weak.clone();
@@ -3649,6 +3852,9 @@ impl App {
         let w = weak.clone();
         self.guide
             .on_preset_shortcut(move |n| with_app(&w, |app| app.recall_preset_at(n)));
+        let w = weak.clone();
+        self.settings
+            .on_preset_shortcut(move |n| with_app(&w, |app| app.recall_preset_at(n)));
         macro_rules! forward_menu_keys {
             ($($window:expr),+) => {$(
                 let w = weak.clone();
@@ -3659,9 +3865,21 @@ impl App {
                 $window.on_refresh_devices(move || {
                     with_app(&w, |app| app.update(|b| b.refresh_devices()))
                 });
+                let w = weak.clone();
+                $window.on_settings_requested(move || with_app(&w, App::show_settings));
+                let w = weak.clone();
+                $window.on_equalizer_requested(move || with_app(&w, App::show_equalizer));
+                let w = weak.clone();
+                $window.on_main_window_requested(move || with_app(&w, App::show_main));
             )+};
         }
-        forward_menu_keys!(self.equalizer, self.help, self.remote_window, self.guide);
+        forward_menu_keys!(
+            self.equalizer,
+            self.help,
+            self.remote_window,
+            self.guide,
+            self.settings
+        );
         let w = weak.clone();
         main.on_speaker_move_to_zone_requested(move |id, zone| {
             with_app(&w, |app| app.move_to_zone(&id, &zone))
@@ -3812,7 +4030,7 @@ impl App {
         let weak = Rc::downgrade(self);
 
         let w = weak.clone();
-        flyout.on_power_toggled(move |on| with_app(&w, |app| app.update(|b| b.set_running(on))));
+        flyout.on_power_toggled(move |on| with_app(&w, |app| app.set_running(on, &w)));
         let w = weak.clone();
         flyout.on_source_selected(move |index| with_app(&w, |app| app.select_source(index)));
         let w = weak.clone();
@@ -4274,6 +4492,7 @@ impl App {
         let state = self.snapshot();
         if let Some(speaker) = state.speaker(id) {
             let on = state.row_click_turns_on(speaker);
+            self.trace_frames("speaker switch", Duration::from_millis(350));
             self.update(|b| b.set_speaker_enabled(id, on));
         }
     }
@@ -4419,7 +4638,7 @@ impl App {
     pub fn at_session_query(&self) {
         // The query can arrive inside a COM call the backend makes on this
         // thread; the quit at the session's end restores then.
-        if let Ok(mut backend) = self.backend.try_borrow_mut() {
+        if let Some(mut backend) = self.backend.try_borrow_mut() {
             backend.restore_default_output();
         }
     }
@@ -5108,6 +5327,7 @@ impl App {
         let Some(zone) = made else {
             return;
         };
+        self.show_main();
         self.start_rename(&zone.id, RenamePlace::Zone);
         if let Some((_, typed)) = self.ui.borrow_mut().rename.as_mut() {
             typed.clear();
@@ -5712,6 +5932,189 @@ fn newest_notices<T: Clone>(notices: &[T], limit: usize) -> Vec<T> {
     notices.iter().take(limit).cloned().collect()
 }
 
+/// How long a row that left stays while its room shuts: the Mac's row move
+/// (`MainMotion.rowMove`, WindowRules.swift:82).
+const ROW_MOVE: Duration = Duration::from_millis(350);
+
+thread_local! {
+    /// How many times each row or zone has left a main-window list.
+    static ROW_LEAVES: RefCell<HashMap<SharedString, u64>> = RefCell::default();
+}
+
+/// A speaker row or zone that eases into and out of a main-window list.
+trait Eased: Clone + PartialEq + 'static {
+    fn id(&self) -> &SharedString;
+    fn leaving(&self) -> bool;
+    fn fresh(&self) -> bool;
+    fn mark(&mut self, fresh: bool, leaving: bool);
+    fn set_hand_off(&mut self, id: SharedString);
+}
+
+impl Eased for SpeakerItem {
+    fn id(&self) -> &SharedString {
+        &self.id
+    }
+    fn leaving(&self) -> bool {
+        self.leaving
+    }
+    fn fresh(&self) -> bool {
+        self.fresh
+    }
+    fn mark(&mut self, fresh: bool, leaving: bool) {
+        (self.fresh, self.leaving) = (fresh, leaving);
+    }
+    fn set_hand_off(&mut self, id: SharedString) {
+        self.hand_off = id;
+    }
+}
+
+impl Eased for ZoneItem {
+    fn id(&self) -> &SharedString {
+        &self.id
+    }
+    fn leaving(&self) -> bool {
+        self.leaving
+    }
+    fn fresh(&self) -> bool {
+        self.fresh
+    }
+    fn mark(&mut self, fresh: bool, leaving: bool) {
+        (self.fresh, self.leaving) = (fresh, leaving);
+    }
+    fn set_hand_off(&mut self, id: SharedString) {
+        self.hand_off = id;
+    }
+}
+
+/// The rows a main-window list shows when it changes from `old` to `items`
+/// while rows ease, and the IDs of the rows that just left: a row not in
+/// `old` comes `fresh`, and one gone from `items` stays `leaving` after the
+/// row it followed until its room has shut, handing the keyboard focus to
+/// its nearest neighbour that stays, the next one first.
+fn eased_rows<T: Eased>(old: &[T], items: Vec<T>) -> (Vec<T>, Vec<SharedString>) {
+    let mut rest: Vec<T> = items
+        .into_iter()
+        .map(|mut item| {
+            // A refresh before the row was first drawn keeps it coming.
+            let fresh = old
+                .iter()
+                .find(|row| row.id() == item.id())
+                .is_none_or(Eased::fresh);
+            item.mark(fresh, false);
+            item
+        })
+        .collect();
+    let mut rows: Vec<T> = Vec::with_capacity(old.len() + rest.len());
+    let mut left = Vec::new();
+    for row in old {
+        if let Some(at) = rest.iter().position(|item| item.id() == row.id()) {
+            rows.extend(rest.drain(..=at));
+        } else if !rows.iter().any(|item| item.id() == row.id()) {
+            if !row.leaving() {
+                left.push(row.id().clone());
+            }
+            let mut gone = row.clone();
+            gone.mark(false, true);
+            rows.push(gone);
+        }
+    }
+    rows.extend(rest);
+    let staying: Vec<Option<SharedString>> = rows
+        .iter()
+        .map(|row| (!row.leaving()).then(|| row.id().clone()))
+        .collect();
+    for (at, row) in rows.iter_mut().enumerate() {
+        if row.leaving() {
+            let near = (1..staying.len())
+                .flat_map(|by| [at.checked_add(by), at.checked_sub(by)])
+                .flatten()
+                .find_map(|i| staying.get(i).cloned().flatten());
+            row.set_hand_off(near.unwrap_or_default());
+        }
+    }
+    (rows, left)
+}
+
+/// Syncs a main-window list of speaker rows or zones; while `eased`, by ID
+/// with [`eased_rows`], dropping each one that left once its room has shut.
+fn sync_rows<T: Eased>(model: &Rc<VecModel<T>>, items: Vec<T>, eased: bool) {
+    if !eased {
+        sync_model(model, items);
+        return;
+    }
+    let old: Vec<T> = model.iter().collect();
+    let (rows, left) = eased_rows(&old, items);
+    let came = rows.iter().any(Eased::fresh);
+    sync_by_id(model, rows);
+    if came {
+        let model = Rc::clone(model);
+        Timer::single_shot(ROW_MOVE, move || {
+            let rows = model
+                .iter()
+                .map(|mut row| {
+                    let leaving = row.leaving();
+                    row.mark(false, leaving);
+                    row
+                })
+                .collect();
+            sync_by_id(&model, rows);
+        });
+    }
+    if left.is_empty() {
+        return;
+    }
+    // A row that came back and left again is dropped only by its last leave's timer.
+    let left: Vec<(SharedString, u64)> = ROW_LEAVES.with(|leaves| {
+        let mut leaves = leaves.borrow_mut();
+        left.into_iter()
+            .map(|id| {
+                let leave = leaves.entry(id.clone()).or_default();
+                *leave += 1;
+                (id, *leave)
+            })
+            .collect()
+    });
+    let model = Rc::clone(model);
+    Timer::single_shot(ROW_MOVE, move || {
+        let last = |row: &T| {
+            ROW_LEAVES.with(|leaves| {
+                let leave = leaves.borrow().get(row.id()).copied();
+                left.iter()
+                    .any(|(id, at)| id == row.id() && Some(*at) == leave)
+            })
+        };
+        let kept: Vec<T> = model
+            .iter()
+            .filter(|row| !row.leaving() || !last(row))
+            .collect();
+        sync_by_id(&model, kept);
+    });
+}
+
+/// Puts `rows` in `model` by ID: a row already there is updated in place, so
+/// only a row that comes or goes is built or dropped.
+fn sync_by_id<T: Eased>(model: &VecModel<T>, rows: Vec<T>) {
+    let len = rows.len();
+    for (at, row) in rows.into_iter().enumerate() {
+        let found = (at..model.row_count())
+            .find(|&i| model.row_data(i).is_some_and(|old| old.id() == row.id()));
+        match found {
+            Some(i) => {
+                for _ in at..i {
+                    model.remove(at);
+                }
+                if model.row_data(at).as_ref() != Some(&row) {
+                    model.set_row_data(at, row);
+                }
+            }
+            None => model.insert(at, row),
+        }
+    }
+    while model.row_count() > len {
+        model.remove(len);
+    }
+}
+
 /// Replaces the rows that changed; the whole list only when its length did.
 fn sync_model<T: Clone + PartialEq + 'static>(model: &VecModel<T>, items: Vec<T>) {
     if model.row_count() == items.len() {
@@ -6058,6 +6461,7 @@ pub fn speaker_item(
             .is_none(),
         // Needs the strings: set by the caller (`App::refresh`).
         calibration_status: SharedString::default(),
+        calibration_failed: false,
         calibration_privacy: offers_privacy(
             state.calibration.speaker_id.as_deref() == Some(speaker.id.as_str())
                 && state.calibration.phase == Phase::Failed(Failure::MicrophoneDenied),
@@ -6104,6 +6508,10 @@ pub fn speaker_item(
         zone_note: SharedString::default(),
         zone_dimmed: false,
         missing: false,
+        // Set by the caller while rows ease (`eased_rows`).
+        fresh: false,
+        leaving: false,
+        hand_off: SharedString::default(),
     }
 }
 
@@ -6381,6 +6789,9 @@ struct CalibrateAllCard {
     /// For a Calibrate Zone run: where to bring the PC.
     zone: SharedString,
     outcome: SharedString,
+    /// The outcome is a failure or a refused Apply: the error color, as on
+    /// the Mac (CalibrateAllViews.swift:147, 519-524).
+    outcome_problem: bool,
     can_apply: bool,
     /// Apply set the new delays: Close reads Done, as on the Mac.
     applied: bool,
@@ -6419,6 +6830,10 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
         AllPhase::CannotMeasureAgain(name, missing) => strings.invoke_calibrate_all_cannot_again(
             calibration_needs(strings, reference, *missing, name.as_str().into()),
         ),
+        AllPhase::AgainFailed(name, failure) => strings.invoke_calibrate_all_again_stopped(
+            calibration_failure(strings, reference, *failure),
+            name.as_str().into(),
+        ),
         AllPhase::Idle if all.other_running => strings.get_calibrate_all_busy(),
         AllPhase::Idle => match all.blocked {
             Some(Failure::NoReference) => strings.get_calibration_no_reference(),
@@ -6432,12 +6847,19 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
     };
     let failed = matches!(
         all.phase,
-        AllPhase::Failed(_) | AllPhase::Stale | AllPhase::CannotMeasureAgain(..)
+        AllPhase::Failed(_)
+            | AllPhase::Stale
+            | AllPhase::CannotMeasureAgain(..)
+            | AllPhase::AgainFailed(..)
     );
     let sheet = all.sheet.as_ref();
-    let outcome = sheet.map_or_else(SharedString::default, |sheet| {
-        sheet_outcome(strings, reference, sheet)
-    });
+    // Over the results the refusal is the sheet's line, as on the Mac
+    // (CalibrateAllViews.swift:146).
+    let outcome = match sheet {
+        Some(_) if failed => status.clone(),
+        Some(sheet) => sheet_outcome(strings, reference, sheet),
+        None => SharedString::default(),
+    };
     let said = if failed || outcome.is_empty() {
         status.clone()
     } else {
@@ -6480,13 +6902,8 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
                 .iter()
                 .enumerate()
                 .map(|(index, row)| CalibrationRowItem {
-                    name: row.name.as_str().into(),
-                    detail: if off.contains(&index) {
-                        strings.get_calibrate_all_off()
-                    } else {
-                        row_detail(strings, reference, row)
-                    },
                     can_measure_again: row.can_measure_again && !busy,
+                    ..row_card(strings, reference, row, off.contains(&index))
                 })
                 .collect()
         }),
@@ -6510,6 +6927,11 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
             .map_or_else(SharedString::default, |zone| {
                 strings.invoke_calibrate_zone_bring(zone.name.as_str().into())
             }),
+        outcome_problem: sheet.is_some_and(|sheet| match &all.phase {
+            AllPhase::Failed(_) | AllPhase::AgainFailed(..) | AllPhase::Stale => true,
+            AllPhase::CannotMeasureAgain(..) => false,
+            _ => sheet.failure.is_some(),
+        }),
         outcome,
         can_apply: sheet.is_some_and(|sheet| sheet.can_apply),
         applied: sheet.is_some_and(|sheet| sheet.applied),
@@ -6566,8 +6988,11 @@ fn sheet_outcome(strings: &Strings<'_>, reference: &str, sheet: &SheetState) -> 
     if sheet.applied {
         return strings.get_calibrate_all_applied();
     }
-    if let Some(reason) = sheet.again_ended {
-        return strings.invoke_calibrate_all_again_stopped(ended_text(strings, reason));
+    if let Some((name, reason)) = &sheet.again_ended {
+        return strings.invoke_calibrate_all_again_stopped(
+            ended_text(strings, *reason),
+            name.as_str().into(),
+        );
     }
     let measured = sheet
         .rows
@@ -6593,38 +7018,112 @@ fn sheet_ms(strings: &Strings<'_>, class: Class, ms: f64) -> SharedString {
     }
 }
 
-fn row_detail(strings: &Strings<'_>, reference: &str, row: &SheetRow) -> SharedString {
-    let old = row.old_ms.map_or_else(
-        || strings.get_calibrate_all_none(),
-        |ms| sheet_ms(strings, row.class, ms),
-    );
-    let measured = |m: &Measurement| {
-        (
-            old.clone(),
-            sheet_ms(strings, row.class, m.new_ms),
-            m.uncertainty_ms.ceil().max(1.0) as i32,
+/// A result card as the Mac's (CalibrateAllViews.swift:337-391): the kind
+/// and a chip by the name, the new delay large with "± 2 ms · was +12 ms",
+/// then a note; `detail` is all of it for Narrator.
+fn row_card(
+    strings: &Strings<'_>,
+    reference: &str,
+    row: &SheetRow,
+    off: bool,
+) -> CalibrationRowItem {
+    let is_reference = row.state == SheetRowState::Reference;
+    let kind = match row.class {
+        _ if is_reference => strings.get_calibrate_all_kind_reference(),
+        Class::Local => strings.get_calibrate_all_kind_local(),
+        Class::Cast => strings.get_calibrate_all_kind_cast(),
+        Class::AirPlay => strings.get_calibrate_all_kind_airplay(),
+    };
+    let current: SharedString = if is_reference {
+        SharedString::default()
+    } else {
+        row.old_ms.map_or_else(
+            || strings.get_calibrate_all_none(),
+            |ms| sheet_ms(strings, row.class, ms),
         )
     };
-    match &row.state {
-        SheetRowState::Reference => strings.get_calibrate_all_reference(),
-        SheetRowState::NotMeasured => strings.get_calibrate_all_not_measured(),
-        SheetRowState::Certain(m) => {
-            let (old, new, uncertainty) = measured(m);
-            if m.clamped {
-                strings.invoke_calibrate_all_clamped(old, new, uncertainty)
-            } else {
-                strings.invoke_calibrate_all_certain(old, new, uncertainty)
-            }
-        }
-        SheetRowState::Uncertain(m) => {
-            let (old, new, uncertainty) = measured(m);
-            strings.invoke_calibrate_all_uncertain(old, new, uncertainty)
-        }
+    let delay = match &row.state {
+        SheetRowState::Certain(m) | SheetRowState::Uncertain(m) if !off => Some(m),
+        _ => None,
+    };
+    let uncertainty = |m: &Measurement| m.uncertainty_ms.ceil().max(1.0) as i32;
+    let measured = |m: &Measurement| {
+        strings
+            .invoke_calibrate_all_measured(sheet_ms(strings, row.class, m.new_ms), uncertainty(m))
+    };
+    let refused = match &row.state {
         SheetRowState::Refused(refused) => match calibration::outcome(&Err(*refused)) {
-            calibration::Outcome::Refuse(failure) => strings
-                .invoke_calibrate_all_refused(calibration_failure(strings, reference, failure)),
-            calibration::Outcome::Commit { .. } => strings.get_calibrate_all_not_measured(),
+            calibration::Outcome::Refuse(failure) => Some(
+                strings
+                    .invoke_calibrate_all_refused(calibration_failure(strings, reference, failure)),
+            ),
+            calibration::Outcome::Commit { .. } => None,
         },
+        _ => None,
+    };
+    let result: SharedString = match &row.state {
+        _ if off => strings.get_calibrate_all_off(),
+        SheetRowState::Reference => strings.get_calibrate_all_reference(),
+        SheetRowState::Certain(m) if m.clamped => {
+            format!("{}. {}", measured(m), strings.get_calibrate_all_clamped()).into()
+        }
+        SheetRowState::Certain(m) => measured(m),
+        SheetRowState::Uncertain(m) => {
+            format!("{}. {}", measured(m), strings.get_calibrate_all_uncertain()).into()
+        }
+        SheetRowState::NotMeasured | SheetRowState::Refused(_) => refused
+            .clone()
+            .unwrap_or_else(|| strings.get_calibrate_all_not_measured()),
+    };
+    let note: SharedString = match &row.state {
+        _ if off => result.clone(),
+        SheetRowState::Certain(m) if m.clamped => strings.get_calibrate_all_clamped(),
+        SheetRowState::Certain(_) => SharedString::default(),
+        SheetRowState::Uncertain(_) => strings.get_calibrate_all_uncertain(),
+        _ => result.clone(),
+    };
+    let (chip, chip_warn) = match &row.state {
+        _ if off => (SharedString::default(), false),
+        SheetRowState::Reference => (kind.clone(), false),
+        SheetRowState::Certain(_) => (strings.get_calibrate_all_measured_clearly(), false),
+        SheetRowState::Uncertain(_) => (strings.get_calibrate_all_not_clear(), true),
+        _ => (SharedString::default(), false),
+    };
+    let mut label = vec![kind.to_string()];
+    if !chip.is_empty() {
+        label.push(chip.to_string());
+    }
+    label.push(result.to_string());
+    if !is_reference {
+        label.push(format!(
+            "{}, {current}",
+            strings.get_calibrate_all_current()
+        ));
+    }
+    CalibrationRowItem {
+        name: row.name.as_str().into(),
+        detail: label.join(", ").into(),
+        kind: if is_reference {
+            SharedString::default()
+        } else {
+            kind
+        },
+        chip,
+        chip_warn,
+        value: delay.map_or_else(SharedString::default, |m| {
+            sheet_ms(strings, row.class, m.new_ms)
+        }),
+        was: delay.map_or_else(SharedString::default, |m| {
+            strings.invoke_calibrate_all_was(uncertainty(m), current.clone())
+        }),
+        note: if delay.is_none() && !is_reference && !note.is_empty() {
+            strings.invoke_calibrate_all_note_was(note, current.clone())
+        } else {
+            note
+        },
+        clear: matches!(row.state, SheetRowState::Certain(_)) && !off,
+        refused: refused.is_some() && !off,
+        can_measure_again: false,
     }
 }
 
@@ -6633,6 +7132,7 @@ fn airplay_line(strings: &Strings<'_>, shared: &AirPlayShared) -> SharedString {
         || strings.get_calibrate_all_none(),
         |ms| sheet_ms(strings, Class::AirPlay, ms),
     );
+    let old: SharedString = old.to_lowercase().into();
     let new = shared.new_ms.unwrap_or(0.0).round() as i32;
     let spread = shared.spread_ms.round() as i32;
     let set = if shared.certain_rows == 1 {
@@ -6917,6 +7417,9 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         NoticeMessage::CastCantPlay { speaker, problem } => {
             strings.invoke_notice_cast(cast_problem(*problem), speaker.as_str().into())
         }
+        NoticeMessage::CastSenderStopped { speaker } => {
+            strings.invoke_notice_cast_sender_stopped(speaker.as_str().into())
+        }
         NoticeMessage::AirPlayAheadOfCast { speaker, tenths } => {
             let seconds = format!("{}.{}", tenths / 10, tenths % 10);
             strings.invoke_notice_airplay_ahead(seconds.into(), speaker.as_str().into())
@@ -7104,6 +7607,7 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
             (NoticeKind::AirplayCantPlay, speaker.as_str())
         }
         NoticeMessage::CastCantPlay { speaker, .. } => (NoticeKind::CastCantPlay, speaker.as_str()),
+        NoticeMessage::CastSenderStopped { .. } => (NoticeKind::CastSenderStopped, ""),
         NoticeMessage::AirPlayAheadOfCast { speaker, .. } => {
             (NoticeKind::AirplayAheadOfCast, speaker.as_str())
         }
@@ -7232,7 +7736,7 @@ fn cached_app_icon(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::ui_model::{MOCK_CAST_HOLD, MockBackend};
 
@@ -7294,7 +7798,7 @@ mod tests {
 
     /// A platform without native windows, so a test can build the whole App
     /// and drive it through the windows' callbacks or keys.
-    struct Headless;
+    pub(crate) struct Headless;
 
     thread_local! {
         /// The windows the headless platform made on this thread.
@@ -7331,7 +7835,7 @@ mod tests {
     }
 
     /// Moves the clock [`hold_clock`] stopped on by `by`.
-    fn advance_clock(by: Duration) {
+    pub(super) fn advance_clock(by: Duration) {
         HELD_CLOCK.with(|clock| clock.set(clock.get().map(|now| now + by)));
     }
 
@@ -7415,7 +7919,7 @@ mod tests {
         // The platform is set per thread: a thread that already built an
         // App has it, which is fine.
         let _ = slint::platform::set_platform(Box::new(Headless));
-        App::new(Box::new(backend), log).expect("the windows build headless")
+        App::new(Engine::here(Box::new(backend)), log).expect("the windows build headless")
     }
 
     /// Saves the main window, the tray flyout and the equalizer (on, two
@@ -7443,11 +7947,13 @@ mod tests {
         app.flyout.set_now_playing_subtitle("Artist".into());
         app.ambient.borrow_mut().advance(1.0, || None);
         app.main.set_now_playing_ambient(app.ambient_look(
+            &app.ambient_rows[0],
             ambient::WINDOW_DENSITY,
             ambient::WINDOW_SLOT,
             false,
         ));
         app.flyout.set_now_playing_ambient(app.ambient_look(
+            &app.ambient_rows[1],
             ambient::FLYOUT_DENSITY,
             ambient::FLYOUT_SLOT,
             false,
@@ -8038,6 +8544,58 @@ mod tests {
         assert!(main.contains("padding-top: title-row.height - 1px;"));
     }
 
+    /// What he sees on opening the app: a song with its cover, This PC's two
+    /// speakers, Presets, Equalizer and Calibrate All. The left column fits
+    /// with no scrolling at the default 696 x 680 and at the 712 x 674 a
+    /// resize leaves, as the Mac's does; so does the tray flyout on a
+    /// 1920 x 1080 screen at 150 %, its work area 688 high less the 12 px gaps.
+    // covers: S450
+    #[test]
+    fn the_left_column_and_flyout_fit_a_song_with_its_cover() {
+        use crate::now_playing_card::fake::{FakeControls, track};
+        use crate::now_playing_card::{CardArtwork, PlayModes, Repeat};
+        let app = app_over(MockBackend::new());
+        let fake = FakeControls::default();
+        app.set_media_controls(fake.controls());
+        app.main.show().expect("the main window shows");
+        app.poll();
+        let mut song = track("Spotify.exe", "Song", "Band", true);
+        song.artwork = Some(CardArtwork::new(8, [90u8, 40, 30, 255].repeat(64)));
+        song.modes = PlayModes {
+            shuffle: Some(false),
+            repeat: Some(Repeat::Off),
+        };
+        fake.read(Some(song));
+        // The mock's first speaker starts with a low Windows volume, whose fix shows under Calibrate.
+        app.main
+            .invoke_device_volume_fix_requested(app.main.get_calibrate_all_volume_id());
+        app.poll();
+        assert_eq!(app.models.this_pc.row_count(), 2, "This PC's two speakers");
+        assert!(app.main.get_now_playing_has_artwork());
+        for (width, height) in [(696.0, 680.0), (712.0, 674.0)] {
+            // draw_frames sizes every window 1000 x 720, so the size comes after.
+            draw_frames();
+            app.main
+                .window()
+                .set_size(slint::LogicalSize::new(width, height));
+            slint::platform::update_timers_and_animations();
+            let content = app.main.get_left_content_height();
+            let room = app.main.get_left_visible_height();
+            assert!(content <= room, "{width} x {height}: {content} of {room}");
+        }
+
+        app.prepare_flyout_open(false);
+        app.flyout.show().expect("the flyout shows");
+        draw_frames();
+        let room = 688.0 - 24.0;
+        let height = app.fit_flyout(room);
+        assert_eq!(
+            (app.flyout.get_list_cut(), app.flyout.get_body_cut()),
+            (0.0, 0.0),
+            "flyout: {height} of {room}"
+        );
+    }
+
     /// A Now Playing title too long for its line stays on one line and
     /// scrolls: it rests 2 s at its start, then moves 30 px a second. With
     /// Windows' animation effects off it stays at its start.
@@ -8395,6 +8953,32 @@ mod tests {
         assert_eq!(main_notice_titles(&app), Vec::<SharedString>::new());
     }
 
+    /// A notice that leaves on its own (cleared, expired, its action taken)
+    /// fades out where it stood before its room shuts, as one dismissed with
+    /// its X does (WindowRules.swift:642-657).
+    #[test]
+    fn a_notice_leaving_on_its_own_fades_out_first() {
+        let app = two_notices_shown();
+        app.rows_ease.set(true);
+        let dialog_at = |app: &App| {
+            app.main
+                .get_notices()
+                .iter()
+                .position(|n| u64::try_from(n.id) == Ok(DIALOG_NOTICE_ID))
+        };
+        let at = dialog_at(&app).expect("the dialog notice");
+        app.ui.borrow_mut().dialog_notice = None;
+        app.refresh();
+        draw_frames();
+        assert_eq!(dialog_at(&app), Some(at), "it stays in its place");
+        assert!(app.main.get_notices().row_data(at).expect("it").closing);
+        assert_eq!(app.main.get_notices_staying(), 1);
+        advance_clock(Duration::from_millis(600));
+        draw_frames();
+        assert_eq!(dialog_at(&app), None);
+        assert_eq!(app.main.get_notices().row_count(), 1);
+    }
+
     /// A notice raised again under its ID with new text while its old text
     /// fades out stays, shown in full.
     #[test]
@@ -8558,6 +9142,51 @@ mod tests {
         assert!(!app.meter_timer.running());
     }
 
+    /// The strands' 300 x 22 box is the whole strip, as the Mac's Canvas maps
+    /// it (AmbientArt.swift:121, 129-132); Slint's Path fit takes the stroke's
+    /// width off that box and starts it half a stroke in.
+    #[test]
+    fn the_art_strands_span_the_whole_strip_as_on_the_mac() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.set_now_playing_shown(true);
+        app.main.set_now_playing_title("Song".into());
+        app.main.show().expect("the main window shows");
+        app.ambient.borrow_mut().advance(1.0, || None);
+        app.main.set_now_playing_ambient(app.ambient_look(
+            &app.ambient_rows[0],
+            ambient::WINDOW_DENSITY,
+            ambient::WINDOW_SLOT,
+            false,
+        ));
+        draw_frames();
+        let strip = ElementHandle::find_by_element_type_name(&app.main, "AmbientArt")
+            .next()
+            .expect("the strip shows");
+        let (at, size) = (strip.absolute_position(), strip.size());
+        let lines: Vec<_> =
+            ElementHandle::find_by_element_id(&app.main, "AmbientArt::line").collect();
+        assert_eq!(lines.len(), 3, "one breath line a strand");
+        let stroke = ambient_breath::STROKE as f32;
+        for line in lines {
+            let (from, path) = (line.absolute_position(), line.size());
+            let fitted = [
+                from.x + stroke / 2.0,
+                from.y + stroke / 2.0,
+                path.width - stroke,
+                path.height - stroke,
+            ];
+            let wanted = [at.x, at.y, size.width, size.height];
+            assert!(
+                fitted
+                    .iter()
+                    .zip(wanted)
+                    .all(|(got, want)| (got - want).abs() < 0.01),
+                "{fitted:?} {wanted:?}"
+            );
+        }
+    }
+
     #[test]
     fn the_now_playing_art_moves_only_while_its_card_shows() {
         use i_slint_backend_testing::ElementHandle;
@@ -8607,7 +9236,27 @@ mod tests {
         let strip = ElementHandle::find_by_element_type_name(&app.main, "AmbientArt")
             .next()
             .expect("the art's strip");
-        assert_eq!(strip.size().height, 16.0, "the strip keeps its height");
+        assert_eq!(
+            f64::from(strip.size().height),
+            ambient::WINDOW_SLOT,
+            "the art is drawn the slot's full height, unsquashed"
+        );
+    }
+
+    #[test]
+    fn a_frame_of_the_now_playing_art_keeps_its_strand_rows() {
+        let app = app_over(MockBackend::new());
+        let weak = Rc::downgrade(&app);
+        app.main.global::<Motion>().set_on(true);
+        app.main.set_now_playing_shown(true);
+        app.main.show().expect("the main window shows");
+        app.follow_ambient(&weak);
+        let first = app.main.get_now_playing_ambient().strands;
+        app.tick_ambient();
+        assert!(
+            app.main.get_now_playing_ambient().strands == first,
+            "a new model each frame makes the window build its strands anew, 30 times a second"
+        );
     }
 
     #[test]
@@ -9614,8 +10263,10 @@ mod tests {
             old_ms: None,
             ..row("Den", Class::Cast, SheetRowState::Certain(clear))
         };
-        let detail = row_detail(&strings, "", &never);
-        assert!(detail.starts_with("Was none."), "{detail}");
+        let card_row = row_card(&strings, "", &never, false);
+        assert_eq!(card_row.was, "± 2 ms · was None");
+        assert_eq!(card_row.chip, "Measured clearly");
+        assert_eq!(card_row.kind, "Google Cast");
         let sheet = state.calibrate_all.sheet.as_mut().unwrap();
         let shared = sheet.airplay.as_mut().unwrap();
         shared.spread_ms = 4.0;
@@ -9726,6 +10377,44 @@ mod tests {
         assert_eq!(card.outcome, strings.get_calibrate_all_nothing_certain());
     }
 
+    // The Mac's sheet line (CalibrateAllViews.swift:146) shows a refused
+    // Measure Again or Apply over the results.
+    #[test]
+    fn a_refused_measure_again_or_apply_reads_under_the_results() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let mut state = app.snapshot();
+        state.reference_name = Some("Speakers".into());
+        state.calibrate_all.other_running = false;
+        state.calibrate_all.sheet = Some(SheetState {
+            rows: vec![SheetRow {
+                name: "Speakers".into(),
+                class: Class::Local,
+                old_ms: None,
+                state: SheetRowState::Reference,
+                can_measure_again: false,
+            }],
+            airplay: None,
+            ended: None,
+            failure: None,
+            again_ended: None,
+            can_apply: false,
+            applied: false,
+            can_undo: false,
+            undone: false,
+        });
+        state.calibrate_all.phase = AllPhase::CannotMeasureAgain("Den".into(), Missing::SPEAKER);
+        assert_eq!(
+            calibrate_all_card(&strings, &state).outcome,
+            "Turn on Den to measure it again."
+        );
+        state.calibrate_all.phase = AllPhase::Stale;
+        assert_eq!(
+            calibrate_all_card(&strings, &state).outcome,
+            "A delay changed after the measurement, so nothing was applied. Calibrate again."
+        );
+    }
+
     #[test]
     fn a_calibrations_ending_is_announced_once() {
         let mut announced = None;
@@ -9807,6 +10496,43 @@ mod tests {
         // Linux has no program for the page (guide::linux_program): no button.
         assert!(!offers_privacy(true, |uri| uri != privacy));
         assert!(!offers_privacy(false, |_| true));
+    }
+
+    /// The delay steps and the field between them are one height, centred
+    /// on one line, as the Mac's row reads.
+    #[test]
+    fn delay_row_boxes_share_one_height() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        app.main.invoke_sync_toggled("local:desk".into());
+        app.poll();
+        draw_frames();
+        let field = element(&app, "SyncControls::field").expect("the delay field shows");
+        let boxes: Vec<(f32, f32)> = [-100, -10, 10, 100]
+            .iter()
+            .map(|delta: &i32| {
+                let label = if *delta < 0 {
+                    format!("\u{2212}{} ms, decrease delay", -delta)
+                } else {
+                    format!("+{delta} ms, increase delay")
+                };
+                ElementHandle::find_by_accessible_label(&app.main, &label)
+                    .next()
+                    .unwrap_or_else(|| panic!("the {delta} step shows"))
+            })
+            .chain(std::iter::once(field))
+            .map(|e| {
+                (
+                    e.size().height,
+                    e.absolute_position().y + e.size().height / 2.0,
+                )
+            })
+            .collect();
+        assert!(
+            boxes.iter().all(|b| *b == boxes[4]),
+            "steps and field (height, centre y): {boxes:?}"
+        );
     }
 
     /// Opens the desk's and the headset's sync controls, types 400 into the
@@ -9908,6 +10634,14 @@ mod tests {
             0,
             "no scroll bar on the columns"
         );
+        // The column fits the window with a song alone, so open presets make it scroll.
+        for name in ["One", "Two", "Three", "Four"] {
+            app.save_preset(name);
+        }
+        app.main.set_presets_open(true);
+        app.refresh();
+        advance_clock(Duration::from_millis(400));
+        draw_frames();
         let column = element(&app, "MainWindow::left-column").expect("the left column");
         let top = column.absolute_position().y;
         let (left, ..) = red_bounds(window);
@@ -10075,11 +10809,10 @@ mod tests {
         assert_eq!(flash(), 0.0, "the flash is gone after a second");
     }
 
-    /// A row switched off dims its volume knob over 250 ms, as the Mac's
+    /// A row switched off darkens its volume knob over 250 ms, as the Mac's
     /// row does, instead of at once.
     #[test]
     fn a_row_switched_off_dims_its_slider_over_250_ms() {
-        use i_slint_backend_testing::ElementHandle;
         hold_clock();
         let mut backend = MockBackend::new();
         backend.set_running(true);
@@ -10089,21 +10822,28 @@ mod tests {
         draw_frames();
         advance_clock(Duration::from_millis(500));
         draw_frames();
-        let dimming = || {
-            ElementHandle::find_by_element_id(&app.main, "LevelSlider::thumb")
-                .map(|knob| knob.computed_opacity())
-                .filter(|opacity| (0.3..0.95).contains(opacity))
-                .count()
+        let label = app
+            .main
+            .global::<crate::Strings>()
+            .invoke_volume_of("Speakers".into());
+        let knob = || {
+            let (left, top, width, height) = slider_box(&app.main, &label);
+            let x = left + 8.0 + (width - 16.0) * 0.6;
+            pixels(app.main.window())(x, top + height / 2.0)[0]
         };
-        assert_eq!(dimming(), 0);
+        let on = knob();
         app.main.invoke_speaker_toggled("local:speakers".into());
         draw_frames();
         advance_clock(Duration::from_millis(100));
         draw_frames();
-        assert_eq!(dimming(), 1, "its knob dims over time");
+        let midway = knob();
         advance_clock(Duration::from_millis(300));
         draw_frames();
-        assert_eq!(dimming(), 0, "dimmed after 250 ms");
+        let off = knob();
+        assert!(
+            off < midway && midway < on,
+            "{on}, then {midway}, then {off}"
+        );
     }
 
     /// Settings fades in over 560 ms as it opens, as the Mac's window does;
@@ -10283,6 +11023,18 @@ mod tests {
         assert_eq!(app.snapshot().zones.len(), zones, "no zone was made");
     }
 
+    /// Ctrl+N in another window brings the main window up before the new
+    /// zone's header opens for its name (AppDelegate+Zones.swift:313).
+    #[test]
+    fn a_new_zone_from_another_window_shows_the_main_window() {
+        let app = app_over(MockBackend::zones_preview());
+        app.equalizer.show().expect("the equalizer shows");
+        assert!(!app.main.window().is_visible());
+        app.equalizer.invoke_new_zone_requested();
+        assert!(app.main.window().is_visible());
+        assert!(app.models.zones.iter().any(|zone| zone.renaming));
+    }
+
     /// Narrator's Increment and Decrement move a speaker's and the master
     /// volume by a tenth, as VoiceOver's do on the Mac; arrow keys stay at 1.
     #[test]
@@ -10441,7 +11193,7 @@ mod tests {
         let app = app_over(MockBackend::new());
         app.main.show().expect("the main window shows");
         draw_frames();
-        for label in ["System volume", "Desk Speaker delay"] {
+        for label in ["System volume", "Show controls for Desk Speaker delay"] {
             let chip = ElementHandle::find_by_accessible_label(&app.main, label)
                 .next()
                 .unwrap_or_else(|| panic!("{label}"));
@@ -10452,6 +11204,154 @@ mod tests {
                 "{label}: a {} px box around {} px of text",
                 size.width,
                 right - left
+            );
+        }
+    }
+
+    /// The delay value's number and "ms" sit on the middle of their 16 px
+    /// box, as the Mac's text-sized value does (MainWindow.swift:2729-2734).
+    #[test]
+    fn a_rows_delay_value_sits_on_the_middle_of_its_box() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        draw_frames();
+        let chip = ElementHandle::find_by_accessible_label(
+            &app.main,
+            "Show controls for Desk Speaker delay",
+        )
+        .next()
+        .expect("the delay value");
+        let number = ElementHandle::find_by_element_id(&app.main, "SpeakerRow::delay-roll")
+            .next()
+            .expect("the delay number");
+        let (box_y, box_height) = (chip.absolute_position().y, chip.size().height);
+        let (at, size) = (number.absolute_position(), number.size());
+        let (_, top, _, bottom) = ink(
+            app.main.window(),
+            at.x,
+            box_y - 4.0,
+            size.width,
+            box_height + 8.0,
+        );
+        let off = (top + bottom) / 2.0 - (box_y + box_height / 2.0);
+        assert!(
+            off.abs() <= 0.5,
+            "ink {top}..{bottom} is {off} px off the middle of {box_y}+{box_height}"
+        );
+    }
+
+    /// In an open delay panel the field's number and each step's label sit
+    /// on the middle of their box, as the Mac's centred bezel text does
+    /// (MainWindow.swift:2972, 3430-3436).
+    #[test]
+    fn the_delay_fields_number_and_the_step_labels_sit_on_their_boxes_middle() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        app.main.invoke_sync_toggled("local:desk".into());
+        app.poll();
+        draw_frames();
+        let steps = ["\u{2212}100 ms, decrease delay", "+10 ms, increase delay"]
+            .iter()
+            .map(|label| {
+                ElementHandle::find_by_accessible_label(&app.main, label)
+                    .next()
+                    .unwrap_or_else(|| panic!("{label}"))
+            });
+        let field = element(&app, "SyncControls::field").expect("the delay field shows");
+        for (name, e) in std::iter::once(("field", field)).chain(steps.map(|e| ("step", e))) {
+            let (at, size) = (e.absolute_position(), e.size());
+            // 4 px in from the sides: the bezel's rounded corners are not ink.
+            let (_, top, _, bottom) = ink(
+                app.main.window(),
+                at.x + 4.0,
+                at.y + 2.0,
+                size.width - 8.0,
+                size.height - 4.0,
+            );
+            let off = (top + bottom) / 2.0 - (at.y + size.height / 2.0);
+            assert!(
+                off.abs() <= 0.5,
+                "{name}: ink {top}..{bottom} is {off} px off the middle of {}+{}",
+                at.y,
+                size.height
+            );
+        }
+    }
+
+    /// Typing not yet applied shows as the Mac's dashed teal line under the
+    /// field (MainWindow.swift:3306-3314), not as an outline round it.
+    #[test]
+    fn typing_not_yet_applied_dashes_a_line_under_the_field_and_draws_no_outline() {
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        app.main.invoke_sync_toggled("local:desk".into());
+        app.main
+            .invoke_delay_edited("local:desk".into(), "400".into());
+        app.poll();
+        draw_frames();
+        let field = element(&app, "SyncControls::field").expect("the delay field shows");
+        let (at, size) = (field.absolute_position(), field.size());
+        let px = pixels(app.main.window());
+        let middle = at.y + size.height / 2.0;
+        assert_eq!(
+            px(at.x - 2.0, middle),
+            px(at.x - 2.0, at.y - 6.0),
+            "no outline left of the field"
+        );
+        let ground = px(at.x - 2.0, at.y + size.height + 5.0);
+        let dashed = (0..size.width as usize)
+            .filter(|column| px(at.x + *column as f32, at.y + size.height + 5.0) != ground)
+            .count();
+        assert!(
+            dashed > size.width as usize / 3 && dashed < size.width as usize * 4 / 5,
+            "{dashed} of {} columns under the field are line",
+            size.width
+        );
+    }
+
+    /// A row's delay value and the AirPlay delay's are one plain button on the
+    /// Mac (MainWindow.swift:2676, 2749): opening one under the pointer
+    /// leaves no box behind the teal value.
+    #[test]
+    fn a_rows_delay_value_has_no_box_under_the_pointer() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        hold_clock();
+        draw_frames();
+        for label in [
+            "Show controls for Desk Speaker delay",
+            "Show controls for AirPlay Delay",
+        ] {
+            let chip = ElementHandle::find_by_accessible_label(&app.main, label)
+                .next()
+                .unwrap_or_else(|| panic!("{label}"));
+            let (at, size) = (chip.absolute_position(), chip.size());
+            click(
+                app.main.window(),
+                at.x + size.width / 2.0,
+                at.y + size.height / 2.0,
+            );
+            advance_clock(Duration::from_secs(1));
+            // Rows above may have closed and moved it: the pointer goes back on it.
+            let (at, size) = (chip.absolute_position(), chip.size());
+            let position =
+                slint::LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0);
+            app.main
+                .window()
+                .dispatch_event(WindowEvent::PointerMoved { position });
+            draw_frames();
+            let at = pixels(app.main.window());
+            let (x, y) = (
+                chip.absolute_position().x + 1.0,
+                chip.absolute_position().y + 1.0,
+            );
+            assert_eq!(
+                at(x, y),
+                at(x, y - 6.0),
+                "{label}: the box's corner and above it"
             );
         }
     }
@@ -10648,7 +11548,10 @@ mod tests {
         item.cast = true;
         item.has_delay = true;
         item.delay_ms = 10;
-        let label = app.strings().invoke_delay_of(item.name.clone());
+        let label = {
+            let strings = app.strings();
+            strings.invoke_show_delay_controls(strings.invoke_delay_of(item.name.clone()))
+        };
         connected.set_row_data(0, item);
         draw_frames();
         let value = ElementHandle::find_by_accessible_label(&app.main, &label)
@@ -10657,8 +11560,8 @@ mod tests {
         assert_eq!(value.as_str(), "10 ms");
     }
 
-    /// The delay panel holds the Mac's small steps, 20 px high and 4 px
-    /// apart, around a 72 x 22 field.
+    /// The delay panel holds the Mac's small steps 4 px apart around a
+    /// 72 x 22 field, at the field's 22 px height (the Mac's are 20).
     // covers: S450
     #[test]
     fn the_delay_panel_holds_small_steps_around_a_72_by_22_field() {
@@ -10676,7 +11579,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("the {delta} step"))
         };
         let steps = [-100, -10].map(step);
-        assert!(steps.iter().all(|s| s.size().height == 20.0));
+        assert!(steps.iter().all(|s| s.size().height == 22.0));
         assert_eq!(
             steps[1].absolute_position().x - right_edge(&steps[0]),
             4.0,
@@ -10685,7 +11588,7 @@ mod tests {
         let name = app.snapshot().speaker("local:desk").unwrap().name.clone();
         let field = ElementHandle::find_by_accessible_label(
             &app.main,
-            &strings.invoke_delay_of(name.into()),
+            &strings.invoke_delay_field_label(strings.invoke_delay_of(name.into())),
         )
         .find(|e| e.size().width == 72.0)
         .expect("the delay field");
@@ -11156,7 +12059,7 @@ mod tests {
         let app = app_with_the_no_airplay_note(true);
         let strings = app.strings();
         let name = app.snapshot().speaker("local:desk").unwrap().name.clone();
-        let field_label = strings.invoke_delay_of(name.into());
+        let field_label = strings.invoke_delay_field_label(strings.invoke_delay_of(name.into()));
         let step_label = strings.invoke_delay_step_accessibility(100);
         // Taken from the laid-out controls, as fonts differ between hosts:
         // right of the steps on the field's line, then in the layout's gap
@@ -12013,11 +12916,11 @@ mod tests {
             .invoke_speaker_rename_edited("local:desk".into(), "Desk".into());
         let mut unplugged = MockBackend::new();
         unplugged.retain_speakers(|s| s.id != "local:desk");
-        *app.backend.borrow_mut() = Box::new(unplugged);
+        app.backend.replace(Box::new(unplugged));
         app.refresh();
         assert!(app.ui.borrow().rename.is_none());
 
-        *app.backend.borrow_mut() = Box::new(MockBackend::new());
+        app.backend.replace(Box::new(MockBackend::new()));
         app.refresh();
         assert!(
             !row_of(&app, "local:desk").renaming,
@@ -12141,7 +13044,7 @@ mod tests {
                 let hit = found(app);
                 let _ = app.zone_dialog.hide();
                 app.blank_click();
-                *app.backend.borrow_mut() = Box::new(MockBackend::zones_preview());
+                app.backend.replace(Box::new(MockBackend::zones_preview()));
                 {
                     let mut ui = app.ui.borrow_mut();
                     ui.sync_open.clear();
@@ -12374,10 +13277,10 @@ mod tests {
             "it ends before the gear"
         );
         assert!(size.height < 26.0, "one line, {} px", size.height);
-        // Segoe UI's 13 px line is 17.3 px; a 16 px box cut its descenders.
+        // Segoe UI's 12 px line, the Mac's callout, is 16 px; a 15 px box cut its descenders.
         #[cfg(windows)]
         assert!(
-            size.height >= 17.0,
+            size.height >= 15.9,
             "a whole Segoe UI line, {} px",
             size.height
         );
@@ -12499,6 +13402,27 @@ mod tests {
         );
     }
 
+    /// The AirPlay delay reads as one line, its name and value, as on the
+    /// Mac: the steps, field and note fold open only from the value.
+    #[test]
+    fn the_airplay_delay_folds_until_its_value_opens_it() {
+        let app = narrow_app(MockBackend::new());
+        advance_clock(Duration::from_millis(400));
+        draw_frames_at(776, 900);
+        assert!(app.main.get_airplay_delay_shown(), "the row shows");
+        assert!(
+            element(&app, "AirPlayDelayControls::field").is_none(),
+            "its field stays folded"
+        );
+        app.main.invoke_sync_toggled(AIRPLAY_DELAY_FIELD.into());
+        advance_clock(Duration::from_millis(400));
+        draw_frames_at(776, 900);
+        assert!(
+            element(&app, "AirPlayDelayControls::field").is_some(),
+            "the value opens it"
+        );
+    }
+
     /// With Add by Address under it, the AirPlay delay's note shows whole
     /// once the speaker list is scrolled to its end, at a short and a tall
     /// window: its pane keeps the note's second line and its padding, and
@@ -12508,6 +13432,7 @@ mod tests {
         use i_slint_backend_testing::ElementHandle;
         for height in [480, 900] {
             let app = narrow_app(MockBackend::new());
+            app.main.invoke_sync_toggled(AIRPLAY_DELAY_FIELD.into());
             advance_clock(Duration::from_millis(400));
             draw_frames_at(776, height);
             let list = element(&app, "MainWindow::scroll").expect("the speaker list");
@@ -12936,6 +13861,7 @@ mod tests {
     #[test]
     fn leaving_the_name_field_for_the_master_volume_or_airplay_delay_applies_the_name() {
         let app = app_over(MockBackend::new());
+        app.main.invoke_sync_toggled(AIRPLAY_DELAY_FIELD.into());
         app.main.show().unwrap();
         draw_frames();
         let window = app.main.window();
@@ -13019,7 +13945,7 @@ mod tests {
         // The desk is unplugged: its draft goes with it.
         let mut unplugged = MockBackend::new();
         unplugged.retain_speakers(|s| s.id != "local:desk");
-        *app.backend.borrow_mut() = Box::new(unplugged);
+        app.backend.replace(Box::new(unplugged));
         app.refresh();
         assert!(
             !app.ui.borrow().delay_drafts.contains_key("local:desk"),
@@ -13027,7 +13953,7 @@ mod tests {
         );
 
         // Plugged back in, it shows its saved delay.
-        *app.backend.borrow_mut() = Box::new(MockBackend::new());
+        app.backend.replace(Box::new(MockBackend::new()));
         app.refresh();
         assert_eq!(desk_delay_text(&app), "+120");
     }
@@ -15254,6 +16180,19 @@ mod tests {
             strings.invoke_zone_count(0, 1, 0, 0, 1),
             "1 playing in a pair"
         );
+        for (on, total, waiting, present, in_pair, note, head, rest) in [
+            (2, 5, 1, 4, 0, "", "2 of 5 on", ", 1 waiting"),
+            (1, 3, 0, 2, 0, "In use", "1 of 3 on", " · In use"),
+            (0, 3, 0, 1, 0, "", "0 of 3 on", ""),
+            (0, 3, 0, 0, 0, "", "", "None of 3 found"),
+            (0, 0, 0, 0, 0, "", "", "No speakers"),
+        ] {
+            assert_eq!(strings.invoke_zone_count_on(on, total, present), head);
+            assert_eq!(
+                strings.invoke_zone_count_rest(on, total, waiting, present, in_pair, note.into()),
+                rest
+            );
+        }
         assert_eq!(
             strings.invoke_zone_value(2, 5, 1),
             "2 of 5 speakers on, 1 waiting"
@@ -15596,9 +16535,11 @@ mod tests {
         assert!(item().expanded, "Enter unfolded it");
     }
 
+    /// A zone none of whose members is here has none on, so its header
+    /// shows no volume, as the Mac's `if zone.on > 0` (MainWindow.swift:1992).
     // covers: S359
     #[test]
-    fn a_zone_volume_works_while_none_of_its_members_is_present() {
+    fn a_zone_shows_no_volume_while_none_of_its_members_is_present() {
         use i_slint_backend_testing::ElementHandle;
         let mut backend = MockBackend::new();
         backend.add_zone("zone:garage", "Garage", &["airplay:not-here"]);
@@ -15606,18 +16547,13 @@ mod tests {
         let app = app_over(backend);
         app.main.show().unwrap();
         draw_frames();
-        let enabled = |label: &str| {
+        let shown = |label: &str| {
             ElementHandle::find_by_accessible_label(&app.main, label)
                 .next()
-                .unwrap_or_else(|| panic!("nothing is labeled {label}"))
-                .accessible_enabled()
+                .is_some()
         };
-        assert_eq!(enabled("Garage volume"), Some(true), "as on the Mac");
-        assert_eq!(
-            enabled("Empty volume"),
-            Some(false),
-            "a zone with no member"
-        );
+        assert!(!shown("Garage volume"), "no member is here to be on");
+        assert!(!shown("Empty volume"), "a zone with no member");
     }
 
     // covers: S359
@@ -15996,21 +16932,26 @@ mod tests {
             zone.off_rows = vec![1];
         }
         let card = calibrate_all_card(&strings, &state);
-        assert_eq!(
-            card.rows[1].detail,
-            "Off, so it wasn't measured. Turn it on and choose Measure Again."
+        assert!(
+            card.rows[1].note.starts_with(
+                "Off, so it wasn't measured. Turn it on and choose Measure Again. · was "
+            ),
+            "{}",
+            card.rows[1].note
         );
-        assert_eq!(
-            card.rows[2].detail,
-            strings.get_calibrate_all_not_measured()
+        assert!(
+            card.rows[2]
+                .note
+                .starts_with(strings.get_calibrate_all_not_measured().as_str())
         );
 
         state.calibrate_all.zone = None;
         let card = calibrate_all_card(&strings, &state);
         assert!(card.zone.is_empty());
-        assert_eq!(
-            card.rows[1].detail,
-            strings.get_calibrate_all_not_measured()
+        assert!(
+            card.rows[1]
+                .note
+                .starts_with(strings.get_calibrate_all_not_measured().as_str())
         );
         assert!(!card.status.contains("Upstairs"), "a whole run's text");
     }
@@ -17213,7 +18154,7 @@ mod tests {
 
     // covers: S453
     #[test]
-    fn home_and_end_leave_an_equalizer_band_where_it_is() {
+    fn home_end_page_up_and_page_down_leave_an_equalizer_band_where_it_is() {
         let app = app_over(MockBackend::new());
         app.equalizer.show().expect("the equalizer shows headless");
         app.equalizer.invoke_take_focus();
@@ -17226,6 +18167,10 @@ mod tests {
         assert_eq!(first_band_gain(&app), 0.5, "Home");
         press(window, Key::End);
         assert_eq!(first_band_gain(&app), 0.5, "End");
+        press(window, Key::PageUp);
+        assert_eq!(first_band_gain(&app), 0.5, "Page Up");
+        press(window, Key::PageDown);
+        assert_eq!(first_band_gain(&app), 0.5, "Page Down");
     }
 
     /// The left, top, width and height of the slider Narrator calls `label`.
@@ -17248,6 +18193,104 @@ mod tests {
             let (x, y) = ((x * scale) as usize, (y * scale) as usize);
             let at = (y * shot.width() as usize + x) * 4;
             shot.as_bytes()[at..at + 4].try_into().unwrap()
+        }
+    }
+
+    /// The grey a row slider shows at `x` on its track's centre line, the
+    /// row's own grey 6 px above the slider, and the brightest grey on the
+    /// knob's line, with the pointer off or on the row.
+    fn row_slider_greys(app: &App, label: &str, x: f32, hovered: bool) -> (u8, u8, u8) {
+        let (left, top, width, height) = slider_box(&app.main, label);
+        let middle = top + height / 2.0;
+        let window = app.main.window();
+        let position = if hovered {
+            slint::LogicalPosition::new(left + 30.0, middle)
+        } else {
+            slint::LogicalPosition::new(2.0, 2.0)
+        };
+        window.dispatch_event(WindowEvent::PointerMoved { position });
+        advance_clock(Duration::from_secs(1));
+        draw_frames();
+        let at = pixels(window);
+        let brightest = (0..width as i32)
+            .map(|dx| at(left + dx as f32, middle)[0])
+            .max()
+            .unwrap_or_default();
+        (
+            at(left + x, middle)[0],
+            at(left + 30.0, top - 6.0)[0],
+            brightest,
+        )
+    }
+
+    /// An off speaker's slider keeps the Mac's contrast on its row, plain or
+    /// under the pointer, in both themes (measured on the Mac's off
+    /// row at 2x: on dark the track is
+    /// 11 over the row and 10 over its hover, the knob 27 and 26; on light
+    /// the track 7 under both). Its knob has no lighter rim.
+    #[test]
+    fn an_off_speakers_slider_shows_on_its_row_as_on_the_mac() {
+        use slint::language::ColorScheme;
+        let app = narrow_app(MockBackend::new());
+        let label = app
+            .main
+            .global::<crate::Strings>()
+            .invoke_volume_of("Headphones".into());
+        let (_, _, width, _) = slider_box(&app.main, &label);
+        for scheme in [ColorScheme::Dark, ColorScheme::Light] {
+            app.main.global::<Palette>().set_color_scheme(scheme);
+            for hovered in [false, true] {
+                let (track, row, brightest) = row_slider_greys(&app, &label, width - 12.0, hovered);
+                let case = format!("{scheme:?}, hovered {hovered}");
+                if scheme == ColorScheme::Dark {
+                    assert!(track >= row + 10, "{case}: track {track} on {row}");
+                    assert!(brightest >= row + 26, "{case}: knob {brightest} on {row}");
+                    assert!(
+                        brightest <= row + 28,
+                        "{case}: knob rim {brightest} on {row}"
+                    );
+                } else {
+                    assert!(track + 6 <= row, "{case}: track {track} on {row}");
+                    if hovered {
+                        assert!(brightest >= row + 5, "{case}: knob {brightest} on {row}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// A row's volume number sits centred on its slider's track, as on the
+    /// Mac, whose digits' ink and track share one centre line.
+    #[test]
+    fn a_rows_volume_number_is_centred_on_its_track() {
+        let app = narrow_app(MockBackend::new());
+        let label = app
+            .main
+            .global::<crate::Strings>()
+            .invoke_volume_of("Speakers".into());
+        for scale_factor in [1.0, 1.5] {
+            app.main
+                .window()
+                .dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor });
+            draw_frames();
+            let (left, top, width, height) = slider_box(&app.main, &label);
+            let middle = top + height / 2.0;
+            let at = pixels(app.main.window());
+            let row = at(left + 30.0, top - 6.0)[0];
+            let step = 1.0 / scale_factor;
+            let inked: Vec<f32> = (0..(24.0 * scale_factor) as i32)
+                .map(|i| middle - 12.0 + i as f32 * step)
+                .filter(|&y| {
+                    (0..(44.0 * scale_factor) as i32)
+                        .any(|i| at(left + width + 4.0 + i as f32 * step, y)[0].abs_diff(row) > 60)
+                })
+                .collect();
+            let (first, last) = (inked[0], inked[inked.len() - 1] + step);
+            let centre = (first + last) / 2.0;
+            assert!(
+                (centre - middle).abs() <= 0.5,
+                "at {scale_factor}x the number's ink {first}..{last} centres on {centre}, the track on {middle}"
+            );
         }
     }
 
@@ -17882,7 +18925,7 @@ mod tests {
         focus_speaker_volume(&app, "cc:attic");
         let fixed = cast_backend(true);
         let editing = fixed.volume_editing.clone();
-        *app.backend.borrow_mut() = Box::new(fixed);
+        app.backend.replace(Box::new(fixed));
         app.refresh();
         draw_frames();
         let window = app.main.window();
@@ -18535,6 +19578,37 @@ mod tests {
         );
     }
 
+    /// Switching on opens the capture, which takes Windows about 190 ms
+    /// (debug log of 2026-11-17); the switch hands that to another thread.
+    #[test]
+    fn the_power_switch_returns_at_once_while_streaming_starts_elsewhere() {
+        use crate::audio::backend::AudioBackend as _;
+        let mut audio = crate::audio::mock::MockBackend::empty();
+        audio.connect_output("speakers", "Speakers");
+        audio.add_app(2000, "Spotify.exe");
+        // On before launch: a speaker switched on in the app starts streaming
+        // itself, and a stop's fade-out would put the next capture off.
+        audio
+            .set_output_enabled("speakers", true)
+            .expect("switched on");
+        audio.slow_capture_starts(Duration::from_millis(500));
+        let adapter =
+            crate::adapter::AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        let _ = slint::platform::set_platform(Box::new(Headless));
+        let app = App::new(Engine::movable(Box::new(adapter)), DebugLog::new(None))
+            .expect("headless windows");
+        assert!(!app.snapshot().running);
+        let pressed = std::time::Instant::now();
+        app.main.invoke_power_toggled(true);
+        let held = pressed.elapsed();
+        assert!(
+            held < Duration::from_millis(250),
+            "the switch held the UI thread {held:?}"
+        );
+        assert!(app.snapshot().running);
+        assert!(app.backend.borrow().snapshot().running);
+    }
+
     // covers: S197, S198
     #[test]
     fn calibrate_alls_volume_fix_unmutes_the_reference_and_keeps_the_focus() {
@@ -19007,6 +20081,47 @@ mod tests {
         );
     }
 
+    /// A Several Apps list longer than the window below the source button
+    /// scrolls inside the menu instead of running past the window's edge,
+    /// where the popup is cut. Slint's tests reach no popup's items, so this
+    /// reads the menu's source.
+    #[test]
+    fn a_long_source_menu_scrolls_inside_the_window() {
+        let main = include_str!("../ui/main.slint").replace("\r\n", "\n");
+        let menu = &main[main.find("component SourceMenu").unwrap()..];
+        let menu = &menu[menu.find("menu := PopupWindow").unwrap()..];
+        let menu = &menu[..menu.find("FocusRing {").unwrap()];
+        assert!(
+            menu.contains("height: MenuRoom.height > 0px ? min(panel.preferred-height,"),
+            "the popup's height stops at the window's"
+        );
+        assert!(menu.contains("OverlayScrollView {"), "its rows scroll");
+    }
+
+    /// The Calibrate All sheet stays inside a window narrower than its 600
+    /// px, a margin each side and a gap under the title row, its corners
+    /// all round, so no edge reads as cut off.
+    #[test]
+    fn the_calibrate_sheet_fits_inside_the_window() {
+        let main = include_str!("../ui/main.slint").replace("\r\n", "\n");
+        let sheet = &main[main.find("component CalibrateAllSheet").unwrap()..];
+        let sheet = &sheet[..sheet.find("bottom := VerticalLayout").unwrap()];
+        assert!(
+            sheet.contains("width: min(600px, root.room-width - 2 * Fluent.window-margin);"),
+            "the sheet narrows with the window"
+        );
+        assert!(
+            sheet.contains("border-radius: Tokens.radius-card;"),
+            "it floats with four round corners"
+        );
+        let popup = &main[main.find("calibrate-sheet := PopupWindow").unwrap()..];
+        let popup = &popup[..popup.find("running: root.calibrate-all-running;").unwrap()];
+        assert!(
+            popup.contains("y: Fluent.window-margin / 2;"),
+            "a gap above the sheet"
+        );
+    }
+
     /// A click on a flyout row's name, not only on its round mark, switches
     /// the speaker, as the Mac panel's rows do (S439).
     // covers: S439
@@ -19460,15 +20575,19 @@ mod tests {
         assert_eq!(preset_rows(&app)[0], ("Evening".into(), true));
         app.remote_window.invoke_preset_shortcut(2);
         assert_eq!(preset_rows(&app)[1], ("Party".into(), true));
+        app.show_settings();
+        draw_frames();
+        ctrl(app.settings.window(), "1");
+        assert_eq!(preset_rows(&app)[0], ("Evening".into(), true), "Settings");
     }
 
     #[test]
-    fn f1_ctrl_n_and_f5_alone_work_in_the_equalizer_the_guides_and_the_web_remote() {
+    fn f1_ctrl_n_and_f5_alone_work_in_the_equalizer_the_guides_the_web_remote_and_settings() {
         let backend = MockBackend::new();
         let refreshes = backend.refreshes.clone();
         let app = app_over(backend);
         type Open = fn(&App) -> &slint::Window;
-        let windows: [(&str, Open); 4] = [
+        let windows: [(&str, Open); 5] = [
             ("equalizer", |app| {
                 app.show_equalizer();
                 app.equalizer.window()
@@ -19485,6 +20604,10 @@ mod tests {
             ("web remote", |app| {
                 app.show_remote();
                 app.remote_window.window()
+            }),
+            ("settings", |app| {
+                app.show_settings();
+                app.settings.window()
             }),
         ];
         for (name, open) in windows {
@@ -19549,6 +20672,60 @@ mod tests {
         assert!(app.equalizer.window().is_visible(), "Ctrl+E");
         assert!(app.main.invoke_shortcut(Key::F1.into(), false, false));
         assert!(app.help.window().is_visible(), "F1");
+        assert!(app.main.invoke_shortcut("r".into(), true, false), "Ctrl+R");
+    }
+
+    /// The Mac's Command-comma, Option-Command-E, Command-0 and Command-R
+    /// (MainMenu.swift:18, 45, 60, 61) work whichever window is in front.
+    #[test]
+    fn ctrl_comma_e_0_and_r_work_from_every_window() {
+        let backend = MockBackend::new();
+        let refreshes = backend.refreshes.clone();
+        let app = app_over(backend);
+        type Open = fn(&App) -> &slint::Window;
+        let windows: [(&str, Open); 5] = [
+            ("equalizer", |app| {
+                app.show_equalizer();
+                app.equalizer.window()
+            }),
+            ("Guide", |app| {
+                app.show_help();
+                app.help.window()
+            }),
+            ("notice guide", |app| {
+                app.guide.show().expect("the guide shows headless");
+                app.guide.invoke_take_focus();
+                app.guide.window()
+            }),
+            ("web remote", |app| {
+                app.show_remote();
+                app.remote_window.window()
+            }),
+            ("settings", |app| {
+                app.show_settings();
+                app.settings.window()
+            }),
+        ];
+        for (name, open) in windows {
+            let window = open(&app);
+            draw_frames();
+            if name != "settings" {
+                let _ = app.settings.hide();
+                ctrl(window, ",");
+                assert!(app.settings.window().is_visible(), "Ctrl+, in the {name}");
+            }
+            if name != "equalizer" {
+                let _ = app.equalizer.hide();
+                ctrl(window, "e");
+                assert!(app.equalizer.window().is_visible(), "Ctrl+E in the {name}");
+            }
+            let _ = app.main.hide();
+            ctrl(window, "0");
+            assert!(app.main.window().is_visible(), "Ctrl+0 in the {name}");
+            let before = refreshes.get();
+            ctrl(window, "r");
+            assert_eq!(refreshes.get(), before + 1, "Ctrl+R in the {name}");
+        }
     }
 
     #[test]
@@ -20041,13 +21218,12 @@ mod tests {
         press(window, " ");
         assert_eq!(preset_rows(&app)[1], ("Party".into(), true), "Space");
 
+        // The Mac's Presets list has no Escape action; Return or Space on the row folds it.
         press(window, Key::Escape);
         draw_frames();
-        assert!(!app.main.get_presets_open(), "Escape folded it");
-        press(window, " ");
         assert!(
             app.main.get_presets_open(),
-            "the Presets row took the focus back"
+            "Escape leaves it open, as on the Mac"
         );
     }
 
@@ -21078,6 +22254,60 @@ mod tests {
         assert!(element(&app, "SpeakerRow::focus-tip").is_none());
     }
 
+    /// A double-click on a name, a new name and Enter, twice
+    /// with the pointer left where it was, leaves no tooltip, focus tip or
+    /// hover tip, also when the renamed row sorts away and another comes
+    /// under the pointer, as AppKit shows none until the pointer moves.
+    #[test]
+    fn two_renames_in_a_row_leave_no_tooltip_under_the_resting_pointer() {
+        let app = app_over(MockBackend::new());
+        app.main.show().unwrap();
+        hold_clock();
+        draw_frames();
+        let window = app.main.window();
+        let (x, y) = name_point(&app, "local:desk");
+        let tips = || {
+            i_slint_backend_testing::ElementHandle::find_by_element_type_name(&app.main, "LabelTip")
+                .count()
+                + usize::from(element(&app, "SpeakerRow::focus-tip").is_some())
+        };
+        let rename_under_pointer = |typed: &str| {
+            click(window, x, y);
+            click(window, x, y);
+            let renamed = app.ui.borrow().rename.as_ref().map(|(id, _)| id.clone());
+            advance_clock(Duration::from_millis(100));
+            draw_frames();
+            type_text(window, typed);
+            press(window, Key::Return);
+            advance_clock(Duration::from_secs(3));
+            draw_frames();
+            renamed.expect("the double-click renames")
+        };
+
+        assert_eq!(rename_under_pointer("Zed"), "local:desk");
+        assert_eq!(name_of(&app, "local:desk"), "Zed", "Enter applies it");
+        assert_eq!(tips(), 0, "no tip after the first rename");
+
+        let next = rename_under_pointer("Yak");
+        assert_ne!(next, "local:desk", "the next row came under the pointer");
+        assert_eq!(name_of(&app, &next), "Yak");
+        assert_eq!(tips(), 0, "no tip after the second rename");
+
+        let same = rename_under_pointer("Ant");
+        assert_eq!(name_of(&app, &same), "Ant");
+        assert_eq!(tips(), 0, "no tip after a third, on whichever row");
+
+        let position = slint::LogicalPosition::new(x + 1.0, y);
+        window.dispatch_event(WindowEvent::PointerMoved { position });
+        advance_clock(Duration::from_secs(2));
+        slint::platform::update_timers_and_animations();
+        assert_eq!(
+            tips(),
+            1,
+            "a move shows the name tip again, so the probe sees one"
+        );
+    }
+
     /// With an input device chosen as the source, the source picker carries
     /// a microphone marker, as the Mac's does; with an app or the whole
     /// system it carries none (S448).
@@ -21239,6 +22469,25 @@ mod tests {
             ]
         );
         assert_eq!(app.flyout.get_source_looks().row_count(), kinds.len());
+    }
+
+    /// Several Apps lists each app with its own icon, as the Mac's
+    /// (MenuBar.swift sourceMenu, `if let icon = app.icon`), and the app
+    /// glyph where it has none, as the source rows above it.
+    #[test]
+    fn several_apps_rows_show_each_apps_icon() {
+        let types = include_str!("../ui/types.slint").replace("\r\n", "\n");
+        assert!(
+            types.contains("export struct MixAppItem {\n    name: string,\n    icon: image,"),
+            "MixAppItem carries the app's icon"
+        );
+        let main = include_str!("../ui/main.slint").replace("\r\n", "\n");
+        assert!(
+            main.contains(
+                "text: app.name;\n                        icon: app.icon;\n                        icon-glyph: Glyphs.display;\n"
+            ),
+            "the Several Apps row draws the icon, else the app glyph"
+        );
     }
 
     /// The keyboard reaches every row of the source menu: each source, then
@@ -21548,7 +22797,9 @@ mod tests {
         draw_frames();
         assert!(app.ui.borrow().sync_open.contains("local:desk"));
         assert_eq!(
-            opacity(strings.invoke_delay_of(name.as_str().into())),
+            opacity(
+                strings.invoke_hide_delay_controls(strings.invoke_delay_of(name.as_str().into()))
+            ),
             1.0,
             "the delay stays shown"
         );
@@ -21589,7 +22840,9 @@ mod tests {
         focus(RowPart::Delay);
         assert_eq!(options(), 0.0, "the delay's focus leaves … hidden");
         assert_eq!(
-            opacity(strings.invoke_delay_of(name.as_str().into())),
+            opacity(
+                strings.invoke_show_delay_controls(strings.invoke_delay_of(name.as_str().into()))
+            ),
             1.0,
             "the delay shows on its own focus"
         );
@@ -21751,6 +23004,8 @@ mod tests {
         use i_slint_backend_testing::ElementHandle;
         let mut backend = MockBackend::new();
         backend.add_zone("zone:den", "Den", &["local:desk"]);
+        // The zone's volume shows only while a member is on (MainWindow.swift:1992).
+        backend.set_speaker_enabled("local:desk", true);
         let app = main_window_over(backend);
         app.save_preset("Evening");
         app.main.set_presets_open(true);
@@ -22041,21 +23296,95 @@ mod tests {
         assert_eq!(app.flyout.get_current_preset(), "Party", "the last preset");
     }
 
-    /// The Presets row opens through UI Automation's Expand, as a screen
-    /// reader opens it, not only through Invoke.
+    /// Narrator opens and closes a speaker's delay controls, the AirPlay
+    /// delay's, the System volume panel and Presets with Invoke, as VoiceOver
+    /// presses the Mac's buttons (MainWindow.swift:2754, 2791, 899-901): a
+    /// node with an expanded state gets no Invoke from UI Automation, and
+    /// Slint 1.18 passes no Collapse on.
     #[test]
-    fn the_presets_row_opens_through_expand() {
+    fn narrator_opens_and_closes_the_delay_rows_and_presets_and_picks_a_preset() {
+        use i_slint_backend_testing::ElementHandle;
         let app = narrow_app(MockBackend::new());
-        let presets = app.main.global::<crate::Strings>().get_presets();
-        let row = || {
-            i_slint_backend_testing::ElementHandle::find_by_accessible_label(&app.main, &presets)
-                .find(|e| e.accessible_expandable() == Some(true))
-                .expect("the Presets row")
-        };
-        assert_eq!(row().accessible_expanded(), Some(false));
-        row().invoke_accessible_expand_action();
+        app.save_preset("Party");
+        app.update(|b| b.set_master_volume(60.0));
+        app.refresh();
         draw_frames();
-        assert_eq!(row().accessible_expanded(), Some(true), "Expand opened it");
+        let strings = app.strings();
+        let element = |label: &str| {
+            ElementHandle::find_by_accessible_label(&app.main, label)
+                .find(|e| {
+                    e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Button)
+                })
+                .unwrap_or_else(|| panic!("no button is labeled {label}"))
+        };
+        let press = |label: &str| {
+            let button = element(label);
+            assert_ne!(
+                button.accessible_expandable(),
+                Some(true),
+                "{label}: UI Automation offers no Invoke on an expandable node"
+            );
+            button.invoke_accessible_default_action();
+            app.poll();
+            // The clock is held: let a fold finish.
+            advance_clock(Duration::from_millis(400));
+            draw_frames();
+        };
+        let open = |id: &str| app.ui.borrow().sync_open.contains(id);
+        let named =
+            |label: &str| ElementHandle::find_by_accessible_label(&app.main, label).count() > 0;
+
+        let name = app.snapshot().speaker("local:desk").unwrap().name.clone();
+        let delay = strings.invoke_delay_of(name.as_str().into());
+        press(&strings.invoke_show_delay_controls(delay.clone()));
+        assert!(open("local:desk"), "Invoke opened the speaker's delay");
+        assert!(
+            named(&strings.invoke_delay_field_label(delay.clone())),
+            "the field says ms"
+        );
+        press(&strings.invoke_hide_delay_controls(delay));
+        assert!(!open("local:desk"), "Invoke closed it");
+
+        let airplay = strings.get_airplay_delay_title();
+        press(&strings.invoke_show_delay_controls(airplay.clone()));
+        assert!(open(AIRPLAY_DELAY_FIELD), "Invoke opened the AirPlay delay");
+        assert!(named(&strings.invoke_delay_field_label(airplay.clone())));
+        press(&strings.invoke_hide_delay_controls(airplay));
+        assert!(!open(AIRPLAY_DELAY_FIELD), "Invoke closed it");
+
+        let reference = app
+            .snapshot()
+            .speakers
+            .into_iter()
+            .find(ui_model::Speaker::is_reference)
+            .expect("the reference");
+        press(&strings.get_system_volume_button());
+        assert!(open(&reference.id), "Invoke opened the System panel");
+        press(&strings.get_system_volume_button());
+        assert!(!open(&reference.id), "Invoke closed it");
+
+        let presets = strings.get_presets();
+        let hint = || {
+            element(&presets)
+                .accessible_description()
+                .unwrap_or_default()
+        };
+        assert_eq!(hint(), strings.get_show_preset_list());
+        press(&presets);
+        assert!(app.main.get_presets_open(), "Invoke opened Presets");
+        assert_eq!(hint(), strings.get_hide_preset_list());
+        element("Party").invoke_accessible_default_action();
+        draw_frames();
+        assert_eq!(app.main.get_current_preset(), "Party", "Invoke picked it");
+        press(&presets);
+        assert!(!app.main.get_presets_open(), "Invoke closed Presets");
+
+        assert_eq!(
+            element(&strings.get_more_options())
+                .accessible_description()
+                .unwrap_or_default(),
+            strings.get_more_options_hint()
+        );
     }
 
     /// A row's options button hides again once the pointer leaves, even after
@@ -22257,9 +23586,9 @@ mod tests {
         assert!(app.main.invoke_shortcut(",".into(), true, false));
         app.main.invoke_speaker_hide_requested("local:desk".into());
         let strings = app.main.global::<crate::Strings>();
-        // Volume Keys shows on Windows only (volume_keys_available).
+        // Volume Keys shows on Windows only, the quit switch on Linux only.
         let labels: Vec<_> = [
-            Some(strings.get_switch_source_on_quit()),
+            (!cfg!(windows)).then(|| strings.get_switch_source_on_quit()),
             cfg!(windows).then(|| strings.get_volume_keys()),
             Some(strings.get_unhide()),
         ]
@@ -22578,7 +23907,11 @@ mod tests {
         let (at, below) = (row.absolute_position(), line.absolute_position());
         assert_eq!(below.y - (at.y + row.size().height), 6.0, "the gap");
         assert_eq!(below.x - at.x, 8.0, "the inset");
-        assert_eq!(row.size().height, 36.0, "the quick row, 36 high");
+        assert_eq!(
+            row.size().height,
+            28.0,
+            "the quick row, 28 high as the Mac's"
+        );
         let (_, tip) = rest_on(
             &app,
             "CalibrationCard::calibrate-button",

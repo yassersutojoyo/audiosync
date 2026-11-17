@@ -6,7 +6,7 @@
 // focus ring while it has keyboard focus, acts on Space and Enter, and
 // carries an accessible role, label and (where it has one) value.
 
-import { Button, ComboBox } from "std-widgets.slint";
+import { Button, ComboBox, Spinner } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { Availability, CastState, DeviceVolumeHint, NoticeItem, RowPart, UpdateButton, RowState, SourceLook, SourceRowKind, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
@@ -34,8 +34,8 @@ export global Fluent {
     out property <int> weight-regular: Platform.os == OperatingSystemType.windows ? 480 : 400;
     out property <int> weight-medium: Platform.os == OperatingSystemType.windows ? 560 : 500;
     out property <int> weight-semibold: Platform.os == OperatingSystemType.windows ? 640 : 600;
-    // Cards, the flyout and the notices (overlay radius).
-    out property <length> radius-card: 8px;
+    // Cards, the flyout and the notices, as the Mac's (BrandTokens.swift Radius.card).
+    out property <length> radius-card: 12px;
     // Buttons, chips and the rows inside a card (control radius).
     out property <length> radius-control: 4px;
     // The Mac's AppKit bordered small button and segmented track: white with a
@@ -76,9 +76,7 @@ export global Fluent {
     // A list row under the pointer, as the Mac's: primary at 5 %, in over
     // 80 ms and out at once.
     out property <brush> row-hover: Tokens.text.with-alpha(0.05);
-    // Dark takes more, as the Mac's dark plate steps further off its window.
-    out property <brush> row-hover-dark: Tokens.text.with-alpha(0.08);
-    out property <length> radius-row: 10px;
+    out property <length> radius-row: 9px;
     out property <duration> row-hover-in: 80ms;
     // An open list's block (Presets), as the Mac's openRowFill.
     out property <brush> open-row: Tokens.text.with-alpha(0.04);
@@ -92,12 +90,12 @@ export global Fluent {
     out property <color> house-text: Tokens.dark ? #63dac2 : #0f574f;
     // The block of what plays and the source, in the main window and the
     // tray panel: as grey on the white window as the Mac's on its grey one.
-    out property <brush> hero: Tokens.text.with-alpha(0.06);
+    out property <brush> hero: Tokens.text.with-alpha(0.05);
     // A 1 px edge that sets a card off a light background.
     out property <brush> stroke: Tokens.dark ? Tokens.separator : #0000001a;
-    // Windows' two-tone keyboard focus ring, as the style's own controls draw it.
-    out property <color> focus-outer: Tokens.dark ? #ffffff : #000000e6;
-    out property <color> focus-inner: Tokens.dark ? #000000b3 : #ffffff;
+    // The main window: white on light, the Mac's system window color on dark
+    // (#323232, Brand.swift:17-21).
+    out property <color> main-window: Tokens.dark ? #323232 : #ffffff;
     // The style's slider thumb and its edge, for a slider AudioSync draws itself.
     out property <color> thumb: Tokens.dark ? #454545 : #ffffff;
     out property <color> thumb-edge: Tokens.dark ? #ffffff17 : #00000029;
@@ -126,9 +124,6 @@ export component FoldPane inherits Rectangle {
     in property <bool> open;
     // The content may go only once the pane is folded shut.
     out property <bool> shown: root.open || root.progress > 0;
-    // Escape inside the pane, where nothing in it took the key, folds it.
-    in property <bool> escape-folds;
-    callback fold();
     property <float> progress: root.open ? 1 : 0;
     animate progress { duration: Motion.on ? 250ms : 150ms; }
     property <length> height-open: max(body.min-height, body.preferred-height);
@@ -139,24 +134,13 @@ export component FoldPane inherits Rectangle {
     max-height: self.min-height;
     clip: true;
 
-    FocusScope {
-        enabled: false;
-        key-pressed(event) => {
-            if root.escape-folds && root.open && event.text == Key.Escape {
-                root.fold();
-                return accept;
-            }
-            return reject;
-        }
+    Rectangle {
+        height: root.height-open;
+        y: 0px;
+        opacity: Fold.fade(root.progress, !Motion.on);
 
-        Rectangle {
-            height: root.height-open;
-            y: 0px;
-            opacity: Fold.fade(root.progress, !Motion.on);
-
-            body := VerticalLayout {
-                @children
-            }
+        body := VerticalLayout {
+            @children
         }
     }
 }
@@ -445,7 +429,21 @@ export global Glyphs {
     // outlines where the Mac's are filled, so these are drawn on Windows too;
     // its Presets, Equalizer, microphone and timer are filled where the Mac's are outlines.
     public pure function drawn-everywhere(glyph: string) -> bool {
-        return glyph == root.repeat-all || glyph == root.repeat-one || glyph == root.more || glyph == root.previous || glyph == root.next || glyph == root.play || glyph == root.pause || glyph == root.volume-low || glyph == root.volume-mid || glyph == root.volume-high || glyph == root.volume-muted || glyph == root.presets || glyph == root.equalizer || glyph == root.microphone || glyph == root.timer;
+        return glyph == root.shuffle || glyph == root.repeat-all || glyph == root.repeat-one || glyph == root.more || glyph == root.previous || glyph == root.next || glyph == root.play || glyph == root.pause || glyph == root.volume-low || glyph == root.volume-mid || glyph == root.volume-high || glyph == root.volume-muted || glyph == root.presets || glyph == root.equalizer || glyph == root.microphone || glyph == root.timer;
+    }
+
+    // Shuffle and Repeat are drawn on a 20-unit box with 2-unit strokes and
+    // solid arrowheads, the same drawings as the Mac's.
+    public pure function bold(glyph: string) -> bool {
+        return glyph == root.shuffle || glyph == root.repeat-all || glyph == root.repeat-one;
+    }
+
+    // The "1" inside Repeat One, a 1.7-unit stroke on the 20-unit box.
+    public pure function fine(glyph: string) -> string {
+        if glyph == root.repeat-one {
+            return "M8.9 8.6 L10.4 7.6 V12.4";
+        }
+        return "";
     }
 
     // The Mac's gear and chevrons stand at about 1.5 pt strokes; the icon font's are 1 px.
@@ -527,16 +525,17 @@ export global Glyphs {
         if glyph == root.music-note {
             return "M10.5 11.5 V2 Q10.5 4 13.5 5.5";
         }
+        // Two crossing curves; the rising one breaks where the falling one
+        // passes over it.
         if glyph == root.shuffle {
-            return "M2 4.5 H5 L11 11.5 H14 M2 11.5 H5 L11 4.5 H14 M12 2.5 L14 4.5 L12 6.5 M12 9.5 L14 11.5 L12 13.5";
+            return "M2 14 H4.5 C5.52 14 6.38 13.48 7.16 12.7 M11.34 7.3 C12.12 6.52 12.98 6 14 6 H15.5 M2 6 H4.5 C8.5 6 10 14 14 14 H15.5";
         }
-        // Own drawing: one rounded loop running clockwise, its arrowhead at
-        // the gap on top.
+        // Own drawing: two rounded arcs chasing each other, a solid arrowhead on each.
         if glyph == root.repeat-all {
-            return "M8 4 H10.5 Q13.5 4 13.5 7 V9 Q13.5 12 10.5 12 H5.5 Q2.5 12 2.5 9 V7 Q2.5 4 5.5 4 H6.25 M4.5 2.25 L6.25 4 L4.5 5.75";
+            return "M3 10 V8.5 C3 6.6 4.6 5 6.5 5 H15 M17 10 V11.5 C17 13.4 15.4 15 13.5 15 H5";
         }
         if glyph == root.repeat-one {
-            return "M8 4 H10.5 Q13.5 4 13.5 7 V9 Q13.5 12 10.5 12 H5.5 Q2.5 12 2.5 9 V7 Q2.5 4 5.5 4 H6.25 M4.5 2.25 L6.25 4 L4.5 5.75 M7.25 7 L8.25 6.25 V9.75";
+            return "M3 10 V8.5 C3 6.6 4.6 5 6.5 5 H15 M17 10 V11.5 C17 13.4 15.4 15 13.5 15 H5";
         }
         // The Mac's square.stack.3d.up: a layer over two more.
         if glyph == root.presets {
@@ -549,6 +548,12 @@ export global Glyphs {
     }
 
     public pure function solid(glyph: string) -> string {
+        if glyph == root.shuffle {
+            return "M15 2.6 L19 6 L15 9.4 Z M15 10.6 L19 14 L15 17.4 Z";
+        }
+        if glyph == root.repeat-all || glyph == root.repeat-one {
+            return "M14.6 1.6 L18.4 5 L14.6 8.4 Z M5.4 11.6 L1.6 15 L5.4 18.4 Z";
+        }
         if glyph == root.speakers {
             return "M8 3.25 A1 1 0 0 1 8 5.25 A1 1 0 0 1 8 3.25 Z";
         }
@@ -637,11 +642,11 @@ export component Glyph inherits HorizontalLayout {
             y: root.vertical-alignment == TextVerticalAlignment.top ? 0px : root.vertical-alignment == TextVerticalAlignment.bottom ? parent.height - self.height : (parent.height - self.height) / 2;
             width: root.font-size;
             height: root.font-size;
-            viewbox-width: 16;
-            viewbox-height: 16;
+            viewbox-width: Glyphs.bold(root.glyph) ? 20 : 16;
+            viewbox-height: Glyphs.bold(root.glyph) ? 20 : 16;
             commands: Glyphs.outline(root.glyph);
             stroke: root.color;
-            stroke-width: max(1px, root.font-size / 12);
+            stroke-width: Glyphs.bold(root.glyph) ? root.font-size / 10 : max(1px, root.font-size / 12);
             stroke-line-cap: round;
             stroke-line-join: round;
         }
@@ -651,10 +656,28 @@ export component Glyph inherits HorizontalLayout {
             y: root.vertical-alignment == TextVerticalAlignment.top ? 0px : root.vertical-alignment == TextVerticalAlignment.bottom ? parent.height - self.height : (parent.height - self.height) / 2;
             width: root.font-size;
             height: root.font-size;
-            viewbox-width: 16;
-            viewbox-height: 16;
+            viewbox-width: Glyphs.bold(root.glyph) ? 20 : 16;
+            viewbox-height: Glyphs.bold(root.glyph) ? 20 : 16;
             commands: Glyphs.solid(root.glyph);
             fill: root.color;
+            // Rounds the arrowheads' tips.
+            stroke: Glyphs.bold(root.glyph) ? root.color : transparent;
+            stroke-width: Glyphs.bold(root.glyph) ? root.font-size / 25 : 0px;
+            stroke-line-join: round;
+        }
+
+        if Glyphs.fine(root.glyph) != "": Path {
+            x: (parent.width - self.width) / 2;
+            y: root.vertical-alignment == TextVerticalAlignment.top ? 0px : root.vertical-alignment == TextVerticalAlignment.bottom ? parent.height - self.height : (parent.height - self.height) / 2;
+            width: root.font-size;
+            height: root.font-size;
+            viewbox-width: 20;
+            viewbox-height: 20;
+            commands: Glyphs.fine(root.glyph);
+            stroke: root.color;
+            stroke-width: root.font-size * 0.085;
+            stroke-line-cap: round;
+            stroke-line-join: round;
         }
     }
 }
@@ -677,17 +700,7 @@ export component FocusRing inherits Rectangle {
     in property <bool> visible-focus;
     property <bool> drawn: root.visible-focus && KeyboardFocus.shown;
     border-width: root.drawn ? 2px : 0px;
-    border-color: Fluent.focus-outer;
-
-    Rectangle {
-        x: 2px;
-        y: 2px;
-        width: parent.width - 4px;
-        height: parent.height - 4px;
-        border-width: root.drawn ? 1px : 0px;
-        border-radius: max(0px, parent.border-radius - 2px);
-        border-color: Fluent.focus-inner;
-    }
+    border-color: Tokens.focus;
 }
 
 // A rounded panel on the window background.
@@ -764,6 +777,36 @@ export component QuietText inherits HorizontalLayout {
         vertical-alignment: root.vertical-alignment;
         wrap: root.wrap;
         overflow: root.overflow;
+        accessible-role: none;
+    }
+}
+
+// A zone header's count in two runs, as the Mac's (MainWindow.swift:2042-2048):
+// "2 of 3 on" in teal while a member is on, the waiting part and note grey.
+export component ZoneCount inherits HorizontalLayout {
+    in property <int> on;
+    in property <string> head;
+    in property <string> rest;
+    out property <string> text: root.head + root.rest;
+
+    Text {
+        horizontal-stretch: 0;
+        text: root.head;
+        font-size: Tokens.font-size-caption;
+        color: root.on > 0 ? Tokens.teal-text : Tokens.secondary-text;
+        wrap: no-wrap;
+        overflow: elide;
+        accessible-role: none;
+    }
+
+    Text {
+        horizontal-stretch: 1;
+        min-width: 0px;
+        text: root.rest;
+        font-size: Tokens.font-size-caption;
+        color: Tokens.secondary-text;
+        wrap: no-wrap;
+        overflow: elide;
         accessible-role: none;
     }
 }
@@ -1033,7 +1076,8 @@ export component IconButton inherits Rectangle {
 
     if root.active: Rectangle {
         x: (parent.width - self.width) / 2;
-        y: parent.height - 7px;
+        // The Mac's hangs 7 px under the glyph's bottom (MainWindow.swift:507-508).
+        y: (root.height + root.glyph-size) / 2 + 3px;
         width: 4px;
         height: 4px;
         border-radius: 2px;
@@ -1766,9 +1810,16 @@ export component LevelSlider inherits Rectangle {
     property <length> thickness: 4px;
     property <length> span: (root.vertical ? root.height : root.width) - root.knob;
     property <float> ratio: root.maximum > root.minimum ? (root.value - root.minimum) / (root.maximum - root.minimum) : 0;
-    // The Mac's disabled small slider (a speaker that is off): a track and fill
-    // so pale they almost vanish under a white knob, not the whole slider dimmed.
+    // The Mac's disabled small slider (a speaker that is off), measured on its
+    // window at 2x on 17 Nov: no fill, a see-through track and knob.
     property <bool> idle: root.small && !root.enabled;
+    // 1 while idle, faded over the Mac row's 250 ms; the knob's own fill
+    // changes, as a second circle over it left a lighter rim.
+    property <float> dim: root.idle ? 1 : 0;
+    animate dim {
+        duration: Motion.on ? 250ms : 150ms;
+        easing: Motion.on ? ease-in-out : linear;
+    }
 
     min-width: root.vertical ? root.knob : 48px;
     // A row's knob reaches 1 px past its 14 px line, which keeps the rows' 49 px step.
@@ -1834,13 +1885,17 @@ export component LevelSlider inherits Rectangle {
         }
     }
 
-    Rectangle {
-        x: root.vertical ? (root.width - self.width) / 2 : root.knob / 2;
+    // The Mac's small slider over its row, measured at 2x on a plain and a hovered row: see-through,
+    // so it keeps its contrast on the hover fill. Horizontal
+    // tracks stop at the knob, which an idle knob would show through.
+    property <brush> track-look: root.idle ? (Tokens.dark ? #ffffff0e : #00000008) : root.small ? (Tokens.dark ? #ffffff1b : #0000000e) : root.track;
+    for piece in (root.vertical ? 1 : 2): Rectangle {
+        x: root.vertical ? (root.width - self.width) / 2 : piece == 0 ? root.knob / 2 : root.span * root.ratio + root.knob;
         y: root.vertical ? root.knob / 2 : (root.height - self.height) / 2;
-        width: root.vertical ? root.thickness : root.span;
+        width: root.vertical ? root.thickness : max(0px, piece == 0 ? root.span * root.ratio - root.knob / 2 : root.span * (1 - root.ratio) - root.knob / 2);
         height: root.vertical ? root.span : root.thickness;
         border-radius: root.thickness / 2;
-        background: root.idle ? Tokens.text.with-alpha(0.07) : root.track;
+        background: root.track-look;
         animate background {
             duration: Motion.on ? 250ms : 150ms;
             easing: Motion.on ? ease-in-out : linear;
@@ -1853,8 +1908,8 @@ export component LevelSlider inherits Rectangle {
         width: root.vertical ? root.thickness : root.span * root.ratio;
         height: root.vertical ? root.span * root.ratio : root.thickness;
         border-radius: root.thickness / 2;
-        // The Mac's disabled small slider shows no fill; on dark its fill is grey, not white.
-        background: root.idle ? Tokens.text.with-alpha(0.07) : root.small && Tokens.dark ? Tokens.text.with-alpha(0.26) : Tokens.text;
+        // On dark the Mac's small slider fill is grey, not white.
+        background: root.idle ? transparent : root.small ? (Tokens.dark ? #ffffff42 : #000000f5) : Tokens.text;
         animate background {
             duration: Motion.on ? 250ms : 150ms;
             easing: Motion.on ? ease-in-out : linear;
@@ -1867,21 +1922,17 @@ export component LevelSlider inherits Rectangle {
         x: root.vertical ? (root.width - self.width) / 2 : root.span * root.ratio;
         y: root.vertical ? root.span * (1 - root.ratio) : (root.height - self.height) / 2;
         border-radius: self.width / 2;
-        // The Mac's small knob on dark is grey (#959595 on its window), faint while disabled.
-        background: root.small && Tokens.dark ? #959595 : root.small && touch.pressed ? #ebebeb : #ffffff;
-        opacity: root.idle && Tokens.dark ? 0.25 : 1;
-        // As the Mac's row, which dims over its switch's 250 ms.
-        animate opacity {
-            duration: Motion.on ? 250ms : 150ms;
-            easing: Motion.on ? ease-in-out : linear;
-        }
+        // The Mac's small knob on dark is grey (#959595 on its window). Idle it
+        // is see-through like its track: white at 13 % on dark, 56 % on light.
+        background: !root.small ? #ffffff : (Tokens.dark ? #ffffff22 : #ffffff90).mix(Tokens.dark ? #959595 : touch.pressed ? #ebebeb : #ffffff, root.dim);
         // The Mac's small knob: on light a faint ring and a soft shadow keep it
-        // off a white window at 100; on dark the shadow alone.
+        // off a white window at 100; on dark the shadow alone, which an idle
+        // knob would show through.
         border-width: root.small && Tokens.dark ? 0px : 1px;
         border-color: root.small ? #0000001f : Tokens.secondary-text;
         drop-shadow-blur: root.small && !Tokens.dark ? 3px : 1.5px;
         drop-shadow-offset-y: root.small && !Tokens.dark ? 1px : 0.5px;
-        drop-shadow-color: root.small && !Tokens.dark ? #00000033 : #0000004d;
+        drop-shadow-color: (root.small && !Tokens.dark ? #00000033 : #0000004d).transparentize(root.dim);
     }
 
     touch := TouchArea {
@@ -2066,6 +2117,7 @@ export component VolumeSlider inherits HorizontalLayout {
     in property <bool> shows-value: true;
     // Its value reads "60%" rather than "60".
     in property <bool> percent;
+    in property <length> value-width: root.percent ? 34px : 26px;
     in property <bool> small <=> slider.small;
     callback changed(float);
     // True from the first move of a drag or key press to its release.
@@ -2131,20 +2183,28 @@ export component VolumeSlider inherits HorizontalLayout {
         }
     }
 
-    if root.shows-value: QuietText {
-        text: root.percent ? Strings.system-volume-percent(round(slider.value)) : Strings.volume-value(slider.value);
-        color: root.is-editing || slider.held ? Tokens.text : Tokens.secondary-text;
-        width: root.percent ? 34px : 26px;
-        horizontal-alignment: right;
-        // One line, centered on the track: a wrapped label is taller than
-        // the slider and drops below it.
-        vertical-alignment: center;
-        wrap: no-wrap;
-        // The Mac's subheadline, as its code sets it.
-        font-size: Tokens.font-size-subheadline;
+    if root.shows-value: Rectangle {
+        width: root.value-width;
         // The Mac's line: Segoe UI's is 2 px taller, all of it leading, and
         // would break a speaker row's 52 px step.
         height: 14px;
+
+        QuietText {
+            // Skia draws the digits 1 px under the box's middle (measured
+            // at 1x); the Mac centres their ink on the track.
+            y: -1px;
+            width: parent.width;
+            height: parent.height;
+            text: root.percent ? Strings.system-volume-percent(round(slider.value)) : Strings.volume-value(slider.value);
+            color: root.is-editing || slider.held ? Tokens.text : Tokens.secondary-text;
+            horizontal-alignment: right;
+            // One line, centered on the track: a wrapped label is taller than
+            // the slider and drops below it.
+            vertical-alignment: center;
+            wrap: no-wrap;
+            // The Mac's subheadline, as its code sets it.
+            font-size: Tokens.font-size-subheadline;
+        }
     }
 }
 
@@ -2376,6 +2436,8 @@ export component TextField inherits Rectangle {
         HorizontalLayout {
             padding-left: root.compact ? 6px : 10px;
             padding-right: root.compact ? 6px : 10px;
+            // Skia sets the delay fields' 12 px digits 1 px under the middle.
+            padding-bottom: root.raised ? 2px : 0px;
 
             // The text slides left under this clip so the cursor stays in
             // view: `offset` is how far, never past the end of the text.
@@ -2435,18 +2497,19 @@ export component TextField inherits Rectangle {
     }
 }
 
-// Around a delay field: a teal outline while the field holds typing not yet
-// applied (Enter applies it), a red one while that typing is a number out of
-// range. Drawn in the 4 px spacing around the field instead of taking room,
-// so the row is no taller than its buttons.
-// A delay step, as the Mac panel's small bordered button: 20 high, 10 px
-// digits, a white pill with a soft shadow and no border, or grey in dark.
+// Around a delay field: a dashed teal line under it while the field holds
+// typing not yet applied (Enter applies it), a red outline while that typing
+// is a number out of range. Drawn in the spacing around the field instead of
+// taking room, so the row is no taller than its buttons.
+// A delay step, as the Mac panel's small bordered button: 10 px digits, a
+// white pill with a soft shadow and no border, or grey in dark. 22 high, the
+// field's height, where the Mac's is 20 beside a 22 field.
 component DelayStep inherits Rectangle {
     in property <int> delta;
     out property <bool> has-focus: focus.has-focus;
     callback clicked();
 
-    height: 20px;
+    height: 22px;
     min-width: label.preferred-width + 14px;
     border-radius: 5px;
     // A Mac bordered button has no hover look; pressing it greys it, a step lighter in dark.
@@ -2462,7 +2525,7 @@ component DelayStep inherits Rectangle {
         root.clicked();
     }
 
-    // 24 px to hit, the pointer minimum, centred on the 20 px step.
+    // 24 px to hit, the pointer minimum, centred on the 22 px step.
     touch := TouchArea {
         y: (root.height - self.height) / 2;
         height: 24px;
@@ -2484,7 +2547,10 @@ component DelayStep inherits Rectangle {
         }
     }
 
+    // Skia sets the caption 1 px under its box's middle; the Mac's sits on it.
     label := Text {
+        y: -1px;
+        height: parent.height;
         text: Strings.delay-step(root.delta);
         font-size: Tokens.font-size-caption;
         color: Tokens.text;
@@ -2514,7 +2580,19 @@ component DraftOutline inherits Rectangle {
         height: parent.height + 6px;
         border-radius: Tokens.radius-control + 3px;
         border-width: 2px;
-        border-color: root.out-of-range ? Tokens.error-text : root.pending ? Tokens.teal-text : transparent;
+        border-color: root.out-of-range ? Tokens.error-text : transparent;
+    }
+
+    // Typing not yet applied: the Mac's dashed 1.5 px teal line, 3 on 2 off,
+    // centred 5 under the field (MainWindow.swift:3306-3314).
+    if root.pending: Rectangle {
+        y: parent.height + 4.25px;
+        height: 1.5px;
+        for dash in ceil(parent.width / 5px): Rectangle {
+            x: dash * 5px;
+            width: min(3px, parent.width - self.x);
+            background: Tokens.teal-text;
+        }
     }
 }
 
@@ -2547,7 +2625,7 @@ component DraftHint inherits HorizontalLayout {
 export component SyncControls inherits VerticalLayout {
     in property <string> name;
     in property <string> delay-text;
-    // The field holds typing not yet applied: an outline and a hint say so.
+    // The field holds typing not yet applied: a dashed line and a hint say so.
     in property <bool> pending;
     // Typing out of range: the range and what Enter applies; empty otherwise.
     in property <string> range-hint;
@@ -2560,6 +2638,8 @@ export component SyncControls inherits VerticalLayout {
     in property <bool> calibrating;
     in property <bool> calibration-enabled;
     in property <string> calibration-status;
+    // The last calibration failed: its line in the error color.
+    in property <bool> calibration-failed;
     in property <bool> calibration-privacy;
     // Why microphone calibration leaves it out; empty otherwise.
     in property <string> calibration-left-out;
@@ -2628,7 +2708,7 @@ export component SyncControls inherits VerticalLayout {
             }
 
             // Text input, so a leading "+" or "−" can be typed. Typing not
-            // yet applied gets a teal outline around it, out of range a red one.
+            // yet applied gets a dashed teal line under it, out of range a red outline.
             DraftOutline {
                 pending: root.pending;
                 out-of-range: root.range-hint != "";
@@ -2641,7 +2721,7 @@ export component SyncControls inherits VerticalLayout {
                     font-size: Tokens.font-size-callout;
                     text: root.delay-text;
                     horizontal-alignment: center;
-                    accessible-label: Strings.delay-of(root.name);
+                    accessible-label: Strings.delay-field-label(Strings.delay-of(root.name));
                     accessible-description: root.range-hint != "" ? root.range-hint : root.pending ? Strings.delay-draft-hint : "";
                     edited(text) => {
                         root.edited(text);
@@ -2702,6 +2782,23 @@ export component SyncControls inherits VerticalLayout {
             alignment: start;
             spacing: 8px;
 
+            // The step beside Cancel, as on the Mac (CalibrationViews.swift:41-49).
+            if root.calibrating: VerticalLayout {
+                alignment: center;
+
+                Spinner {
+                    indeterminate: true;
+                    width: 16px;
+                    height: 16px;
+                    accessible-role: none;
+                }
+            }
+
+            if root.calibrating: QuietText {
+                text: root.calibration-status;
+                vertical-alignment: center;
+            }
+
             // One button for both, so the keyboard focus stays on it when
             // a calibration starts or ends.
             Button {
@@ -2722,8 +2819,8 @@ export component SyncControls inherits VerticalLayout {
             }
 
             if root.calibration-privacy: Button {
-                text: Strings.notice-open-privacy;
-                accessible-label: Strings.notice-open-privacy-label;
+                text: Strings.open-microphone-settings;
+                accessible-label: Strings.open-microphone-settings;
                 clicked => {
                     root.calibration-privacy-requested();
                 }
@@ -2733,9 +2830,11 @@ export component SyncControls inherits VerticalLayout {
             }
         }
 
-        // The button's description says it already.
-        QuietText {
-            text: root.calibration-status != "" ? root.calibration-status : Strings.calibration-hint(root.reference-name);
+        // The button's description says it already; the hint is only its
+        // description, as on the Mac (CalibrationViews.swift:57-74).
+        if !root.calibrating && root.calibration-status != "": QuietText {
+            text: root.calibration-status;
+            color: root.calibration-failed ? Tokens.error-text : Tokens.secondary-text;
         }
     }
 
@@ -2752,7 +2851,7 @@ export component SyncControls inherits VerticalLayout {
 // number would clamp.
 export component AirPlayDelayControls inherits VerticalLayout {
     in property <string> delay-text;
-    // The field holds typing not yet applied: an outline and a hint say so.
+    // The field holds typing not yet applied: a dashed line and a hint say so.
     in property <bool> pending;
     // Typing out of range: the range and what Enter applies; empty otherwise.
     in property <string> range-hint;
@@ -2765,138 +2864,217 @@ export component AirPlayDelayControls inherits VerticalLayout {
     callback focus-changed(bool);
     // The list's width, which the note's wrapped lines are measured at.
     in property <length> width-given;
+    // The steps, field and note show under the name, as the Mac's pane.
+    in property <bool> open;
+    // The applied delay, beside the name.
+    in property <string> value;
+    // A click on the value or the name, or Enter or Space on the value.
+    callback toggled();
 
-    spacing: 6px;
     padding-left: 12px;
     padding-right: 12px;
     padding-top: 10px;
     padding-bottom: 12px;
     accessible-role: groupbox;
     accessible-label: Strings.airplay-delay-title;
-    // Typing replaces the field's binding; show the applied value after a step.
-    changed delay-text => {
-        if field.text != root.delay-text {
-            field.text = root.delay-text;
-        }
-    }
 
-    // The glyph in the toggles' column, the name where the rows' names start.
-    HorizontalLayout {
-        spacing: 12px;
-
-        Glyph {
-            width: 32px;
-            glyph: Glyphs.timer;
-            color: Tokens.secondary-text;
+    // The glyph in the toggles' column, the name where the rows' names start,
+    // the value at the row's end. A click anywhere on it works like the value.
+    TouchArea {
+        clicked => {
+            root.toggled();
         }
 
-        Text {
-            text: Strings.airplay-delay-title;
-            font-size: Tokens.font-size-body;
-            color: Tokens.text;
-            vertical-alignment: center;
-            accessible-role: none;
-        }
-    }
+        HorizontalLayout {
+            spacing: 12px;
 
-    VerticalLayout {
-        padding-left: Fluent.name-inset - Fluent.row-padding-x;
+            Glyph {
+                width: 32px;
+                glyph: Glyphs.timer;
+                color: Tokens.secondary-text;
+            }
 
-        VerticalLayout {
-            spacing: 6px;
+            Text {
+                text: Strings.airplay-delay-title;
+                font-size: Tokens.font-size-body;
+                color: Tokens.text;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                accessible-role: none;
+            }
 
-            // Escape in the field or on a step drops what was typed and
-            // shows the applied value again. Captured before the field sees
-            // the key.
-            FocusScope {
-                focus-on-click: false;
-                focus-on-tab-navigation: false;
-                capture-key-pressed(event) => {
-                    if event.text == Key.Escape {
-                        root.cancelled();
-                        field.text = root.delay-text;
-                        return accept;
+            VerticalLayout {
+                alignment: center;
+
+                Rectangle {
+                    width: value-text.preferred-width + 6px;
+                    height: 16px;
+                    border-radius: Fluent.radius-control;
+                    forward-focus: value-focus;
+                    accessible-role: button;
+                    accessible-label: root.open ? Strings.hide-delay-controls(Strings.airplay-delay-title) : Strings.show-delay-controls(Strings.airplay-delay-title);
+                    accessible-value: root.value;
+                    accessible-description: Strings.sync-adjust;
+                    accessible-action-default => {
+                        root.toggled();
                     }
-                    return reject;
-                }
 
-                HorizontalLayout {
-                    spacing: 4px;
-                    alignment: start;
-
-                    for delta in [-100, -10]: DelayStep {
-                        delta: delta;
+                    value-focus := FocusScope {
+                        focus-on-click: false;
+                        key-pressed(event) => {
+                            if event.text == " " || event.text == Key.Return {
+                                root.toggled();
+                                return accept;
+                            }
+                            return reject;
+                        }
                         changed has-focus => {
                             root.focus-changed(self.has-focus);
                         }
+                    }
+
+                    // 24 px to hit and to ring around the 16 px line.
+                    value-touch := TouchArea {
+                        y: -4px;
+                        height: 24px;
                         clicked => {
-                            root.stepped(delta);
+                            root.toggled();
                         }
                     }
 
-                    DraftOutline {
-                        pending: root.pending;
-                        out-of-range: root.range-hint != "";
-
-                        field := TextField {
-                            width: 72px;
-                            compact: true;
-                            raised: true;
-                            border-radius: 6px;
-                            font-size: Tokens.font-size-callout;
-                            text: root.delay-text;
-                            horizontal-alignment: center;
-                            accessible-label: Strings.airplay-delay-title;
-                            changed has-focus => {
-                                root.focus-changed(self.has-focus);
-                            }
-                            accessible-description: root.range-hint != "" ? root.range-hint : root.pending ? Strings.delay-draft-hint : Strings.airplay-delay-hint;
-                            edited(text) => {
-                                root.edited(text);
-                                // A character the field can't take: the app
-                                // kept the text from before the edit.
-                                if field.text != root.delay-text {
-                                    field.text = root.delay-text;
-                                }
-                            }
-                            accepted => {
-                                root.committed();
-                            }
-                        }
-                    }
-
-                    Text {
-                        text: Strings.milliseconds-unit;
-                        font-size: Tokens.font-size-callout;
-                        color: Tokens.secondary-text;
+                    value-text := Text {
+                        x: 3px;
+                        text: root.value;
+                        font-size: Tokens.font-size-subheadline;
+                        // Small text: the readable teal, as a speaker's delay.
+                        color: root.open ? Tokens.teal-text : Tokens.secondary-text;
                         vertical-alignment: center;
                         accessible-role: none;
                     }
 
-                    for delta in [10, 100]: DelayStep {
-                        delta: delta;
-                        changed has-focus => {
-                            root.focus-changed(self.has-focus);
-                        }
-                        clicked => {
-                            root.stepped(delta);
-                        }
+                    FocusRing {
+                        y: value-touch.y;
+                        height: value-touch.height;
+                        visible-focus: value-focus.has-focus;
+                        border-radius: parent.border-radius;
                     }
                 }
             }
+        }
+    }
+
+    pane := FoldPane {
+        open: root.open;
+
+        if pane.shown: VerticalLayout {
+            padding-left: Fluent.name-inset - Fluent.row-padding-x;
+            padding-top: 6px;
 
             VerticalLayout {
-                spacing: 2px;
+                spacing: 6px;
 
-                DraftHint {
-                    shown: root.pending;
-                    range-hint: root.range-hint;
+                // Escape in the field or on a step drops what was typed and
+                // shows the applied value again. Captured before the field sees
+                // the key.
+                FocusScope {
+                    focus-on-click: false;
+                    focus-on-tab-navigation: false;
+                    capture-key-pressed(event) => {
+                        if event.text == Key.Escape {
+                            root.cancelled();
+                            field.text = root.delay-text;
+                            // The pane folds: the value takes the focus back.
+                            value-focus.focus();
+                            return accept;
+                        }
+                        return reject;
+                    }
+                    // Typing replaces the field's binding; show the applied value after a step.
+                    property <string> applied: root.delay-text;
+                    changed applied => {
+                        if field.text != root.delay-text {
+                            field.text = root.delay-text;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 4px;
+                        alignment: start;
+
+                        for delta in [-100, -10]: DelayStep {
+                            delta: delta;
+                            changed has-focus => {
+                                root.focus-changed(self.has-focus);
+                            }
+                            clicked => {
+                                root.stepped(delta);
+                            }
+                        }
+
+                        DraftOutline {
+                            pending: root.pending;
+                            out-of-range: root.range-hint != "";
+
+                            field := TextField {
+                                width: 72px;
+                                compact: true;
+                                raised: true;
+                                border-radius: 6px;
+                                font-size: Tokens.font-size-callout;
+                                text: root.delay-text;
+                                horizontal-alignment: center;
+                                accessible-label: Strings.delay-field-label(Strings.airplay-delay-title);
+                                changed has-focus => {
+                                    root.focus-changed(self.has-focus);
+                                }
+                                accessible-description: root.range-hint != "" ? root.range-hint : root.pending ? Strings.delay-draft-hint : Strings.airplay-delay-hint;
+                                edited(text) => {
+                                    root.edited(text);
+                                    // A character the field can't take: the app
+                                    // kept the text from before the edit.
+                                    if field.text != root.delay-text {
+                                        field.text = root.delay-text;
+                                    }
+                                }
+                                accepted => {
+                                    root.committed();
+                                }
+                            }
+                        }
+
+                        Text {
+                            text: Strings.milliseconds-unit;
+                            font-size: Tokens.font-size-callout;
+                            color: Tokens.secondary-text;
+                            vertical-alignment: center;
+                            accessible-role: none;
+                        }
+
+                        for delta in [10, 100]: DelayStep {
+                            delta: delta;
+                            changed has-focus => {
+                                root.focus-changed(self.has-focus);
+                            }
+                            clicked => {
+                                root.stepped(delta);
+                            }
+                        }
+                    }
                 }
 
-                // Its width set, so the pane's height counts every wrapped line.
-                hint := SecondaryText {
-                    width: root.width-given - 24px - (Fluent.name-inset - Fluent.row-padding-x);
-                    text: Strings.airplay-delay-hint;
+                VerticalLayout {
+                    spacing: 2px;
+
+                    DraftHint {
+                        shown: root.pending;
+                        range-hint: root.range-hint;
+                    }
+
+                    // Its width set, so the pane's height counts every wrapped line.
+                    hint := SecondaryText {
+                        width: root.width-given - 24px - (Fluent.name-inset - Fluent.row-padding-x);
+                        text: Strings.airplay-delay-hint;
+                    }
                 }
             }
         }
@@ -3590,7 +3768,7 @@ export component SpeakerRow inherits Rectangle {
     // The row keeps its plate while its menu is open, as the Mac's under its menu.
     property <bool> plated: hover.has-hover || (MenuState.open != 0 && MenuState.open == root.menu-serial);
     border-radius: Fluent.radius-row;
-    background: !root.grouped && root.plated ? (Tokens.dark ? Fluent.row-hover-dark : Fluent.row-hover) : transparent;
+    background: !root.grouped && root.plated ? Fluent.row-hover : transparent;
     animate background {
         duration: root.plated ? Fluent.row-hover-in : 0ms;
         easing: linear;
@@ -3650,11 +3828,14 @@ export component SpeakerRow inherits Rectangle {
                     // The row's least height sits here: on the line itself it
                     // would replace the content's minimum and let the volume
                     // line spill past the row.
-                    VerticalLayout {
-                        alignment: center;
-                        padding-right: 4px;
+                    Rectangle {
+                        width: badge.width + 4px;
                         min-height: Fluent.row-height - 16px;
                         badge := SpeakerBadge {
+                            x: 0px;
+                            // In the middle of the gap between the name and the slider,
+                            // as the Mac's badgePin, so a hint line below doesn't move it.
+                            y: floor((name-line.y + name-line.height + 5px / 2 - self.height / 2) / 1px) * 1px;
                             icon: DeviceIcons.glyph(root.item.kind);
                             state: root.item.state;
                             plays: root.item.plays;
@@ -3682,7 +3863,7 @@ export component SpeakerRow inherits Rectangle {
                         spacing: 5px;
                         horizontal-stretch: 1;
 
-                        HorizontalLayout {
+                        name-line := HorizontalLayout {
                             spacing: 8px;
 
                             // Name and kind
@@ -3918,8 +4099,6 @@ export component SpeakerRow inherits Rectangle {
                                     accessible-label: Strings.system-volume-button;
                                     accessible-value: root.item.system-muted ? Strings.device-volume-hint(DeviceVolumeHint.muted, 0) : Strings.system-volume-percent(root.item.system-volume);
                                     accessible-description: Strings.system-volume-help(root.item.name);
-                                    accessible-expandable: true;
-                                    accessible-expanded: root.item.system-open;
                                     accessible-action-default => {
                                         root.sync-toggled();
                                     }
@@ -3973,8 +4152,6 @@ export component SpeakerRow inherits Rectangle {
                                     height: 16px;
                                     opacity: root.item.delay-ms != 0 || root.item.sync-open ? 1 : root.delay-reveal;
                                     border-radius: Fluent.radius-control;
-                                    background: delay-touch.pressed ? Fluent.pressed : delay-touch.has-hover ? Fluent.hover : transparent;
-                                    animate background { duration: Fluent.fast; }
                                     forward-focus: delay-focus;
                                     init => {
                                         if root.pending-focus == RowPart.delay {
@@ -3991,11 +4168,9 @@ export component SpeakerRow inherits Rectangle {
                                         }
                                     }
                                     accessible-role: button;
-                                    accessible-label: Strings.delay-of(root.item.name);
+                                    accessible-label: root.item.sync-open ? Strings.hide-delay-controls(Strings.delay-of(root.item.name)) : Strings.show-delay-controls(Strings.delay-of(root.item.name));
                                     accessible-value: root.item.cast ? Strings.airplay-delay-value(root.item.delay-ms) : Strings.delay-value(root.item.delay-ms);
                                     accessible-description: Strings.sync-adjust;
-                                    accessible-expandable: true;
-                                    accessible-expanded: root.item.sync-open;
                                     accessible-action-default => {
                                         root.sync-toggled();
                                     }
@@ -4035,6 +4210,8 @@ export component SpeakerRow inherits Rectangle {
 
                                     // The Mac's 5 px ink gap: the timer's drawing is inset in its box.
                                     delay-row := HorizontalLayout {
+                                        // Skia sets the 11 px number 1 px under the box's middle.
+                                        y: -1px;
                                         spacing: 2px;
                                         padding-left: 3px;
                                         padding-right: 3px;
@@ -4173,6 +4350,8 @@ export component SpeakerRow inherits Rectangle {
                                     x: -Fluent.slider-inset;
                                     width: parent.width + Fluent.slider-inset;
                                     height: parent.height;
+                                    // The Windows volume panel's column, so both sliders end together.
+                                    value-width: 34px;
                                     volume: root.item.volume;
                                     step: root.item.cast ? root.item.volume-step : 1;
                                     label: Strings.volume-of(root.item.name);
@@ -4348,16 +4527,24 @@ export component SpeakerRow inherits Rectangle {
                             accessible-role: none;
                         }
 
-                        VolumeSlider {
-                            small: true;
-                            percent: true;
-                            volume: max(root.item.system-volume, 0);
-                            label: Strings.system-volume-slider(root.item.name);
-                            changed(value) => {
-                                root.system-volume-changed(value);
-                            }
-                            editing(on) => {
-                                root.system-volume-editing(on);
+                        // Moved left as the speaker slider, so both tracks start together.
+                        Rectangle {
+                            min-height: system-slider.min-height;
+
+                            system-slider := VolumeSlider {
+                                small: true;
+                                percent: true;
+                                x: -Fluent.slider-inset;
+                                width: parent.width + Fluent.slider-inset;
+                                height: parent.height;
+                                volume: max(root.item.system-volume, 0);
+                                label: Strings.system-volume-slider(root.item.name);
+                                changed(value) => {
+                                    root.system-volume-changed(value);
+                                }
+                                editing(on) => {
+                                    root.system-volume-editing(on);
+                                }
                             }
                         }
 
@@ -4392,6 +4579,7 @@ export component SpeakerRow inherits Rectangle {
                             calibrating: root.item.calibrating;
                             calibration-enabled: root.item.calibration-enabled;
                             calibration-status: root.item.calibration-status;
+                            calibration-failed: root.item.calibration-failed;
                             calibration-privacy: root.item.calibration-privacy;
                             calibration-left-out: root.item.calibration-left-out;
                             calibrate => {
@@ -4725,10 +4913,6 @@ export component ZoneMemberRow inherits Rectangle {
             self.running = false;
         }
     }
-
-    border-radius: Fluent.radius-control;
-    background: hover.has-hover ? Fluent.hover : transparent;
-    animate background { duration: Fluent.fast; }
 
     // The zone's bar on the group's left edge.
     Rectangle {
@@ -5302,12 +5486,12 @@ export component ZoneHeader inherits Rectangle {
                                 preferred-width: count-text.preferred-width;
                                 height: count-text.preferred-height;
 
-                                count-text := QuietText {
+                                count-text := ZoneCount {
                                     width: 100%;
                                     height: 100%;
-                                    text: root.item.total == 0 ? Strings.zone-empty : Strings.speaker-caption(Strings.zone-count(root.item.on, root.item.total, root.item.waiting, root.item.present, root.item.in-pair), Strings.row-note(root.item.state, root.item.waiting-name));
-                                    wrap: no-wrap;
-                                    overflow: elide;
+                                    on: root.item.on;
+                                    head: Strings.zone-count-on(root.item.on, root.item.total, root.item.present);
+                                    rest: Strings.zone-count-rest(root.item.on, root.item.total, root.item.waiting, root.item.present, root.item.in-pair, Strings.row-note(root.item.state, root.item.waiting-name));
                                 }
 
                                 TouchArea {
@@ -5340,33 +5524,46 @@ export component ZoneHeader inherits Rectangle {
                         }
                     }
 
-                    VerticalLayout {
-                        alignment: center;
-                        volume-slider := VolumeSlider {
-                            small: true;
-                            min-width: 100px;
-                            preferred-width: 140px;
-                            max-width: 140px;
-                            volume: root.item.volume;
-                            enabled: root.item.total > 0;
-                            label: Strings.zone-volume(root.item.name);
-                            changed(value) => {
-                                root.volume-changed(value);
+                    // One gap before the options, gone with the volume as in the Mac's HStack.
+                    HorizontalLayout {
+                        spacing: root.item.on > 0 ? 8px : 0px;
+
+                        // A box rather than an `if`: the focus code names the slider.
+                        Rectangle {
+                            visible: root.item.on > 0;
+                            min-width: self.visible ? 100px : 0px;
+                            max-width: self.visible ? 140px : 0px;
+
+                            VerticalLayout {
+                                alignment: center;
+                                volume-slider := VolumeSlider {
+                                    small: true;
+                                    min-width: 100px;
+                                    preferred-width: 140px;
+                                    max-width: 140px;
+                                    volume: root.item.volume;
+                                    enabled: root.item.total > 0;
+                                    label: Strings.zone-volume(root.item.name);
+                                    shows-value: false;
+                                    changed(value) => {
+                                        root.volume-changed(value);
+                                    }
+                                }
                             }
                         }
-                    }
 
-                    VerticalLayout {
-                        alignment: center;
-                        options := IconButton {
-                            glyph: Glyphs.more;
-                            label: Strings.speaker-options(root.item.name);
-                            glyph-color: Tokens.teal-text;
-                            clicked => {
-                                root.open-menu-under-options();
-                            }
-                            focus-changed(focused) => {
-                                root.options-focused = focused;
+                        VerticalLayout {
+                            alignment: center;
+                            options := IconButton {
+                                glyph: Glyphs.more;
+                                label: Strings.speaker-options(root.item.name);
+                                glyph-color: Tokens.teal-text;
+                                clicked => {
+                                    root.open-menu-under-options();
+                                }
+                                focus-changed(focused) => {
+                                    root.options-focused = focused;
+                                }
                             }
                         }
                     }
@@ -5519,13 +5716,13 @@ export component NoticeStack inherits VerticalLayout {
         property <length> gap: index == 0 ? root.lead : 6px;
         property <bool> closing: root.eased && notice.closing;
         // How far its room is open and how visible the notice is, 0 to 1.
-        property <float> open: (root.eased && notice.fresh) || self.closing ? 0 : 1;
+        // One built closing, as a list rebuilt the moment a notice leaves
+        // builds it, starts open and closes from there.
+        property <float> open: root.eased && notice.fresh ? 0 : 1;
         property <float> shown: self.open;
         init => {
-            if !self.closing {
-                self.open = 1;
-                self.shown = 1;
-            }
+            self.open = self.closing ? 0 : 1;
+            self.shown = self.closing ? 0 : 1;
         }
         changed closing => {
             if self.closing {

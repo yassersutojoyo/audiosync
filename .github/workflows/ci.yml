@@ -106,6 +106,15 @@ jobs:
       - name: The screenshot renderers still compile against the app sources
         run: scripts/screenshots/render.sh --typecheck
 
+      - name: The Mac's LAYAR states with their element lists, for scripts/screen_compare.py
+        run: scripts/screenshots/render.sh --layar "$RUNNER_TEMP/layar"
+
+      - name: Upload the LAYAR states (workflow artifact)
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: layar-mac
+          path: ${{ runner.temp }}/layar
+
       - name: Install the pinned shellcheck (Tests/run-tests.sh requires it)
         run: |
           scripts/shellcheck.sh --install "$RUNNER_TEMP/shellcheck"

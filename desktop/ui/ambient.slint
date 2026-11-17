@@ -32,9 +32,13 @@ export component AmbientArt inherits Rectangle {
         width: 100%;
         height: 100%;
 
-        Path {
-            width: 100%;
-            height: 100%;
+        line := Path {
+            // Slint fits the viewbox into the path less its stroke, half a
+            // stroke in; this grows the path so that box is the strip, as on the Mac.
+            x: -strand.width * 1px / 2;
+            y: -strand.width * 1px / 2;
+            width: parent.width + strand.width * 1px;
+            height: parent.height + strand.width * 1px;
             viewbox-width: 300;
             viewbox-height: 22;
             // Stretched, as the Mac draws the strands across the strip's width.
@@ -47,8 +51,10 @@ export component AmbientArt inherits Rectangle {
         }
 
         Path {
-            width: 100%;
-            height: 100%;
+            x: -strand.width * 1px / 2;
+            y: -strand.width * 1px / 2;
+            width: parent.width + strand.width * 1px;
+            height: parent.height + strand.width * 1px;
             viewbox-width: 300;
             viewbox-height: 22;
             fit: fill;
