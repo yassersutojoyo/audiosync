@@ -244,6 +244,56 @@ fn nothing_is_written_without_a_click() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+// covers: S472
+#[test]
+fn a_found_level_is_saved_as_the_output_starts_playing() {
+    let dir = test_dir("adapter-local-volume-saved");
+    let path = dir.join(settings::FILE_NAME);
+    let mut audio = audio();
+    audio.set_output_level(SPEAKERS, 0.18);
+    let file = SettingsFile::at(path.clone());
+    let mut adapter =
+        AudioAdapter::with_settings(audio, || "09.41".to_owned(), DebugLog::default(), file);
+    adapter.set_speaker_enabled(&key(SPEAKERS), true);
+    adapter.set_running(true);
+    // Saved before the next poll, so a crash now still puts it back.
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let saved: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+    assert!(
+        saved["local_volumes"]["found"][SPEAKERS].is_number(),
+        "found level saved: {text}"
+    );
+    drop(adapter);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+// covers: S472
+#[test]
+fn a_remembered_level_whose_save_fails_reports_the_notice_from_that_poll() {
+    let dir = test_dir("adapter-local-volume-save-fails");
+    let path = dir.join(settings::FILE_NAME);
+    let file = SettingsFile::at(path.clone());
+    let mut adapter =
+        AudioAdapter::with_settings(audio(), || "09.41".to_owned(), DebugLog::default(), file);
+    adapter.set_speaker_enabled(&key(SPEAKERS), true);
+    adapter.set_running(true);
+    adapter.poll();
+    let blocked = crate::data_folder::temporary_path(&path);
+    std::fs::create_dir(&blocked).expect("blocked");
+    // Lowered in Windows while it plays, with no hint: only the memory changes.
+    adapter.audio_mut().set_output_level(SPEAKERS, 0.5);
+    assert!(adapter.poll(), "the notice shows from this poll");
+    let shown: Vec<_> = adapter
+        .snapshot()
+        .notices
+        .into_iter()
+        .map(|notice| notice.message)
+        .collect();
+    assert_eq!(shown, [crate::ui_model::NoticeMessage::SettingsNotSaved]);
+    drop(adapter);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 // covers: S197
 #[test]
 fn calibrate_all_shows_a_quiet_or_muted_reference_before_a_run_with_its_fix() {
@@ -329,4 +379,71 @@ fn calibrate_all_logs_the_reference_volume_and_mute_at_its_start() {
         "{messages:?}"
     );
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The This PC row shows "System 13%" while it is off too, as the Mac's
+/// built-in speakers do, with no low-volume hint: its level is read only.
+/// Nothing is written at launch, at a start or stop, or as its panel
+/// opens; only another output that is off stays unread.
+// covers: S192, S197
+#[test]
+fn the_reference_shows_its_system_volume_while_off_and_writes_nothing() {
+    let mut audio = audio();
+    audio.connect_output_as(SPEAKERS, "Speakers", OutputKind::BuiltIn);
+    audio.set_output_level(SPEAKERS, 0.13);
+    audio.set_output_level(HEADPHONES, 0.13);
+    let record = audio.volume_record();
+    let mut adapter = adapter(audio);
+    adapter.set_running(true);
+    adapter.poll();
+    adapter.set_running(false);
+    adapter.poll();
+
+    let state = adapter.snapshot();
+    let speaker = state.speaker(&key(SPEAKERS)).expect("listed");
+    assert!(!speaker.enabled);
+    let item = speaker_item(&state, speaker, false, true, None);
+    assert_eq!(item.system_volume, 13, "System 13% while off");
+    assert!(item.system_open, "its panel opens");
+    assert_eq!(
+        item.device_volume,
+        DeviceVolumeHint::None,
+        "no hint while off"
+    );
+    assert_eq!(
+        hint(&adapter, HEADPHONES),
+        None,
+        "another output off: unread"
+    );
+    assert!(record.writes().is_empty(), "{:?}", record.writes());
+}
+
+/// Headphones and in-ears get no low-volume hint: 18 % is already loud in
+/// the ears. Speakers keep it.
+#[test]
+fn headphones_show_no_device_volume_hint_and_speakers_still_do() {
+    let in_ears = || crate::audio::outputs::DeviceTraits {
+        form_factor: Some(crate::audio::outputs::form_factor::HEADPHONES),
+        enumerator: Some("USB".to_owned()),
+    };
+    let mut audio = MockBackend::empty();
+    audio.connect_output_as(SPEAKERS, "Speakers", OutputKind::BuiltIn);
+    audio.connect_output(HEADPHONES, "IEM");
+    audio.connect_output("edifier", "Edifier");
+    audio.set_output_traits(SPEAKERS, in_ears());
+    audio.set_output_traits(HEADPHONES, in_ears());
+    for id in [SPEAKERS, HEADPHONES, "edifier"] {
+        audio.set_output_level(id, 0.18);
+    }
+    let mut adapter = adapter(audio);
+    for id in [SPEAKERS, HEADPHONES, "edifier"] {
+        adapter.set_speaker_enabled(&key(id), true);
+    }
+    assert_eq!(row(&adapter, HEADPHONES).0, DeviceVolumeHint::None);
+    assert_eq!(row(&adapter, "edifier"), (DeviceVolumeHint::Low, 18));
+    assert_eq!(
+        calibrate_all_volume(&adapter.snapshot()).0,
+        DeviceVolumeHint::None,
+        "a reference in the ears"
+    );
 }
