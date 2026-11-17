@@ -299,8 +299,10 @@ func panelShot(_ model: AppModel, look: Look) -> NSBitmapImageRep {
 /// The commonest pixel in `rect` (points from the top left) as the background,
 /// and the commonest one whose channels differ from it by more than 96 in sum
 /// as the foreground, one sample per point: the desktop's layar_shots samples
-/// its photos the same way (`sampled_colours`).
-func sampledColours(_ rep: NSBitmapImageRep, _ rect: CGRect) -> (String?, String?) {
+/// its photos the same way (`sampled_colours`). The capture leaves the window's
+/// background out (transparent pixels read as black), so each pixel is laid
+/// over `behind` (0-255 sRGB) first, as the window shows it.
+func sampledColours(_ rep: NSBitmapImageRep, _ rect: CGRect, behind: [Int]) -> (String?, String?) {
     guard let data = rep.bitmapData else { return (nil, nil) }
     let perPoint = CGFloat(rep.pixelsWide) / rep.size.width
     var counts: [UInt32: Int] = [:]
@@ -308,7 +310,10 @@ func sampledColours(_ rep: NSBitmapImageRep, _ rect: CGRect) -> (String?, String
         for x in stride(from: max(0, Int(rect.minX)), to: min(Int(rep.size.width), Int(rect.maxX)), by: 1) {
             let at = Int((CGFloat(y) + 0.5) * perPoint) * rep.bytesPerRow
                 + Int((CGFloat(x) + 0.5) * perPoint) * (rep.bitsPerPixel / 8)
-            counts[UInt32(data[at]) << 16 | UInt32(data[at + 1]) << 8 | UInt32(data[at + 2]), default: 0] += 1
+            // The rep's samples are premultiplied by alpha.
+            let clear = 255 - Int(data[at + 3])
+            let rgb = (0..<3).map { UInt32(Int(data[at + $0]) + clear * behind[$0] / 255) }
+            counts[rgb[0] << 16 | rgb[1] << 8 | rgb[2], default: 0] += 1
         }
     }
     func commonest(_ keep: (UInt32) -> Bool) -> UInt32? {
@@ -346,13 +351,14 @@ extension View {
 
 /// Every `layarKey` element of the view just captured in `rep`, as
 /// scripts/screen_compare.py reads it. The marks carry no font, so `font` is
-/// null, as on the desktop.
-func layarElements(in view: NSView, rep: NSBitmapImageRep) -> [[String: Any]] {
+/// null, as on the desktop. `top` is how far below the top of `view` the
+/// marked content starts.
+func layarElements(in view: NSView, rep: NSBitmapImageRep, top: CGFloat, behind: [Int]) -> [[String: Any]] {
     let page = CGRect(origin: .zero, size: view.bounds.size)
     return layarSink.marks.compactMap { mark in
-        let rect = mark.frame
+        let rect = mark.frame.offsetBy(dx: 0, dy: top)
         guard rect.width > 0, rect.height > 0, rect.intersects(page) else { return nil }
-        let (fg, bg) = sampledColours(rep, rect)
+        let (fg, bg) = sampledColours(rep, rect, behind: behind)
         return ["key": mark.key,
                 "frame": [rect.minX, rect.minY, rect.width, rect.height].map { Double($0) },
                 "font": NSNull(), "fg": (fg as Any?) ?? NSNull(), "bg": (bg as Any?) ?? NSNull()]
@@ -631,10 +637,21 @@ func writeLayar() {
         for (look, theme) in [(Look.light, "terang"), (Look.dark, "gelap")] {
             NSApp.appearance = look.appearance
             layarSink.marks = []
-            let (window, view) = draw(look)
+            let (window, content) = draw(look)
+            // The main window's transparent title bar is part of what the user
+            // sees, as the desktop's own top row is: photograph from the window's top.
+            let view = window.titlebarAppearsTransparent ? content.superview ?? content : content
+            let placed = content.convert(content.bounds, to: view)
+            let top = view.isFlipped ? placed.minY : view.bounds.height - placed.maxY
+            var behind = [255, 255, 255]
+            look.appearance.performAsCurrentDrawingAppearance {
+                if let fill = window.backgroundColor.usingColorSpace(.sRGB) {
+                    behind = [fill.redComponent, fill.greenComponent, fill.blueComponent].map { Int(($0 * 255).rounded()) }
+                }
+            }
             let rep = capture(view)
             write(rep, "\(id)-\(theme).png")
-            let elements = layarElements(in: view, rep: rep)
+            let elements = layarElements(in: view, rep: rep, top: top, behind: behind)
             if id == "MAIN-PLAYING", look == .light { playingCount = elements.count }
             let listed: [String: Any] = [
                 "window": [Double(view.bounds.width), Double(view.bounds.height)],
