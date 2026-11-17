@@ -3081,7 +3081,7 @@ export component MainWindow inherits Window {
                     accessible-role: text;
                     accessible-label: root.status;
 
-                    header-status := SecondaryText {
+                    header-status := QuietText {
                         text: root.status-a;
                         width: parent.width;
                         height: parent.height;
@@ -3095,7 +3095,7 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    header-status-other := SecondaryText {
+                    header-status-other := QuietText {
                         text: root.status-b;
                         width: parent.width;
                         height: parent.height;
