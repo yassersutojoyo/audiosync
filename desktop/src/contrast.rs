@@ -1277,6 +1277,22 @@ fn windows_texts_with_a_linux_twin_are_unchanged() {
     }
 }
 
+/// Windows moves or holds back the doubled source itself (S469 to S471) and
+/// shows no double-audio notice, so its Help asks for no change by hand.
+#[test]
+fn windows_help_on_hearing_twice_asks_for_no_change() {
+    let text = tr_text(include_str!("../ui/strings.slint"), "help-double");
+    for wording in ["Sound settings", "shows a notice", "Show How"] {
+        assert!(!text.contains(wording), "{wording} in: {text}");
+    }
+    for sentence in text.split('.') {
+        if sentence.contains("Volume mixer") {
+            let sentence = sentence.trim_start().trim_start_matches("\\n");
+            assert!(sentence.starts_with("Don't mute"), "asks: {sentence}");
+        }
+    }
+}
+
 /// A notice that leaves the user stuck says what to do next, and Resync
 /// names the Cast offset it restores.
 #[test]
