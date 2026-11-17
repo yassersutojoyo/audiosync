@@ -144,8 +144,10 @@ def main(argv):
         print(__doc__.strip().split("\n\n")[-1], file=sys.stderr)
         return 2
     rows = compare(argv[0], argv[1])
-    for row in rows:
-        print(row)
+    # `python -I` ignores PYTHONIOENCODING, and keys carry U+2212.
+    sys.stdout.flush()
+    sys.stdout.buffer.write("".join(row + "\n" for row in rows).encode("utf-8"))
+    sys.stdout.flush()
     print(f"{len(rows)} differences", file=sys.stderr)
     return 1 if rows else 0
 
