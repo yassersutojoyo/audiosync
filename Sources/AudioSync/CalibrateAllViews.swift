@@ -101,6 +101,7 @@ struct CalibrateAllSheetView: View {
                 Text(status.zone == nil ? t.calibrateAll : t.calibrateZone)
                     .font(.title3.weight(.semibold))
                     .accessibilityAddTraits(.isHeader)
+                    .layarKey(status.zone == nil ? t.calibrateAll : t.calibrateZone)
                 if let zone = status.zone {
                     Text(t.calibrateZoneBring(zone.name))
                         .fixedSize(horizontal: false, vertical: true)
@@ -136,21 +137,25 @@ struct CalibrateAllSheetView: View {
                             .accessibilityHidden(true)
                         Text(t.calibrateAllProgress(progress))
                             .fixedSize(horizontal: false, vertical: true)
+                            .layarKey(t.calibrateAllProgress(progress))
                     }
                 }
                 if status.sheet == nil, !status.isRunning, status.line == nil, let blocker = status.blocker {
                     Text(t.calibrateAllSheetBlocker(blocker))
                         .foregroundStyle(Brand.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
+                        .layarKey(t.calibrateAllSheetBlocker(blocker))
                 }
                 if let line = status.line {
                     Text(t.calibrateAllLine(line))
                         .foregroundStyle(isProblem(line) ? Brand.errorText : Brand.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
+                        .layarKey(t.calibrateAllLine(line))
                 } else if let finished = finishedLine(status, t: t) {
                     Text(finished)
                         .foregroundStyle(Brand.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
+                        .layarKey(finished)
                 }
                 buttons(status, t: t)
             }
@@ -180,6 +185,7 @@ struct CalibrateAllSheetView: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(Brand.secondaryText)
                 .accessibilityAddTraits(.isHeader)
+                .layarKey(t.calibrateBeforeStart)
             VStack(spacing: 0) {
                 HStack(spacing: 12) {
                     checkIcon("mic", tint: Brand.tealText, solid: false)
@@ -190,6 +196,7 @@ struct CalibrateAllSheetView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     .accessibilityElement(children: .combine)
+                    .layarKey(t.calibrateMicrophoneCheck)
                     Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 12)
@@ -222,6 +229,7 @@ struct CalibrateAllSheetView: View {
                 }
             }
             .accessibilityElement(children: .combine)
+            .layarKey(t.calibrateVolumeTitle(volume))
             Spacer(minLength: 0)
             if let warning {
                 Button(t.deviceVolumeFix(warning)) {
@@ -230,6 +238,7 @@ struct CalibrateAllSheetView: View {
                     model.actions.fixCalibrationVolume()
                 }
                 .focused($focus, equals: .fix)
+                .layarKey(t.deviceVolumeFix(warning))
             }
         }
         .padding(.horizontal, 12)
@@ -302,6 +311,7 @@ struct CalibrateAllSheetView: View {
                 .foregroundStyle(Brand.secondaryText)
         }
         .accessibilityElement(children: .combine)
+        .layarKey(t.calibrateAllProgress(progress) + " " + t.calibrateMusicFadesBack)
         .padding(.horizontal, 12)
         .padding(.vertical, 26)
         .frame(maxWidth: .infinity)
@@ -319,6 +329,7 @@ struct CalibrateAllSheetView: View {
                     Text(t.calibrateAllAirPlay(airPlay))
                         .foregroundStyle(airPlay.state == .certain ? Color.primary : Brand.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
+                        .layarKey(t.calibrateAllAirPlay(airPlay))
                     if let moves = status.zone.flatMap({ t.calibrateZoneAirPlayMoves($0.airPlayMoves) }) {
                         Text(moves)
                             .foregroundStyle(Brand.secondaryText)
@@ -379,12 +390,14 @@ struct CalibrateAllSheetView: View {
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(label.compactMap { $0 }.joined(separator: ", "))
+            .layarKey(label.compactMap { $0 }.joined(separator: ", "))
             Spacer(minLength: 0)
             if sheet.canMeasureAgain(row) {
                 Button(t.measureAgain) { model.actions.measureAgain(row.index) }
                     .controlSize(.small)
                     .disabled(status.isRunning || status.holdsOutputs)
                     .accessibilityLabel(t.measureAgainLabel(of: row.speaker.name))
+                    .layarKey(t.measureAgainLabel(of: row.speaker.name))
             }
         }
         .padding(.horizontal, 12)
@@ -424,6 +437,7 @@ struct CalibrateAllSheetView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Brand.secondaryText)
                     .accessibilityAddTraits(.isHeader)
+                    .layarKey(t.calibrateLeftOutTitle)
                 ForEach(rows) { row in
                     HStack(alignment: .firstTextBaseline, spacing: 10) {
                         VStack(alignment: .leading, spacing: 1) {
@@ -436,17 +450,20 @@ struct CalibrateAllSheetView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         .accessibilityElement(children: .combine)
+                        .layarKey(row.name)
                         Spacer()
                         if choosing {
                             if row.included {
                                 Button(t.leaveOut) { model.actions.includeInCalibrateAll(row.id, false) }
                                     .controlSize(.small)
                                     .accessibilityLabel(t.leaveOutLabel(of: row.name))
+                                    .layarKey(t.leaveOutLabel(of: row.name))
                             } else {
                                 Button(t.includeAnyway) { model.actions.includeInCalibrateAll(row.id, true) }
                                     .controlSize(.small)
                                     .help(t.includeAnywayHelp(row.reason))
                                     .accessibilityLabel(t.includeAnywayLabel(of: row.name))
+                                    .layarKey(t.includeAnywayLabel(of: row.name))
                                     .accessibilityHint(t.includeAnywayHelp(row.reason))
                             }
                         }
@@ -474,6 +491,7 @@ struct CalibrateAllSheetView: View {
             if status.isRunning {
                 Button(t.calibrationCancel) { model.actions.cancelCalibrateAll() }
                     .keyboardShortcut(.cancelAction)
+                    .layarKey(t.calibrationCancel)
             } else {
                 if status.canUndo {
                     Button(t.calibrateAllUndo) { model.actions.undoCalibrateAll() }
@@ -484,17 +502,20 @@ struct CalibrateAllSheetView: View {
                 let applied = status.sheet?.applied == true
                 Button(applied ? t.calibrateAllDone : t.calibrateAllClose) { model.actions.closeCalibrateAll() }
                     .keyboardShortcut(.cancelAction)
+                    .layarKey(applied ? t.calibrateAllDone : t.calibrateAllClose)
                 if status.sheet == nil || status.sheet?.ended != nil {
                     Button(status.zone == nil ? t.calibrateAll : t.calibrateZone) { model.actions.calibrateAll() }
                         .keyboardShortcut(.defaultAction)
                         .focused($focus, equals: .start)
                         .disabled(status.blocker != nil || status.holdsOutputs)
+                        .layarKey(status.zone == nil ? t.calibrateAll : t.calibrateZone)
                 } else if let sheet = status.sheet, !sheet.applied, sheet.ended == nil {
                     Button(t.calibrateAllApply) { model.actions.applyCalibrateAll() }
                         .keyboardShortcut(.defaultAction)
                         .disabled(!sheet.canApply)
                         .help(t.calibrateAllApplyHelp)
                         .accessibilityHint(t.calibrateAllApplyHelp)
+                        .layarKey(t.calibrateAllApply)
                 }
             }
         }
