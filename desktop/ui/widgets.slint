@@ -5139,6 +5139,7 @@ export component ZoneHeader inherits Rectangle {
                                 if root.item.renaming: NameEditor {
                                     horizontal-stretch: 1;
                                     text: root.item.name-text;
+                                    placeholder: root.item.name;
                                     label: Strings.new-zone-field-label;
                                     description: Strings.zone-name-field-hint;
                                     focus-wanted: root.pending-focus == RowPart.name;

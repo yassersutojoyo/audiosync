@@ -83,10 +83,6 @@ fn pin_digits(text: &str) -> String {
 /// What the zone name dialog is open for.
 #[derive(Clone, Debug, PartialEq)]
 enum DialogPurpose {
-    /// New Zone from Active Speakers.
-    NewZone,
-    /// New Zone… in a speaker's menu, by speaker ID.
-    NewZoneWith(String),
     /// Only a message (no name field), e.g. why a zone can't be made yet.
     Message,
     /// Rename in the equalizer, for the saved curve of this name.
@@ -4958,53 +4954,58 @@ impl App {
         crate::platform::bring_to_front(self.equalizer.window());
     }
 
-    /// The gear's New Zone from Active Speakers… (Ctrl+N): a name for a
-    /// zone of the speakers that are on, or why none can be made yet.
+    /// The gear's New Zone from Active Speakers… (Ctrl+N): a numbered zone
+    /// of the speakers that are on, named in its header as on the Mac, or
+    /// why none can be made yet.
     fn ask_new_zone(&self) {
         if self.dialog_already_open() {
             return;
         }
         let strings = self.strings();
-        let dialog = &self.zone_dialog;
         if self.snapshot().active_speakers() == 0 {
+            let dialog = &self.zone_dialog;
             *self.dialog_purpose.borrow_mut() = DialogPurpose::Message;
-            dialog.set_heading(strings.get_new_zone_title());
+            dialog.set_heading(strings.get_app_name());
             dialog.set_message(strings.get_new_zone_needs_speakers());
             dialog.set_show_field(false);
             dialog.set_confirm_label(strings.get_ok());
-        } else {
-            *self.dialog_purpose.borrow_mut() = DialogPurpose::NewZone;
-            dialog.set_heading(strings.get_new_zone_title());
-            dialog.set_message(strings.get_new_zone_message());
-            self.ask_zone_name(&strings);
-        }
-        self.open_dialog();
-    }
-
-    /// New Zone… in a speaker's menu: a name for a zone of that speaker.
-    fn ask_new_zone_with(&self, speaker_id: &str) {
-        if self.dialog_already_open() {
+            self.open_dialog();
             return;
         }
-        let Some(speaker) = self.snapshot().speaker(speaker_id).cloned() else {
+        let name = self.new_zone_name();
+        self.name_new_zone(|b| {
+            let _ = b.new_zone(&name);
+        });
+    }
+
+    /// New Zone… in a speaker's menu: a numbered zone of that speaker,
+    /// named in its header.
+    fn ask_new_zone_with(&self, speaker_id: &str) {
+        if self.dialog_already_open() || self.snapshot().speaker(speaker_id).is_none() {
+            return;
+        }
+        let name = self.new_zone_name();
+        self.name_new_zone(|b| b.new_zone_with(speaker_id, &name));
+    }
+
+    /// Makes a zone with `make`, then opens its header's name field empty,
+    /// so Return on nothing or Escape keeps the numbered name.
+    fn name_new_zone(&self, make: impl FnOnce(&mut dyn Backend)) {
+        let before = self.snapshot().zones;
+        self.update(make);
+        let made = self
+            .snapshot()
+            .zones
+            .into_iter()
+            .find(|zone| before.iter().all(|old| old.id != zone.id));
+        let Some(zone) = made else {
             return;
         };
-        let strings = self.strings();
-        let dialog = &self.zone_dialog;
-        *self.dialog_purpose.borrow_mut() = DialogPurpose::NewZoneWith(speaker_id.to_owned());
-        dialog.set_heading(strings.get_new_zone_title());
-        dialog.set_message(strings.invoke_new_zone_for_speaker(speaker.name.as_str().into()));
-        self.ask_zone_name(&strings);
-        self.open_dialog();
-    }
-
-    fn ask_zone_name(&self, strings: &Strings<'_>) {
-        let dialog = &self.zone_dialog;
-        dialog.set_placeholder(strings.get_new_zone_placeholder());
-        dialog.set_field_label(strings.get_new_zone_field_label());
-        dialog.set_name(SharedString::new());
-        dialog.set_show_field(true);
-        dialog.set_confirm_label(strings.get_create());
+        self.start_rename(&zone.id, RenamePlace::Zone);
+        if let Some((_, typed)) = self.ui.borrow_mut().rename.as_mut() {
+            typed.clear();
+        }
+        self.refresh();
     }
 
     fn ask_save_curve(&self) {
@@ -5114,12 +5115,9 @@ impl App {
         self.open_dialog();
     }
 
-    /// A new zone's name: what was typed, else the first "Zone n" no zone
-    /// has, counting on from the zones there are.
-    fn new_zone_name(&self, typed: &str) -> String {
-        if !typed.trim().is_empty() {
-            return typed.to_owned();
-        }
+    /// A new zone's name: the first "Zone n" no zone has, counting on from
+    /// the zones there are.
+    fn new_zone_name(&self) -> String {
         let zones = self.snapshot().zones;
         let strings = self.strings();
         (zones.len() + 1..)
@@ -5315,17 +5313,6 @@ impl App {
         let purpose = self.dialog_purpose.borrow().clone();
         self.hide_dialog();
         match purpose {
-            DialogPurpose::NewZone => {
-                let name = self.new_zone_name(name);
-                // The dialog only offers a name while a speaker is on; if the
-                // last one went off meanwhile, nothing is made.
-                let _ = self.backend.borrow_mut().new_zone(&name);
-                self.refresh();
-            }
-            DialogPurpose::NewZoneWith(id) => {
-                let name = self.new_zone_name(name);
-                self.update(|b| b.new_zone_with(&id, &name));
-            }
             DialogPurpose::Message => {}
             DialogPurpose::RenameCurve(old) => {
                 let mut curves = self.snapshot().equalizer_curves;
@@ -10101,6 +10088,85 @@ mod tests {
         assert!(app.settings.get_revealed(), "its own timer");
     }
 
+    /// New Zone makes "Zone n" at once, with no name dialog, and opens its
+    /// header's name field empty with the focus, as the Mac's: Return on
+    /// nothing or Escape keeps the numbered name. With no speaker on, a plain
+    /// message says why, under the app's name.
+    #[test]
+    fn a_new_zone_is_made_at_once_and_named_in_its_header() {
+        let app = app_over(MockBackend::zones_preview());
+        let main = &app.main;
+        let zones = app.snapshot().zones.len();
+        let header = |id: &str| {
+            app.models
+                .zones
+                .iter()
+                .find(|zone| zone.id == id)
+                .expect("the new zone's header")
+        };
+        let new_zone = |before: &[String]| {
+            app.snapshot()
+                .zones
+                .into_iter()
+                .find(|zone| !before.contains(&zone.id))
+                .expect("a new zone")
+        };
+        let ids = || {
+            app.snapshot()
+                .zones
+                .into_iter()
+                .map(|zone| zone.id)
+                .collect::<Vec<_>>()
+        };
+
+        let before = ids();
+        main.invoke_new_zone_requested();
+        assert!(!app.zone_dialog.window().is_visible(), "no dialog");
+        let zone = new_zone(&before);
+        assert_eq!(zone.name, format!("Zone {}", zones + 1));
+        assert!(header(&zone.id).renaming);
+        assert_eq!(header(&zone.id).name_text, "", "the field opens empty");
+        slint::platform::update_timers_and_animations();
+        assert_eq!(main.get_focus_zone_part(), RowPart::Name);
+        main.invoke_zone_rename_committed(zone.id.as_str().into());
+        assert_eq!(new_zone(&before).name, format!("Zone {}", zones + 1));
+
+        let before = ids();
+        main.invoke_speaker_new_zone_requested("local:headphones".into());
+        assert!(!app.zone_dialog.window().is_visible(), "no dialog");
+        let zone = new_zone(&before);
+        assert_eq!(
+            app.snapshot()
+                .zone_of("local:headphones")
+                .map(|z| z.id.clone()),
+            Some(zone.id.clone())
+        );
+        assert!(header(&zone.id).renaming);
+        main.invoke_zone_rename_cancelled(zone.id.as_str().into());
+        assert_eq!(new_zone(&before).name, format!("Zone {}", zones + 2));
+
+        let on: Vec<_> = app
+            .snapshot()
+            .speakers
+            .iter()
+            .filter(|speaker| speaker.enabled)
+            .map(|speaker| speaker.id.clone())
+            .collect();
+        for id in on {
+            app.update(|b| b.set_speaker_enabled(&id, false));
+        }
+        let zones = app.snapshot().zones.len();
+        main.invoke_new_zone_requested();
+        assert!(app.zone_dialog.window().is_visible());
+        assert_eq!(app.zone_dialog.get_heading(), "AudioSync");
+        assert_eq!(
+            app.zone_dialog.get_message(),
+            app.strings().get_new_zone_needs_speakers()
+        );
+        assert!(!app.zone_dialog.get_show_field());
+        assert_eq!(app.snapshot().zones.len(), zones, "no zone was made");
+    }
+
     /// A Cast speaker's delay is a wait, never below 0, so its row shows it
     /// with no sign, as the Mac's does.
     // covers: S450
@@ -12721,10 +12787,11 @@ mod tests {
         dialog
             .window()
             .set_size(slint::LogicalSize::new(380.0, 153.0));
-        let speaker = app.snapshot().speakers[0].id.clone();
-        app.ask_new_zone_with(&speaker);
+        app.equalizer.invoke_save_curve();
+        app.equalizer.invoke_curve_named("Bass".into(), true);
+        app.equalizer.invoke_rename_curve();
         assert!(dialog.window().is_visible());
-        assert_window_fits(dialog.window(), dialog.get_fit_height(), "New Zone");
+        assert_window_fits(dialog.window(), dialog.get_fit_height(), "Rename");
     }
 
     #[test]
@@ -15208,8 +15275,6 @@ mod tests {
         );
 
         main.invoke_speaker_new_zone_requested("local:headphones".into());
-        assert!(app.zone_dialog.window().is_visible());
-        app.confirm_dialog("  ");
         let state = app.snapshot();
         let zone = state
             .zone_of("local:headphones")
@@ -16200,18 +16265,27 @@ mod tests {
     #[test]
     fn escape_on_the_zone_dialog_buttons_cancels() {
         let app = app_over(MockBackend::new());
-        let zones = app.snapshot().zones.len();
-        app.ask_new_zone();
+        app.equalizer.invoke_save_curve();
+        app.equalizer.invoke_curve_named("Bass".into(), true);
+        app.equalizer.invoke_rename_curve();
         let window = app.zone_dialog.window();
         assert!(window.is_visible());
-        assert!(app.zone_dialog.get_show_field(), "a speaker is on");
-        // From the name field to Create.
+        assert!(app.zone_dialog.get_show_field());
+        app.zone_dialog.set_name(SharedString::new());
+        // From the name field to the confirm button.
         tab(window, 1);
         press(window, "x");
         assert_eq!(app.zone_dialog.get_name(), "", "the field lost the focus");
         press(window, Key::Escape);
-        assert!(!window.is_visible(), "Escape on Create closed the dialog");
-        assert_eq!(app.snapshot().zones.len(), zones, "and made no zone");
+        assert!(
+            !window.is_visible(),
+            "Escape on the button closed the dialog"
+        );
+        assert_eq!(
+            app.snapshot().equalizer_curves[0].name,
+            "Bass",
+            "and renamed nothing"
+        );
     }
 
     // covers: S270

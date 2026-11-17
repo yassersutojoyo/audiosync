@@ -272,9 +272,6 @@ export global Strings {
 
     // Zones
     out property <string> new-zone: @tr("New Zone from Active Speakers…");
-    out property <string> new-zone-title: @tr("New Zone");
-    out property <string> new-zone-message: @tr("The speakers that are on right now move into this zone. A speaker in another zone leaves that zone.");
-    out property <string> new-zone-placeholder: @tr("Living room, Kitchen…");
     out property <string> new-zone-field-label: @tr("Zone name");
     out property <string> new-zone-needs-speakers: @tr("Turn on the speakers you want in the zone first, then create it.");
     // In a speaker's … menu: the submenu of zones, its last entry, and the
@@ -340,7 +337,6 @@ export global Strings {
     // In a zone member's menu under its zone: the other members go off.
     out property <string> only-this-speaker: @tr("Only This Speaker");
     out property <string> ok: @tr("OK");
-    out property <string> create: @tr("Create");
     out property <string> cancel: @tr("Cancel");
     out property <string> rename: @tr("Rename");
     // In a speaker's … menu and right-click menu: edits its name in the row.
@@ -2106,11 +2102,6 @@ export global Strings {
     // A new zone's name when none was typed.
     public pure function numbered-zone(n: int) -> string {
         return @tr("Zone {}", n);
-    }
-
-    // New Zone… in a speaker's menu.
-    public pure function new-zone-for-speaker(name: string) -> string {
-        return @tr("{} moves into this zone.", name);
     }
 
     public pure function rename-message(name: string) -> string {
