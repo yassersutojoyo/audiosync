@@ -1764,8 +1764,8 @@ export component LevelSlider inherits Rectangle {
     property <length> thickness: 4px;
     property <length> span: (root.vertical ? root.height : root.width) - root.knob;
     property <float> ratio: root.maximum > root.minimum ? (root.value - root.minimum) / (root.maximum - root.minimum) : 0;
-    // A small slider that takes no drag (a speaker that is off) keeps its full
-    // look, as the main window mockup OK'd on 17 Nov: the badge says it is off.
+    // The Mac's disabled small slider (a speaker that is off), measured on its
+    // window at 2x on 17 Nov: no fill, a pale whole track, an opaque knob.
     property <bool> idle: root.small && !root.enabled;
 
     min-width: root.vertical ? root.knob : 48px;
@@ -1838,7 +1838,7 @@ export component LevelSlider inherits Rectangle {
         width: root.vertical ? root.thickness : root.span;
         height: root.vertical ? root.span : root.thickness;
         border-radius: root.thickness / 2;
-        background: root.track;
+        background: root.idle ? (Tokens.dark ? #363533 : #f7f7f7) : root.track;
         animate background {
             duration: Motion.on ? 250ms : 150ms;
             easing: Motion.on ? ease-in-out : linear;
@@ -1852,7 +1852,7 @@ export component LevelSlider inherits Rectangle {
         height: root.vertical ? root.span * root.ratio : root.thickness;
         border-radius: root.thickness / 2;
         // On dark the Mac's small slider fill is grey, not white.
-        background: root.small && Tokens.dark ? Tokens.text.with-alpha(0.26) : Tokens.text;
+        background: root.idle ? transparent : root.small && Tokens.dark ? Tokens.text.with-alpha(0.26) : Tokens.text;
         animate background {
             duration: Motion.on ? 250ms : 150ms;
             easing: Motion.on ? ease-in-out : linear;
@@ -1865,8 +1865,8 @@ export component LevelSlider inherits Rectangle {
         x: root.vertical ? (root.width - self.width) / 2 : root.span * root.ratio;
         y: root.vertical ? root.span * (1 - root.ratio) : (root.height - self.height) / 2;
         border-radius: self.width / 2;
-        // The Mac's small knob on dark is grey (#959595 on its window).
-        background: root.small && Tokens.dark ? #959595 : root.small && touch.pressed ? #ebebeb : #ffffff;
+        // The Mac's small knob on dark is grey (#959595 on its window), darker while disabled.
+        background: root.idle ? (Tokens.dark ? #464543 : #ffffff) : root.small && Tokens.dark ? #959595 : root.small && touch.pressed ? #ebebeb : #ffffff;
         // The Mac's small knob: on light a faint ring and a soft shadow keep it
         // off a white window at 100; on dark the shadow alone.
         border-width: root.small && Tokens.dark ? 0px : 1px;
