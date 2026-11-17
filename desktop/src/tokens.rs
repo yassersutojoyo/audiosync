@@ -82,6 +82,26 @@ pub const COLORS: &[ColorToken] = &[
         dark: [61, 61, 61],
     },
     ColorToken {
+        name: "settingsWindow",
+        light: [239, 238, 237],
+        dark: [42, 42, 42],
+    },
+    ColorToken {
+        name: "settingsCard",
+        light: [255, 255, 255],
+        dark: [31, 31, 31],
+    },
+    ColorToken {
+        name: "segmentChosen",
+        light: [20, 113, 103],
+        dark: [20, 113, 103],
+    },
+    ColorToken {
+        name: "segmentChosenText",
+        light: [255, 255, 255],
+        dark: [255, 255, 255],
+    },
+    ColorToken {
         name: "focus",
         light: [20, 113, 103],
         dark: [99, 218, 194],

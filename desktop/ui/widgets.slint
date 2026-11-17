@@ -9,7 +9,7 @@
 import { Button, ComboBox } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { Availability, CastState, DeviceVolumeHint, NoticeItem, RowPart, UpdateButton, RowState, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
+import { Availability, CastState, DeviceVolumeHint, NoticeItem, RowPart, UpdateButton, RowState, SourceLook, SourceRowKind, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
 
 import "../../brand/fonts/Poppins-Medium.ttf";
 import "../res/fonts/Inter-Regular.ttf";
@@ -20,16 +20,28 @@ import "../res/fonts/Inter-Bold.ttf";
 // Windows 11 metrics and states, for this app only: the shared design tokens
 // keep the colors and the wordmark, these give the Windows look (Fluent's
 // corner radii, list row height, hover and pressed fills, and its short
-// motion). Text is set in Inter, the Mac mockups' family, compiled into the
-// executable so it looks the same on every machine; glyphs Inter lacks fall
-// back to the system font.
+// motion). Text is set in the system font as on the Mac: Segoe UI Variable,
+// which every Windows 11 ships (Inter rendered narrow and thin there), and
+// elsewhere Inter, compiled into the executable; glyphs a font lacks fall
+// back to the system's.
 export global Fluent {
-    out property <string> font: "Inter";
-    out property <string> display-font: "Inter";
+    out property <string> font: Platform.os == OperatingSystemType.windows ? "Segoe UI Variable Text" : "Inter";
+    out property <string> display-font: Platform.os == OperatingSystemType.windows ? "Segoe UI Variable Display" : "Inter";
+    // The Mac's regular, medium and semibold. Windows sets them heavier: its hinted
+    // 1x stems carry less ink than the Mac's Retina text seen at 1:1 (matched per string).
+    // One weight for both themes: a heavier weight sets the text wider, and a row
+    // that fit one line on dark wrapped on light.
+    out property <int> weight-regular: Platform.os == OperatingSystemType.windows ? 480 : 400;
+    out property <int> weight-medium: Platform.os == OperatingSystemType.windows ? 560 : 500;
+    out property <int> weight-semibold: Platform.os == OperatingSystemType.windows ? 640 : 600;
     // Cards, the flyout and the notices (overlay radius).
     out property <length> radius-card: 8px;
     // Buttons, chips and the rows inside a card (control radius).
     out property <length> radius-control: 4px;
+    // The Mac's AppKit bordered small button and segmented track: white with a
+    // soft shadow in light, a filled grey (about #555 on the window) in dark.
+    out property <brush> native-control: Tokens.dark ? Tokens.text.with-alpha(0.2) : Tokens.surface;
+    out property <color> native-control-shadow: Tokens.dark ? transparent : Tokens.text.with-alpha(0.22);
     out property <length> card-padding: 12px;
     // The minimum height of a speaker or group row.
     out property <length> row-height: 48px;
@@ -44,8 +56,10 @@ export global Fluent {
     // The main window's wordmark and mark, as the Mac's.
     out property <length> wordmark: 21px;
     out property <length> mark: 32px;
+    // Left and right of a speaker row's content (the Mac's rowPaddingX).
+    out property <length> row-padding-x: 10px;
     // Where a row's name starts: its padding, the 32 px toggle and the gap.
-    out property <length> name-inset: 56px;
+    out property <length> name-inset: 54px;
     // The delay column every speaker row lines up on.
     out property <length> delay-column: 76px;
     // The main window's left column, narrow and wide, and the speaker list's
@@ -59,8 +73,24 @@ export global Fluent {
     // Subtle fills under the pointer, over any card or row.
     out property <brush> hover: Tokens.text.with-alpha(0.06);
     out property <brush> pressed: Tokens.text.with-alpha(0.035);
-    // The tray panel's block of what plays and the source.
-    out property <brush> hero: Tokens.text.with-alpha(0.04);
+    // A list row under the pointer, as the Mac's: primary at 5 %, in over
+    // 80 ms and out at once.
+    out property <brush> row-hover: Tokens.text.with-alpha(0.05);
+    out property <length> radius-row: 9px;
+    out property <duration> row-hover-in: 80ms;
+    // An open list's block (Presets), as the Mac's openRowFill.
+    out property <brush> open-row: Tokens.text.with-alpha(0.04);
+    // A playing AirPlay or Bluetooth speaker's kind glyph, the Mac's
+    // activeBlue: 5.8:1 on white, 5.3:1 on the light playing row, 5.5:1 dark.
+    out property <color> active-blue: Tokens.dark ? #5eaeff : #0062cc;
+    // A warning notice's box, the Mac's warnBackground.
+    out property <color> warn-background: Tokens.dark ? #3a2c12 : #fff4dd;
+    // The small button's text, the Mac's house button ink (tealDeep, and
+    // logo on dark).
+    out property <color> house-text: Tokens.dark ? #63dac2 : #0f574f;
+    // The block of what plays and the source, in the main window and the
+    // tray panel: as grey on the white window as the Mac's on its grey one.
+    out property <brush> hero: Tokens.text.with-alpha(0.06);
     // A 1 px edge that sets a card off a light background.
     out property <brush> stroke: Tokens.dark ? Tokens.separator : #0000001a;
     // Windows' two-tone keyboard focus ring, as the style's own controls draw it.
@@ -88,7 +118,8 @@ export global Fold {
 }
 
 // A pane under its row, laid out from one progress that runs 0.25 s, so the
-// rows below follow it frame by frame; with Motion off it folds at once.
+// rows below follow it frame by frame; with Motion off its edge moves at
+// once and its content fades over 150 ms, as the Mac's under Reduce Motion.
 export component FoldPane inherits Rectangle {
     in property <bool> open;
     // The content may go only once the pane is folded shut.
@@ -97,12 +128,12 @@ export component FoldPane inherits Rectangle {
     in property <bool> escape-folds;
     callback fold();
     property <float> progress: root.open ? 1 : 0;
-    animate progress { duration: Motion.on ? 250ms : 0ms; }
+    animate progress { duration: Motion.on ? 250ms : 150ms; }
     property <length> height-open: max(body.min-height, body.preferred-height);
 
     min-width: body.min-width;
     preferred-width: body.preferred-width;
-    min-height: Fold.edge(root.progress, !Motion.on) * root.height-open;
+    min-height: (Motion.on ? Fold.edge(root.progress, false) : root.open ? 1 : 0) * root.height-open;
     max-height: self.min-height;
     clip: true;
 
@@ -374,9 +405,11 @@ export global Glyphs {
     out property <string> repeat-one: "\u{E8ED}";
     out property <string> play: "\u{E768}";
     out property <string> pause: "\u{E769}";
-    out property <string> presets: "\u{E728}";
+    // MapLayers: the stacked squares of the Mac's Presets row (Linux keeps its drawn star).
+    out property <string> presets: "\u{E81E}";
     out property <string> check: "\u{E73E}";
     out property <string> microphone: "\u{E720}";
+    out property <string> gear: "\u{E713}";
 
     // A switched-on output's own volume in Windows: the muted speaker while
     // muted, the speaker with one wave while low (spec S198).
@@ -405,62 +438,23 @@ export global Glyphs {
         return root.volume-high;
     }
 
-    // The icon font's Repeat reads poorly at 16 px, so these two are drawn
-    // on Windows too.
+    // The icon font's Repeat reads poorly at 16 px, it has no circled
+    // ellipsis (the Mac's options glyph) and its transport glyphs are
+    // outlines where the Mac's are filled, so these are drawn on Windows too;
+    // its Presets, Equalizer, microphone and timer are filled where the Mac's are outlines.
     public pure function drawn-everywhere(glyph: string) -> bool {
-        return glyph == root.repeat-all || glyph == root.repeat-one;
+        return glyph == root.repeat-all || glyph == root.repeat-one || glyph == root.more || glyph == root.previous || glyph == root.next || glyph == root.play || glyph == root.pause || glyph == root.volume-low || glyph == root.volume-mid || glyph == root.volume-high || glyph == root.volume-muted || glyph == root.presets || glyph == root.equalizer || glyph == root.microphone || glyph == root.timer;
     }
 
-    // What the speaker is; how it is reached is the kind's glyph after the
-    // name, so a network speaker's toggle shows a speaker, as on the Mac.
-    public pure function speaker(kind: SpeakerKind) -> string {
-        if kind == SpeakerKind.airplay || kind == SpeakerKind.airplay2 || kind == SpeakerKind.cast {
-            return root.speakers;
-        }
-        // The device's form wins over its bus; the kind line still says USB.
-        if kind == SpeakerKind.headphones || kind == SpeakerKind.usb-headphones {
-            return root.headphones;
-        }
-        if kind == SpeakerKind.bluetooth {
-            return root.bluetooth;
-        }
-        if kind == SpeakerKind.usb {
-            return root.usb;
-        }
-        if kind == SpeakerKind.hdmi || kind == SpeakerKind.display-port {
-            return root.display;
-        }
-        if kind == SpeakerKind.built-in || kind == SpeakerKind.usb-speakers {
-            return root.speakers;
-        }
-        return root.device;
-    }
-
-    // The small glyph after a speaker's name: how it is reached, where the
-    // toggle's glyph shows what it is.
-    public pure function kind-icon(kind: SpeakerKind) -> string {
-        if kind == SpeakerKind.airplay || kind == SpeakerKind.airplay2 || kind == SpeakerKind.cast {
-            return root.network;
-        }
-        if kind == SpeakerKind.bluetooth {
-            return root.bluetooth;
-        }
-        if kind == SpeakerKind.usb || kind == SpeakerKind.usb-headphones || kind == SpeakerKind.usb-speakers {
-            return root.usb;
-        }
-        if kind == SpeakerKind.hdmi || kind == SpeakerKind.display-port {
-            return root.display;
-        }
-        if kind == SpeakerKind.headphones {
-            return root.headphones;
-        }
-        if kind == SpeakerKind.built-in {
-            return root.speakers;
-        }
-        return root.device;
+    // The Mac's gear and chevrons stand at about 1.5 pt strokes; the icon font's are 1 px.
+    public pure function heavy(glyph: string) -> bool {
+        return glyph == root.gear || glyph == root.chevron-right || glyph == root.chevron-down;
     }
 
     public pure function outline(glyph: string) -> string {
+        if glyph == root.more {
+            return "M8 1.5 A6.5 6.5 0 0 1 8 14.5 A6.5 6.5 0 0 1 8 1.5 Z";
+        }
         if glyph == root.speakers {
             return "M4.5 1.5 H11.5 A1 1 0 0 1 12.5 2.5 V13.5 A1 1 0 0 1 11.5 14.5 H4.5 A1 1 0 0 1 3.5 13.5 V2.5 A1 1 0 0 1 4.5 1.5 Z M8 7.5 A2.5 2.5 0 0 1 8 12.5 A2.5 2.5 0 0 1 8 7.5 Z";
         }
@@ -469,6 +463,9 @@ export global Glyphs {
         }
         if glyph == root.bluetooth {
             return "M4.5 5 L11 10.75 L8 13.75 V2.25 L11 5.25 L4.5 11";
+        }
+        if glyph == root.gear {
+            return "M8 5.7 A2.3 2.3 0 0 1 8 10.3 A2.3 2.3 0 0 1 8 5.7 Z M8 3.4 A4.6 4.6 0 0 1 8 12.6 A4.6 4.6 0 0 1 8 3.4 Z M8 1.5 V3.4 M8 12.6 V14.5 M1.5 8 H3.4 M12.6 8 H14.5 M3.4 3.4 L4.75 4.75 M11.25 11.25 L12.6 12.6 M3.4 12.6 L4.75 11.25 M11.25 4.75 L12.6 3.4";
         }
         if glyph == root.microphone {
             return "M6 3.5 A2 2 0 0 1 10 3.5 V7.5 A2 2 0 0 1 6 7.5 Z M3.5 7.5 A4.5 4.5 0 0 0 12.5 7.5 M8 12 V14.5 M5.5 14.5 H10.5";
@@ -503,8 +500,9 @@ export global Glyphs {
         if glyph == root.chevron-down {
             return "M3 6 L8 11 L13 6";
         }
+        // The Mac's slider.vertical.3: three tracks, each with its knob.
         if glyph == root.equalizer {
-            return "M4 2 V14 M8 2 V14 M12 2 V14";
+            return "M4 2 V14 M8 2 V14 M12 2 V14 M2.5 10.5 H5.5 M6.5 5 H9.5 M10.5 8 H13.5";
         }
         if glyph == root.timer {
             return "M8 3.5 A5.5 5.5 0 0 1 8 14.5 A5.5 5.5 0 0 1 8 3.5 Z M6.5 1.5 H9.5 M8 1.5 V3.5 M8 9 V6 M12 4.5 L13 3.5";
@@ -513,25 +511,19 @@ export global Glyphs {
             return "M9.5 1.5 L3.5 9 H8 L6.5 14.5 L12.5 7 H8 Z";
         }
         if glyph == root.volume-low {
-            return "M2 6 H4.5 L8 3 V13 L4.5 10 H2 Z M10.5 6 A2.5 2.5 0 0 1 10.5 10";
+            return "M0.5 5.5 H3.5 L7.5 2 V14 L3.5 10.5 H0.5 Z M9.75 5.5 A3 3 0 0 1 9.75 10.5";
         }
         if glyph == root.volume-mid {
-            return "M2 6 H4.5 L8 3 V13 L4.5 10 H2 Z M10.5 6 A2.5 2.5 0 0 1 10.5 10 M11.8 4.5 A4.5 4.5 0 0 1 11.8 11.5";
+            return "M0.5 5.5 H3.5 L7.5 2 V14 L3.5 10.5 H0.5 Z M9.75 5.5 A3 3 0 0 1 9.75 10.5 M11.5 3.75 A5.5 5.5 0 0 1 11.5 12.25";
         }
         if glyph == root.volume-high {
-            return "M2 6 H4.5 L8 3 V13 L4.5 10 H2 Z M10.5 6 A2.5 2.5 0 0 1 10.5 10 M11.8 4.5 A4.5 4.5 0 0 1 11.8 11.5 M12.5 2.5 A6.5 6.5 0 0 1 12.5 13.5";
+            return "M0.5 5.5 H3.5 L7.5 2 V14 L3.5 10.5 H0.5 Z M9.75 5.5 A3 3 0 0 1 9.75 10.5 M11.5 3.75 A5.5 5.5 0 0 1 11.5 12.25 M13.25 2 A9 9 0 0 1 13.25 14";
         }
         if glyph == root.volume-muted {
-            return "M2 6 H4.5 L8 3 V13 L4.5 10 H2 Z M10.5 6.25 L14 9.75 M14 6.25 L10.5 9.75";
+            return "M0.5 5.5 H3.5 L7.5 2 V14 L3.5 10.5 H0.5 Z M10 5.75 L14.5 10.25 M14.5 5.75 L10 10.25";
         }
         if glyph == root.music-note {
             return "M10.5 11.5 V2 Q10.5 4 13.5 5.5";
-        }
-        if glyph == root.previous {
-            return "M3.5 3 V13";
-        }
-        if glyph == root.next {
-            return "M12.5 3 V13";
         }
         if glyph == root.shuffle {
             return "M2 4.5 H5 L11 11.5 H14 M2 11.5 H5 L11 4.5 H14 M12 2.5 L14 4.5 L12 6.5 M12 9.5 L14 11.5 L12 13.5";
@@ -544,8 +536,9 @@ export global Glyphs {
         if glyph == root.repeat-one {
             return "M8 4 H10.5 Q13.5 4 13.5 7 V9 Q13.5 12 10.5 12 H5.5 Q2.5 12 2.5 9 V7 Q2.5 4 5.5 4 H6.25 M4.5 2.25 L6.25 4 L4.5 5.75 M7.25 7 L8.25 6.25 V9.75";
         }
+        // The Mac's square.stack.3d.up: a layer over two more.
         if glyph == root.presets {
-            return "M4 2 H12 V14 L8 10.75 L4 14 Z";
+            return "M8 1.5 L14.5 5 L8 8.5 L1.5 5 Z M1.5 8.25 L8 11.75 L14.5 8.25 M1.5 11.25 L8 14.75 L14.5 11.25";
         }
         if glyph == root.check {
             return "M3 8.5 L6.5 12 L13 4.5";
@@ -567,7 +560,7 @@ export global Glyphs {
             return "M4.5 5 A0.85 0.85 0 0 1 4.5 6.7 A0.85 0.85 0 0 1 4.5 5 Z M11.5 5 A0.85 0.85 0 0 1 11.5 6.7 A0.85 0.85 0 0 1 11.5 5 Z";
         }
         if glyph == root.more {
-            return "M3 6.9 A1.1 1.1 0 0 1 3 9.1 A1.1 1.1 0 0 1 3 6.9 Z M8 6.9 A1.1 1.1 0 0 1 8 9.1 A1.1 1.1 0 0 1 8 6.9 Z M13 6.9 A1.1 1.1 0 0 1 13 9.1 A1.1 1.1 0 0 1 13 6.9 Z";
+            return "M5 7.1 A0.9 0.9 0 0 1 5 8.9 A0.9 0.9 0 0 1 5 7.1 Z M8 7.1 A0.9 0.9 0 0 1 8 8.9 A0.9 0.9 0 0 1 8 7.1 Z M11 7.1 A0.9 0.9 0 0 1 11 8.9 A0.9 0.9 0 0 1 11 7.1 Z";
         }
         if glyph == root.warning {
             return "M8 10.75 A0.8 0.8 0 0 1 8 12.35 A0.8 0.8 0 0 1 8 10.75 Z";
@@ -581,17 +574,23 @@ export global Glyphs {
         if glyph == root.music-note {
             return "M5.5 11.5 A2.5 2 0 0 1 10.5 11.5 A2.5 2 0 0 1 5.5 11.5 Z";
         }
+        // The body of the Mac's speaker.wave.n.fill, which spans its whole box as these do.
+        if glyph == root.volume-low || glyph == root.volume-mid || glyph == root.volume-high || glyph == root.volume-muted {
+            return "M0.5 5.5 H3.5 L7.5 2 V14 L3.5 10.5 H0.5 Z";
+        }
+        // Two solid triangles across the whole box, as the Mac's
+        // backward.fill and forward.fill: about 7 wide to 4 high.
         if glyph == root.previous {
-            return "M13 3 L5.5 8 L13 13 Z";
+            return "M8 3.45 L0 8 L8 12.55 Z M16 3.45 L8 8 L16 12.55 Z";
         }
         if glyph == root.next {
-            return "M3 3 L10.5 8 L3 13 Z";
+            return "M0 3.45 L8 8 L0 12.55 Z M8 3.45 L16 8 L8 12.55 Z";
         }
         if glyph == root.play {
-            return "M4.5 2.5 L13 8 L4.5 13.5 Z";
+            return "M3.5 1 L14.5 8 L3.5 15 Z";
         }
         if glyph == root.pause {
-            return "M4 2.5 H6.5 V13.5 H4 Z M9.5 2.5 H12 V13.5 H9.5 Z";
+            return "M3.5 1.5 H6.75 V14.5 H3.5 Z M9.25 1.5 H12.5 V14.5 H9.25 Z";
         }
         return "";
     }
@@ -617,6 +616,9 @@ export component Glyph inherits HorizontalLayout {
         font-family: "Segoe Fluent Icons";
         font-size: root.font-size;
         color: root.color;
+        stroke: root.color;
+        stroke-width: Glyphs.heavy(root.glyph) ? root.font-size / 48 : 0px;
+        stroke-style: outside;
         horizontal-alignment: center;
         vertical-alignment: root.vertical-alignment;
         accessible-role: none;
@@ -710,7 +712,7 @@ export component SectionTitle inherits HorizontalLayout {
     Text {
         text: root.text;
         font-size: Tokens.font-size-subheadline;
-        font-weight: 600;
+        font-weight: Fluent.weight-semibold;
         color: Tokens.text;
         accessible-role: none;
     }
@@ -722,7 +724,7 @@ export component SectionTitle inherits HorizontalLayout {
 export component CardTitle inherits HorizontalLayout {
     in property <string> text;
 
-    padding-left: 2px;
+    padding-left: 4px;
 
     label := Text {
         text: root.text.to-uppercase();
@@ -750,11 +752,12 @@ export component QuietText inherits HorizontalLayout {
     in property <TextVerticalAlignment> vertical-alignment: top;
     in property <TextWrap> wrap: word-wrap;
     in property <TextOverflow> overflow: clip;
+    in property <color> color: Tokens.secondary-text;
 
     Text {
         text: root.text;
         font-size: root.font-size;
-        color: Tokens.secondary-text;
+        color: root.color;
         horizontal-alignment: root.horizontal-alignment;
         vertical-alignment: root.vertical-alignment;
         wrap: root.wrap;
@@ -792,20 +795,125 @@ export component LabelTip inherits Rectangle {
     }
 }
 
+// AudioSync's own device drawings (brand/icons): an 18 px glyph for a
+// speaker's 32 px round toggle, and a 12 px badge after its name for how it is
+// reached. The toggle shows what the speaker is, as on the Mac.
+export global DeviceIcons {
+    out property <image> zone: @image-url("../../brand/icons/zone.svg");
+    out property <image> zone16: @image-url("../../brand/icons/16/zone.svg");
+
+    public pure function glyph(kind: SpeakerKind) -> image {
+        if kind == SpeakerKind.airplay || kind == SpeakerKind.airplay2 {
+            return @image-url("../../brand/icons/smart-speaker.svg");
+        }
+        // The device's form wins over its bus; the badge still says USB.
+        if kind == SpeakerKind.headphones || kind == SpeakerKind.usb-headphones {
+            return @image-url("../../brand/icons/headphones.svg");
+        }
+        if kind == SpeakerKind.bluetooth {
+            return @image-url("../../brand/icons/bluetooth.svg");
+        }
+        if kind == SpeakerKind.usb {
+            return @image-url("../../brand/icons/usb.svg");
+        }
+        if kind == SpeakerKind.hdmi || kind == SpeakerKind.display-port {
+            return @image-url("../../brand/icons/monitor.svg");
+        }
+        if kind == SpeakerKind.cast || kind == SpeakerKind.built-in || kind == SpeakerKind.usb-speakers {
+            return @image-url("../../brand/icons/speaker.svg");
+        }
+        return @image-url("../../brand/icons/device.svg");
+    }
+
+    // The same drawings at 16 px, for the tray panel's 28 px circles.
+    public pure function glyph16(kind: SpeakerKind) -> image {
+        if kind == SpeakerKind.airplay || kind == SpeakerKind.airplay2 {
+            return @image-url("../../brand/icons/16/smart-speaker.svg");
+        }
+        if kind == SpeakerKind.headphones || kind == SpeakerKind.usb-headphones {
+            return @image-url("../../brand/icons/16/headphones.svg");
+        }
+        if kind == SpeakerKind.bluetooth {
+            return @image-url("../../brand/icons/16/bluetooth.svg");
+        }
+        if kind == SpeakerKind.usb {
+            return @image-url("../../brand/icons/16/usb.svg");
+        }
+        if kind == SpeakerKind.hdmi || kind == SpeakerKind.display-port {
+            return @image-url("../../brand/icons/16/monitor.svg");
+        }
+        if kind == SpeakerKind.cast || kind == SpeakerKind.built-in || kind == SpeakerKind.usb-speakers {
+            return @image-url("../../brand/icons/16/speaker.svg");
+        }
+        return @image-url("../../brand/icons/16/device.svg");
+    }
+
+    // The same drawings at 14 px, for the 24 px circles of a zone's speakers.
+    public pure function glyph14(kind: SpeakerKind) -> image {
+        if kind == SpeakerKind.airplay || kind == SpeakerKind.airplay2 {
+            return @image-url("../../brand/icons/14/smart-speaker.svg");
+        }
+        if kind == SpeakerKind.headphones || kind == SpeakerKind.usb-headphones {
+            return @image-url("../../brand/icons/14/headphones.svg");
+        }
+        if kind == SpeakerKind.bluetooth {
+            return @image-url("../../brand/icons/14/bluetooth.svg");
+        }
+        if kind == SpeakerKind.usb {
+            return @image-url("../../brand/icons/14/usb.svg");
+        }
+        if kind == SpeakerKind.hdmi || kind == SpeakerKind.display-port {
+            return @image-url("../../brand/icons/14/monitor.svg");
+        }
+        if kind == SpeakerKind.cast || kind == SpeakerKind.built-in || kind == SpeakerKind.usb-speakers {
+            return @image-url("../../brand/icons/14/speaker.svg");
+        }
+        return @image-url("../../brand/icons/14/device.svg");
+    }
+
+    public pure function badge(kind: SpeakerKind) -> image {
+        if kind == SpeakerKind.airplay || kind == SpeakerKind.airplay2 {
+            return @image-url("../../brand/icons/badge-airplay.svg");
+        }
+        if kind == SpeakerKind.cast {
+            return @image-url("../../brand/icons/badge-cast.svg");
+        }
+        if kind == SpeakerKind.bluetooth {
+            return @image-url("../../brand/icons/badge-bluetooth.svg");
+        }
+        if kind == SpeakerKind.usb || kind == SpeakerKind.usb-headphones || kind == SpeakerKind.usb-speakers {
+            return @image-url("../../brand/icons/badge-usb.svg");
+        }
+        if kind == SpeakerKind.hdmi || kind == SpeakerKind.display-port {
+            return @image-url("../../brand/icons/badge-display.svg");
+        }
+        if kind == SpeakerKind.headphones {
+            return @image-url("../../brand/icons/badge-headphones.svg");
+        }
+        if kind == SpeakerKind.built-in {
+            return @image-url("../../brand/icons/badge-laptop.svg");
+        }
+        return @image-url("../../brand/icons/badge-speaker.svg");
+    }
+}
+
 // A speaker's kind as a small glyph after its name, as on the Mac. The
 // tooltip names the kind; Narrator reads it from the row's toggle.
 export component KindIcon inherits Rectangle {
     in property <SpeakerKind> kind;
+    // The speaker plays: blue for AirPlay and Bluetooth, teal for the rest.
+    in property <bool> lit;
     callback clicked();
 
-    width: Tokens.font-size-caption + 2px;
+    width: 12px;
 
-    Glyph {
-        width: 100%;
-        height: 100%;
-        glyph: Glyphs.kind-icon(root.kind);
-        font-size: Tokens.font-size-caption;
-        color: Tokens.secondary-text;
+    Image {
+        y: round((root.height - 12px) / 2px) * 1px;
+        width: 12px;
+        height: 12px;
+        source: DeviceIcons.badge(root.kind);
+        colorize: !root.lit ? Tokens.secondary-text : root.kind == SpeakerKind.airplay || root.kind == SpeakerKind.airplay2 || root.kind == SpeakerKind.bluetooth ? Fluent.active-blue : Tokens.teal-text;
+        accessible-role: none;
     }
 
     TouchArea {
@@ -850,6 +958,8 @@ export component IconButton inherits Rectangle {
     in property <length> glyph-size: 16px;
     in property <float> glyph-scale: 1;
     in property <float> glyph-opacity: 1;
+    // Moves the glyph right of its place, for a reveal's slide.
+    in property <length> glyph-shift;
     // A mode that is on: a dot under the glyph, in the glyph's color.
     in property <bool> active;
     callback clicked();
@@ -897,9 +1007,17 @@ export component IconButton inherits Rectangle {
         clicked => {
             root.clicked();
         }
+
+        if root.label != "": Tooltip {
+            tip := LabelTip {
+                text: root.label;
+                max-tip-width: 240px;
+            }
+        }
     }
 
     Rectangle {
+        x: root.glyph-shift;
         transform-scale: root.glyph-scale;
         opacity: root.glyph-opacity;
 
@@ -926,71 +1044,6 @@ export component IconButton inherits Rectangle {
         visible-focus: focus.has-focus;
         border-radius: root.border-radius;
     }
-}
-
-// A menu's name in the main window's top row. Only Alt or F10 reaches it by
-// keyboard, as a menu bar, so Tab keeps starting at the window's content.
-// Its menu goes in as a child (a ContextMenuArea), which `open` shows.
-export component MenuName inherits Rectangle {
-    in property <string> title;
-    callback open();
-    // Left (-1) or Right (+1) asks for the neighbouring menu.
-    callback step(int);
-
-    height: 32px;
-    horizontal-stretch: 0;
-    min-width: label.preferred-width + 20px;
-    border-radius: Fluent.radius-control;
-    background: touch.pressed ? Fluent.pressed : touch.has-hover || focus.has-focus ? Fluent.hover : transparent;
-    animate background { duration: Fluent.fast; }
-    forward-focus: focus;
-    accessible-role: button;
-    accessible-label: root.title;
-    accessible-action-default => {
-        root.open();
-    }
-
-    focus := FocusScope {
-        focus-on-click: false;
-        focus-on-tab-navigation: false;
-        key-pressed(event) => {
-            if event.text == Key.LeftArrow || event.text == Key.RightArrow {
-                root.step(event.text == Key.LeftArrow ? -1 : 1);
-                return accept;
-            }
-            if event.text == " " || event.text == Key.Return || event.text == Key.DownArrow {
-                root.open();
-                return accept;
-            }
-            if event.text == Key.Escape {
-                self.clear-focus();
-                return accept;
-            }
-            return reject;
-        }
-    }
-
-    touch := TouchArea {
-        clicked => {
-            root.open();
-        }
-    }
-
-    label := Text {
-        text: root.title;
-        color: Tokens.text;
-        font-size: Tokens.font-size-callout;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-        accessible-role: none;
-    }
-
-    FocusRing {
-        visible-focus: focus.has-focus;
-        border-radius: root.border-radius;
-    }
-
-    @children
 }
 
 // The main window's own minimize, maximize or restore, and close button.
@@ -1059,6 +1112,8 @@ export component LinkButton inherits Rectangle {
     in property <string> text;
     in property <string> label;
     in property <TextOverflow> overflow: clip;
+    // A notice's links take the text color, as the Mac's do.
+    in property <color> text-color: Tokens.teal-text;
     // Shown while the pointer rests on it; empty for none.
     in property <string> tip;
     // Whether it has the keyboard focus (a click doesn't give it).
@@ -1111,8 +1166,8 @@ export component LinkButton inherits Rectangle {
         Text {
             text: root.text;
             font-size: Tokens.font-size-caption;
-            font-weight: 600;
-            color: Tokens.teal-text;
+            font-weight: Fluent.weight-semibold;
+            color: root.text-color;
             vertical-alignment: center;
             overflow: root.overflow;
             opacity: touch.pressed ? 0.75 : 1;
@@ -1126,34 +1181,41 @@ export component LinkButton inherits Rectangle {
     }
 }
 
-// A button that shows or hides the controls under it, with a chevron that
-// points down while they show.
-export component Disclosure inherits Rectangle {
+// The Mac's small house button (HouseButtonStyle small): medium text in the
+// deep teal on a teal tint with a faint teal edge, for the fix under a note.
+export component SmallButton inherits Rectangle {
     in property <string> text;
-    in property <bool> expanded;
-    callback toggled();
+    // Shown while the pointer rests on it, and what Narrator adds.
+    in property <string> tip;
+    in property <length> font-size: Tokens.font-size-callout;
+    // Can't be used now: grey, as the Mac's disabled push button.
+    in property <bool> dimmed;
+    callback clicked();
 
-    min-width: content.min-width;
-    min-height: content.min-height;
-    preferred-width: content.preferred-width;
-    preferred-height: content.preferred-height;
-    border-radius: Fluent.radius-control;
-    background: touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : transparent;
-    animate background { duration: Fluent.fast; }
+    min-width: label.preferred-width + 20px;
+    preferred-width: self.min-width;
+    height: 24px;
+    border-radius: Tokens.radius-control;
+    background: root.dimmed ? Tokens.text.with-alpha(0.05) : Tokens.teal.with-alpha(touch.pressed ? (Tokens.dark ? 0.30 : 0.28) : touch.has-hover ? (Tokens.dark ? 0.20 : 0.18) : (Tokens.dark ? 0.14 : 0.12));
+    animate background {
+        duration: 120ms;
+        easing: ease-out;
+    }
+    border-width: root.dimmed ? 0px : max(0.5px, 1phx);
+    border-color: Tokens.teal.with-alpha(0.3);
     forward-focus: focus;
     accessible-role: button;
     accessible-label: root.text;
-    accessible-expandable: true;
-    accessible-expanded: root.expanded;
+    accessible-description: root.tip;
     accessible-action-default => {
-        root.toggled();
+        root.clicked();
     }
 
     focus := FocusScope {
         focus-on-click: false;
         key-pressed(event) => {
-            if event.text == " " || event.text == Key.Return || (event.text == Key.Escape && root.expanded) {
-                root.toggled();
+            if event.text == " " || event.text == Key.Return {
+                root.clicked();
                 return accept;
             }
             return reject;
@@ -1161,31 +1223,26 @@ export component Disclosure inherits Rectangle {
     }
 
     touch := TouchArea {
-        mouse-cursor: pointer;
         clicked => {
-            root.toggled();
+            root.clicked();
+        }
+
+        if root.tip != "": Tooltip {
+            LabelTip {
+                text: root.tip;
+                max-tip-width: 360px;
+            }
         }
     }
 
-    content := HorizontalLayout {
-        padding-left: 2px;
-        padding-right: 2px;
-        spacing: 4px;
-
-        Text {
-            text: root.text;
-            font-size: Tokens.font-size-caption;
-            font-weight: 600;
-            color: Tokens.teal-text;
-            vertical-alignment: center;
-            accessible-role: none;
-        }
-
-        Glyph {
-            glyph: root.expanded ? Glyphs.chevron-down : Glyphs.chevron-right;
-            font-size: 10px;
-            color: Tokens.teal-text;
-        }
+    label := Text {
+        text: root.text;
+        font-size: root.font-size;
+        font-weight: Fluent.weight-medium;
+        color: root.dimmed ? Tokens.text.with-alpha(0.5) : Fluent.house-text;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
     }
 
     FocusRing {
@@ -1232,7 +1289,8 @@ export component DialogButton inherits FocusScope {
 // plays, outlined while it waits (for streaming, or for a device or an
 // AirPlay speaker while streaming), grey while off.
 export component SpeakerBadge inherits Rectangle {
-    in property <string> glyph;
+    // DeviceIcons.glyph at 32 px, DeviceIcons.glyph14 at 24 px.
+    in property <image> icon;
     in property <RowState> state;
     // Filled: a speaker row passes its item's `plays`.
     in property <bool> plays: root.state == RowState.playing;
@@ -1259,24 +1317,29 @@ export component SpeakerBadge inherits Rectangle {
     // Only the behavior and the focus ring: the tray panel draws its own
     // round mark under it.
     in property <bool> bare;
+    // Its tooltip under the pointer, as the Mac switch's help.
+    in property <string> help;
 
     width: root.size;
     height: root.size;
     border-radius: root.size / 2;
     // As the Mac's (Badge in src/window_rules.rs): a grey disc while off, a
-    // faint teal disc in a teal ring while it is on and waits, a teal disc
-    // while it plays. The disc grows in; with animation effects off it fades in.
-    property <bool> hovered: touch.has-hover && root.enabled;
+    // faint teal disc in a teal ring while it is on and waits, a dark teal
+    // disc while it plays. The disc grows in; with animation effects off it fades in.
+    // No hover look, as the Mac's.
     property <bool> waits: !root.plays && root.state != RowState.off;
     property <float> fill: root.plays ? 1 : 0;
     animate fill {
         duration: Motion.on ? 250ms : 150ms;
         easing: Motion.on ? ease-in-out : linear;
     }
-    background: root.bare || root.plays ? transparent : root.waits ? Tokens.teal.with-alpha(0.14) : root.hovered ? #80808042 : #8080802e;
-    animate background { duration: Motion.on ? 250ms : 150ms; }
-    border-width: !root.bare && root.waits ? max(1.5px, root.size / 18) : 0px;
-    border-color: Tokens.teal-text;
+    background: root.bare || root.plays ? transparent : root.waits ? Tokens.teal.with-alpha(0.14) : #8080802e;
+    animate background {
+        duration: Motion.on ? 250ms : 150ms;
+        easing: Motion.on ? ease-in-out : linear;
+    }
+    // A press hides the tooltip until the pointer leaves, as AppKit's help.
+    property <bool> tip-allowed: true;
     opacity: root.enabled ? 1 : Tokens.disabled-opacity;
     forward-focus: focus;
     // A toggle button, not a switch: see ToggleSwitch.
@@ -1330,20 +1393,60 @@ export component SpeakerBadge inherits Rectangle {
         clicked => {
             root.toggled();
         }
+        changed has-hover => {
+            if !self.has-hover {
+                root.tip-allowed = true;
+            }
+        }
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down {
+                root.tip-allowed = false;
+            }
+        }
+
+        if root.help != "" && root.tip-allowed: Tooltip {
+            tip := LabelTip {
+                text: root.help;
+                max-tip-width: 240px;
+            }
+        }
+    }
+
+    // The waiting ring fades with the disc, as the Mac's does.
+    if !root.bare: Rectangle {
+        border-radius: root.size / 2;
+        border-width: root.size == 32px ? 2px : max(1.5px, root.size / 18);
+        border-color: Tokens.teal-text;
+        opacity: root.waits ? 1 : 0;
+        animate opacity {
+            duration: Motion.on ? 250ms : 150ms;
+            easing: Motion.on ? ease-in-out : linear;
+        }
     }
 
     if !root.bare: Rectangle {
         width: root.width * (Motion.on ? 0.6 + 0.4 * root.fill : 1);
         height: self.width;
         border-radius: self.width / 2;
-        background: root.hovered ? Tokens.teal.darker(0.15) : Tokens.teal;
+        background: #147167;
         opacity: root.fill;
     }
 
-    if !root.bare: Glyph {
-        glyph: root.glyph;
-        font-size: root.size * 0.43;
-        color: root.plays ? #ffffff : root.state == RowState.off ? Tokens.secondary-text : Tokens.teal-text;
+    property <color> ink: root.plays ? #ffffff : root.state == RowState.off ? (Tokens.dark ? #e8eaea : #3a3f3f) : Tokens.teal-text;
+    animate ink {
+        duration: Motion.on ? 250ms : 150ms;
+        easing: Motion.on ? ease-in-out : linear;
+    }
+
+    // Centred on whole pixels: 7 px in the 32 px circle, 5 px in the 24 px one.
+    if !root.bare: Image {
+        x: (root.size - self.width) / 2;
+        y: self.x;
+        width: root.size == 32px ? 18px : 14px;
+        height: self.width;
+        source: root.icon;
+        colorize: root.ink;
+        accessible-role: none;
     }
 
     FocusRing {
@@ -1539,10 +1642,12 @@ export component PowerSwitch inherits Rectangle {
         }
     }
 
-    Rectangle {
+    knob := Rectangle {
         width: root.checked ? 18px : 21px;
         height: self.width;
-        x: root.checked ? root.width - 2px - self.width : 0.5px;
+        // From the end size, not self.width: an x that reads the animating
+        // width restarts its own animation every frame and lags the track.
+        x: root.checked ? root.width - 2px - 18px : 0.5px;
         y: (root.height - self.height) / 2;
         border-radius: self.width / 2;
         background: #ffffff;
@@ -1569,6 +1674,8 @@ export component PowerSwitch inherits Rectangle {
 export component ToggleSwitch {
     in-out property <bool> checked <=> track.checked;
     in property <string> text;
+    // The label in the headline weight, as the Mac's Equalizer switch.
+    in property <bool> headline;
     out property <bool> has-focus: track.has-focus;
     callback toggled();
 
@@ -1597,6 +1704,7 @@ export component ToggleSwitch {
         Text {
             text: root.text;
             color: Tokens.text;
+            font-weight: root.headline ? Fluent.weight-semibold : Fluent.weight-regular;
             vertical-alignment: center;
             accessible-role: none;
         }
@@ -1639,33 +1747,44 @@ export component LevelSlider inherits Rectangle {
     in property <float> maximum: 100;
     in-out property <float> value;
     in property <float> step: 1;
+    // How far Narrator's Increment and Decrement move it.
+    in property <float> accessible-step: root.step;
     in property <bool> enabled: true;
     in property <Orientation> orientation: Orientation.horizontal;
     in property <brush> track: Tokens.text.with-alpha(0.15);
+    // The Mac's small slider (a speaker's or a zone's volume).
+    in property <bool> small;
     out property <bool> has-focus: focus.has-focus;
+    out property <bool> held: touch.pressed;
     callback changed(float);
     callback released(float);
     property <bool> vertical: root.orientation == Orientation.vertical;
+    // A row's slider has the Mac's 16 px knob on a 4 px track too, as measured on its window.
     property <length> knob: 16px;
+    property <length> thickness: 4px;
     property <length> span: (root.vertical ? root.height : root.width) - root.knob;
     property <float> ratio: root.maximum > root.minimum ? (root.value - root.minimum) / (root.maximum - root.minimum) : 0;
+    // A small slider that takes no drag (a speaker that is off) keeps its full
+    // look, as the main window mockup OK'd on 17 Nov: the badge says it is off.
+    property <bool> idle: root.small && !root.enabled;
 
     min-width: root.vertical ? root.knob : 48px;
-    min-height: root.vertical ? 48px : root.knob;
-    preferred-height: 22px;
+    // A row's knob reaches 1 px past its 14 px line, which keeps the rows' 49 px step.
+    min-height: root.vertical ? 48px : root.small ? 14px : root.knob;
+    preferred-height: root.small ? 16px : 22px;
     forward-focus: focus;
-    opacity: root.enabled ? 1 : Tokens.disabled-opacity;
+    opacity: root.enabled || root.idle ? 1 : Tokens.disabled-opacity;
     accessible-role: slider;
     accessible-enabled: root.enabled;
     accessible-value-minimum: root.minimum;
     accessible-value-maximum: root.maximum;
     accessible-value-step: root.step;
     accessible-action-increment => {
-        root.move-to(root.value + root.step);
+        root.move-to(root.value + root.accessible-step);
         root.released(root.value);
     }
     accessible-action-decrement => {
-        root.move-to(root.value - root.step);
+        root.move-to(root.value - root.accessible-step);
         root.released(root.value);
     }
 
@@ -1716,35 +1835,48 @@ export component LevelSlider inherits Rectangle {
     Rectangle {
         x: root.vertical ? (root.width - self.width) / 2 : root.knob / 2;
         y: root.vertical ? root.knob / 2 : (root.height - self.height) / 2;
-        width: root.vertical ? 4px : root.span;
-        height: root.vertical ? root.span : 4px;
-        border-radius: 2px;
+        width: root.vertical ? root.thickness : root.span;
+        height: root.vertical ? root.span : root.thickness;
+        border-radius: root.thickness / 2;
         background: root.track;
+        animate background {
+            duration: Motion.on ? 250ms : 150ms;
+            easing: Motion.on ? ease-in-out : linear;
+        }
     }
 
     Rectangle {
         x: root.vertical ? (root.width - self.width) / 2 : root.knob / 2;
         y: root.vertical ? root.knob / 2 + root.span * (1 - root.ratio) : (root.height - self.height) / 2;
-        width: root.vertical ? 4px : root.span * root.ratio;
-        height: root.vertical ? root.span * root.ratio : 4px;
-        border-radius: 2px;
-        background: Tokens.text;
+        width: root.vertical ? root.thickness : root.span * root.ratio;
+        height: root.vertical ? root.span * root.ratio : root.thickness;
+        border-radius: root.thickness / 2;
+        // On dark the Mac's small slider fill is grey, not white.
+        background: root.small && Tokens.dark ? Tokens.text.with-alpha(0.26) : Tokens.text;
+        animate background {
+            duration: Motion.on ? 250ms : 150ms;
+            easing: Motion.on ? ease-in-out : linear;
+        }
     }
 
-    Rectangle {
+    thumb := Rectangle {
         width: root.knob;
         height: root.knob;
         x: root.vertical ? (root.width - self.width) / 2 : root.span * root.ratio;
         y: root.vertical ? root.span * (1 - root.ratio) : (root.height - self.height) / 2;
         border-radius: self.width / 2;
-        background: #ffffff;
-        border-width: max(0.5px, 1phx);
-        border-color: Tokens.secondary-text;
-        drop-shadow-blur: 2px;
-        drop-shadow-color: #00000040;
+        // The Mac's small knob on dark is grey (#959595 on its window).
+        background: root.small && Tokens.dark ? #959595 : root.small && touch.pressed ? #ebebeb : #ffffff;
+        // The Mac's small knob: on light a faint ring and a soft shadow keep it
+        // off a white window at 100; on dark the shadow alone.
+        border-width: root.small && Tokens.dark ? 0px : 1px;
+        border-color: root.small ? #0000001f : Tokens.secondary-text;
+        drop-shadow-blur: root.small && !Tokens.dark ? 3px : 1.5px;
+        drop-shadow-offset-y: root.small && !Tokens.dark ? 1px : 0.5px;
+        drop-shadow-color: root.small && !Tokens.dark ? #00000033 : #0000004d;
     }
 
-    TouchArea {
+    touch := TouchArea {
         enabled: root.enabled;
         pointer-event(event) => {
             if event.button != PointerEventButton.left {
@@ -1791,6 +1923,8 @@ export component OverlayScrollView {
 
     changed content-y => {
         root.scrolling = true;
+        // restart() alone does nothing on a timer that is not running.
+        settle.start();
         settle.restart();
     }
 
@@ -1854,6 +1988,64 @@ export component OverlayScrollView {
     }
 }
 
+// A main window column with no scroll bar, as the Mac's. Slint has no mask,
+// so an edge's fade is the window's colour drawn over it.
+export component FadeScrollView {
+    out property <length> visible-height <=> flickable.height;
+    in-out property <length> content-height <=> flickable.content-height;
+    in-out property <length> content-y <=> flickable.content-y;
+    in property <color> fade-color;
+    // Room past each side that the content may reach without being cut.
+    in property <length> bleed;
+    callback blank-clicked();
+    out property <length> fade: 12px;
+    out property <float> top-fade: clamp(-flickable.content-y / root.fade, 0, 1);
+    out property <float> bottom-fade: clamp((flickable.content-height - flickable.height + flickable.content-y) / root.fade, 0, 1);
+
+    min-height: 50px;
+    min-width: 50px;
+    horizontal-stretch: 1;
+    vertical-stretch: 1;
+    preferred-height: 100%;
+    preferred-width: 100%;
+
+    TouchArea {
+        x: -root.bleed;
+        width: parent.width + 2 * root.bleed;
+        clicked => {
+            root.blank-clicked();
+        }
+
+        flickable := Flickable {
+            width: parent.width;
+            height: parent.height;
+
+            VerticalLayout {
+                padding-left: root.bleed;
+                padding-right: root.bleed;
+                padding-bottom: root.fade;
+                @children
+            }
+        }
+    }
+
+    top-edge := Rectangle {
+        x: -root.bleed;
+        width: parent.width + 2 * root.bleed;
+        y: 0px;
+        height: root.fade;
+        background: @linear-gradient(180deg, root.fade-color.with-alpha(root.top-fade) 0%, root.fade-color.with-alpha(0) 100%);
+    }
+
+    bottom-edge := Rectangle {
+        x: -root.bleed;
+        width: parent.width + 2 * root.bleed;
+        y: root.height - root.fade;
+        height: root.fade;
+        background: @linear-gradient(0deg, root.fade-color.with-alpha(root.bottom-fade) 0%, root.fade-color.with-alpha(0) 100%);
+    }
+}
+
 // A volume slider with its value. `changed` reports every move.
 export component VolumeSlider inherits HorizontalLayout {
     in property <float> volume;
@@ -1864,6 +2056,10 @@ export component VolumeSlider inherits HorizontalLayout {
     in property <float> step: 1;
     in property <brush> track <=> slider.track;
     in property <bool> shows-value: true;
+    // Its value reads "60%" rather than "60".
+    in property <bool> percent;
+    in property <length> value-width: root.percent ? 34px : 26px;
+    in property <bool> small <=> slider.small;
     callback changed(float);
     // True from the first move of a drag or key press to its release.
     callback editing(bool);
@@ -1895,11 +2091,13 @@ export component VolumeSlider inherits HorizontalLayout {
                 minimum: 0;
                 maximum: 100;
                 step: root.step;
+                // A tenth, as VoiceOver's step on the Mac's sliders.
+                accessible-step: 10;
                 value: root.volume;
                 enabled: root.enabled;
                 accessible-label: root.label;
                 accessible-description: root.description;
-                accessible-value: Strings.volume-value(self.value);
+                accessible-value: root.percent ? Strings.system-volume-percent(round(self.value)) : Strings.volume-value(self.value);
                 changed(value) => {
                     if !root.is-editing {
                         root.is-editing = true;
@@ -1927,14 +2125,19 @@ export component VolumeSlider inherits HorizontalLayout {
     }
 
     if root.shows-value: QuietText {
-        text: Strings.volume-value(slider.value);
-        width: 26px;
+        text: root.percent ? Strings.system-volume-percent(round(slider.value)) : Strings.volume-value(slider.value);
+        color: root.is-editing || slider.held ? Tokens.text : Tokens.secondary-text;
+        width: root.value-width;
         horizontal-alignment: right;
         // One line, centered on the track: a wrapped label is taller than
         // the slider and drops below it.
         vertical-alignment: center;
         wrap: no-wrap;
+        // The Mac's subheadline, as its code sets it.
         font-size: Tokens.font-size-subheadline;
+        // The Mac's line: Segoe UI's is 2 px taller, all of it leading, and
+        // would break a speaker row's 52 px step.
+        height: 14px;
     }
 }
 
@@ -1946,6 +2149,8 @@ export component MasterVolume inherits HorizontalLayout {
     in property <int> waves;
     // From the track's end to the number.
     in property <length> number-gap: 6px;
+    // The mute button's side: 24 in the main window, as the Mac's.
+    in property <length> button-size: 32px;
     out property <bool> slider-focused: slider.slider-focused;
     callback changed(float);
     callback mute-toggled();
@@ -1953,6 +2158,8 @@ export component MasterVolume inherits HorizontalLayout {
     spacing: 4px;
 
     IconButton {
+        width: root.button-size;
+        height: root.button-size;
         label: root.waves == 0 ? Strings.unmute-master : Strings.mute-master;
         clicked => {
             root.mute-toggled();
@@ -2051,6 +2258,14 @@ export component TextField inherits Rectangle {
     in property <InputType> input-type <=> input.input-type;
     in property <bool> read-only <=> input.read-only;
     in property <string> placeholder-text;
+    // A rename in a list row: the Mac's 22 px rounded field, so the row
+    // keeps its height.
+    in property <bool> compact;
+    // The Mac's sheet field: a rounded box with a 2 px focus outline, no underline.
+    in property <bool> boxed;
+    // The Mac's delay field: white with a soft shadow and no border in light
+    // until it takes the focus.
+    in property <bool> raised;
     out property <bool> has-focus: input.has-focus;
     // Whether the whole text cursor is inside the box (tests read it).
     out property <bool> caret-in-view: input.x + view.caret-x >= 0 && input.x + view.caret-x + input.text-cursor-width <= view.width;
@@ -2066,14 +2281,18 @@ export component TextField inherits Rectangle {
     }
 
     min-width: 48px;
-    min-height: max(32px, input.preferred-height + 12px);
+    min-height: root.compact ? 22px : max(32px, input.preferred-height + 12px);
+    max-height: root.compact ? 22px : 10000px;
     horizontal-stretch: 1;
     vertical-stretch: 0;
     forward-focus: input;
-    border-radius: Fluent.radius-control;
-    border-width: 1px;
-    border-color: Fluent.stroke;
-    background: input.has-focus ? Tokens.surface : Tokens.surface.mix(Tokens.text, 0.98);
+    border-radius: root.compact ? 5px : root.boxed ? 8px : Fluent.radius-control;
+    border-width: root.boxed && input.has-focus ? 2px : root.raised && !Tokens.dark && !input.has-focus ? 0px : 1px;
+    border-color: root.boxed ? (input.has-focus ? Tokens.focus : Tokens.secondary-text) : root.compact && input.has-focus ? Tokens.teal : Fluent.stroke;
+    background: input.has-focus || (root.raised && !Tokens.dark) ? Tokens.surface : Tokens.surface.mix(Tokens.text, 0.98);
+    drop-shadow-blur: 1px;
+    drop-shadow-offset-y: 0.5px;
+    drop-shadow-color: root.raised ? Fluent.native-control-shadow : transparent;
     clip: true;
     accessible-role: text-input;
     accessible-value: root.text;
@@ -2148,8 +2367,8 @@ export component TextField inherits Rectangle {
         }
 
         HorizontalLayout {
-            padding-left: 10px;
-            padding-right: 10px;
+            padding-left: root.compact ? 6px : 10px;
+            padding-right: root.compact ? 6px : 10px;
 
             // The text slides left under this clip so the cursor stays in
             // view: `offset` is how far, never past the end of the text.
@@ -2200,7 +2419,7 @@ export component TextField inherits Rectangle {
         }
     }
 
-    Rectangle {
+    if !root.compact && !root.boxed: Rectangle {
         x: 0;
         y: parent.height - self.height;
         width: parent.width;
@@ -2213,6 +2432,66 @@ export component TextField inherits Rectangle {
 // applied (Enter applies it), a red one while that typing is a number out of
 // range. Drawn in the 4 px spacing around the field instead of taking room,
 // so the row is no taller than its buttons.
+// A delay step, as the Mac panel's small bordered button: 20 high, 10 px
+// digits, a white pill with a soft shadow and no border, or grey in dark.
+component DelayStep inherits Rectangle {
+    in property <int> delta;
+    out property <bool> has-focus: focus.has-focus;
+    callback clicked();
+
+    height: 20px;
+    min-width: label.preferred-width + 14px;
+    border-radius: 5px;
+    // A Mac bordered button has no hover look; pressing it greys it, a step lighter in dark.
+    background: touch.pressed ? Tokens.text.with-alpha(Tokens.dark ? 0.3 : 0.1) : Fluent.native-control;
+    drop-shadow-blur: 1px;
+    drop-shadow-offset-y: 0.5px;
+    drop-shadow-color: Fluent.native-control-shadow;
+    animate background { duration: Fluent.fast; }
+    forward-focus: focus;
+    accessible-role: button;
+    accessible-label: Strings.delay-step-accessibility(root.delta);
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    // 24 px to hit, the pointer minimum, centred on the 20 px step.
+    touch := TouchArea {
+        y: (root.height - self.height) / 2;
+        height: 24px;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    // A click leaves the focus where it was, as on the Mac, so a step
+    // builds on the field's typing.
+    focus := FocusScope {
+        focus-on-click: false;
+        key-pressed(event) => {
+            if event.text == " " || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    label := Text {
+        text: Strings.delay-step(root.delta);
+        font-size: Tokens.font-size-caption;
+        color: Tokens.text;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+
+    FocusRing {
+        visible-focus: focus.has-focus;
+        border-radius: root.border-radius;
+    }
+}
+
 component DraftOutline inherits Rectangle {
     in property <bool> pending;
     in property <bool> out-of-range;
@@ -2331,9 +2610,8 @@ export component SyncControls inherits VerticalLayout {
             spacing: 4px;
             alignment: start;
 
-            for delta in [-100, -10]: Button {
-                text: Strings.delay-step(delta);
-                accessible-label: Strings.delay-step-accessibility(delta);
+            for delta in [-100, -10]: DelayStep {
+                delta: delta;
                 clicked => {
                     root.stepped(delta);
                 }
@@ -2350,6 +2628,10 @@ export component SyncControls inherits VerticalLayout {
 
                 field := TextField {
                     width: 72px;
+                    compact: true;
+                    raised: true;
+                    border-radius: 6px;
+                    font-size: Tokens.font-size-callout;
                     text: root.delay-text;
                     horizontal-alignment: center;
                     accessible-label: Strings.delay-of(root.name);
@@ -2373,14 +2655,14 @@ export component SyncControls inherits VerticalLayout {
 
             Text {
                 text: Strings.milliseconds-unit;
+                font-size: Tokens.font-size-callout;
                 color: Tokens.secondary-text;
                 vertical-alignment: center;
                 accessible-role: none;
             }
 
-            for delta in [10, 100]: Button {
-                text: Strings.delay-step(delta);
-                accessible-label: Strings.delay-step-accessibility(delta);
+            for delta in [10, 100]: DelayStep {
+                delta: delta;
                 clicked => {
                     root.stepped(delta);
                 }
@@ -2474,6 +2756,8 @@ export component AirPlayDelayControls inherits VerticalLayout {
     // Escape in the field or on a step: drop what was typed.
     callback cancelled();
     callback focus-changed(bool);
+    // The list's width, which the note's wrapped lines are measured at.
+    in property <length> width-given;
 
     spacing: 6px;
     padding-left: 12px;
@@ -2509,7 +2793,7 @@ export component AirPlayDelayControls inherits VerticalLayout {
     }
 
     VerticalLayout {
-        padding-left: Fluent.name-inset - 12px;
+        padding-left: Fluent.name-inset - Fluent.row-padding-x;
 
         VerticalLayout {
             spacing: 6px;
@@ -2533,9 +2817,8 @@ export component AirPlayDelayControls inherits VerticalLayout {
                     spacing: 4px;
                     alignment: start;
 
-                    for delta in [-100, -10]: Button {
-                        text: Strings.delay-step(delta);
-                        accessible-label: Strings.delay-step-accessibility(delta);
+                    for delta in [-100, -10]: DelayStep {
+                        delta: delta;
                         changed has-focus => {
                             root.focus-changed(self.has-focus);
                         }
@@ -2550,6 +2833,10 @@ export component AirPlayDelayControls inherits VerticalLayout {
 
                         field := TextField {
                             width: 72px;
+                            compact: true;
+                            raised: true;
+                            border-radius: 6px;
+                            font-size: Tokens.font-size-callout;
                             text: root.delay-text;
                             horizontal-alignment: center;
                             accessible-label: Strings.airplay-delay-title;
@@ -2573,14 +2860,14 @@ export component AirPlayDelayControls inherits VerticalLayout {
 
                     Text {
                         text: Strings.milliseconds-unit;
+                        font-size: Tokens.font-size-callout;
                         color: Tokens.secondary-text;
                         vertical-alignment: center;
                         accessible-role: none;
                     }
 
-                    for delta in [10, 100]: Button {
-                        text: Strings.delay-step(delta);
-                        accessible-label: Strings.delay-step-accessibility(delta);
+                    for delta in [10, 100]: DelayStep {
+                        delta: delta;
                         changed has-focus => {
                             root.focus-changed(self.has-focus);
                         }
@@ -2599,7 +2886,9 @@ export component AirPlayDelayControls inherits VerticalLayout {
                     range-hint: root.range-hint;
                 }
 
-                SecondaryText {
+                // Its width set, so the pane's height counts every wrapped line.
+                hint := SecondaryText {
+                    width: root.width-given - 24px - (Fluent.name-inset - Fluent.row-padding-x);
                     text: Strings.airplay-delay-hint;
                 }
             }
@@ -2632,7 +2921,14 @@ export component NameEditor inherits FocusScope {
         return reject;
     }
 
+    // Fills the name's whole room, up to the icons at the row's end, as the
+    // Mac's field does, so a long name shows whole.
+    min-width: 120px;
+    horizontal-stretch: 1;
+
     field := TextField {
+        compact: true;
+        font-size: Tokens.font-size-body;
         text: root.text;
         placeholder-text: root.placeholder;
         accessible-label: root.label;
@@ -2673,10 +2969,472 @@ export component NameEditor inherits FocusScope {
     }
 }
 
+// The keys that open a focused control's menu: the Menu key, or Shift+F10.
+export global MenuKey {
+    public pure function opens(event: KeyEvent) -> bool {
+        return event.text == Key.Menu || (event.text == Key.F10 && event.modifiers.shift);
+    }
+}
+
+// The room a window's row menus keep inside; zero where no window sets it.
+export global MenuRoom {
+    in-out property <length> width;
+    in-out property <length> height;
+    // A menu's popup reaches this far past its box, so its shadow is inside
+    // the area the renderer redraws as it opens and closes.
+    out property <length> margin: 8px;
+
+    // Where a menu `size` long opened at `at` starts: past `room` it ends at
+    // `flip` instead, and it never leaves the room.
+    public pure function place(at: length, size: length, flip: length, room: length) -> length {
+        if room <= 0px {
+            return at;
+        }
+        return clamp(at + size > room ? flip - size : at, 0px, max(0px, room - size));
+    }
+
+    // A menu's height: 24 px rows, as the Mac's, 9 px dividers, 4 px padding at each end.
+    public pure function rows(count: int, dividers: int) -> length {
+        return count * 24px + dividers * 9px + 8px;
+    }
+}
+
+// One menu shows at a time: each opening claims the next serial, and the
+// menu holding an older one closes. `open` is the serial of the menu that
+// shows (0: none), so Invoke on its button closes it again.
+export global MenuState {
+    in-out property <int> serial;
+    in-out property <int> open;
+    // Bumped as an older menu closes, which gives the focus back to what had
+    // it then: the menu that shows takes it again.
+    in-out property <int> refocus;
+
+    public function claim() -> int {
+        self.serial += 1;
+        return self.serial;
+    }
+}
+
+// The software renderer repaints too small a region where a closed popup
+// was, leaving the menu's old pixels there; a window-wide item that changes
+// as a menu opens or closes makes it repaint the whole window.
+export component MenuRepaint inherits Rectangle {
+    width: 100%;
+    height: 100%;
+    background: MenuState.open == 0 ? #ffffff00 : #00000000;
+}
+
+// The app's own menus (the gear's, the source picker's, a speaker's options):
+// a popup drawn in the app's colors, so it is dark with the app as the Mac's
+// menus are. MenuPanel holds the rows and the keys: the arrows, Home and End
+// pick a row with a focus ring, Enter or Space runs it, Escape or Tab closes.
+// Each MenuRow shares `current`, `keyboard`, `pulse` and `done` with it.
+// A closing popup gives the focus back to what had it, so a row whose
+// action focuses a name field closes the menu before it runs; a row inside
+// an `if` runs it first, as closing drops the rest of its Invoke handler.
+export component MenuPanel inherits FocusScope {
+    in property <int> count;
+    in-out property <int> current: -1;
+    in-out property <bool> keyboard;
+    // Enter or Space bumps it; the picked row runs on the change.
+    out property <int> pulse;
+    // A row that ran bumps it, which closes the menu.
+    in-out property <int> done;
+    // Which way the keys last moved, for a disabled row to pass the pick on.
+    out property <int> step: 1;
+    callback close-requested(bool);
+    property <int> own;
+    property <int> latest: MenuState.serial;
+
+    changed done => {
+        root.close-requested(false);
+    }
+
+    property <int> refocus: MenuState.refocus;
+
+    changed latest => {
+        if self.latest != self.own {
+            root.close-requested(false);
+            MenuState.refocus += 1;
+        }
+    }
+
+    changed refocus => {
+        if MenuState.serial == self.own {
+            MenuState.open = self.own;
+            self.focus();
+        }
+    }
+
+    init => {
+        self.own = MenuState.serial;
+        MenuState.open = self.own;
+        self.focus();
+    }
+    // Only closing takes it this way; Narrator may move it elsewhere first.
+    focus-lost(reason) => {
+        if reason == FocusReason.popup-activation && MenuState.open == root.own {
+            MenuState.open = 0;
+        }
+    }
+    key-pressed(event) => {
+        if root.count > 0 && event.text == Key.DownArrow {
+            root.step = 1;
+            root.current = mod(root.current + 1, root.count);
+            root.keyboard = true;
+            return accept;
+        }
+        if root.count > 0 && event.text == Key.UpArrow {
+            root.step = -1;
+            root.current = mod(max(root.current, 0) + root.count - 1, root.count);
+            root.keyboard = true;
+            return accept;
+        }
+        if root.count > 0 && (event.text == Key.Home || event.text == Key.End) {
+            root.step = event.text == Key.Home ? 1 : -1;
+            root.current = event.text == Key.Home ? 0 : root.count - 1;
+            root.keyboard = true;
+            return accept;
+        }
+        if (event.text == Key.Return || event.text == " ") && root.current >= 0 {
+            root.pulse += 1;
+            return accept;
+        }
+        if event.text == Key.Escape || event.text == Key.Tab || event.text == Key.Backtab {
+            root.close-requested(true);
+            return accept;
+        }
+        return reject;
+    }
+
+    Rectangle {
+        x: MenuRoom.margin;
+        y: MenuRoom.margin;
+        width: parent.width - 2 * MenuRoom.margin;
+        height: parent.height - 2 * MenuRoom.margin;
+        background: Tokens.surface;
+        border-width: 1px;
+        border-color: Fluent.stroke;
+        border-radius: 10px;
+        drop-shadow-blur: 6px;
+        drop-shadow-offset-y: 2px;
+        drop-shadow-color: #00000038;
+    }
+
+    VerticalLayout {
+        padding: 4px + MenuRoom.margin;
+        @children
+    }
+}
+
+// A menu row: a check column when the menu has checks, the name, and its keys
+// or a submenu's chevron at the right in the secondary color.
+export component MenuRow inherits Rectangle {
+    in property <int> index;
+    in property <string> text;
+    in property <string> keys;
+    in property <bool> checks;
+    in property <bool> checked;
+    // The check column of a menu where only some rows have a check.
+    in property <bool> check-column;
+    in property <bool> enabled: true;
+    // A disabled row passes a pick by the keys on, as the Mac's menus do:
+    // it binds the panel's `step` and `count`.
+    in property <int> step;
+    in property <int> count;
+    // A submenu's row, which unfolds its rows under it and keeps the menu open.
+    in property <bool> submenu;
+    in property <bool> expanded;
+    // A submenu's rows sit a step in.
+    in property <bool> nested;
+    // An icon before the name: an app's own, else a glyph.
+    in property <image> icon;
+    in property <string> icon-glyph;
+    in-out property <int> current;
+    in-out property <bool> keyboard;
+    in property <int> pulse;
+    in-out property <int> done;
+    callback activated();
+    property <bool> selected: root.current == root.index;
+
+    function run() {
+        if !root.enabled {
+            return;
+        }
+        root.activated();
+        if !root.submenu {
+            root.done += 1;
+        }
+    }
+
+    changed pulse => {
+        if root.selected {
+            root.run();
+        }
+    }
+
+    changed selected => {
+        if root.selected && !root.enabled && root.keyboard && root.count > 1 {
+            root.current = mod(root.current + root.step + root.count, root.count);
+        }
+    }
+
+    height: 24px;
+    border-radius: Fluent.radius-control;
+    background: root.selected ? Fluent.hover : transparent;
+    opacity: root.enabled ? 1 : Tokens.disabled-opacity;
+    accessible-role: button;
+    accessible-checkable: root.checks;
+    accessible-checked: root.checked;
+    accessible-enabled: root.enabled;
+    accessible-expandable: root.submenu;
+    accessible-expanded: root.expanded;
+    accessible-label: root.text;
+    accessible-description: root.keys;
+    accessible-action-default => {
+        root.run();
+    }
+
+    TouchArea {
+        changed has-hover => {
+            if self.has-hover {
+                root.current = root.index;
+                root.keyboard = false;
+            }
+        }
+        clicked => {
+            root.run();
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: root.nested ? 26px : 10px;
+        padding-right: 10px;
+        spacing: 8px;
+
+        if root.checks || root.check-column: Glyph {
+            width: 14px;
+            glyph: root.checks && root.checked ? Glyphs.check : "";
+            color: Tokens.text;
+        }
+
+        if root.icon.width > 0: Rectangle {
+            width: 16px;
+
+            Image {
+                width: 16px;
+                height: 16px;
+                source: root.icon;
+            }
+        }
+
+        if root.icon.width == 0 && root.icon-glyph != "": Glyph {
+            width: 16px;
+            glyph: root.icon-glyph;
+            font-size: 14px;
+        }
+
+        Text {
+            text: root.text;
+            color: Tokens.text;
+            font-size: Tokens.font-size-body;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+            accessible-role: none;
+        }
+
+        if root.keys != "": Text {
+            text: root.keys;
+            color: Tokens.secondary-text;
+            font-size: Tokens.font-size-subheadline;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+
+        if root.submenu: Rectangle {
+            width: 12px;
+            transform-rotation: root.expanded ? 90deg : 0deg;
+
+            Glyph {
+                glyph: Glyphs.chevron-right;
+                font-size: Tokens.font-size-caption;
+                color: Tokens.secondary-text;
+            }
+        }
+    }
+
+    FocusRing {
+        visible-focus: root.selected && root.keyboard;
+        border-radius: root.border-radius;
+    }
+}
+
+// A menu section's name, or a line no one picks.
+export component MenuNote inherits HorizontalLayout {
+    in property <string> text;
+    in property <bool> nested;
+
+    padding-left: root.nested ? 26px : 10px;
+    padding-right: 10px;
+    padding-top: 6px;
+    padding-bottom: 2px;
+
+    Text {
+        text: root.text;
+        color: Tokens.secondary-text;
+        font-size: Tokens.font-size-subheadline;
+        wrap: word-wrap;
+    }
+}
+
+export component MenuDivider inherits HorizontalLayout {
+    padding-left: 6px;
+    padding-right: 6px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+
+    Rectangle {
+        height: 1px;
+        background: Tokens.separator;
+    }
+}
+
+// A source menu row as the Mac's: a divider where its section starts, Input
+// Devices over the first input, and the app's icon or a glyph before its name.
+export component SourceMenuRow inherits VerticalLayout {
+    in property <int> index;
+    in property <string> text;
+    in property <bool> checked;
+    in property <SourceLook> look;
+    // The row above's kind; the first row's is its own.
+    in property <SourceRowKind> above;
+    in-out property <int> current;
+    in-out property <bool> keyboard;
+    in property <int> pulse;
+    in-out property <int> done;
+    callback activated();
+
+    if root.look.kind != root.above: MenuDivider { }
+
+    if root.look.kind == SourceRowKind.input && root.above != SourceRowKind.input: MenuNote {
+        // Under the icons, as the Mac's header.
+        padding-left: 32px;
+        text: Strings.source-inputs-header;
+    }
+
+    if root.look.kind == SourceRowKind.input && root.above != SourceRowKind.input: MenuDivider { }
+
+    MenuRow {
+        height: 24px;
+        index: root.index;
+        text: root.text;
+        checks: true;
+        checked: root.checked;
+        icon: root.look.icon;
+        icon-glyph: root.look.kind == SourceRowKind.input ? Glyphs.microphone : root.look.kind == SourceRowKind.app ? Glyphs.display : "";
+        current <=> root.current;
+        keyboard <=> root.keyboard;
+        pulse: root.pulse;
+        done <=> root.done;
+        activated => {
+            root.activated();
+        }
+    }
+}
+
+// One character of a row's delay, as the Mac's numeric text rolls it: when
+// it changes, the old one leaves as the new one comes in, up as the delay
+// grows; with Motion off the two only cross-fade.
+component DelayDigit inherits Rectangle {
+    in property <string> now;
+    in property <string> was;
+    in property <float> roll: 1;
+    in property <length> rise;
+    in property <color> ink;
+    property <bool> rolling: root.roll < 1 && root.was != root.now;
+    preferred-width: max(new.preferred-width, root.rolling ? old.preferred-width : 0px);
+    clip: true;
+
+    new := Text {
+        y: root.rolling ? (1 - root.roll) * root.rise : 0px;
+        height: parent.height;
+        opacity: root.rolling ? root.roll : 1;
+        text: root.now;
+        font-size: Tokens.font-size-subheadline;
+        color: root.ink;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+
+    old := Text {
+        y: -root.roll * root.rise;
+        height: parent.height;
+        opacity: root.rolling ? 1 - root.roll : 0;
+        text: root.was;
+        font-size: Tokens.font-size-subheadline;
+        color: root.ink;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+}
+
 // One speaker: its toggle, then its name with its kind and note, the sync
 // delay and its options on one line, and its volume under them. The sync
 // controls open underneath.
 export component SpeakerRow inherits Rectangle {
+    property <length> menu-x;
+    property <length> menu-y;
+    property <length> menu-width: 260px;
+    // The options menu's rows that show, as on the Mac; each index counts
+    // the rows shown above it.
+    property <bool> menu-rename: !root.item.missing;
+    // Auto-connect is for local and AirPlay speakers; a Cast speaker's menu
+    // holds the controls under its volume.
+    property <bool> menu-auto: !root.item.cast && !root.item.missing;
+    property <bool> menu-mute: root.cast-live && !root.item.volume-fixed;
+    property <bool> menu-pairing: root.item.paired || root.item.holds-credentials;
+    property <bool> menu-password: !root.item.paired && !root.item.holds-credentials && root.item.holds-password;
+    property <bool> menu-only: root.item.zone-id != "" && !root.item.missing;
+    property <bool> menu-remove: root.item.zone-movable && root.item.zone-id != "";
+    // Move to Zone's rows show under it.
+    property <bool> menu-move-open;
+    property <int> i-auto: root.menu-rename ? 1 : 0;
+    property <int> i-mute: root.i-auto + (root.menu-auto ? 1 : 0);
+    property <int> i-resync: root.i-mute + (root.menu-mute ? 1 : 0);
+    property <int> i-pairing: root.i-resync + (root.cast-live ? 1 : 0);
+    property <int> i-cast-remove: root.i-pairing + (root.menu-pairing || root.menu-password ? 1 : 0);
+    property <int> i-only: root.i-cast-remove + (root.item.cast-added-by-address ? 1 : 0);
+    property <int> i-move: root.i-only + (root.menu-only ? 1 : 0);
+    property <int> i-remove: root.i-move + (root.item.zone-movable ? 1 + (root.menu-move-open ? root.item.move-zones.length + 1 : 0) : 0);
+    property <int> i-hide: root.i-remove + (root.menu-remove ? 1 : 0);
+
+    // At x, y in the window; past its right or bottom edge the menu
+    // flips to end at flip-x or flip-y.
+    property <int> menu-serial;
+
+    function open-menu(x: length, y: length, flip-x: length, flip-y: length) {
+        root.menu-x = MenuRoom.place(x, root.menu-width, flip-x, MenuRoom.width) - root.absolute-position.x;
+        root.menu-y = MenuRoom.place(y, MenuRoom.rows(root.i-hide + 1, 3), flip-y, MenuRoom.height) - root.absolute-position.y;
+        root.menu-move-open = false;
+        if MenuState.open != 0 && MenuState.open == root.menu-serial {
+            menu.close();
+            MenuState.open = 0;
+            return;
+        }
+        // A closing menu gives the focus back to what had it, which is also
+        // how it tells it closed; with nothing focused it couldn't.
+        if root.focused-part == RowPart.none {
+            options.focus();
+        }
+        root.menu-serial = MenuState.claim();
+        menu.show();
+    }
+
+    function open-menu-under-options() {
+        root.open-menu(options.absolute-position.x, options.absolute-position.y + options.height, options.absolute-position.x + options.width, options.absolute-position.y);
+    }
+
     in property <SpeakerItem> item;
     // In a zone: no hover fill of its own, as on the Mac.
     in property <bool> grouped;
@@ -2698,6 +3456,10 @@ export component SpeakerRow inherits Rectangle {
     callback forget-pairing();
     // The fix after the device-volume hint.
     callback device-volume-fix();
+    // The System slider moved by the user, 0 to 100.
+    callback system-volume-changed(float);
+    // The System slider is held (true) or let go (false).
+    callback system-volume-editing(bool);
     // Rename… in its menu, or a double-click on its name: edit the name here.
     callback rename-requested();
     callback rename-edited(string);
@@ -2792,11 +3554,11 @@ export component SpeakerRow inherits Rectangle {
     property <string> note: root.item.zone-note != "" ? root.item.zone-note : Strings.speaker-note(root.item);
     property <string> note-help: root.availability-note != "" && root.note == Strings.speaker-caption(Strings.row-note(root.item.state, root.item.name), root.availability-note) ? Strings.speaker-availability-help(root.item.availability, root.item.code-every-time, root.item.state) : "";
 
-    // A click on the row's box works like its delay button; a row without a
-    // delay is outside every sync control.
+    // A click on the row's box works like its delay or System button; a row
+    // without either is outside every sync control.
     // While the row is renaming, a click on it only applies the name.
     function box-clicked() {
-        if root.item.has-delay && !root.item.renaming {
+        if (root.item.has-delay || root.item.system-volume >= 0) && !root.item.renaming {
             root.sync-toggled();
         } else {
             root.blank-clicked();
@@ -2818,12 +3580,30 @@ export component SpeakerRow inherits Rectangle {
         }
     }
 
-    border-radius: Fluent.radius-control;
-    background: !root.grouped && hover.has-hover ? Fluent.hover : transparent;
-    animate background { duration: Fluent.fast; }
-    // The options button and a delay of 0 ms show under the pointer or the
-    // keyboard focus; Narrator finds them either way.
-    property <bool> revealed: hover.has-hover || root.focused-part != RowPart.none || root.item.sync-open;
+    // The row keeps its plate while its menu is open, as the Mac's under its menu.
+    property <bool> plated: hover.has-hover || (MenuState.open != 0 && MenuState.open == root.menu-serial);
+    border-radius: Fluent.radius-row;
+    background: !root.grouped && root.plated ? Fluent.row-hover : transparent;
+    animate background {
+        duration: root.plated ? Fluent.row-hover-in : 0ms;
+        easing: linear;
+    }
+    // The options button and a delay of 0 ms show under the pointer or their
+    // own keyboard focus, and while the row's menu, which takes both, is open;
+    // Narrator finds them either way.
+    property <bool> revealed: hover.has-hover || (MenuState.open != 0 && MenuState.open == root.menu-serial);
+    // The Mac's Reveal: a fade with a 4 px slide from the right over 440 ms;
+    // with animation effects off, a 150 ms fade alone.
+    property <float> reveal: root.revealed || root.focused-part == RowPart.options ? 1 : 0;
+    animate reveal {
+        duration: Motion.on ? 440ms : 150ms;
+        easing: Motion.on ? ease-out : linear;
+    }
+    property <float> delay-reveal: root.revealed || root.focused-part == RowPart.delay ? 1 : 0;
+    animate delay-reveal {
+        duration: Motion.on ? 440ms : 150ms;
+        easing: Motion.on ? ease-out : linear;
+    }
 
     // Around the row's content, so the hover fill stays on over the row's
     // own controls (they still get their clicks and drags first). The delay
@@ -2832,114 +3612,30 @@ export component SpeakerRow inherits Rectangle {
         clicked => {
             root.box-clicked();
         }
-        menu := ContextMenuArea {
-            Menu {
-                if !root.item.missing: MenuItem {
-                    title: Strings.rename-speaker;
-                    activated => {
-                        root.rename-requested();
-                    }
+        pointer-event(event) => {
+            if event.button == PointerEventButton.right && event.kind == PointerEventKind.down {
+                root.open-menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+            }
+        }
+
+        FocusScope {
+            focus-on-click: false;
+            focus-on-tab-navigation: false;
+            key-pressed(event) => {
+                if MenuKey.opens(event) {
+                    root.open-menu-under-options();
+                    return accept;
                 }
-
-                // Auto-connect is for local and AirPlay speakers; a Cast
-                // speaker's menu holds the controls under its volume.
-                if !root.item.cast && !root.item.missing: MenuItem {
-                    title: Strings.auto-connect;
-                    checkable: true;
-                    checked: root.item.auto-connect;
-                    activated => {
-                        root.auto-connect-toggled(!root.item.auto-connect);
-                    }
-                }
-
-                if root.cast-live && !root.item.volume-fixed: MenuItem {
-                    title: root.item.muted ? Strings.cast-unmute : Strings.cast-mute;
-                    activated => {
-                        root.cast-muted(!root.item.muted);
-                    }
-                }
-
-                if root.cast-live: MenuItem {
-                    title: Strings.cast-resync;
-                    activated => {
-                        root.cast-resync();
-                    }
-                }
-
-                if root.item.paired || root.item.holds-credentials: MenuItem {
-                    title: Strings.forget-pairing;
-                    activated => {
-                        root.forget-pairing();
-                    }
-                }
-
-                if !root.item.paired && !root.item.holds-credentials && root.item.holds-password: MenuItem {
-                    title: Strings.forget-password;
-                    activated => {
-                        root.forget-pairing();
-                    }
-                }
-
-                if root.item.cast-added-by-address: MenuItem {
-                    title: Strings.cast-remove;
-                    activated => {
-                        root.cast-remove();
-                    }
-                }
-
-                if (root.item.zone-movable || root.item.zone-id != "") && !root.item.missing: MenuSeparator { }
-
-                if root.item.zone-id != "" && !root.item.missing: MenuItem {
-                    title: Strings.only-this-speaker;
-                    activated => {
-                        root.only-this();
-                    }
-                }
-
-                if root.item.zone-movable: Menu {
-                    title: Strings.move-to-zone;
-                    for zone in root.item.move-zones: MenuItem {
-                        title: zone.name;
-                        activated => {
-                            root.move-to-zone(zone.id);
-                        }
-                    }
-
-                    if root.item.move-zones.length > 0: MenuSeparator { }
-
-                    MenuItem {
-                        title: Strings.new-zone-item;
-                        activated => {
-                            root.new-zone();
-                        }
-                    }
-                }
-
-                if root.item.zone-movable && root.item.zone-id != "": MenuItem {
-                    title: Strings.remove-from-zone;
-                    activated => {
-                        root.remove-from-zone();
-                    }
-                }
-
-                if root.item.hideable: MenuSeparator { }
-
-                if root.item.hideable: MenuItem {
-                    title: Strings.hide-speaker;
-                    activated => {
-                        root.hide-requested();
-                    }
-                }
+                return reject;
             }
 
             VerticalLayout {
-                padding-left: 12px;
-                padding-right: 8px;
-                padding-top: Fluent.row-padding-y;
-                // A pixel less, so the divider keeps the Mac's 52 px step and
-                // the 32 px badge stays on whole pixels in its 40 px line.
+                padding-left: Fluent.row-padding-x;
+                padding-right: Fluent.row-padding-x;
+                // The Mac's 8 pt above; less below, where Segoe's taller name
+                // line already sits, so the rows keep the Mac's 54 px step.
+                padding-top: Fluent.row-padding-y + 2px;
                 padding-bottom: Fluent.row-padding-y - 1px;
-                spacing: 4px;
 
                 HorizontalLayout {
                     spacing: 8px;
@@ -2947,16 +3643,20 @@ export component SpeakerRow inherits Rectangle {
                     // The row's least height sits here: on the line itself it
                     // would replace the content's minimum and let the volume
                     // line spill past the row.
-                    VerticalLayout {
-                        alignment: center;
-                        padding-right: 4px;
+                    Rectangle {
+                        width: badge.width + 4px;
                         min-height: Fluent.row-height - 16px;
                         badge := SpeakerBadge {
-                            glyph: Glyphs.speaker(root.item.kind);
+                            x: 0px;
+                            // In the middle of the gap between the name and the slider,
+                            // as the Mac's badgePin, so a hint line below doesn't move it.
+                            y: floor((name-line.y + name-line.height + 5px / 2 - self.height / 2) / 1px) * 1px;
+                            icon: DeviceIcons.glyph(root.item.kind);
                             state: root.item.state;
                             plays: root.item.plays;
                             enabled: !root.item.missing;
                             name: root.item.name;
+                            help: Strings.help(root.item.state);
                             label: root.item.cast-group ? Strings.cast-group-label(root.item.name, root.item.cast-group-note) : root.item.cast-added-by-address ? Strings.cast-group-label(Strings.speaker-label(root.item.name, root.item.kind, false, root.item.system-name), Strings.cast-added-by-address) : Strings.speaker-label(root.item.name, root.item.kind, root.item.show-kind, root.item.system-name);
                             description: Strings.with-group-note(root.item.group-note, root.item.zone-note != "" ? root.item.zone-note : root.availability-note != "" ? (root.note-help != "" ? Strings.announcements(root.availability-note, root.note-help) : root.availability-note) : Strings.help(root.item.state));
                             toggled => {
@@ -2975,10 +3675,10 @@ export component SpeakerRow inherits Rectangle {
                     // so a long name keeps the width the slider took.
                     VerticalLayout {
                         alignment: center;
-                        spacing: 4px;
+                        spacing: 5px;
                         horizontal-stretch: 1;
 
-                        HorizontalLayout {
+                        name-line := HorizontalLayout {
                             spacing: 8px;
 
                             // Name and kind
@@ -2987,7 +3687,10 @@ export component SpeakerRow inherits Rectangle {
                                 spacing: 1px;
                                 horizontal-stretch: 1;
 
+                                // Fixed, so the 22 px rename field takes no more
+                                // room than the name and the row keeps its 52 px step.
                                 HorizontalLayout {
+                                    height: 17px;
                                     spacing: 6px;
                                     alignment: start;
 
@@ -3007,7 +3710,7 @@ export component SpeakerRow inherits Rectangle {
                                             height: 100%;
                                             text: root.item.name;
                                             font-size: Tokens.font-size-body;
-                                            font-weight: root.item.plays ? 600 : 400;
+                                            font-weight: Fluent.weight-regular;
                                             text-color: root.item.zone-dimmed ? Tokens.secondary-text : Tokens.text;
                                             accessible-role: none;
                                         }
@@ -3045,32 +3748,43 @@ export component SpeakerRow inherits Rectangle {
                                         }
                                     }
 
-                                    if root.item.renaming: NameEditor {
+                                    // The field overhangs the 17 px line by
+                                    // 2.5 px each way, so the row keeps its height.
+                                    if root.item.renaming: Rectangle {
                                         horizontal-stretch: 1;
-                                        text: root.item.name-text;
-                                        placeholder: root.item.device-name;
-                                        label: Strings.speaker-name-field(root.item.device-name);
-                                        description: Strings.speaker-name-field-hint;
-                                        focus-wanted: root.pending-focus == RowPart.name;
-                                        focus-taken => {
-                                            root.pending-focus = RowPart.none;
-                                        }
-                                        focus-changed(focused) => {
-                                            root.name-focused = focused;
-                                        }
-                                        edited(text) => {
-                                            root.rename-edited(text);
-                                        }
-                                        accepted => {
-                                            root.rename-committed();
-                                        }
-                                        cancelled => {
-                                            root.rename-cancelled();
+                                        min-width: 120px;
+                                        // The line starts its items at their preferred width.
+                                        preferred-width: 100000px;
+
+                                        NameEditor {
+                                            y: (parent.height - self.height) / 2;
+                                            height: 22px;
+                                            text: root.item.name-text;
+                                            placeholder: root.item.device-name;
+                                            label: Strings.speaker-name-field(root.item.device-name);
+                                            description: Strings.speaker-name-field-hint;
+                                            focus-wanted: root.pending-focus == RowPart.name;
+                                            focus-taken => {
+                                                root.pending-focus = RowPart.none;
+                                            }
+                                            focus-changed(focused) => {
+                                                root.name-focused = focused;
+                                            }
+                                            edited(text) => {
+                                                root.rename-edited(text);
+                                            }
+                                            accepted => {
+                                                root.rename-committed();
+                                            }
+                                            cancelled => {
+                                                root.rename-cancelled();
+                                            }
                                         }
                                     }
 
                                     if root.item.show-kind && !root.item.cast-group: KindIcon {
                                         kind: root.item.kind;
+                                        lit: root.item.plays;
                                         clicked => {
                                             root.box-clicked();
                                         }
@@ -3179,16 +3893,81 @@ export component SpeakerRow inherits Rectangle {
                             }
 
                             // Delay column: the same width on every row, empty where a
-                            // speaker has no delay.
+                            // speaker has no delay. A value's box hugs it by the Mac's
+                            // 3 px, so the hover fill is no wider than the value.
                             VerticalLayout {
                                 width: Fluent.delay-column;
                                 alignment: center;
+                                cross-axis-alignment: end;
+                                padding-right: 3px;
+
+                                // The reference's Windows volume, where other rows show
+                                // their delay, as the Mac's built-in speakers: it opens
+                                // the panel holding its slider.
+                                if root.item.system-volume >= 0: Rectangle {
+                                    width: system-text.preferred-width + 6px;
+                                    height: 16px;
+                                    border-radius: Fluent.radius-control;
+                                    background: system-touch.pressed ? Fluent.pressed : system-touch.has-hover ? Fluent.hover : transparent;
+                                    forward-focus: system-focus;
+                                    accessible-role: button;
+                                    accessible-label: Strings.system-volume-button;
+                                    accessible-value: root.item.system-muted ? Strings.device-volume-hint(DeviceVolumeHint.muted, 0) : Strings.system-volume-percent(root.item.system-volume);
+                                    accessible-description: Strings.system-volume-help(root.item.name);
+                                    accessible-expandable: true;
+                                    accessible-expanded: root.item.system-open;
+                                    accessible-action-default => {
+                                        root.sync-toggled();
+                                    }
+
+                                    system-focus := FocusScope {
+                                        focus-on-click: false;
+                                        key-pressed(event) => {
+                                            if event.text == " " || event.text == Key.Return {
+                                                root.sync-toggled();
+                                                return accept;
+                                            }
+                                            return reject;
+                                        }
+                                        changed has-focus => {
+                                            root.delay-focused = self.has-focus;
+                                        }
+                                    }
+
+                                    system-touch := TouchArea {
+                                        y: -4px;
+                                        height: 24px;
+                                        clicked => {
+                                            root.sync-toggled();
+                                        }
+                                    }
+
+                                    // 2 px spare above and below: Skia clips a Text to its box, and the
+                                    // line box ends on the descender.
+                                    system-text := Text {
+                                        x: 3px;
+                                        y: (parent.height - self.height) / 2;
+                                        height: self.preferred-height + 4px;
+                                        text: Strings.system-volume-value(root.item.system-volume, root.item.system-muted);
+                                        font-size: Tokens.font-size-subheadline;
+                                        // Small text: the readable teal, as the delay's.
+                                        color: root.item.system-open ? Tokens.teal-text : Tokens.secondary-text;
+                                        vertical-alignment: center;
+                                        accessible-role: none;
+                                    }
+
+                                    FocusRing {
+                                        y: system-touch.y;
+                                        height: system-touch.height;
+                                        visible-focus: system-focus.has-focus;
+                                        border-radius: parent.border-radius;
+                                    }
+                                }
 
                                 if root.item.has-delay: Rectangle {
-                                    min-width: delay-row.preferred-width + 12px;
+                                    width: delay-row.preferred-width;
                                     height: 16px;
-                                    opacity: root.revealed || root.item.delay-ms != 0 ? 1 : 0;
-                                    animate opacity { duration: 120ms; }
+                                    opacity: root.item.delay-ms != 0 || root.item.sync-open ? 1 : root.delay-reveal;
                                     border-radius: Fluent.radius-control;
                                     background: delay-touch.pressed ? Fluent.pressed : delay-touch.has-hover ? Fluent.hover : transparent;
                                     animate background { duration: Fluent.fast; }
@@ -3209,7 +3988,7 @@ export component SpeakerRow inherits Rectangle {
                                     }
                                     accessible-role: button;
                                     accessible-label: Strings.delay-of(root.item.name);
-                                    accessible-value: Strings.delay-value(root.item.delay-ms);
+                                    accessible-value: root.item.cast ? Strings.airplay-delay-value(root.item.delay-ms) : Strings.delay-value(root.item.delay-ms);
                                     accessible-description: Strings.sync-adjust;
                                     accessible-expandable: true;
                                     accessible-expanded: root.item.sync-open;
@@ -3240,22 +4019,107 @@ export component SpeakerRow inherits Rectangle {
                                         }
                                     }
 
-                                    delay-row := HorizontalLayout {
-                                        spacing: 4px;
-                                        alignment: center;
+                                    // At its 12% peak the tint keeps the readable teal
+                                    // at 4.5:1 or better, as on the Mac.
+                                    delay-flash := Rectangle {
+                                        y: -3px;
+                                        height: parent.height + 6px;
+                                        border-radius: 4px;
+                                        background: Tokens.teal;
+                                        opacity: 0.12 * delay-roll.tint;
+                                    }
 
+                                    // The Mac's 5 px ink gap: the timer's drawing is inset in its box.
+                                    delay-row := HorizontalLayout {
+                                        spacing: 2px;
+                                        padding-left: 3px;
+                                        padding-right: 3px;
+
+                                        // Skia draws the 12 px number 1 px under its box's middle;
+                                        // the timer drops as far to stay level with it, as on the Mac.
                                         Glyph {
+                                            padding-top: 2px;
                                             glyph: Glyphs.timer;
                                             font-size: 12px;
                                             color: root.item.sync-open ? Tokens.teal-text : Tokens.secondary-text;
                                         }
 
-                                        Text {
-                                            text: Strings.delay-value(root.item.delay-ms);
-                                            font-size: Tokens.font-size-subheadline;
-                                            color: root.item.sync-open ? Tokens.teal-text : Tokens.secondary-text;
-                                            vertical-alignment: center;
-                                            accessible-role: none;
+                                        // The Mac's numeric text: the changed characters of a
+                                        // new value roll in over 300 ms, up as the delay grows
+                                        // and down as it shrinks.
+                                        delay-roll := HorizontalLayout {
+                                            property <int> delay: root.item.delay-ms;
+                                            property <int> last;
+                                            // A slot the list reuses for another speaker
+                                            // shows its delay without a roll.
+                                            property <string> id: root.item.id;
+                                            property <string> last-id;
+                                            property <int> from;
+                                            property <int> rolls;
+                                            property <float> rolled: self.rolls;
+                                            animate rolled {
+                                                duration: 300ms;
+                                                easing: ease-out;
+                                            }
+                                            property <float> roll: clamp(1 - (self.rolls - self.rolled), 0, 1);
+                                            property <length> rise: !Motion.on ? 0px : self.delay > self.from ? 16px : -16px;
+                                            // The Mac's flash after a change: a teal tint up in
+                                            // 120 ms, then gone over 900 ms.
+                                            property <float> flashed: self.rolls;
+                                            animate flashed { duration: 1020ms; }
+                                            property <float> flash-at: clamp(1 - (self.rolls - self.flashed), 0, 1);
+                                            property <float> fall: clamp((self.flash-at - 0.1176) / 0.8824, 0, 1);
+                                            out property <float> tint: self.flash-at < 0.1176 ? self.flash-at / 0.1176 : 1 - self.fall * self.fall * (3 - 2 * self.fall);
+                                            // A Cast offset is a wait, never below 0, so it has no sign.
+                                            property <bool> signed: !root.item.cast;
+                                            property <int> places: max(self.count(self.delay), self.roll < 1 ? self.count(self.from) : 0);
+                                            property <color> color: root.item.sync-open ? Tokens.teal-text : Tokens.secondary-text;
+                                            pure function count(ms: int) -> int {
+                                                return abs(ms) >= 10000 ? 5 : abs(ms) >= 1000 ? 4 : abs(ms) >= 100 ? 3 : abs(ms) >= 10 ? 2 : 1;
+                                            }
+                                            // The digit for 10^place, empty past the number's first.
+                                            pure function digit(ms: int, place: int) -> string {
+                                                return place < self.count(ms) ? "\{Math.mod(floor(abs(ms) / pow(10, place)), 10)}" : "";
+                                            }
+                                            init => {
+                                                self.last = self.delay;
+                                                self.last-id = self.id;
+                                            }
+                                            changed id => {
+                                                self.last = self.delay;
+                                                self.last-id = self.id;
+                                            }
+                                            changed delay => {
+                                                if self.id == self.last-id && self.delay != self.last {
+                                                    self.from = self.last;
+                                                    self.rolls += 1;
+                                                }
+                                                self.last = self.delay;
+                                            }
+
+                                            DelayDigit {
+                                                now: delay-roll.signed ? Strings.delay-sign(delay-roll.delay) : "";
+                                                was: delay-roll.signed ? Strings.delay-sign(delay-roll.from) : "";
+                                                roll: delay-roll.roll;
+                                                rise: delay-roll.rise;
+                                                ink: delay-roll.color;
+                                            }
+
+                                            for place in delay-roll.places: DelayDigit {
+                                                now: delay-roll.digit(delay-roll.delay, delay-roll.places - 1 - place);
+                                                was: delay-roll.digit(delay-roll.from, delay-roll.places - 1 - place);
+                                                roll: delay-roll.roll;
+                                                rise: delay-roll.rise;
+                                                ink: delay-roll.color;
+                                            }
+
+                                            Text {
+                                                text: " " + Strings.milliseconds-unit;
+                                                font-size: Tokens.font-size-subheadline;
+                                                color: delay-roll.color;
+                                                vertical-alignment: center;
+                                                accessible-role: none;
+                                            }
                                         }
                                     }
 
@@ -3275,15 +4139,11 @@ export component SpeakerRow inherits Rectangle {
                                     height: 16px;
                                     glyph: Glyphs.more;
                                     label: Strings.speaker-options(root.item.name);
-                                    glyph-color: Tokens.text;
-                                    opacity: root.revealed ? 1 : 0;
-                                    animate opacity { duration: 120ms; }
+                                    glyph-color: Tokens.secondary-text;
+                                    opacity: root.reveal;
+                                    glyph-shift: Motion.on ? (1 - root.reveal) * 4px : 0px;
                                     clicked => {
-                                        // show() takes a point in the menu area, not in this button's layout.
-                                        menu.show({
-                                            x: self.absolute-position.x - menu.absolute-position.x,
-                                            y: self.absolute-position.y - menu.absolute-position.y + self.height,
-                                        });
+                                        root.open-menu-under-options();
                                     }
                                     focus-changed(focused) => {
                                         root.options-focused = focused;
@@ -3297,7 +4157,7 @@ export component SpeakerRow inherits Rectangle {
                         // and its fix, read right after the slider.
                         VerticalLayout {
                             spacing: 2px;
-                            padding-bottom: 4px;
+                            padding-bottom: 2px;
 
                             // Moved left by the slider's own inset, so its track
                             // starts under the name, as on the Mac.
@@ -3305,9 +4165,12 @@ export component SpeakerRow inherits Rectangle {
                                 min-height: volume-slider.min-height;
 
                                 volume-slider := VolumeSlider {
+                                    small: true;
                                     x: -Fluent.slider-inset;
                                     width: parent.width + Fluent.slider-inset;
                                     height: parent.height;
+                                    // The Windows volume panel's column, so both sliders end together.
+                                    value-width: 34px;
                                     volume: root.item.volume;
                                     step: root.item.cast ? root.item.volume-step : 1;
                                     label: Strings.volume-of(root.item.name);
@@ -3331,54 +4194,6 @@ export component SpeakerRow inherits Rectangle {
                                         LabelTip {
                                             text: root.volume-hint;
                                             max-tip-width: root.width;
-                                        }
-                                    }
-                                }
-                            }
-
-                            if root.item.device-volume != DeviceVolumeHint.none: HorizontalLayout {
-                                spacing: 4px;
-
-                                Glyph {
-                                    glyph: Glyphs.device-volume(root.item.device-volume);
-                                    font-size: 12px;
-                                    color: Tokens.secondary-text;
-                                    vertical-alignment: top;
-                                }
-
-                                VerticalLayout {
-                                    horizontal-stretch: 1;
-                                    alignment: start;
-
-                                    Text {
-                                        text: Strings.device-volume-hint(root.item.device-volume, root.item.device-volume-percent);
-                                        font-size: Tokens.font-size-caption;
-                                        color: Tokens.secondary-text;
-                                        wrap: word-wrap;
-                                        min-height: self.preferred-height;
-                                        accessible-role: text;
-                                        accessible-label: Strings.device-volume-hint-label(root.item.name, root.item.device-volume, root.item.device-volume-percent);
-                                    }
-
-                                    HorizontalLayout {
-                                        alignment: start;
-
-                                        fix-button := LinkButton {
-                                            text: Strings.device-volume-fix(root.item.device-volume);
-                                            label: Strings.device-volume-fix-label(root.item.name, root.item.device-volume);
-                                            changed keyboard-focused => {
-                                                root.fix-focused = self.keyboard-focused;
-                                            }
-                                            clicked => {
-                                                // The button goes with the hint once
-                                                // Windows reports the change: hand
-                                                // the keyboard focus to the slider
-                                                // first, so it stays in the row.
-                                                if fix-button.keyboard-focused {
-                                                    volume-slider.focus-slider();
-                                                }
-                                                root.device-volume-fix();
-                                            }
                                         }
                                     }
                                 }
@@ -3417,67 +4232,212 @@ export component SpeakerRow inherits Rectangle {
                                     }
                                 }
                             }
+
+                            // Last in the column, so a shut hint takes no spacing: its 2 px
+                            // come out of the padding below. It opens and shuts over the
+                            // Mac's 0.35 s ease-out, so the rows below glide.
+                            hint-box := Rectangle {
+                                property <bool> open: root.item.device-volume != DeviceVolumeHint.none;
+                                // What the hint said last, kept while it shuts.
+                                property <DeviceVolumeHint> held;
+                                property <int> held-percent;
+                                property <DeviceVolumeHint> live: root.item.device-volume;
+                                property <int> live-percent: root.item.device-volume-percent;
+                                function hold() {
+                                    if self.open {
+                                        self.held = self.live;
+                                        self.held-percent = self.live-percent;
+                                    }
+                                }
+                                init => {
+                                    self.hold();
+                                }
+                                changed live => {
+                                    self.hold();
+                                }
+                                changed live-percent => {
+                                    self.hold();
+                                }
+                                out property <DeviceVolumeHint> hint: self.open ? root.item.device-volume : self.held;
+                                out property <int> percent: self.open ? root.item.device-volume-percent : self.held-percent;
+                                out property <float> progress: self.open ? 1 : 0;
+                                animate progress {
+                                    duration: Motion.on ? 350ms : 0ms;
+                                    easing: ease-out;
+                                }
+                                height: self.progress * (hint-line.preferred-height + 2px);
+                                clip: true;
+
+                                hint-line := HorizontalLayout {
+                                    visible: hint-box.progress > 0;
+                                    y: 2px;
+                                    width: parent.width;
+                                    height: self.preferred-height;
+                                    spacing: 4px;
+
+                                    Glyph {
+                                        glyph: Glyphs.device-volume(hint-box.hint);
+                                        font-size: 12px;
+                                        color: Tokens.secondary-text;
+                                        vertical-alignment: top;
+                                    }
+
+                                    VerticalLayout {
+                                        horizontal-stretch: 1;
+                                        alignment: start;
+
+                                        Text {
+                                            text: Strings.device-volume-hint(hint-box.hint, hint-box.percent);
+                                            font-size: Tokens.font-size-caption;
+                                            color: Tokens.secondary-text;
+                                            wrap: word-wrap;
+                                            min-height: self.preferred-height;
+                                            accessible-role: text;
+                                            accessible-label: hint-box.open ? Strings.device-volume-hint-label(root.item.name, hint-box.hint, hint-box.percent) : "";
+                                        }
+
+                                        HorizontalLayout {
+                                            alignment: start;
+
+                                            fix-button := LinkButton {
+                                                text: Strings.device-volume-fix(hint-box.hint);
+                                                label: Strings.device-volume-fix-label(root.item.name, hint-box.hint);
+                                                changed keyboard-focused => {
+                                                    root.fix-focused = self.keyboard-focused;
+                                                }
+                                                clicked => {
+                                                    // A shutting hint is stale: its link does nothing.
+                                                    if !hint-box.open {
+                                                        return;
+                                                    }
+                                                    // The button goes with the hint once
+                                                    // Windows reports the change: hand
+                                                    // the keyboard focus to the slider
+                                                    // first, so it stays in the row.
+                                                    if fix-button.keyboard-focused {
+                                                        volume-slider.focus-slider();
+                                                    }
+                                                    root.device-volume-fix();
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
 
-                if root.item.has-delay && root.item.sync-open: HorizontalLayout {
-                    padding-left: Fluent.name-inset - 12px;
-                    padding-bottom: 4px;
+                // The reference's panel: its Windows volume, no delay
+                // controls. The slider follows what Windows reports.
+                system-pane := FoldPane {
+                    open: root.item.system-volume >= 0 && root.item.system-open;
 
-                    // A click on the controls' blank space is a click on the
-                    // row's box: it closes them and applies the typing, as
-                    // on the Mac.
-                    SyncControls {
-                        name: root.item.name;
-                        delay-text: root.item.delay-text;
-                        pending: root.item.delay-pending;
-                        range-hint: root.item.delay-range-hint;
-                        reference-name: root.item.reference-name;
-                        cast: root.item.cast;
-                        calibratable: root.item.calibratable;
-                        calibrating: root.item.calibrating;
-                        calibration-enabled: root.item.calibration-enabled;
-                        calibration-status: root.item.calibration-status;
-                        calibration-privacy: root.item.calibration-privacy;
-                        calibration-left-out: root.item.calibration-left-out;
-                        calibrate => {
-                            root.calibrate();
+                    if system-pane.shown: VerticalLayout {
+                        padding-left: Fluent.name-inset - Fluent.row-padding-x;
+                        padding-top: 6px;
+                        padding-bottom: 4px;
+                        spacing: 2px;
+
+                        Text {
+                            text: Strings.system-volume-title;
+                            font-size: Tokens.font-size-caption;
+                            color: Tokens.secondary-text;
+                            accessible-role: none;
                         }
-                        cancel-calibration => {
-                            root.cancel-calibration();
-                        }
-                        calibration-privacy-requested => {
-                            root.calibration-privacy();
-                        }
-                        init => {
-                            // The field keeps what was typed (the app's draft).
-                            if root.pending-focus == RowPart.sync {
-                                root.pending-focus = RowPart.none;
-                                self.focus-field();
+
+                        // Moved left as the speaker slider, so both tracks start together.
+                        Rectangle {
+                            min-height: system-slider.min-height;
+
+                            system-slider := VolumeSlider {
+                                small: true;
+                                percent: true;
+                                x: -Fluent.slider-inset;
+                                width: parent.width + Fluent.slider-inset;
+                                height: parent.height;
+                                volume: max(root.item.system-volume, 0);
+                                label: Strings.system-volume-slider(root.item.name);
+                                changed(value) => {
+                                    root.system-volume-changed(value);
+                                }
+                                editing(on) => {
+                                    root.system-volume-editing(on);
+                                }
                             }
                         }
-                        property <bool> focus-asked: root.pending-focus == RowPart.sync;
-                        changed focus-asked => {
-                            if self.focus-asked {
-                                root.pending-focus = RowPart.none;
-                                self.focus-field();
+
+                        if root.item.system-refused: refusal := Text {
+                            text: Strings.system-volume-refused;
+                            font-size: Tokens.font-size-caption;
+                            color: Tokens.secondary-text;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                sync-pane := FoldPane {
+                    open: root.item.has-delay && root.item.sync-open;
+
+                    if sync-pane.shown: HorizontalLayout {
+                        padding-left: Fluent.name-inset - Fluent.row-padding-x;
+                        padding-top: 6px;
+                        padding-bottom: 4px;
+
+                        // A click on the controls' blank space is a click on the
+                        // row's box: it closes them and applies the typing, as
+                        // on the Mac.
+                        SyncControls {
+                            name: root.item.name;
+                            delay-text: root.item.delay-text;
+                            pending: root.item.delay-pending;
+                            range-hint: root.item.delay-range-hint;
+                            reference-name: root.item.reference-name;
+                            cast: root.item.cast;
+                            calibratable: root.item.calibratable;
+                            calibrating: root.item.calibrating;
+                            calibration-enabled: root.item.calibration-enabled;
+                            calibration-status: root.item.calibration-status;
+                            calibration-privacy: root.item.calibration-privacy;
+                            calibration-left-out: root.item.calibration-left-out;
+                            calibrate => {
+                                root.calibrate();
                             }
-                        }
-                        stepped(delta) => {
-                            root.delay-stepped(delta);
-                        }
-                        edited(text) => {
-                            root.delay-edited(text);
-                        }
-                        committed => {
-                            root.delay-committed();
-                        }
-                        cancelled => {
-                            root.delay-cancelled();
-                        }
-                        changed focus-within => {
-                            root.sync-focused = self.focus-within;
+                            cancel-calibration => {
+                                root.cancel-calibration();
+                            }
+                            calibration-privacy-requested => {
+                                root.calibration-privacy();
+                            }
+                            init => {
+                                // The field keeps what was typed (the app's draft).
+                                if root.pending-focus == RowPart.sync {
+                                    root.pending-focus = RowPart.none;
+                                    self.focus-field();
+                                }
+                            }
+                            property <bool> focus-asked: root.pending-focus == RowPart.sync;
+                            changed focus-asked => {
+                                if self.focus-asked {
+                                    root.pending-focus = RowPart.none;
+                                    self.focus-field();
+                                }
+                            }
+                            stepped(delta) => {
+                                root.delay-stepped(delta);
+                            }
+                            edited(text) => {
+                                root.delay-edited(text);
+                            }
+                            committed => {
+                                root.delay-committed();
+                            }
+                            cancelled => {
+                                root.delay-cancelled();
+                            }
+                            changed focus-within => {
+                                root.sync-focused = self.focus-within;
+                            }
                         }
                     }
                 }
@@ -3485,14 +4445,200 @@ export component SpeakerRow inherits Rectangle {
         }
     }
 
-    // The name's tooltip under the name while the switch has the keyboard
-    // focus, which a click never gives it: a keyboard user can read a cut
-    // name too (S447). Last, so it draws over the row's own controls.
-    if root.badge-focused && !root.item.renaming: focus-tip := LabelTip {
-        x: badge.absolute-position.x - root.absolute-position.x + badge.width + 12px;
-        y: badge.absolute-position.y - root.absolute-position.y + badge.height;
-        text: Strings.speaker-name-tooltip(root.item.name, root.item.system-name);
-        max-tip-width: root.width - self.x - 8px;
+    menu := PopupWindow {
+        x: root.menu-x - MenuRoom.margin;
+        y: root.menu-y - MenuRoom.margin;
+        width: max(root.menu-width + 2 * MenuRoom.margin, panel.preferred-width);
+        close-policy: close-on-click-outside;
+
+        // As the Mac's menu, the check column only where Auto-Connect can carry a check.
+        panel := MenuPanel {
+            count: root.i-hide + (root.item.hideable ? 1 : 0);
+            close-requested => {
+                menu.close();
+            }
+
+            if root.menu-rename: MenuRow {
+                index: 0;
+                text: Strings.rename-speaker;
+                check-column: root.menu-auto;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.rename-requested();
+                    menu.close();
+                }
+            }
+
+            if root.menu-auto: MenuRow {
+                index: root.i-auto;
+                text: Strings.auto-connect;
+                checks: true;
+                checked: root.item.auto-connect;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.auto-connect-toggled(!root.item.auto-connect);
+                }
+            }
+
+            if root.menu-mute: MenuRow {
+                index: root.i-mute;
+                text: root.item.muted ? Strings.cast-unmute : Strings.cast-mute;
+                check-column: root.menu-auto;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.cast-muted(!root.item.muted);
+                }
+            }
+
+            if root.cast-live: MenuRow {
+                index: root.i-resync;
+                text: Strings.cast-resync;
+                check-column: root.menu-auto;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.cast-resync();
+                }
+            }
+
+            if root.menu-pairing: MenuRow {
+                index: root.i-pairing;
+                text: Strings.forget-pairing;
+                check-column: root.menu-auto;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.forget-pairing();
+                }
+            }
+
+            if root.menu-password: MenuRow {
+                index: root.i-pairing;
+                text: Strings.forget-password;
+                check-column: root.menu-auto;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.forget-pairing();
+                }
+            }
+
+            if root.item.cast-added-by-address: MenuRow {
+                index: root.i-cast-remove;
+                text: Strings.cast-remove;
+                check-column: root.menu-auto;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.cast-remove();
+                }
+            }
+
+            if (root.item.zone-movable || root.item.zone-id != "") && !root.item.missing: MenuDivider { }
+
+            if root.menu-only: MenuRow {
+                index: root.i-only;
+                text: Strings.only-this-speaker;
+                check-column: root.menu-auto;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.only-this();
+                }
+            }
+
+            if root.item.zone-movable: MenuRow {
+                index: root.i-move;
+                text: Strings.move-to-zone;
+                check-column: root.menu-auto;
+                submenu: true;
+                expanded: root.menu-move-open;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.menu-move-open = !root.menu-move-open;
+                }
+            }
+
+            for zone[k] in root.item.zone-movable && root.menu-move-open ? root.item.move-zones : []: MenuRow {
+                index: root.i-move + 1 + k;
+                text: zone.name;
+                check-column: root.menu-auto;
+                nested: true;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.move-to-zone(zone.id);
+                }
+            }
+
+            if root.item.zone-movable && root.menu-move-open && root.item.move-zones.length > 0: MenuDivider { }
+
+            if root.item.zone-movable && root.menu-move-open: MenuRow {
+                index: root.i-move + 1 + root.item.move-zones.length;
+                text: Strings.new-zone-item;
+                check-column: root.menu-auto;
+                nested: true;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.new-zone();
+                }
+            }
+
+            if root.menu-remove: MenuRow {
+                index: root.i-remove;
+                text: Strings.remove-from-zone;
+                check-column: root.menu-auto;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.remove-from-zone();
+                }
+            }
+
+            if root.item.hideable: MenuDivider { }
+
+            if root.item.hideable: MenuRow {
+                index: root.i-hide;
+                text: Strings.hide-speaker;
+                check-column: root.menu-auto;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.hide-requested();
+                }
+            }
+        }
     }
 }
 
@@ -3502,6 +4648,35 @@ export component SpeakerRow inherits Rectangle {
 // from Zone. A double-click on the name, or F2 on the switch, renames the
 // speaker here, as on its full row.
 export component ZoneMemberRow inherits Rectangle {
+    property <length> menu-x;
+    property <length> menu-y;
+    property <length> menu-width: 220px;
+
+    // At x, y in the window; past its right or bottom edge the menu
+    // flips to end at flip-x or flip-y.
+    property <int> menu-serial;
+
+    function open-menu(x: length, y: length, flip-x: length, flip-y: length) {
+        root.menu-x = MenuRoom.place(x, root.menu-width, flip-x, MenuRoom.width) - root.absolute-position.x;
+        root.menu-y = MenuRoom.place(y, MenuRoom.rows(2, 0), flip-y, MenuRoom.height) - root.absolute-position.y;
+        if MenuState.open != 0 && MenuState.open == root.menu-serial {
+            menu.close();
+            MenuState.open = 0;
+            return;
+        }
+        // A closing menu gives the focus back to what had it, which is also
+        // how it tells it closed; with nothing focused it couldn't.
+        if root.focused-part == RowPart.none {
+            options.focus();
+        }
+        root.menu-serial = MenuState.claim();
+        menu.show();
+    }
+
+    function open-menu-under-options() {
+        root.open-menu(options.absolute-position.x, options.absolute-position.y + options.height, options.absolute-position.x + options.width, options.absolute-position.y);
+    }
+
     in property <SpeakerItem> item;
     callback toggled();
     callback go-to-zone();
@@ -3557,29 +4732,32 @@ export component ZoneMemberRow inherits Rectangle {
         }
     }
 
-    border-radius: Fluent.radius-control;
-    background: hover.has-hover ? Fluent.hover : transparent;
-    animate background { duration: Fluent.fast; }
+    // The zone's bar on the group's left edge.
+    Rectangle {
+        x: 0;
+        width: 1px;
+        background: Tokens.separator;
+    }
 
     hover := TouchArea {
         clicked => {
             root.blank-clicked();
         }
-        menu := ContextMenuArea {
-            Menu {
-                MenuItem {
-                    title: Strings.go-to-zone;
-                    activated => {
-                        root.go-to-zone();
-                    }
-                }
+        pointer-event(event) => {
+            if event.button == PointerEventButton.right && event.kind == PointerEventKind.down {
+                root.open-menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+            }
+        }
 
-                MenuItem {
-                    title: Strings.remove-from-zone;
-                    activated => {
-                        root.remove-from-zone();
-                    }
+        FocusScope {
+            focus-on-click: false;
+            focus-on-tab-navigation: false;
+            key-pressed(event) => {
+                if MenuKey.opens(event) {
+                    root.open-menu-under-options();
+                    return accept;
                 }
+                return reject;
             }
 
             HorizontalLayout {
@@ -3597,7 +4775,7 @@ export component ZoneMemberRow inherits Rectangle {
                         alignment: center;
                         badge := SpeakerBadge {
                             size: 24px;
-                            glyph: Glyphs.speaker(root.item.kind);
+                            icon: DeviceIcons.glyph14(root.item.kind);
                             state: root.item.state;
                             plays: root.item.plays;
                             name: root.item.name;
@@ -3639,7 +4817,7 @@ export component ZoneMemberRow inherits Rectangle {
                                 height: 100%;
                                 text: root.item.name;
                                 font-size: Tokens.font-size-body;
-                                font-weight: root.item.plays ? 600 : 400;
+                                font-weight: Fluent.weight-regular;
                                 text-color: Tokens.text;
                                 accessible-role: none;
                             }
@@ -3723,15 +4901,50 @@ export component ZoneMemberRow inherits Rectangle {
                         label: Strings.speaker-options(root.item.name);
                         glyph-color: Tokens.teal-text;
                         clicked => {
-                            menu.show({
-                                x: self.absolute-position.x - menu.absolute-position.x,
-                                y: self.absolute-position.y - menu.absolute-position.y + self.height,
-                            });
+                            root.open-menu-under-options();
                         }
                         focus-changed(focused) => {
                             root.options-focused = focused;
                         }
                     }
+                }
+            }
+        }
+    }
+
+    menu := PopupWindow {
+        x: root.menu-x - MenuRoom.margin;
+        y: root.menu-y - MenuRoom.margin;
+        width: max(root.menu-width + 2 * MenuRoom.margin, panel.preferred-width);
+        close-policy: close-on-click-outside;
+
+        panel := MenuPanel {
+            count: 2;
+            close-requested => {
+                menu.close();
+            }
+
+            MenuRow {
+                index: 0;
+                text: Strings.go-to-zone;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.go-to-zone();
+                }
+            }
+
+            MenuRow {
+                index: 1;
+                text: Strings.remove-from-zone;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.remove-from-zone();
                 }
             }
         }
@@ -3744,6 +4957,35 @@ export component ZoneMemberRow inherits Rectangle {
 // anywhere but the toggle, the volume and the options shows or hides the
 // speakers; the arrow is a Tab stop of its own, as on the Mac.
 export component ZoneHeader inherits Rectangle {
+    property <length> menu-x;
+    property <length> menu-y;
+    property <length> menu-width: 260px;
+
+    // At x, y in the window; past its right or bottom edge the menu
+    // flips to end at flip-x or flip-y.
+    property <int> menu-serial;
+
+    function open-menu(x: length, y: length, flip-x: length, flip-y: length) {
+        root.menu-x = MenuRoom.place(x, root.menu-width, flip-x, MenuRoom.width) - root.absolute-position.x;
+        root.menu-y = MenuRoom.place(y, MenuRoom.rows(3 + root.item.targets.length, 1), flip-y, MenuRoom.height) - root.absolute-position.y;
+        if MenuState.open != 0 && MenuState.open == root.menu-serial {
+            menu.close();
+            MenuState.open = 0;
+            return;
+        }
+        // A closing menu gives the focus back to what had it, which is also
+        // how it tells it closed; with nothing focused it couldn't.
+        if root.focused-part == RowPart.none {
+            options.focus();
+        }
+        root.menu-serial = MenuState.claim();
+        menu.show();
+    }
+
+    function open-menu-under-options() {
+        root.open-menu(options.absolute-position.x, options.absolute-position.y + options.height, options.absolute-position.x + options.width, options.absolute-position.y);
+    }
+
     in property <ZoneItem> item;
     callback toggled();
     callback expanded-changed(bool);
@@ -3819,47 +5061,33 @@ export component ZoneHeader inherits Rectangle {
     hover-fill := Rectangle {
         x: 4px;
         width: parent.width - 8px;
-        border-radius: Fluent.radius-control;
-        background: hover.has-hover ? Fluent.hover : transparent;
-        animate background { duration: Fluent.fast; }
+        border-radius: Fluent.radius-row;
+        background: hover.has-hover ? Fluent.row-hover : transparent;
+        animate background {
+            duration: hover.has-hover ? Fluent.row-hover-in : 0ms;
+            easing: linear;
+        }
     }
 
     hover := TouchArea {
         clicked => {
             root.expanded-changed(!root.item.expanded);
         }
-        menu := ContextMenuArea {
-            Menu {
-                MenuItem {
-                    title: Strings.rename-zone;
-                    activated => {
-                        root.rename();
-                    }
-                }
+        pointer-event(event) => {
+            if event.button == PointerEventButton.right && event.kind == PointerEventKind.down {
+                root.open-menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+            }
+        }
 
-                for target in root.item.targets: MenuItem {
-                    title: Strings.use-target-instead(target.target);
-                    activated => {
-                        root.use-target(target.member-id);
-                    }
+        FocusScope {
+            focus-on-click: false;
+            focus-on-tab-navigation: false;
+            key-pressed(event) => {
+                if MenuKey.opens(event) {
+                    root.open-menu-under-options();
+                    return accept;
                 }
-
-                MenuItem {
-                    title: Strings.calibrate-zone-item;
-                    enabled: root.item.can-calibrate;
-                    activated => {
-                        root.calibrate();
-                    }
-                }
-
-                MenuSeparator { }
-
-                MenuItem {
-                    title: Strings.delete-zone;
-                    activated => {
-                        root.delete();
-                    }
-                }
+                return reject;
             }
 
             // F2 renames the zone from any of its header's controls.
@@ -3875,7 +5103,7 @@ export component ZoneHeader inherits Rectangle {
                 }
 
                 HorizontalLayout {
-                    padding-left: 4px;
+                    padding-left: 2px;
                     padding-right: 4px;
                     padding-top: Fluent.row-padding-y;
                     padding-bottom: Fluent.row-padding-y;
@@ -3883,8 +5111,8 @@ export component ZoneHeader inherits Rectangle {
                     min-height: Fluent.row-height;
 
                     // The fold arrow at the far left, as on the Mac.
-                    Rectangle {
-                        width: 24px;
+                    chevron := Rectangle {
+                        width: 16px;
                         height: 32px;
                         border-radius: Fluent.radius-control;
                         y: (parent.height - self.height) / 2;
@@ -3939,10 +5167,19 @@ export component ZoneHeader inherits Rectangle {
                             }
                         }
 
-                        Glyph {
-                            glyph: root.item.expanded ? Glyphs.chevron-down : Glyphs.chevron-right;
-                            font-size: 12px;
-                            color: Tokens.secondary-text;
+                        // Turns a quarter with the 250 ms fold, as the Mac's FoldTurn.
+                        Rectangle {
+                            transform-rotation: root.item.expanded ? 90deg : 0deg;
+                            animate transform-rotation {
+                                duration: Motion.on ? 250ms : 0ms;
+                                easing: ease-in-out;
+                            }
+
+                            Glyph {
+                                glyph: Glyphs.chevron-right;
+                                font-size: 10px;
+                                color: Tokens.secondary-text;
+                            }
                         }
                     }
 
@@ -3950,7 +5187,7 @@ export component ZoneHeader inherits Rectangle {
                         alignment: center;
                         padding-right: 4px;
                         badge := SpeakerBadge {
-                            glyph: Glyphs.zone;
+                            icon: DeviceIcons.zone;
                             state: root.item.state;
                             enabled: root.live;
                             narrated: root.live;
@@ -3999,7 +5236,7 @@ export component ZoneHeader inherits Rectangle {
                                         height: 100%;
                                         text: root.item.name;
                                         font-size: Tokens.font-size-body;
-                                        font-weight: root.item.state == RowState.playing ? 600 : 400;
+                                        font-weight: root.item.state == RowState.playing ? Fluent.weight-semibold : Fluent.weight-regular;
                                         text-color: Tokens.text;
                                         accessible-role: none;
                                     }
@@ -4038,7 +5275,8 @@ export component ZoneHeader inherits Rectangle {
                                 if root.item.renaming: NameEditor {
                                     horizontal-stretch: 1;
                                     text: root.item.name-text;
-                                    label: Strings.new-zone-field-label;
+                                    placeholder: root.item.name;
+                                    label: Strings.speaker-name-field(root.item.name);
                                     description: Strings.zone-name-field-hint;
                                     focus-wanted: root.pending-focus == RowPart.name;
                                     focus-taken => {
@@ -4100,41 +5338,121 @@ export component ZoneHeader inherits Rectangle {
                         }
 
                         Rectangle {
-                            horizontal-stretch: 1;
+                            horizontal-stretch: root.item.renaming ? 0 : 1;
                         }
                     }
 
-                    VerticalLayout {
-                        alignment: center;
-                        volume-slider := VolumeSlider {
-                            width: 140px;
-                            volume: root.item.volume;
-                            enabled: root.item.total > 0;
-                            label: Strings.zone-volume(root.item.name);
-                            changed(value) => {
-                                root.volume-changed(value);
-                            }
-                        }
-                    }
+                    // One gap before the options, gone with the volume as in the Mac's HStack.
+                    HorizontalLayout {
+                        spacing: root.item.on > 0 ? 8px : 0px;
 
-                    VerticalLayout {
-                        alignment: center;
-                        options := IconButton {
-                            glyph: Glyphs.more;
-                            label: Strings.speaker-options(root.item.name);
-                            glyph-color: Tokens.teal-text;
-                            clicked => {
-                                // show() takes a point in the menu area, not in this button's layout.
-                                menu.show({
-                                    x: self.absolute-position.x - menu.absolute-position.x,
-                                    y: self.absolute-position.y - menu.absolute-position.y + self.height,
-                                });
+                        // A box rather than an `if`: the focus code names the slider.
+                        Rectangle {
+                            visible: root.item.on > 0;
+                            min-width: self.visible ? 100px : 0px;
+                            max-width: self.visible ? 140px : 0px;
+
+                            VerticalLayout {
+                                alignment: center;
+                                volume-slider := VolumeSlider {
+                                    small: true;
+                                    min-width: 100px;
+                                    preferred-width: 140px;
+                                    max-width: 140px;
+                                    volume: root.item.volume;
+                                    enabled: root.item.total > 0;
+                                    label: Strings.zone-volume(root.item.name);
+                                    shows-value: false;
+                                    changed(value) => {
+                                        root.volume-changed(value);
+                                    }
+                                }
                             }
-                            focus-changed(focused) => {
-                                root.options-focused = focused;
+                        }
+
+                        VerticalLayout {
+                            alignment: center;
+                            options := IconButton {
+                                glyph: Glyphs.more;
+                                label: Strings.speaker-options(root.item.name);
+                                glyph-color: Tokens.teal-text;
+                                clicked => {
+                                    root.open-menu-under-options();
+                                }
+                                focus-changed(focused) => {
+                                    root.options-focused = focused;
+                                }
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+
+    menu := PopupWindow {
+        x: root.menu-x - MenuRoom.margin;
+        y: root.menu-y - MenuRoom.margin;
+        width: max(root.menu-width + 2 * MenuRoom.margin, panel.preferred-width);
+        close-policy: close-on-click-outside;
+
+        panel := MenuPanel {
+            count: 3 + root.item.targets.length;
+            close-requested => {
+                menu.close();
+            }
+
+            MenuRow {
+                index: 0;
+                text: Strings.rename-zone;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    menu.close();
+                    root.rename();
+                }
+            }
+
+            for target[i] in root.item.targets: MenuRow {
+                index: 1 + i;
+                text: Strings.use-target-instead(target.target);
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.use-target(target.member-id);
+                }
+            }
+
+            MenuRow {
+                index: 1 + root.item.targets.length;
+                text: Strings.calibrate-zone-item;
+                enabled: root.item.can-calibrate;
+                step: panel.step;
+                count: panel.count;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.calibrate();
+                }
+            }
+
+            MenuDivider { }
+
+            MenuRow {
+                index: 2 + root.item.targets.length;
+                text: Strings.delete-zone;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.delete();
                 }
             }
         }
@@ -4230,23 +5548,27 @@ export component NoticeStack inherits VerticalLayout {
                 self.shown = 0;
             }
         }
+        // The Mac's 320 ms (NoticeMotion): a closing notice fades over its
+        // first half and its room shuts after 80 ms; the curve has the same
+        // top speed as the Mac's.
         animate open {
-            duration: Motion.on ? (self.closing ? 200ms : 240ms) : 0ms;
-            delay: Motion.on && self.closing ? 90ms : 0ms;
-            easing: cubic-bezier(0.2, 0.8, 0.2, 1);
+            duration: Motion.on ? 240ms : 0ms;
+            delay: Motion.on && self.closing ? 80ms : 0ms;
+            easing: cubic-bezier(0.25, 0, 0.75, 1);
         }
-        // With animation effects off only a closing notice fades.
+        // With animation effects off a notice cross-fades and its room
+        // opens or shuts at once.
         animate shown {
-            duration: Motion.on ? (self.closing ? 120ms : 180ms) : (self.closing ? 150ms : 0ms);
+            duration: Motion.on ? (self.closing ? 160ms : 180ms) : 150ms;
             delay: Motion.on && !self.closing ? 60ms : 0ms;
-            easing: ease-out;
+            easing: cubic-bezier(0.25, 0, 0.75, 1);
         }
 
         height: (Motion.on ? self.open : 1) * (self.gap + row.preferred-height);
         clip: true;
 
         row := Rectangle {
-            y: slot.gap - (Motion.on ? 6px * (1 - slot.shown) : 0px);
+            y: slot.gap;
             width: parent.width;
             height: self.preferred-height;
             opacity: slot.shown;
@@ -4273,19 +5595,19 @@ export component NoticeStack inherits VerticalLayout {
                 }
             }
 
-            background: Tokens.notice;
-            border-radius: Fluent.radius-card;
+            // The tray panel's notice is text on the panel, as on the Mac.
+            background: root.compact ? transparent : notice.info ? Tokens.teal.with-alpha(0.12) : Fluent.warn-background;
+            border-radius: Tokens.radius-card;
             border-width: 1px;
-            border-color: Fluent.stroke;
+            border-color: root.compact || notice.info ? transparent : Tokens.warn.with-alpha(0.28);
 
             HorizontalLayout {
-                padding: 12px;
-                padding-right: 8px;
-                spacing: 12px;
+                padding: root.compact ? 0px : 10px;
+                spacing: 8px;
 
                 Glyph {
                     glyph: notice.info ? Glyphs.info : Glyphs.warning;
-                    color: Tokens.text;
+                    color: notice.info ? Tokens.teal-text : Tokens.warn;
                     vertical-alignment: top;
                     width: 18px;
                 }
@@ -4296,7 +5618,16 @@ export component NoticeStack inherits VerticalLayout {
                     VerticalLayout {
                         spacing: 2px;
                         accessible-role: text;
-                        accessible-label: notice.message;
+                        accessible-label: Strings.notice-spoken(notice.heading, notice.message);
+
+                        if notice.heading != "": Text {
+                            text: notice.heading;
+                            color: Tokens.text;
+                            font-size: Tokens.font-size-caption;
+                            font-weight: Fluent.weight-semibold;
+                            overflow: elide;
+                            accessible-role: none;
+                        }
 
                         message-box := Rectangle {
                             property <bool> cut: root.capped && message.preferred-height > self.three-lines;
@@ -4339,46 +5670,48 @@ export component NoticeStack inherits VerticalLayout {
 
                     if notice.has-guide: HorizontalLayout {
                         alignment: start;
-                        Button {
+                        LinkButton {
                             text: Strings.notice-show-how;
-                            accessible-label: Strings.notice-show-how-label;
+                            label: Strings.notice-show-how-label;
+                            text-color: Tokens.text;
                             clicked => {
                                 root.guide-requested(notice.id);
                             }
-                            // A standard button reports focus only through has-focus.
-                            changed has-focus => {
-                                row.guide-focused = self.has-focus;
+                            changed keyboard-focused => {
+                                row.guide-focused = self.keyboard-focused;
                             }
                         }
                     }
 
                     if notice.has-retry: HorizontalLayout {
                         alignment: start;
-                        Button {
+                        LinkButton {
                             text: Strings.notice-retry;
-                            accessible-label: Strings.notice-retry-label;
+                            label: Strings.notice-retry-label;
+                            text-color: Tokens.text;
                             clicked => {
                                 root.retry-requested(notice.id);
                             }
                             // A notice has no guide and Retry both, so the row's
                             // second button focus is this one's.
-                            changed has-focus => {
-                                row.guide-focused = self.has-focus;
+                            changed keyboard-focused => {
+                                row.guide-focused = self.keyboard-focused;
                             }
                         }
                     }
 
                     if notice.has-privacy: HorizontalLayout {
                         alignment: start;
-                        Button {
+                        LinkButton {
                             text: Strings.notice-open-privacy;
-                            accessible-label: Strings.notice-open-privacy-label;
+                            label: Strings.notice-open-privacy-label;
+                            text-color: Tokens.text;
                             clicked => {
                                 root.privacy-requested(notice.id);
                             }
                             // Only the microphone notice has this button.
-                            changed has-focus => {
-                                row.guide-focused = self.has-focus;
+                            changed keyboard-focused => {
+                                row.guide-focused = self.keyboard-focused;
                             }
                         }
                     }
@@ -4451,14 +5784,15 @@ export component NoticeStack inherits VerticalLayout {
             height: self.preferred-height;
             alignment: end;
             opacity: all-slot.open;
-            Button {
+            LinkButton {
                 text: Strings.dismiss-all-notices;
-                accessible-label: Strings.dismiss-all-notices;
+                label: Strings.dismiss-all-notices;
+                text-color: Tokens.text;
                 clicked => {
                     root.dismissed-all();
                 }
-                changed has-focus => {
-                    root.dismiss-all-focus-changed(self.has-focus);
+                changed keyboard-focused => {
+                    root.dismiss-all-focus-changed(self.keyboard-focused);
                 }
             }
         }

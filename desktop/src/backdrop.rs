@@ -87,6 +87,87 @@ pub fn apply(_window: &slint::Window, _frame: Frame) -> Option<bool> {
     Some(false)
 }
 
+/// Sets a titled window's title bar dark or light with the app's appearance,
+/// then its backdrop again: Mica set before the switch kept its light tint
+/// under the dark title, which left the white title unreadable.
+#[cfg(windows)]
+pub fn set_dark(window: &slint::Window, dark: bool) {
+    use slint::winit_030::WinitWindowAccessor;
+    use slint::winit_030::winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Dwm::{
+        DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWINDOWATTRIBUTE, DwmSetWindowAttribute,
+    };
+    use windows::core::BOOL;
+
+    window.with_winit_window(|window| {
+        let Ok(handle) = window.window_handle() else {
+            return;
+        };
+        let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+            return;
+        };
+        let hwnd = HWND(handle.hwnd.get() as *mut core::ffi::c_void);
+        let value = BOOL::from(dark);
+        // Windows 10 before build 18985 knows the attribute only as 19.
+        for attribute in [DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWINDOWATTRIBUTE(19)] {
+            // SAFETY: `hwnd` is the live window winit created on this (the UI)
+            // thread, and `value` is a 4-byte BOOL that lives through the call.
+            let set = unsafe {
+                DwmSetWindowAttribute(
+                    hwnd,
+                    attribute,
+                    (&raw const value).cast(),
+                    size_of::<BOOL>() as u32,
+                )
+            };
+            if set.is_ok() {
+                break;
+            }
+        }
+        if crate::platform::windows_version().is_some_and(supports_backdrop) {
+            set_frame(hwnd, Frame::Titled);
+        }
+    });
+}
+
+#[cfg(not(windows))]
+pub fn set_dark(_window: &slint::Window, _dark: bool) {}
+
+/// Turns the app's native menus (the tray's) dark or light with the app's
+/// appearance, as the Mac's follow it. Windows names these uxtheme exports
+/// only by ordinal (135 SetPreferredAppMode, 136 FlushMenuThemes); on
+/// 18362 135 is still AllowDarkModeForApp, so builds before 18363 keep light menus.
+#[cfg(windows)]
+pub fn set_menu_dark(dark: bool) {
+    use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+    use windows::core::{PCSTR, w};
+
+    if !crate::platform::windows_version().is_some_and(|version| version >= windows_build(18363)) {
+        return;
+    }
+    // SAFETY: uxtheme.dll is a system library; from build 18363 its ordinal
+    // 135 takes one int (2 force dark, 3 force light) and 136 takes none.
+    unsafe {
+        let Ok(uxtheme) = LoadLibraryW(w!("uxtheme.dll")) else {
+            return;
+        };
+        let (Some(set_mode), Some(flush)) = (
+            GetProcAddress(uxtheme, PCSTR(135 as *const u8)),
+            GetProcAddress(uxtheme, PCSTR(136 as *const u8)),
+        ) else {
+            return;
+        };
+        let set_mode: unsafe extern "system" fn(i32) -> i32 = std::mem::transmute(set_mode);
+        let flush: unsafe extern "system" fn() = std::mem::transmute(flush);
+        set_mode(if dark { 2 } else { 3 });
+        flush();
+    }
+}
+
+#[cfg(not(windows))]
+pub fn set_menu_dark(_dark: bool) {}
+
 #[cfg(windows)]
 fn set_frame(hwnd: windows::Win32::Foundation::HWND, frame: Frame) -> bool {
     use windows::Win32::Graphics::Dwm::{

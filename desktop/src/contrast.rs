@@ -228,6 +228,23 @@ fn the_two_tone_focus_ring_reaches_3_to_1() {
     }
 }
 
+/// The Add by Address sheet's boxed field shows its edge at 3:1 before it
+/// has the focus (a control's boundary), and the focus outline after.
+#[test]
+fn the_boxed_fields_edge_reaches_3_to_1() {
+    for appearance in [Appearance::Light, Appearance::Dark] {
+        let value = ratio("text@secondaryText", "surface", appearance);
+        assert!(
+            value >= MIN_GRAPHIC_CONTRAST,
+            "edge on the sheet ({appearance:?}): {value:.2}:1"
+        );
+    }
+    let field = component_body(include_str!("../ui/widgets.slint"), "TextField");
+    assert!(field.contains(
+        "border-color: root.boxed ? (input.has-focus ? Tokens.focus : Tokens.secondary-text) : root.compact && input.has-focus ? Tokens.teal : Fluent.stroke;"
+    ));
+}
+
 /// The level meter's fill stands out from its track (3:1 for graphics),
 /// and it is never a focusable control.
 #[test]
@@ -249,9 +266,9 @@ fn the_level_meter_reaches_3_to_1_and_takes_no_focus() {
 
 /// An opening notice in the main window, as on the Mac (WindowRules.swift
 /// `NoticeMotion.opacity`): its room opens over 240 ms and it fades in over
-/// 180 ms from 60 ms, opaque as the room lands; with animation effects off
-/// it shows at once. A closing notice keeps its fade. Read line by line:
-/// a Windows checkout may have CRLF line ends.
+/// 180 ms from 60 ms, opaque as the room lands; a closing one fades over
+/// 160 ms. With animation effects off it cross-fades over 150 ms. Read line
+/// by line: a Windows checkout may have CRLF line ends.
 // covers: S450
 #[test]
 fn an_opening_notice_fades_in_as_its_room_lands() {
@@ -266,15 +283,58 @@ fn an_opening_notice_fades_in_as_its_room_lands() {
     };
     assert_eq!(
         after("animate open {").0,
-        "duration: Motion.on ? (self.closing ? 200ms : 240ms) : 0ms;"
+        "duration: Motion.on ? 240ms : 0ms;"
     );
     assert_eq!(
         after("animate shown {"),
         (
-            "duration: Motion.on ? (self.closing ? 120ms : 180ms) : (self.closing ? 150ms : 0ms);",
+            "duration: Motion.on ? (self.closing ? 160ms : 180ms) : 150ms;",
             "delay: Motion.on && !self.closing ? 60ms : 0ms;"
         )
     );
+}
+
+/// A warning notice's orange box, an info notice's teal one and the small
+/// button's tint, as the Mac's: the text on each at 4.5:1 and the notice's
+/// icon at 3:1, on the window and on a card, in light and dark.
+#[test]
+fn the_notice_boxes_and_the_small_button_keep_their_text_readable() {
+    let opaque = |rgba: [f64; 4]| [rgba[0], rgba[1], rgba[2]];
+    for (index, appearance) in [Appearance::Light, Appearance::Dark]
+        .into_iter()
+        .enumerate()
+    {
+        let warn_box = opaque(fluent_color("warn-background")[index]);
+        let ink = opaque(fluent_color("house-text")[index]);
+        let pressed = if index == 0 { 0.28 } else { 0.30 };
+        for under in ["background", "surface"] {
+            let below = srgb(under, appearance);
+            let teal = srgb("teal", appearance);
+            let tint = |alpha: f64| [0, 1, 2].map(|i| teal[i] * alpha + below[i] * (1.0 - alpha));
+            for (name, fill, icon) in [
+                ("warning", warn_box, "warn"),
+                ("info", tint(0.12), "tealText"),
+            ] {
+                for text in ["text", "text@secondaryText"] {
+                    let value = contrast(composite(text, fill, appearance), fill);
+                    assert!(
+                        value >= MIN_TEXT_CONTRAST,
+                        "{text} on the {name} box over {under} ({appearance:?}): {value:.2}:1"
+                    );
+                }
+                let value = contrast(srgb(icon, appearance), fill);
+                assert!(
+                    value >= MIN_GRAPHIC_CONTRAST,
+                    "{icon} icon on the {name} box over {under} ({appearance:?}): {value:.2}:1"
+                );
+            }
+            let value = contrast(ink, tint(pressed));
+            assert!(
+                value >= MIN_TEXT_CONTRAST,
+                "small button pressed over {under} ({appearance:?}): {value:.2}:1"
+            );
+        }
+    }
 }
 
 /// The master volume rows as on the Mac (MenuBar.swift `MasterSlider`): the
@@ -320,7 +380,7 @@ fn the_master_volume_draws_its_levels_waves_and_a_3_to_1_track() {
     assert!(master.contains("color: Tokens.text;"));
     let slider = component_body(&widgets, "LevelSlider");
     assert!(slider.contains("background: root.track;"));
-    assert!(slider.contains("border-color: Tokens.secondary-text;"));
+    assert!(slider.contains("border-width: root.small && Tokens.dark ? 0px : 1px;"));
 }
 
 /// The interface sources, for the checks below.
@@ -516,6 +576,69 @@ fn custom_controls_are_accessible_and_show_focus() {
     ] {
         assert!(row.contains(needle), "the delay button has {needle}");
     }
+}
+
+/// The delay steps and the light Appearance track look like the Mac's AppKit
+/// controls: white with a soft shadow in light, a grey fill in
+/// dark that keeps the text at 4.5:1 on the window and on a card.
+#[test]
+fn delay_steps_and_the_appearance_track_look_like_the_macs_native_controls() {
+    let step = component_body(include_str!("../ui/widgets.slint"), "DelayStep");
+    let settings = include_str!("../ui/settings.slint");
+    let track = settings
+        .split("accessible-label: Strings.appearance;")
+        .next()
+        .and_then(|before| before.rsplit("Rectangle {").next())
+        .expect("the Appearance track");
+    for (name, body) in [("delay step", step), ("Appearance track", track)] {
+        for needle in [
+            "Fluent.native-control",
+            "drop-shadow-color: Fluent.native-control-shadow",
+        ] {
+            assert!(body.contains(needle), "the {name} has {needle}");
+        }
+    }
+    let prefix = "out property <brush> native-control: Tokens.dark ? Tokens.text.with-alpha(";
+    let alpha: f64 = include_str!("../ui/widgets.slint")
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(prefix))
+        .and_then(|rest| rest.split(')').next())
+        .and_then(|value| value.parse().ok())
+        .expect("Fluent.native-control is the text color over the window in dark");
+    let text = srgb("text", Appearance::Dark);
+    for under in ["surface", "settingsCard"] {
+        let below = srgb(under, Appearance::Dark);
+        let fill = [0, 1, 2].map(|i| text[i] * alpha + below[i] * (1.0 - alpha));
+        let value = contrast(text, fill);
+        assert!(
+            value >= MIN_TEXT_CONTRAST,
+            "text on the grey control over {under}: {value:.2}:1"
+        );
+    }
+}
+
+/// In light the delay steps and both delay fields are white with a soft shadow
+/// and no border, as the Mac's; a field shows its border again on focus.
+#[test]
+fn delay_steps_and_fields_draw_no_border_in_light() {
+    let widgets = include_str!("../ui/widgets.slint");
+    assert!(
+        !component_body(widgets, "DelayStep").contains("border-width"),
+        "a delay step draws no border"
+    );
+    let field = component_body(widgets, "TextField");
+    for needle in [
+        "root.raised && !Tokens.dark && !input.has-focus ? 0px",
+        "input.has-focus || (root.raised && !Tokens.dark) ? Tokens.surface",
+        "drop-shadow-color: root.raised ? Fluent.native-control-shadow",
+    ] {
+        assert!(field.contains(needle), "the text field has {needle}");
+    }
+    assert_eq!(
+        widgets.matches("raised: true;").count(),
+        2,
+        "both delay fields are raised"
+    );
 }
 
 /// The text of `component`'s definition in `source`, up to the next one.
@@ -728,8 +851,8 @@ fn every_icon_has_a_drawing_off_windows() {
 #[test]
 fn keyboard_shortcuts_are_declared() {
     let main = include_str!("../ui/main.slint");
-    for keys in ["\"Ctrl+W\")", "\"Ctrl+N\")", "\"Ctrl+E\")", "\"F5\")"] {
-        assert!(main.contains(keys), "the menus show {keys}");
+    for keys in ["\"Ctrl+N\";", "\"F5\";", "\"Ctrl+,\";", "\"Ctrl+Q\";"] {
+        assert!(main.contains(keys), "the gear's menu shows {keys}");
     }
     for (file, source) in UI_FILES {
         if source.contains("inherits Window") && !source.contains("public function shortcut(") {
@@ -862,7 +985,8 @@ fn no_text_promises_airplay() {
 }
 
 /// "Looking for speakers…" and the other list notes in the Mac window's
-/// style: callout text on a 10 px inset (MainWindow.swift, `emptyNote`).
+/// style: callout text on a 10 px inset, 8 px over its button
+/// (MainWindow.swift, `emptyNote`).
 // covers: S393
 #[test]
 fn the_speaker_list_note_is_callout_text_as_on_the_mac() {
@@ -870,6 +994,7 @@ fn the_speaker_list_note_is_callout_text_as_on_the_mac() {
     let main = include_str!("../ui/main.slint").replace("\r\n", "\n");
     assert!(main.contains(
         "                    padding: 10px;
+                    spacing: 8px;
                     SecondaryText {
                         text: root.note;
                         font-size: Tokens.font-size-callout;"
@@ -967,7 +1092,7 @@ fn accessible_names_start_with_the_visible_text() {
         let (text, label) = (tr_text(strings, text), tr_text(strings, label));
         assert!(label.starts_with(text), "`{label}` starts with `{text}`");
     }
-    assert_eq!(buttons, 8, "the check found the buttons");
+    assert_eq!(buttons, 6, "the check found the buttons");
 }
 
 /// Retry on the notice that AirPlay stopped: the button shows only on a
@@ -1152,6 +1277,22 @@ fn windows_texts_with_a_linux_twin_are_unchanged() {
     }
 }
 
+/// Windows moves or holds back the doubled source itself (S469 to S471) and
+/// shows no double-audio notice, so its Help asks for no change by hand.
+#[test]
+fn windows_help_on_hearing_twice_asks_for_no_change() {
+    let text = tr_text(include_str!("../ui/strings.slint"), "help-double");
+    for wording in ["Sound settings", "shows a notice", "Show How", "row says"] {
+        assert!(!text.contains(wording), "{wording} in: {text}");
+    }
+    for sentence in text.split('.') {
+        if sentence.contains("Volume mixer") {
+            let sentence = sentence.trim_start().trim_start_matches("\\n");
+            assert!(sentence.starts_with("Don't mute"), "asks: {sentence}");
+        }
+    }
+}
+
 /// A notice that leaves the user stuck says what to do next, and Resync
 /// names the Cast offset it restores.
 #[test]
@@ -1175,7 +1316,7 @@ fn stuck_notices_say_what_to_do_next() {
 }
 
 /// A text that asks the user to start AudioSync again says so in the words
-/// of File > Exit, never quit and reopen or restart.
+/// of the gear's Exit, never quit and reopen or restart.
 #[test]
 fn texts_say_exit_to_start_audiosync_again() {
     let strings = include_str!("../ui/strings.slint");
@@ -1201,16 +1342,17 @@ fn no_text_asks_for_a_pin() {
     }
 }
 
-/// Help > AudioSync Guide (F1) opens the Guide, which spells out no text of
+/// AudioSync Guide in the gear's menu (F1) opens the Guide, which spells out no text of
 /// its own, closes on Escape, and keeps every paragraph's full height.
 #[test]
 fn the_audiosync_guide_is_wired_and_worded_in_strings() {
     let main = include_str!("../ui/main.slint");
     let item = main
-        .find("title: Strings.with-keys(Strings.help-title, \"F1\");")
-        .expect("the Help menu has the Guide, with F1");
-    let item = &main[item..item + 200];
-    assert!(item.contains("root.help-requested();"));
+        .find("text: Strings.help-title;\n                keys: \"F1\";")
+        .expect("the gear's menu has the Guide, with F1");
+    let item = &main[item..item + 400];
+    assert!(item.contains("root.guide();"));
+    assert!(main.contains("root.help-requested();"));
     // A Windows checkout may end the lines of main.slint with CRLF.
     assert!(main.replace("\r\n", "\n").contains(
         "if text == Key.F1 {
@@ -1267,7 +1409,7 @@ fn the_audiosync_guide_is_wired_and_worded_in_strings() {
     assert!(help.contains("source: Tokens.dark ? root.dark : root.light;"));
 }
 
-/// The Windows and Linux Guides say what Several Apps opens and describe
+/// The Windows and Linux Guides say where Several Apps is and describe
 /// the Now Playing card, as the Mac Guide does.
 // covers: S416
 #[test]
@@ -1280,7 +1422,10 @@ fn the_guide_describes_several_apps_and_now_playing_on_both_hosts() {
             .unwrap_or_else(|| panic!("strings.slint has {name}"))
     };
     for suffix in ["", "-linux"] {
-        assert!(text(&format!("help-start{suffix}")).contains("Several Apps opens a list"));
+        assert!(
+            text(&format!("help-start{suffix}"))
+                .contains("Several Apps, at the end of the source menu")
+        );
         assert!(text(&format!("help-more{suffix}")).contains("the Now Playing card"));
     }
 }
@@ -1452,12 +1597,12 @@ fn the_hint_and_the_fix_name_the_output_for_narrator() {
     let slider = row.find("VolumeSlider {").expect("the row's slider");
     let hint_at = row
         .find(
-            "accessible-label: Strings.device-volume-hint-label(root.item.name, \
-             root.item.device-volume, root.item.device-volume-percent);",
+            "accessible-label: hint-box.open ? Strings.device-volume-hint-label(\
+             root.item.name, hint-box.hint, hint-box.percent) : \"\";",
         )
-        .expect("the hint names the output");
+        .expect("the hint names the output, and a shutting hint says nothing");
     let fix_at = row
-        .find("label: Strings.device-volume-fix-label(root.item.name, root.item.device-volume);")
+        .find("label: Strings.device-volume-fix-label(root.item.name, hint-box.hint);")
         .expect("the fix names the output");
     let options = row
         .find("options := IconButton {")
@@ -1467,24 +1612,20 @@ fn the_hint_and_the_fix_name_the_output_for_narrator() {
         "the hint and the fix come right after the slider"
     );
     let shown = row
-        .find("if root.item.device-volume != DeviceVolumeHint.none:")
+        .find("property <bool> open: root.item.device-volume != DeviceVolumeHint.none;")
         .expect("the hint shows only with a hint to show");
     assert!(slider < shown && shown < hint_at);
     let sync = row
-        .find("if root.item.has-delay && root.item.sync-open:")
+        .find("sync-pane := FoldPane {")
         .expect("the sync controls");
     let part = &row[shown..sync];
     assert!(part.contains("accessible-role: text;"));
-    assert!(part.contains(
-        "text: Strings.device-volume-hint(root.item.device-volume, \
-         root.item.device-volume-percent);"
-    ));
-    assert!(part.contains("text: Strings.device-volume-fix(root.item.device-volume);"));
+    assert!(part.contains("text: Strings.device-volume-hint(hint-box.hint, hint-box.percent);"));
+    assert!(part.contains("text: Strings.device-volume-fix(hint-box.hint);"));
     assert!(part.contains("root.device-volume-fix();"));
     assert!(part.contains("color: Tokens.secondary-text;"));
     assert!(
-        part.contains("Glyph {")
-            && part.contains("glyph: Glyphs.device-volume(root.item.device-volume);"),
+        part.contains("Glyph {") && part.contains("glyph: Glyphs.device-volume(hint-box.hint);"),
         "the glyph is a decorative Glyph"
     );
     assert!(
@@ -1694,8 +1835,8 @@ fn the_updater_notice_uses_strings_and_tokens() {
         }
     }
     for needle in [
-        "background: Tokens.notice;",
-        "accessible-label: notice.message;",
+        "background: root.compact ? transparent : notice.info ? Tokens.teal.with-alpha(0.12) : Fluent.warn-background;",
+        "accessible-label: Strings.notice-spoken(notice.heading, notice.message);",
         "text: Strings.update-button(button);",
         "accessible-label: Strings.update-button(button);",
         "label: Strings.dismiss-notice(notice.title);",
@@ -1717,12 +1858,12 @@ fn the_updater_notice_uses_strings_and_tokens() {
             );
         }
     }
-    let main = include_str!("../ui/main.slint");
+    let settings = include_str!("../ui/settings.slint");
     for title in [
-        "title: Strings.check-updates-automatically;",
-        "title: Strings.menu-check-for-updates;",
+        "text: Strings.check-updates-automatically;",
+        "text: Strings.menu-check-for-updates;",
     ] {
-        assert!(main.contains(title), "main.slint has {title}");
+        assert!(settings.contains(title), "settings.slint has {title}");
     }
     let strings = include_str!("../ui/strings.slint");
     for label in [
@@ -1744,7 +1885,7 @@ fn the_updater_notice_uses_strings_and_tokens() {
 // covers: S268 (the Windows host)
 /// The preset controls (spec S267, S268): token colors only, a focus ring,
 /// Narrator's label and value on the Presets row, and the Menu key and
-/// Shift+F10 through each listed preset's context menu area.
+/// Shift+F10 through each listed preset's menu.
 #[test]
 fn the_preset_controls_use_tokens_and_reach_the_keyboard() {
     let main = include_str!("../ui/main.slint");
@@ -1777,10 +1918,11 @@ fn the_preset_controls_use_tokens_and_reach_the_keyboard() {
         assert!(card.contains(needle), "PresetsCard has {needle}");
     }
     for needle in [
-        "menu := ContextMenuArea {",
-        "title: Strings.rename-preset;",
+        "menu := PopupWindow {",
+        "if MenuKey.opens(event) {",
+        "text: Strings.rename-preset;",
         "enabled: !root.item.current;",
-        "title: Strings.delete-preset;",
+        "text: Strings.delete-preset;",
         "FocusRing {",
         "|| ScreenReader.on ? 1 : 0;",
     ] {
@@ -1795,18 +1937,19 @@ fn the_preset_controls_use_tokens_and_reach_the_keyboard() {
         assert!(card.contains(needle), "PresetsCard has {needle}");
         assert!(picker.contains(needle), "PresetPicker has {needle}");
     }
-    assert!(flyout.contains("if root.presets.length > 0: PresetPicker {"));
+    assert!(flyout.contains("if root.presets.length > 0: IntroPart {"));
 }
 
 /// A preset row's grey 11 px second line keeps 4.5:1 under the row's hover
-/// and pressed fills, on the window's own background in light and dark.
+/// and pressed fills over the open list's tint, on the window's own
+/// background in light and dark.
 // covers: S259
 #[test]
 fn a_preset_rows_second_line_reaches_4_5_to_1_under_its_fills() {
     let main = include_str!("../ui/main.slint");
     let row = component_body(main, "PresetListRow");
     assert!(row.contains(
-        "background: hover.pressed ? Fluent.pressed : hover.has-hover ? Fluent.hover : transparent;"
+        "background: hover.pressed ? Fluent.pressed : hover.has-hover ? Fluent.row-hover : transparent;"
     ));
     let second_line = row
         .find("font-size: Tokens.font-size-subheadline;")
@@ -1815,15 +1958,17 @@ fn a_preset_rows_second_line_reaches_4_5_to_1_under_its_fills() {
         row[second_line..].lines().nth(1).map(str::trim),
         Some("color: Tokens.secondary-text;")
     );
-    assert!(main.contains("background: Tokens.dark ? Tokens.background : Tokens.surface;"));
-    for (appearance, window) in [
-        (Appearance::Light, "surface"),
-        (Appearance::Dark, "background"),
-    ] {
-        let text = srgb("text", appearance);
+    assert!(
+        main.contains("    background: Tokens.surface;\n    default-font-family: Fluent.font;")
+    );
+    for appearance in [Appearance::Light, Appearance::Dark] {
+        let window = "surface";
         let under = srgb(window, appearance);
-        for fill in ["hover", "pressed"] {
-            let alpha = fluent_fill_alpha(fill);
+        let text = srgb("text", appearance);
+        // Over the open list's own tint.
+        let open = fluent_fill_alpha("open-row");
+        for fill in ["row-hover", "pressed"] {
+            let alpha = 1.0 - (1.0 - open) * (1.0 - fluent_fill_alpha(fill));
             let filled = [0, 1, 2].map(|i| text[i] * alpha + under[i] * (1.0 - alpha));
             let value = contrast(composite("text@secondaryText", filled, appearance), filled);
             assert!(
@@ -1877,8 +2022,57 @@ fn the_preset_and_equalizer_rows_name_their_choice_on_a_second_line() {
 fn a_zone_header_fills_only_on_hover() {
     let header = component_body(include_str!("../ui/widgets.slint"), "ZoneHeader");
     assert!(
-        header.contains("        background: hover.has-hover ? Fluent.hover : transparent;"),
+        header.contains("        background: hover.has-hover ? Fluent.row-hover : transparent;"),
         "the header's fill follows only the hover"
+    );
+}
+
+/// A zone header's volume is a bare slider: the Mac's zone Slider has no
+/// value text beside it (MainWindow.swift:1993-2000).
+#[test]
+fn a_zone_headers_volume_shows_no_number() {
+    let header = component_body(include_str!("../ui/widgets.slint"), "ZoneHeader");
+    let slider = header
+        .find("volume-slider := VolumeSlider {")
+        .expect("the header has its volume");
+    let end = slider + header[slider..].find("changed(value)").unwrap();
+    assert!(
+        header[slider..end].contains("shows-value: false;"),
+        "no number beside the zone's volume"
+    );
+}
+
+/// A zone header shows its volume only while one of its speakers is on, as
+/// the Mac's `if zone.on > 0` (MainWindow.swift:1992); hidden, it takes no room.
+#[test]
+fn a_zone_headers_volume_shows_only_while_a_speaker_is_on() {
+    let header = component_body(include_str!("../ui/widgets.slint"), "ZoneHeader");
+    let slider = header
+        .find("volume-slider := VolumeSlider {")
+        .expect("the header has its volume");
+    let wrap = header[..slider]
+        .rfind("Rectangle {")
+        .expect("the volume sits in its own box");
+    let gate = &header[wrap..slider];
+    assert!(gate.contains("visible: root.item.on > 0;"), "{gate}");
+    assert!(gate.contains("min-width: self.visible ? 100px : 0px;"), "{gate}");
+    assert!(gate.contains("max-width: self.visible ? 140px : 0px;"), "{gate}");
+}
+
+/// A hidden zone volume leaves no gap either: the Mac's HStack drops the
+/// slider's spacing with it (MainWindow.swift:1992), so the name keeps the room.
+#[test]
+fn a_hidden_zone_volume_leaves_no_gap() {
+    let header = component_body(include_str!("../ui/widgets.slint"), "ZoneHeader");
+    let slider = header
+        .find("volume-slider := VolumeSlider {")
+        .expect("the header has its volume");
+    let group = header[..slider]
+        .rfind("HorizontalLayout {")
+        .expect("the volume and options share a row");
+    assert!(
+        header[group..slider].contains("spacing: root.item.on > 0 ? 8px : 0px;"),
+        "the gap before the options goes with the volume"
     );
 }
 
@@ -1895,6 +2089,116 @@ fn a_zone_headers_hover_fill_stops_4_px_inside_each_edge() {
         .expect("a hover fill of its own");
     assert!(fill.contains("x: 4px;"), "{fill}");
     assert!(fill.contains("width: parent.width - 8px;"), "{fill}");
+}
+
+/// Speaker list rows as the Mac draws them (Sources/AudioSync on this
+/// branch): Radius.row is 9 (BrandTokens.swift:161); a speaker row's fill
+/// is its whole box (MainWindow.swift:2494), not the zone header's 4 px
+/// inset (:2021); a compact in-zone row has no fill (:2177-2180); the rule
+/// between rows runs from nameColumn to the edge (:619, :624).
+#[test]
+fn speaker_list_rows_fill_and_rule_as_on_the_mac() {
+    let widgets = include_str!("../ui/widgets.slint").replace("\r\n", "\n");
+    assert!(widgets.contains("out property <length> radius-row: 9px;"));
+    let row = component_body(&widgets, "SpeakerRow");
+    assert!(!row.contains("hover-fill :="), "the whole row fills");
+    assert!(row.contains(
+        "\n    border-radius: Fluent.radius-row;\n    background: !root.grouped && root.plated"
+    ));
+    let member = component_body(&widgets, "ZoneMemberRow");
+    assert!(
+        !member.contains("background: hover.has-hover"),
+        "no hover fill"
+    );
+    let main = include_str!("../ui/main.slint").replace("\r\n", "\n");
+    assert!(
+        component_body(&main, "SpeakerRows")
+            .contains("padding-left: Fluent.name-inset;\n            Divider { }")
+    );
+}
+
+/// A hovered speaker row takes primary at 5 % in both themes, as the Mac's
+/// (MainWindow.swift:2495), not more on dark.
+#[test]
+fn a_speaker_rows_hover_fill_is_the_same_in_both_themes() {
+    let widgets = include_str!("../ui/widgets.slint").replace("\r\n", "\n");
+    assert!(!widgets.contains("row-hover-dark"));
+    assert!(
+        component_body(&widgets, "SpeakerRow")
+            .contains("background: !root.grouped && root.plated ? Fluent.row-hover : transparent;")
+    );
+}
+
+/// The badge stays beside the name and the slider while a hint line grows
+/// the row: its centre sits in the middle of the 5 px gap between them, as
+/// the Mac's badgePin (MainWindow.swift:2331, :2336, :2439 on the rows-tidy
+/// commit), instead of the middle of the whole row, on a whole pixel.
+#[test]
+fn a_speaker_rows_badge_stays_at_the_name_line() {
+    let widgets = include_str!("../ui/widgets.slint").replace("\r\n", "\n");
+    let row = component_body(&widgets, "SpeakerRow");
+    assert!(row.contains("name-line := HorizontalLayout {"));
+    assert!(row.contains(
+        "y: floor((name-line.y + name-line.height + 5px / 2 - self.height / 2) / 1px) * 1px;"
+    ));
+}
+
+/// Both sliders of the reference's row start and end together: the Windows
+/// volume slider moves left by the style's inset as the speaker slider does
+/// (the Mac indents the panel to the slider, MainWindow.swift:2479), and the
+/// speaker's value takes the panel's 34 px column (:2435, :2842).
+#[test]
+fn the_windows_volume_slider_lines_up_with_the_speaker_slider() {
+    let widgets = include_str!("../ui/widgets.slint").replace("\r\n", "\n");
+    let row = component_body(&widgets, "SpeakerRow");
+    assert_eq!(row.matches("x: -Fluent.slider-inset;").count(), 2);
+    assert!(row.contains("value-width: 34px;"));
+    assert!(component_body(&widgets, "VolumeSlider").contains("width: root.value-width;"));
+}
+
+/// Under the network note, the line above Add by Address keeps to the note's
+/// 10 px text inset, with 10 px under it and 6 px under the button, as the
+/// Mac's (MainWindow.swift:655, :664-665 on the rows-tidy commit).
+#[test]
+fn the_line_above_add_by_address_keeps_to_the_note() {
+    let main = include_str!("../ui/main.slint").replace("\r\n", "\n");
+    let section = component_body(&main, "SpeakerSection");
+    assert!(section.contains("padding-left: root.note != \"\" ? 10px : 0px;"));
+    assert!(section.contains("padding-right: root.note != \"\" ? 10px : 0px;"));
+    assert!(section.contains("padding-top: 10px;\n                padding-bottom: 6px;"));
+}
+
+/// An off speaker's slider is drawn as an on speaker's (the mockup's item 2,
+/// OK'd 17 Nov): no pale track or fill and no see-through knob, while it
+/// still takes no drag, as the Mac's .disabled slider (MainWindow.swift:2424).
+#[test]
+fn an_off_speakers_slider_keeps_its_solid_look() {
+    let widgets = include_str!("../ui/widgets.slint").replace("\r\n", "\n");
+    let slider = component_body(&widgets, "LevelSlider");
+    assert!(!slider.contains("root.idle ? Tokens.text.with-alpha(0.07)"));
+    assert!(!slider.contains("opacity: root.idle && Tokens.dark"));
+    assert!(slider.contains("enabled: root.enabled;"));
+}
+
+/// Calibrate All's left-out list as the Mac's (CalibrateAllViews.swift:422-451):
+/// a small "Left out" heading, then each output's name in body text with
+/// its button on the name's line, and the reason under them.
+#[test]
+fn the_left_out_list_reads_as_the_macs() {
+    let main = include_str!("../ui/main.slint").replace("\r\n", "\n");
+    let card = component_body(&main, "CalibrationCard");
+    let list = &card[card
+        .find("if root.left-out.length > 0")
+        .expect("the left-out list")..];
+    assert!(list.contains("text: Strings.calibrate-all-left-out-title;"));
+    let name = list.find("text: item.name;").expect("the name");
+    let button = list.find("Button {").expect("the button");
+    let reason = list.find("text: item.reason;").expect("the reason");
+    assert!(
+        name < button && button < reason,
+        "name, button, then reason"
+    );
+    assert!(!list[name..button].contains("weight-semibold"));
 }
 
 /// A zone header works like a speaker row's box: only its badge switches the
@@ -2018,4 +2322,153 @@ fn both_microphone_fixes_name_the_same_windows_switches() {
             "{text}"
         );
     }
+}
+
+/// The file a `DeviceIcons` function returns for `kind`: the first `if` that
+/// names it, else the closing fallback.
+fn device_icon_for<'a>(function: &'a str, kind: &str) -> &'a str {
+    let named = format!("SpeakerKind.{kind}");
+    let mut lines = function.lines().map(str::trim);
+    let mut fallback = "";
+    while let Some(line) = lines.next() {
+        let file = |line: &'a str| {
+            line.split("@image-url(\"../../brand/icons/")
+                .nth(1)
+                .and_then(|rest| rest.split('"').next())
+                .unwrap_or_else(|| panic!("an icon file in {line}"))
+        };
+        if line.starts_with("if ") {
+            let names = line
+                .split(|c: char| c.is_whitespace() || c == '{')
+                .any(|word| word == named);
+            let target = file(lines.next().expect("the if returns"));
+            if names {
+                return target;
+            }
+        } else if line.starts_with("return @image-url(") {
+            fallback = file(line);
+        }
+    }
+    fallback
+}
+
+/// Every speaker kind gets AudioSync's own drawing from brand/icons in its
+/// round toggle and in the badge after its name, never an icon font glyph.
+#[test]
+fn every_speaker_kind_has_its_own_device_icon() {
+    let types = include_str!("../ui/types.slint");
+    let kinds: Vec<&str> = types[types.find("enum SpeakerKind {").expect("the kinds")..]
+        .split(['{', '}'])
+        .nth(1)
+        .expect("the kind list")
+        .split(',')
+        .map(str::trim)
+        .collect();
+    let expected = [
+        ("airplay", "smart-speaker.svg", "badge-airplay.svg"),
+        ("airplay2", "smart-speaker.svg", "badge-airplay.svg"),
+        ("cast", "speaker.svg", "badge-cast.svg"),
+        ("built-in", "speaker.svg", "badge-laptop.svg"),
+        ("headphones", "headphones.svg", "badge-headphones.svg"),
+        ("bluetooth", "bluetooth.svg", "badge-bluetooth.svg"),
+        ("usb", "usb.svg", "badge-usb.svg"),
+        ("usb-headphones", "headphones.svg", "badge-usb.svg"),
+        ("usb-speakers", "speaker.svg", "badge-usb.svg"),
+        ("hdmi", "monitor.svg", "badge-display.svg"),
+        ("display-port", "monitor.svg", "badge-display.svg"),
+        ("virtual", "device.svg", "badge-speaker.svg"),
+        ("other", "device.svg", "badge-speaker.svg"),
+    ];
+    assert_eq!(
+        kinds,
+        expected.iter().map(|(kind, ..)| *kind).collect::<Vec<_>>(),
+        "every kind has a row here"
+    );
+    let widgets = include_str!("../ui/widgets.slint").replace("\r\n", "\n");
+    let icons = &widgets[widgets
+        .find("export global DeviceIcons {")
+        .expect("DeviceIcons")..];
+    let function = |name: &str| {
+        let body = &icons[icons
+            .find(&format!("function {name}(kind: SpeakerKind) -> image {{"))
+            .unwrap_or_else(|| panic!("DeviceIcons.{name}"))..];
+        &body[..body.find("\n    }").expect("the function ends")]
+    };
+    let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../brand/icons");
+    for (kind, glyph, badge) in expected {
+        assert_eq!(device_icon_for(function("glyph"), kind), glyph, "{kind}");
+        for size in ["16", "14"] {
+            assert_eq!(
+                device_icon_for(function(&format!("glyph{size}")), kind),
+                format!("{size}/{glyph}"),
+                "{kind}"
+            );
+        }
+        assert_eq!(device_icon_for(function("badge"), kind), badge, "{kind}");
+    }
+    for file in icons.split("@image-url(\"../../brand/icons/").skip(1) {
+        let file = file.split('"').next().expect("a file name");
+        assert!(folder.join(file).is_file(), "brand/icons/{file} exists");
+    }
+    for (file, source) in UI_FILES {
+        for font_glyph in [
+            "Glyphs.speaker(",
+            "Glyphs.kind-icon(",
+            "glyph: Glyphs.zone;",
+        ] {
+            assert!(!source.contains(font_glyph), "{file} uses {font_glyph}");
+        }
+    }
+    for (component, icon) in [
+        ("SpeakerRow", "icon: DeviceIcons.glyph(root.item.kind);"),
+        (
+            "ZoneMemberRow",
+            "icon: DeviceIcons.glyph14(root.item.kind);",
+        ),
+        ("ZoneHeader", "icon: DeviceIcons.zone;"),
+    ] {
+        assert!(
+            component_body(&widgets, component).contains(icon),
+            "{component}"
+        );
+    }
+    let flyout = include_str!("../ui/flyout.slint");
+    assert_eq!(
+        flyout
+            .matches("icon: DeviceIcons.glyph16(speaker.kind);")
+            .count(),
+        3
+    );
+    assert!(flyout.contains("icon: DeviceIcons.zone16;"));
+    assert!(!flyout.contains("Glyphs.speaker("));
+}
+
+/// The 18 px glyph sits 7 px into its 32 px circle, the 14 px one 5 px into
+/// a zone speaker's 24 px circle, the 16 px one 6 px into the tray panel's
+/// 26 px circle, and the 12 px badge is drawn at its own
+/// size, so at 100% every edge lands on a whole pixel; the 32 px circle's
+/// waiting ring is 2 px.
+#[test]
+fn device_icons_sit_on_whole_pixels() {
+    let widgets = include_str!("../ui/widgets.slint").replace("\r\n", "\n");
+    let flyout = include_str!("../ui/flyout.slint").replace("\r\n", "\n");
+    let badge = component_body(&widgets, "SpeakerBadge");
+    assert!(
+        badge.contains("in property <length> size: 32px;"),
+        "{badge}"
+    );
+    assert!(badge.contains(
+        "if !root.bare: Image {\n        x: (root.size - self.width) / 2;\n        y: self.x;\n        width: root.size == 32px ? 18px : 14px;\n        height: self.width;"
+    ));
+    assert!(badge.contains("border-width: root.size == 32px ? 2px :"));
+    let disc = component_body(&flyout, "RowDisc");
+    assert!(disc.contains("width: 26px;\n    height: 26px;"), "{disc}");
+    assert!(disc.contains("x: 5px;\n        y: 5px;\n        width: 16px;\n        height: 16px;"));
+    assert!(!disc.contains("Glyph {"), "{disc}");
+    let badge = component_body(&widgets, "KindIcon");
+    assert!(
+        badge.contains("width: 12px;\n        height: 12px;"),
+        "{badge}"
+    );
+    assert!(!badge.contains("Glyph {"), "{badge}");
 }
