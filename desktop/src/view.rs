@@ -1835,7 +1835,7 @@ impl App {
             )
         });
         self.main.set_now_playing_title(track.title.as_str().into());
-        #[cfg(any(windows, target_os = "linux"))]
+        #[cfg(all(any(windows, target_os = "linux"), not(test)))]
         self.main
             .global::<Motion>()
             .set_on(crate::platform::animation_effects());
@@ -10398,7 +10398,11 @@ mod tests {
         assert_eq!(button.accessible_value().as_deref(), Some("13%"));
         button.invoke_accessible_default_action();
         draw_frames();
-        let slider = find(&format!("Windows volume of {}", reference.name));
+        let slider = find(
+            &app.main
+                .global::<crate::Strings>()
+                .invoke_system_volume_slider(reference.name.as_str().into()),
+        );
         slider.invoke_accessible_increment_action();
         draw_frames();
         let level = app
@@ -10514,7 +10518,10 @@ mod tests {
         click(app.main.window(), at.x - 30.0, at.y + size.height / 2.0);
         advance_clock(Duration::from_secs(1));
         draw_frames();
-        let slider = format!("Windows volume of {}", reference.name);
+        let slider = app
+            .main
+            .global::<crate::Strings>()
+            .invoke_system_volume_slider(reference.name.as_str().into());
         assert!(
             ElementHandle::find_by_accessible_label(&app.main, &slider)
                 .next()
@@ -10603,7 +10610,9 @@ mod tests {
         let (app, reference) = open(MockBackend::new());
         let slider = ElementHandle::find_by_accessible_label(
             &app.main,
-            &format!("Windows volume of {}", reference.name),
+            &app.main
+                .global::<crate::Strings>()
+                .invoke_system_volume_slider(reference.name.as_str().into()),
         )
         .next()
         .expect("the slider");
@@ -10662,8 +10671,8 @@ mod tests {
         assert_eq!(value.as_str(), "10 ms");
     }
 
-    /// The delay panel holds the Mac's small steps, 20 px high and 4 px
-    /// apart, around a 72 x 22 field.
+    /// The delay panel holds the Mac's small steps 4 px apart around a
+    /// 72 x 22 field, at the field's 22 px height (the Mac's are 20).
     // covers: S450
     #[test]
     fn the_delay_panel_holds_small_steps_around_a_72_by_22_field() {
@@ -10681,7 +10690,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("the {delta} step"))
         };
         let steps = [-100, -10].map(step);
-        assert!(steps.iter().all(|s| s.size().height == 20.0));
+        assert!(steps.iter().all(|s| s.size().height == 22.0));
         assert_eq!(
             steps[1].absolute_position().x - right_edge(&steps[0]),
             4.0,
@@ -22111,7 +22120,8 @@ mod tests {
     }
 
     /// With many hidden speakers Settings scrolls, so its last box, Check
-    /// Setup, can still be reached at the bottom of a window that fits the screen.
+    /// Setup (the last Unhide row where that box is Windows-only, settings.slint),
+    /// can still be reached at the bottom of a window that fits the screen.
     #[test]
     fn settings_with_30_hidden_speakers_scrolls_to_check_setup() {
         let app = app_over(MockBackend::new());
@@ -22129,11 +22139,16 @@ mod tests {
         // A screen with 700 px of room, whatever the test machine's screen is.
         app.settings.set_room(700.0);
         draw_frames();
-        let label = app.main.global::<crate::Strings>().get_menu_check_setup();
+        let strings = app.main.global::<crate::Strings>();
+        let label = if cfg!(windows) {
+            strings.get_menu_check_setup()
+        } else {
+            strings.get_unhide()
+        };
         let check_setup = || {
             i_slint_backend_testing::ElementHandle::find_by_accessible_label(&app.settings, &label)
-                .next()
-                .expect("Check Setup")
+                .last()
+                .expect("Settings' last control")
         };
         for _ in 0..40 {
             scroll(app.settings.window(), 200.0, 300.0, -120.0);
@@ -22141,7 +22156,7 @@ mod tests {
         let (at, size) = (check_setup().absolute_position(), check_setup().size());
         assert!(
             at.y >= 0.0 && at.y + size.height <= 720.0,
-            "Check Setup at {at:?} {size:?}, out of the 720 px window"
+            "{label} at {at:?} {size:?}, out of the 720 px window"
         );
     }
 
@@ -22158,6 +22173,8 @@ mod tests {
                 kind: "USB".into(),
                 present: true,
             }])));
+        // Updates follows Speakers on every system; Check Setup only on Windows.
+        app.settings.set_updater_available(true);
         draw_frames_at(460, 900);
         let strings = app.main.global::<crate::Strings>();
         let find = |label: SharedString| {
@@ -22170,7 +22187,7 @@ mod tests {
             (e.absolute_position().y, e.size().height)
         };
         let (unhide, height) = find(strings.get_unhide());
-        let (title, _) = find(strings.get_setup_title());
+        let (title, _) = find(strings.get_settings_updates());
         let row_bottom = unhide + height + (48.0 - 8.0 - height) / 2.0 + 4.0;
         assert!(
             title - row_bottom >= 16.0,
@@ -22186,11 +22203,15 @@ mod tests {
         assert!(app.main.invoke_shortcut(",".into(), true, false));
         app.main.invoke_speaker_hide_requested("local:desk".into());
         let strings = app.main.global::<crate::Strings>();
-        let labels = [
-            strings.get_switch_source_on_quit(),
-            strings.get_volume_keys(),
-            strings.get_unhide(),
-        ];
+        // Volume Keys shows on Windows only (volume_keys_available).
+        let labels: Vec<_> = [
+            Some(strings.get_switch_source_on_quit()),
+            cfg!(windows).then(|| strings.get_volume_keys()),
+            Some(strings.get_unhide()),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
         let boxes = |look| {
             app.main.invoke_appearance_chosen(look);
             draw_frames_at(460, 640);
