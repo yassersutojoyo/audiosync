@@ -76,6 +76,7 @@ ignore = [
     # Slint parses styled text with ENABLE_STRIKETHROUGH only, never wikilinks.
     { id = "RUSTSEC-2026-0414", reason = "Slint never sets ENABLE_WIKILINKS; 0.13.5 fixes it, kept out of this change, which bumps only the advisories it names" },
     { id = "RUSTSEC-2026-0433", reason = "Slint never sets ENABLE_WIKILINKS; pulldown-cmark 0.13.6 fixes it, a lockfile bump left to its own change" },
+    { id = "RUSTSEC-2026-0543", reason = "chrono: unmaintained, a non-optional dependency of Slint's i-slint-core; we never call it" },
     { id = "RUSTSEC-2026-0441", reason = "pin-utils: unmaintained, no safe upgrade, build-time only under Slint through spin_on" },
     { crate = "clipboard-win@5.4.1", reason = "yanked; under Slint through arboard; cargo update -p clipboard-win clears it in its own change" },
     # Linux-only, under Slint through winit's window decorations.
