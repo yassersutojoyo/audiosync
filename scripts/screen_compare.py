@@ -145,6 +145,7 @@ def self_test():
         "MAIN-IDLE-terang\tKitchen#2\tfg #1d1d1f vs #3a3a3c",
         "MAIN-IDLE-terang\tSpeakers\tonly in mac",
         "MAIN-IDLE-terang\tStreaming to\tfont SF Pro 13 vs Segoe UI 13",
+        "MAIN-IDLE-terang	Windows Laptop	only in other",
         "MAIN-IDLE-terang\t−170\tonly in mac",
         "TRAY-IDLE-gelap\t-\tnot set up in mac: the panel is not drawn here",
     ]

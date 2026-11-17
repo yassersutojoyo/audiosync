@@ -6,5 +6,6 @@
  {"key": "−170", "frame": [380, 300, 74, 24], "font": null, "fg": null, "bg": null},
  {"key": "Volume", "frame": [300, 100, 120, 20], "font": null, "fg": "#0a84ff", "bg": null},
  {"key": "macOS volume of Kitchen", "frame": [300, 200, 120, 20], "font": null, "fg": null, "bg": null},
- {"key": "Quit AudioSync", "frame": [20, 560, 120, 20], "font": null, "fg": null, "bg": null}
+ {"key": "Quit AudioSync", "frame": [20, 560, 120, 20], "font": null, "fg": null, "bg": null},
+ {"key": "Close", "frame": [20, 300, 60, 20], "font": null, "fg": null, "bg": null}
 ]}
