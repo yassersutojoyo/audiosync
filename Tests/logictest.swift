@@ -1995,6 +1995,14 @@ do {
     }
 
     do {
+        let iemHints: [String: DeviceVolumeHint] = ["iem": .low(percent: 18), "edifier": .low(percent: 18)]
+        check(DeviceVolumes.hint(for: "iem", airPlay: false, headphones: true, enabled: true, in: iemHints) == nil
+                && DeviceVolumes.hint(for: "edifier", airPlay: false, headphones: false, enabled: true,
+                                      in: iemHints) == .low(percent: 18),
+              "device volume: headphones and in-ears show no low-volume hint; speakers keep it")
+    }
+
+    do {
         let host = Host()
         host.access.set(builtIn, .volume, 0.8)
         host.access.set(builtIn, .mute, 0)
@@ -9194,12 +9202,8 @@ do {
     check(PanelLayout.gaps.allSatisfy { $0 == PanelLayout.gap },
           "menu bar panel: one gap between the now playing card, the preset row (or the volume knob when no preset row shows), the volume knob, This Mac's circles, the divider and the list",
           "\(PanelLayout.gaps)")
-    check(PanelLayout.menuLeadingInset + PanelLayout.sourceLeading == 0,
-          "menu bar panel: the source name starts on the title's and the artist's column")
-    // 14 Nov at 1x: the menu's label frame sat on the title's, but "Spotify"'s ink still started 1 pt right of it.
-    check(PanelLayout.sourceLeading == -3.5,
-          "menu bar panel: the source name's ink starts on the title's and the artist's ink",
-          "\(PanelLayout.sourceLeading)")
+    check(bar.contains(".padding(.leading, hero ? 0 : 10)"),
+          "menu bar panel: the source name, SwiftUI's own text like the title's, starts on the title's and the artist's column")
     check(Set(PanelLayout.trailingInk).count == 1,
           "menu bar panel: the card's chevron, the preset chevron and the volume number end on one edge",
           "\(PanelLayout.trailingInk)")
@@ -9219,6 +9223,21 @@ do {
             && panelPresetSource.contains(".font(.system(size: QuickRowIcon.point))")
             && muteSource.contains(".system(size: QuickRowIcon.point)"),
           "menu bar panel source: the preset and volume icons share This Mac's circle box, inside what opens them, and the main window rows' icon size; their text starts on the names' column; with no preset row the volume keeps the card's gap")
+    // 16 Nov at 2x: with a preset's name under it the centred row put its icon 4.5 pt under the card, not 12.
+    check(panelPresetSource.contains("PresetRowLayout {") && !panelPresetSource.contains("minHeight: 34, alignment: .leading"),
+          "menu bar panel source: the preset row keeps its label where a plain row has it when the preset's name shows under it, so the card's gap holds")
+    let plainPresetRow = PanelLayout.presetRow(label: 16, line: 0)
+    let namedPresetRow = PanelLayout.presetRow(label: 16, line: 15)
+    check(plainPresetRow.height == PanelLayout.presetRowHeight && namedPresetRow.labelTop == plainPresetRow.labelTop
+            && namedPresetRow.height == PanelLayout.presetRowHeight + 7.5,
+          "menu bar panel: a preset's name under the preset row pushes only what is below it down, by half its height",
+          "\(plainPresetRow) \(namedPresetRow)")
+    // 16 Nov at 60 fps: the borderless menu's AppKit label moved in whole pixels while the intro moved the card in fractions.
+    let sourceMenuStyle = bar.components(separatedBy: "private struct SourceMenuStyle: ViewModifier {").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    check(sourceMenuStyle.contains("if hero {\n            content.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)")
+            && bar.contains(".modifier(SourceMenuStyle(hero: hero))"),
+          "menu bar panel source: the card's source name and chevron are SwiftUI's own drawing, so they glide with the card as it opens and closes")
     let mainSource = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
     let quickIconSource = mainSource.components(separatedBy: "struct QuickRowIcon: View {").dropFirst().first?
         .components(separatedBy: "\n}\n").first ?? ""
@@ -18528,6 +18547,11 @@ do {
 }
 
 do {
+    check(UIStrings().presetOptions(name: "Evening") == "Options for Evening",
+          "presets: a preset's options button names the preset, as a speaker's does")
+}
+
+do {
     let words = UIStrings()
     // covers: S153
     check(words.noSpeakerNoticeName == "no speaker on"
@@ -19107,8 +19131,8 @@ do {
           "art hold: a song known to have no cover shows its placeholder at once")
     check(ArtHold.decide(shown: shownSong, next: otherApp, heldFor: 0) == .show,
           "art hold: another player taking over shows at once")
-    check(ArtHold.decide(shown: shownSong, next: loading, heldFor: 1.5) == .show && ArtHold.limit == 1.5,
-          "art hold: a cover still loading after 1.5 s gives way to the placeholder")
+    check(ArtHold.decide(shown: shownSong, next: loading, heldFor: ArtHold.limit) == .show && ArtHold.limit == 4,
+          "art hold: a cover still loading after the fetch's 4 s timeout gives way to the placeholder")
     check(ArtHold.decide(shown: shownSong, next: arrived, heldFor: 0.3) == .show,
           "art hold: the new cover's arrival lets the new song in with it")
     var stale = shownSong
@@ -19116,6 +19140,42 @@ do {
     check(ArtHold.keepingArt(of: shownSong, in: stale).artwork === cover
             && ArtHold.keepingArt(of: shownSong, in: bare).artwork == nil,
           "art hold: a late reading of the same song without its cover keeps the cover; another song never inherits it")
+}
+
+// MARK: A slow cover holds the pressed card until it comes, and a failed fetch slides at once (ArtHold, ArtFetches)
+// covers: S459
+do {
+    let waitCover = NSImage(size: NSSize(width: 1, height: 1))
+    let waitShown = NowPlayingMonitor.Track(bundleID: "com.spotify.client", appName: "Spotify", title: "One",
+                                            artist: "A", album: "B", isPlaying: true, artwork: waitCover)
+    var waitLoading = NowPlayingMonitor.Track(bundleID: "com.spotify.client", appName: "Spotify", title: "Two",
+                                              artist: "A", album: "B", isPlaying: true, artwork: nil)
+    waitLoading.artPending = true
+    var waitArrived = waitLoading
+    waitArrived.artwork = waitCover
+    waitArrived.artPending = false
+    let waitAtCover = TrackSlide.waited(heldFor: 2.0, sincePress: 2.3)
+    check(ArtHold.decide(shown: waitShown, next: waitLoading, heldFor: waitAtCover - 0.01) == .hold
+            && ArtHold.decide(shown: waitShown, next: waitArrived, heldFor: waitAtCover) == .show
+            && TrackSlide.cap > 2.3 && TrackSlide.cap == ArtFetches.timeout && ArtHold.limit == ArtFetches.timeout,
+          "cover wait: a cover arriving 2.3 s after a press holds the old card until it comes, with no placeholder slide")
+    let waitLate = TrackSlide.waited(heldFor: 3.0, sincePress: 3.5)
+    check(waitLate == 3.5 && ArtHold.decide(shown: waitShown, next: waitLoading, heldFor: waitLate) == .hold
+            && TrackSlide.direction(pressed: .previous, secondsSincePress: 3.5) == .previous
+            && ArtHold.decide(shown: waitShown, next: waitLoading,
+                              heldFor: TrackSlide.waited(heldFor: 2.0, sincePress: TrackSlide.cap + 0.05)) == .show
+            && TrackSlide.direction(pressed: .previous, secondsSincePress: TrackSlide.cap + 0.05) == .previous,
+          "cover wait: a cover 3.5 s after Previous still counts as the press's, and the hold ends at the cap however slow the fetch")
+    let waitGaveUp = ArtHold.gaveUp(waitLoading, on: waitLoading)
+    check(waitGaveUp?.artPending == false && waitGaveUp?.artwork == nil
+            && waitGaveUp.map { ArtHold.decide(shown: waitShown, next: $0, heldFor: 0.3) } == .show
+            && ArtHold.gaveUp(waitShown, on: waitLoading) == nil,
+          "cover wait: a failed cover fetch lets the new song slide in with the placeholder at once")
+    let waitSource = (try? String(contentsOfFile: "Sources/AudioSync/NowPlaying.swift", encoding: .utf8)) ?? ""
+    let waitFailBranch = waitSource.components(separatedBy: "fetch gave no picture").last?
+        .components(separatedBy: "DebugTrace.log(\"Now Playing art: \\(song) fetched").first ?? ""
+    check(waitFailBranch.contains("ArtHold.gaveUp(") && waitSource.contains("timeoutInterval: ArtFetches.timeout"),
+          "cover wait: the monitor hands a failed fetch's song on without its cover at once")
 }
 
 // MARK: A cover already loaded is found by its address (ArtCache in NowPlaying.swift)
@@ -19220,7 +19280,7 @@ do {
     let slimCast = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+Cast.swift", encoding: .utf8)) ?? ""
     let slimNowPlaying = (try? String(contentsOfFile: "Sources/AudioSync/NowPlaying.swift", encoding: .utf8)) ?? ""
     check(slimAirPlay.contains("ArtPushDelay.wait(") && slimAirPlay.contains("if nowPlayingOnScreen, let before") && slimCast.contains("castArtDelay.isCurrent(")
-            && slimNowPlaying.contains("artFetches.start(") && slimNowPlaying.contains("timeoutInterval: 4") && slimNowPlaying.contains("self.runningPlayers.runs($0.bundleID)"),
+            && slimNowPlaying.contains("artFetches.start(") && slimNowPlaying.contains("timeoutInterval: ArtFetches.timeout") && slimNowPlaying.contains("self.runningPlayers.runs($0.bundleID)"),
           "song change: the AirPlay and Cast covers wait for the slide, Spotify covers are fetched once, "
             + "and a reading's main-thread turn asks no running-app list")
 }
@@ -19365,8 +19425,8 @@ do {
             && TrackSlide.direction(pressed: .previous, secondsSincePress: 1) == .previous
             && TrackSlide.direction(pressed: nil, secondsSincePress: 0.5) == nil
             && TrackSlide.direction(pressed: .next, secondsSincePress: TrackSlide.pressWindow + 1) == nil
-            && TrackSlide.direction(pressed: .next, secondsSincePress: -1) == nil && TrackSlide.pressWindow == 3,
-          "track slide: a change within 3 s of Next or Previous slides that way")
+            && TrackSlide.direction(pressed: .next, secondsSincePress: -1) == nil && TrackSlide.pressWindow > TrackSlide.cap,
+          "track slide: a change within 5 s of Next or Previous, past the 4 s wait, slides that way")
     let one = NowPlayingMonitor.Track(bundleID: "com.apple.Music", appName: "Music", title: "One", artist: "A",
                                       album: "B", isPlaying: true, artwork: nil)
     let onePaused = NowPlayingMonitor.Track(bundleID: "com.apple.Music", appName: "Music", title: "One", artist: "A",
@@ -19386,13 +19446,13 @@ do {
     shown.artwork = cover
     var loading = one
     loading.artPending = true
-    check(TrackSlide.cap == 1.5 && ArtHold.limit == TrackSlide.cap
+    check(TrackSlide.recede == 1.5 && ArtHold.limit == TrackSlide.cap
             && TrackSlide.waited(heldFor: 0.2, sincePress: 1.4) == 1.4
             && TrackSlide.waited(heldFor: 0.2, sincePress: nil) == 0.2
             && TrackSlide.waited(heldFor: 0.2, sincePress: TrackSlide.pressWindow + 1) == 0.2
             && ArtHold.decide(shown: shown, next: loading, heldFor: TrackSlide.waited(heldFor: 0.1, sincePress: 1.0)) == .hold
-            && ArtHold.decide(shown: shown, next: loading, heldFor: TrackSlide.waited(heldFor: 0.1, sincePress: 1.5)) == .show,
-          "track slide: the wait for the new song and its cover ends 1.5 s after the press at most")
+            && ArtHold.decide(shown: shown, next: loading, heldFor: TrackSlide.waited(heldFor: 0.1, sincePress: TrackSlide.cap)) == .show,
+          "track slide: the wait for the new song and its cover ends 4 s after the press at most")
     let rest = TrackSlide.oldCover(waited: 0, slid: 0, reduceMotion: false)
     let waitedOut = TrackSlide.oldCover(waited: 1, slid: 0, reduceMotion: false)
     let gone = TrackSlide.oldCover(waited: 1, slid: 1, reduceMotion: false)
@@ -19461,7 +19521,7 @@ do {
     let pressBody = slideWindow.components(separatedBy: "func press(_ press: TrackSlide.Press").last?
         .components(separatedBy: "private func settle()").first ?? ""
     check(pressBody.contains("deadline: .now() + TrackSlide.cap)") && !pressBody.contains("TrackSlide.pressWindow"),
-          "track slide: a press that changes nothing lets the old cover ease back after 1.5 s, not 3 s")
+          "track slide: a press that changes nothing lets the old cover ease back after the 4 s wait, not 3 s")
     check(pressBody.components(separatedBy: "pressed = press").first?.contains("guard press.direction != nil") == true,
           "track slide: Play/Pause during the wait ends the recede and keeps the Next or Previous it followed")
     check(slideWindow.contains("let arrived = TrackSlide.coverArrived(shown, track)")
@@ -19474,11 +19534,14 @@ do {
           "track slide: no frame clock re-renders the covers or the lines while they slide")
     check(slideViews.contains("CAAnimationGroup") && slideViews.contains("TrackSlide.slideCurve")
             && slideViews.contains("TrackSlide.waitCurve") && slideViews.contains("TrackSlide.settleCurve")
-            && slideViews.contains("TrackSlide.cap") && slideViews.contains("TrackSlide.fadeDuration")
+            && slideViews.contains("TrackSlide.recede") && slideViews.contains("TrackSlide.fadeDuration")
             && slideViews.contains("TrackSlide.oldCover(") && slideViews.contains("TrackSlide.incomingOffset(")
             && slideViews.contains("TrackSlide.textAway") && slideViews.contains("TrackSlide.textFrom")
             && slideViews.contains("beginTime") && slideViews.contains("CATransaction.setDisableActions(true)"),
           "track slide: Core Animation plays the slide on the render server, with TrackSlide's curves and values")
+    check(slideViews.contains("TrackSlide.breatheAfter") && slideViews.contains("pulse.isAdditive = true")
+            && slideViews.contains("removeAnimation(forKey: \"breathe\")"),
+          "track slide: a long wait breathes on the render server, and the next step starts from the breath it stops")
     let slideTint = "AmbientTint(tide: SoundTide.shared, color: CoverColors.of((slide.outgoing ?? track).artwork)[0]"
     check(slideWindow.contains(slideTint) && slidePanel.contains(slideTint),
           "track slide: the hero's tint keeps the old cover's colour until the slide ends")

@@ -328,7 +328,7 @@ pub mod ambient_breath {
         if !on_screen || reduce_motion {
             return None;
         }
-        Some(if live > 0.0 { 1.0 / 60.0 } else { 1.0 / 15.0 })
+        Some(if live > 0.0 { 1.0 / 60.0 } else { 1.0 / 30.0 })
     }
 
     pub fn contrast(a: Rgb, b: Rgb) -> f64 {
@@ -429,11 +429,6 @@ impl Badge {
             (true, true) => Badge::Filled,
         }
     }
-
-    /// The waiting ring's width on a badge `size` wide.
-    pub fn ring_width(size: f32) -> f32 {
-        (size / 18.0).max(1.5)
-    }
 }
 
 /// The header's brand mark breathes, 4 % larger and 20 % fainter at the top
@@ -476,6 +471,19 @@ pub fn focus_ring_shown(was: bool, input: FocusInput) -> bool {
         FocusInput::OtherKey => was,
         FocusInput::Pointer => false,
     }
+}
+
+/// The focus input a key press brings; none for the presses winit makes up
+/// for keys held while the window regains the focus, as Alt+Tab's Tab.
+pub fn key_focus_input(tab: bool, synthetic: bool) -> Option<FocusInput> {
+    if synthetic {
+        return None;
+    }
+    Some(if tab {
+        FocusInput::Tab
+    } else {
+        FocusInput::OtherKey
+    })
 }
 
 #[cfg(test)]
@@ -811,7 +819,11 @@ mod tests {
         use ambient_breath::frame_interval;
         assert_eq!(frame_interval(false, false, 1.0), None);
         assert_eq!(frame_interval(true, true, 1.0), None);
-        assert!(frame_interval(true, false, 0.0).unwrap_or(0.0) >= 1.0 / 20.0);
+        assert_eq!(
+            frame_interval(true, false, 0.0),
+            Some(1.0 / 30.0),
+            "the Mac's idle sway"
+        );
         assert!(frame_interval(true, false, 1.0).unwrap_or(1.0) <= 1.0 / 30.0);
     }
 
@@ -900,21 +912,28 @@ mod tests {
         }
     }
 
+    /// Segoe UI Variable sets smaller than the Mac's system font, so on
+    /// Windows each Mac style is 14/13 of its point size; Inter keeps it.
     #[test]
     fn text_sizes_are_the_macs_text_styles_in_logical_pixels() {
         let tokens = include_str!("../ui/tokens.slint");
-        for (style, size) in [
-            ("caption", 10),
-            ("caption2", 10),
-            ("subheadline", 11),
-            ("callout", 12),
-            ("body", 13),
-            ("headline", 13),
-            ("title3", 15),
-            ("title2", 17),
-            ("wordmark", 21),
-            ("pairing-code", 28),
+        for (style, windows, mac) in [
+            ("caption", 11, 10),
+            ("caption2", 11, 10),
+            ("subheadline", 12, 11),
+            ("callout", 13, 12),
+            ("body", 14, 13),
+            ("headline", 14, 13),
+            ("title3", 16, 15),
+            ("title2", 18, 17),
         ] {
+            let line = format!(
+                "out property <length> font-size-{style}: \
+                 Platform.os == OperatingSystemType.windows ? {windows}px : {mac}px;"
+            );
+            assert!(tokens.contains(&line), "{line}");
+        }
+        for (style, size) in [("wordmark", 21), ("pairing-code", 28)] {
             let line = format!("out property <length> font-size-{style}: {size}px;");
             assert!(tokens.contains(&line), "{line}");
         }
@@ -926,8 +945,6 @@ mod tests {
         assert_eq!(Badge::of(false, false), Badge::Off);
         assert_eq!(Badge::of(true, false), Badge::Ring);
         assert_eq!(Badge::of(true, true), Badge::Filled);
-        assert_eq!(Badge::ring_width(18.0), 1.5);
-        assert_eq!(Badge::ring_width(36.0), 2.0);
     }
 
     #[test]
@@ -958,5 +975,13 @@ mod tests {
             "arrows keep it"
         );
         assert!(!focus_ring_shown(true, FocusInput::Pointer));
+    }
+
+    #[test]
+    fn keys_held_through_alt_tab_back_into_the_window_leave_the_focus_ring_hidden() {
+        assert_eq!(key_focus_input(true, true), None, "a made-up Tab");
+        assert_eq!(key_focus_input(false, true), None, "a made-up Alt");
+        assert_eq!(key_focus_input(true, false), Some(FocusInput::Tab));
+        assert_eq!(key_focus_input(false, false), Some(FocusInput::OtherKey));
     }
 }

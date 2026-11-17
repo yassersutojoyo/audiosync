@@ -208,7 +208,7 @@ mod tests {
         assert_eq!(driver.mode.live(), 0.0, "back to the breath");
         assert_eq!(
             driver.interval(true, false),
-            Some(Duration::from_secs_f64(1.0 / 15.0))
+            Some(Duration::from_secs_f64(1.0 / 30.0))
         );
     }
 
