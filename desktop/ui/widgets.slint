@@ -2407,7 +2407,8 @@ component DelayStep inherits Rectangle {
     border-radius: 5px;
     border-width: Tokens.dark ? 0px : max(0.5px, 1phx);
     border-color: Fluent.stroke;
-    background: touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : Fluent.native-control;
+    // A Mac bordered button has no hover look; pressing it greys it, a step lighter in dark.
+    background: touch.pressed ? Tokens.text.with-alpha(Tokens.dark ? 0.3 : 0.1) : Fluent.native-control;
     drop-shadow-blur: 2px;
     drop-shadow-offset-y: 0.5px;
     drop-shadow-color: Fluent.native-control-shadow;
