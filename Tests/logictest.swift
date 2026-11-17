@@ -8041,7 +8041,7 @@ do {
             && column.contains(".padding(.bottom, MainColumns.separatorPadding.bottom)"),
           "left column: the slider knob and the Presets icon sit 12 pt from the hairline between them",
           "\(MainColumns.separatorPadding)")
-    let castAdd = part("MainWindow.swift", "if lines.castAdd { Divider() }", "\n                }\n")
+    let castAdd = part("MainWindow.swift", "if lines.castAdd { Divider()", "\n                }\n")
     check(castAdd.contains(".buttonStyle(HouseButtonStyle(small: true))") && !castAdd.contains(".controlSize(.small)"),
           "speaker list: Add by Address is the house button, not a default push button")
 }
