@@ -2133,11 +2133,11 @@ fn an_off_speakers_slider_is_dimmed_as_the_macs() {
     for look in [
         "background: root.idle ? (Tokens.dark ? #363533 : #f7f7f7) : root.track;",
         "background: root.idle ? transparent : root.small && Tokens.dark ? Tokens.text.with-alpha(0.26) : Tokens.text;",
-        "background: root.idle ? (Tokens.dark ? #464543 : #ffffff) : root.small && Tokens.dark ? #959595",
+        "background: #464543;\n            opacity: root.idle && Tokens.dark ? 1 : 0;",
     ] {
         assert!(slider.contains(look), "{look}");
     }
-    assert!(!slider.contains("opacity: root.idle"));
+    assert!(!slider.contains("opacity: root.idle && Tokens.dark ? 0.25"));
     assert!(slider.contains("enabled: root.enabled;"));
 }
 
