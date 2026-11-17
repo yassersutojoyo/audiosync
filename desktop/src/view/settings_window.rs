@@ -62,6 +62,11 @@ impl App {
         if fading {
             self.settings.set_revealed(false);
             crate::platform::set_cloaked(self.settings.window(), true);
+        } else if !self.settings.window().is_visible() {
+            // A fading opening's timer left from just before has nothing to do.
+            SETTINGS_OPENING.with(|count| count.set(count.get() + 1));
+            crate::platform::set_cloaked(self.settings.window(), false);
+            self.settings.set_revealed(true);
         }
         if let Err(error) = self.settings.show() {
             self.show_window_error(&error);

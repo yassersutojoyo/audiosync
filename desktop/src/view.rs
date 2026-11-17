@@ -10204,6 +10204,44 @@ mod tests {
         assert_eq!(volume(), 50.0);
     }
 
+    /// Settings reopened with animation effects off right after a fading
+    /// opening shows at once: the fading opening's timer is left with
+    /// nothing to do.
+    #[test]
+    fn a_reopen_with_animation_effects_off_shows_settings_at_once() {
+        hold_clock();
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        draw_frames();
+        app.main.invoke_settings_requested();
+        advance_clock(Duration::from_millis(30));
+        draw_frames();
+        app.settings.hide().expect("Settings hides");
+        app.main.global::<Motion>().set_on(false);
+        app.main.invoke_settings_requested();
+        assert!(!crate::platform::is_cloaked(app.settings.window()));
+        assert!(app.settings.get_revealed());
+    }
+
+    /// A new zone's empty name field still names the zone for Narrator, as
+    /// the Mac's "Name for" label does.
+    #[test]
+    fn a_new_zones_empty_name_field_is_read_with_the_zones_name() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::zones_preview());
+        app.main.show().expect("the main window shows");
+        let name = format!("Zone {}", app.snapshot().zones.len() + 1);
+        app.main.invoke_new_zone_requested();
+        draw_frames();
+        let label = format!("Name for {name}");
+        assert!(
+            ElementHandle::find_by_accessible_label(&app.main, &label)
+                .next()
+                .is_some(),
+            "{label}"
+        );
+    }
+
     /// A Cast speaker's delay is a wait, never below 0, so its row shows it
     /// with no sign, as the Mac's does.
     // covers: S450
