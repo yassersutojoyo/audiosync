@@ -13533,7 +13533,7 @@ pub(crate) mod tests {
     }
 
     /// This PC and Connected Speakers stand 18 px apart, the Mac's
-    /// sectionGap (BrandTokens.swift:154, MainWindow.swift:292).
+    /// sectionGap (BrandTokens.swift:156, used at MainWindow.swift:292).
     #[test]
     fn the_speaker_sections_stand_the_macs_section_gap_apart() {
         let app = narrow_app(MockBackend::new());
@@ -13579,9 +13579,9 @@ pub(crate) mod tests {
         assert_eq!(gap, 4.0, "the fix follows the hint");
     }
 
-    /// A row's options button is the Mac's borderless ellipsis.circle menu,
-    /// 21 × 15 (MainWindow.swift:2644-2653), so the delay chip before it sits
-    /// where the Mac's does.
+    /// A row's options button is the Mac's borderless ellipsis.circle menu
+    /// (optionsMenu, MainWindow.swift:2643-2653), 21 × 15 as measured on the
+    /// Mac photo, so the delay chip before it sits where the Mac's does.
     #[test]
     fn a_rows_options_button_is_the_macs_size() {
         let app = narrow_app(MockBackend::new());

@@ -40,6 +40,7 @@ Poppins font.
 | Mint | `#63DAC2` | Mark and "sync" on dark backgrounds |
 | Off-white | `#F6F6F6` | "audio" on dark backgrounds |
 | Charcoal | `#292929` | "audio" on light backgrounds |
+| Light grey | `#E0E0E0` | Body text in the apps on dark backgrounds |
 
 ## Design tokens
 

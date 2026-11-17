@@ -438,7 +438,8 @@ fn camel_case(kebab: &str) -> String {
 }
 
 /// Dark body text is the Mac's label color as its window shows it
-/// (Color.primary, Brand.swift:54: white at 84.7% over #323232, 223.6),
+/// (Color.primary, Brand.swift:54: white at 84.7% over #323232 is 223.6,
+/// which rounds to E0, 224),
 /// not the wordmark's off-white; secondary text follows at 0.7.
 #[test]
 fn dark_body_text_is_the_macs_label_color() {
@@ -454,10 +455,18 @@ fn an_off_speakers_glyph_is_the_macs_secondary() {
         .map(str::trim)
         .find(|line| line.starts_with("property <color> ink: root.plays ?"))
         .expect("the toggle's ink");
-    assert!(
-        line.contains("RowState.off ? (Tokens.dark ? #ffffff8c : #00000080)"),
-        "{line}"
-    );
+    let off = &line[line
+        .find("RowState.off ? (Tokens.dark ? ")
+        .expect("an off branch")
+        + 30..];
+    let rgba = |hex: &str| -> [u8; 4] {
+        [0, 2, 4, 6].map(|i| u8::from_str_radix(&hex[i + 1..i + 3], 16).expect("a hex colour"))
+    };
+    let (dark, light) = (rgba(&off[..9]), rgba(&off[12..21]));
+    assert_eq!(&dark[..3], &[255, 255, 255], "{line}");
+    assert!((f64::from(dark[3]) / 255.0 - 0.55).abs() < 0.005, "{line}");
+    assert_eq!(&light[..3], &[0, 0, 0], "{line}");
+    assert!((f64::from(light[3]) / 255.0 - 0.5).abs() < 0.005, "{line}");
 }
 
 /// Every token color the UI draws text or icons in is covered by the
