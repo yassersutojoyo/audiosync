@@ -2634,6 +2634,112 @@ mod tests {
         }
     }
 
+    /// A built-in output held back 211 ms behind a Bluetooth one on the same
+    /// ring, as in the Mac sitting of 2026-11-17, rendered as [`Stepped`].
+    struct BuiltInAndBluetooth {
+        ring: Arc<Ring>,
+        writer: crate::ring::RingWriter,
+        built_in: (Renderer, RendererControl),
+        bluetooth: Option<(Renderer, RendererControl)>,
+        block: Vec<f32>,
+        out: Vec<f32>,
+        now: u64,
+    }
+
+    const HELD_211_MS: i64 = 10_128;
+
+    impl BuiltInAndBluetooth {
+        fn output(
+            ring: &Arc<Ring>,
+            bluetooth: bool,
+            hold_back: i64,
+        ) -> (Renderer, RendererControl) {
+            let reader = Reader::new(Arc::clone(ring), 48_000);
+            let control = RendererControl::new(&reader);
+            control.set_bluetooth(bluetooth);
+            control.set_delay_frames(hold_back);
+            let gain = Arc::new(SharedGain::new(1.0));
+            let renderer = Renderer::new(reader, &control, gain, 48_000, 44_100, 2).unwrap();
+            (renderer, control)
+        }
+
+        fn new() -> BuiltInAndBluetooth {
+            let ring = Ring::for_rate(48_000).unwrap();
+            let writer = ring.writer().unwrap();
+            let built_in = Self::output(&ring, false, HELD_211_MS);
+            let bluetooth = Some(Self::output(&ring, true, 0));
+            BuiltInAndBluetooth {
+                ring,
+                writer,
+                built_in,
+                bluetooth,
+                block: vec![0.5; 480 * 2],
+                out: vec![0.0; 441 * 2],
+                now: 0,
+            }
+        }
+
+        fn step(&mut self, count: usize) {
+            for _ in 0..count {
+                self.now += 10_000_000;
+                self.writer.write_at(&self.block, 480, self.now);
+                let at = self.now + 1_000_000;
+                self.built_in.0.render_at(&mut self.out, at);
+                if let Some((renderer, _)) = self.bluetooth.as_mut() {
+                    renderer.render_at(&mut self.out, at);
+                }
+            }
+        }
+
+        fn built_in_resyncs(&self) -> u64 {
+            self.built_in.1.counters().resyncs
+        }
+
+        /// Stops the Bluetooth output after its fade, rests `rest` callbacks
+        /// and starts it again; returns the built-in's re-anchors from the
+        /// new start on. `quiet` is S325's restart: its start lead held
+        /// meanwhile, the built-in's hold-back left alone. Otherwise it is a
+        /// switch-off and on, which re-times the built-in to 0 and back.
+        fn restart_bluetooth(&mut self, quiet: bool, rest: usize) -> u64 {
+            let (_, control) = self.bluetooth.as_ref().unwrap();
+            let held = quiet.then(|| control.hold_lead().expect("its lead was published"));
+            if !quiet {
+                self.built_in.1.set_delay_frames(0);
+            }
+            control.request_fade_out();
+            self.step(10);
+            self.bluetooth = None;
+            self.step(rest);
+            let before = self.built_in_resyncs();
+            self.bluetooth = Some(Self::output(&self.ring, true, 0));
+            if !quiet {
+                self.built_in.1.set_delay_frames(HELD_211_MS);
+            }
+            self.step(1);
+            drop(held);
+            self.step(100);
+            self.built_in_resyncs() - before
+        }
+    }
+
+    // covers: S325
+    #[test]
+    fn a_quiet_bluetooth_restart_reanchors_the_other_outputs_as_a_switch_off_and_on_does() {
+        let mut toggled = BuiltInAndBluetooth::new();
+        toggled.step(300);
+        let toggle = toggled.restart_bluetooth(false, 24);
+        assert!(toggle >= 1, "a switch-off and on re-anchors the built-in");
+
+        let mut restarted = BuiltInAndBluetooth::new();
+        restarted.step(300);
+        let quiet = restarted.restart_bluetooth(true, 118);
+        assert!(
+            quiet >= 1,
+            "the quiet restart leaves the built-in on its old anchor: {quiet} re-anchors, \
+             the switch-off and on {toggle}"
+        );
+    }
+
     #[test]
     fn the_level_is_taken_from_what_the_device_gets() {
         let mut stepped = Stepped::new();
