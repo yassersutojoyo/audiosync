@@ -83,6 +83,26 @@ Type: files; Name: "{app}\audiosync.exe.new"
 Type: files; Name: "{app}\THIRD-PARTY-NOTICES.txt.bak"
 Type: files; Name: "{app}\THIRD-PARTY-NOTICES.txt.new"
 
+[Code]
+// The uninstaller has no Restart Manager step like CloseApplications, and a
+// running copy holds audiosync.exe, so it is stopped here as install.ps1 does.
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Exe: String;
+  ResultCode: Integer;
+begin
+  if CurUninstallStep = usUninstall then
+  begin
+    Exe := ExpandConstant('{app}\audiosync.exe');
+    StringChangeEx(Exe, '''', '''''', True);
+    Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+      '-NoProfile -NonInteractive -Command "Get-Process audiosync -ErrorAction SilentlyContinue | ' +
+      'Where-Object { $_.Path -eq ''' + Exe + ''' } | ' +
+      'ForEach-Object { $_ | Stop-Process -Force; $_ | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue }"',
+      '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  end;
+end;
+
 [Messages]
 SetupWindowTitle=Install %1
 PrivilegesRequiredOverrideTitle=Who uses AudioSync?
