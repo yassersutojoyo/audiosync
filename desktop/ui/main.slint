@@ -3338,15 +3338,10 @@ export component MainWindow inherits Window {
             }
         }
 
-        // The 5 the header moved up, so the notices and columns stay put.
-        Rectangle {
-            height: 5px;
-        }
-
         if root.notices.length > 0: NoticeStack {
             eased: true;
             staying: root.notices-staying;
-            lead: Fluent.gap;
+            lead: Fluent.window-gap;
             max-width: root.content-max-width;
             padding-right: root.scroll-gutter;
             notices: root.notices;
@@ -3378,7 +3373,7 @@ export component MainWindow inherits Window {
         }
 
         HorizontalLayout {
-            padding-top: Fluent.gap;
+            padding-top: Fluent.window-gap;
             spacing: Fluent.column-gap;
             vertical-stretch: 1;
             // Past the speaker list's widest, the extra width stays empty on the right.
