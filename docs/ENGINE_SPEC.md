@@ -4253,7 +4253,7 @@ The checks for S150, S245 to S250 and S271 in the Rust core (`core/tests/policy_
 | tab_stops_on_a_main_window_zone_arrow_with_a_member_present_where_space_and_enter_fold (`desktop/src/view.rs`) | S359 |
 | tab_stops_on_a_flyout_zone_arrow_with_a_member_present_where_space_and_enter_fold (`desktop/src/view.rs`) | S359 |
 | a_zone_arrow_keeps_the_focus_when_another_zone_is_deleted (`desktop/src/view.rs`) | S359 |
-| a_zone_volume_works_while_none_of_its_members_is_present (`desktop/src/view.rs`) | S359 |
+| a_zone_shows_no_volume_while_none_of_its_members_is_present (`desktop/src/view.rs`) | S359 |
 | speakers_move_between_zones_and_back_from_their_menus (`desktop/src/view.rs`) | S150, S245, S359 |
 | a_new_zone_needs_a_speaker_that_is_on_and_names_can_change (`desktop/src/adapter.rs`) | S150, S245 |
 | a_speaker_moves_between_zones_from_its_menu (`desktop/src/adapter.rs`) | S150, S245 |
