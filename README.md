@@ -88,7 +88,7 @@ Each install script checks the download against the release's SHA-256 checksums;
 
 - macOS, in Terminal: `AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync`, then attach `/tmp/audiosync-debug.log`.
 - Windows, in PowerShell in the app's folder: `$env:AUDIOSYNC_DEBUG=1; .\audiosync.exe`, then attach `%TEMP%\audiosync-debug.log` ([more on the exe](desktop/README.md#running-the-exe)).
-- Linux, in a terminal: `AUDIOSYNC_DEBUG=1 audiosync` (use `~/.local/bin/audiosync` after the script install, or the AppImage's path), then attach `~/.local/state/audiosync/debug.log`.
+- Linux, in a terminal: `AUDIOSYNC_DEBUG=1 audiosync` (use `~/.local/bin/audiosync` after the script install, or the AppImage's path), then attach `$XDG_STATE_HOME/audiosync/debug.log` (`~/.local/state/audiosync/debug.log` when `XDG_STATE_HOME` isn't set).
 
 ## License and credits
 

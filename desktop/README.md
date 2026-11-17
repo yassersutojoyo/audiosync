@@ -84,6 +84,12 @@ build you make yourself, you write that file as shown below), and run it.
   `%TEMP%\audiosync-debug.log`; it starts over at every launch and stops at
   50 MB. [docs/DEVELOPMENT.md](../docs/DEVELOPMENT.md) says what it records.
   Attach it when you report a problem.
+- **Debug log, MSIX install:** quit AudioSync from the tray, then run
+  `$env:AUDIOSYNC_DEBUG=1; audiosync.exe` in PowerShell from any folder (the
+  package puts `audiosync.exe` on the PATH). The log goes to
+  `audiosync-debug.log` in the package's `LocalCache` folder, not `%TEMP%`:
+  look under `%LOCALAPPDATA%\Packages` in the folder with `AudioSync` in its
+  name.
 
 ## Linux: a silent output
 
