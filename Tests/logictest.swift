@@ -18052,6 +18052,19 @@ do {
           "Delete Zone: asks first, Return and Escape press Cancel (AppKit gives a Cancel title only Escape), Delete is destructive")
 }
 
+// MARK: The wheel over the master volume (MenuBar.swift, WindowRules.swift)
+do {
+    let wheelBar = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
+    check(wheelBar.contains("MasterTrack.level(afterScroll:"),
+          "master volume: the wheel and the trackpad over the slider move it")
+    check(MasterTrack.level(afterScroll: 1, precise: false, from: 40) == 43
+            && MasterTrack.level(afterScroll: -3, precise: false, from: 40) == 37
+            && MasterTrack.level(afterScroll: 20, precise: true, from: 40) == 46
+            && MasterTrack.level(afterScroll: 1, precise: false, from: 99) == 100
+            && MasterTrack.level(afterScroll: -1, precise: false, from: 2) == 0,
+          "master volume: a wheel notch moves it by the volume keys' step, 10 trackpad points by one, within 0 and 100")
+}
+
 // MARK: A delay pane closed while its field has the focus leaves no ring on a neighbour (MainWindow.swift, PanelZoneHeader.swift)
 do {
     let ringWindow = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""

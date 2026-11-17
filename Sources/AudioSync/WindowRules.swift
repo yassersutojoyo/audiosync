@@ -1600,4 +1600,11 @@ enum MasterTrack {
         case .end: return 100
         }
     }
+
+    /// A scroll over the slider, positive upwards, moves it by the volume
+    /// keys' step: one per wheel notch, or per 10 points of a trackpad swipe.
+    static func level(afterScroll delta: Double, precise: Bool, from level: Double) -> Double {
+        let notches = precise ? delta / 10 : delta > 0 ? 1 : delta < 0 ? -1 : 0
+        return max(0, min(100, level + notches * VolumeKeys.step))
+    }
 }

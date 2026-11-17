@@ -2964,6 +2964,11 @@ struct MasterSlider: View {
             .onEnded { _ in click.clicked = true; focused = true })
         }
         .frame(height: MasterSlider.height)
+        .background(ScrollWatch { event in
+            let up = event.isDirectionInvertedFromDevice ? -event.scrollingDeltaY : event.scrollingDeltaY
+            model.actions.setMaster(MasterTrack.level(afterScroll: Double(up), precise: event.hasPreciseScrollingDeltas,
+                                                      from: model.master))
+        })
         // As the equalizer bands: NSSlider's rule, the ring only under keyboard navigation, a clicked slider keeps the arrows.
         .focusable(interactions: click.clicked ? .edit : .activate)
         .focused($focused)
@@ -2980,6 +2985,33 @@ struct MasterSlider: View {
         }
         .accessibilityLabel(text.masterVolume)
         .accessibilityValue(text.volumeValue(model.master))
+    }
+}
+
+/// Hands the scrolls over the view it backs to `scrolled` and keeps them from
+/// the column's scroll view: SwiftUI's own views here let them pass.
+private struct ScrollWatch: NSViewRepresentable {
+    let scrolled: (NSEvent) -> Void
+
+    func makeNSView(context: Context) -> WatchView { WatchView() }
+    func updateNSView(_ view: WatchView, context: Context) { view.scrolled = scrolled }
+
+    final class WatchView: NSView {
+        var scrolled: (NSEvent) -> Void = { _ in }
+        private var monitor: Any?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+            guard window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                guard let self, let window = self.window, event.window === window,
+                      self.bounds.contains(self.convert(event.locationInWindow, from: nil)) else { return event }
+                self.scrolled(event)
+                return nil
+            }
+        }
     }
 }
 
