@@ -471,6 +471,8 @@ struct Shared {
     /// in ns (S231); they differ only when the report was rejected.
     reported_latency_ns: AtomicU64,
     output_latency_ns: AtomicU64,
+    /// How long after a read its first frame is heard, in ns (S478).
+    heard_after_ns: AtomicU64,
     /// The level the device got, for the debug log.
     level: OutputLevel,
     /// The ring whose session lead counts this renderer, and its slot
@@ -562,6 +564,7 @@ impl RendererControl {
                 bluetooth: AtomicBool::new(false),
                 reported_latency_ns: AtomicU64::new(0),
                 output_latency_ns: AtomicU64::new(0),
+                heard_after_ns: AtomicU64::new(0),
                 level: OutputLevel::default(),
                 ring,
                 slot,
@@ -798,6 +801,18 @@ impl RendererControl {
             .store(reported_ns, Ordering::Relaxed);
         self.shared.output_latency_ns.store(used, Ordering::Relaxed);
         used
+    }
+
+    /// Sets how long after a read its first frame is heard, in ns, which
+    /// the reader's delay leaves out (S478); 0, the default, leaves it whole.
+    pub fn set_heard_after_ns(&self, ns: u64) {
+        self.shared.heard_after_ns.store(ns, Ordering::Relaxed);
+        self.shared.delay_flag.store(true, Ordering::Release);
+    }
+
+    /// How long after a read its first frame is heard, in ns (S478).
+    pub fn heard_after_ns(&self) -> u64 {
+        self.shared.heard_after_ns.load(Ordering::Relaxed)
     }
 
     /// The output latency in use, in ns (S231); 0 before one was reported.
@@ -2302,9 +2317,13 @@ impl Renderer {
     /// session lead, less the converter's latency.
     fn wanted_reader_delay(&self) -> i64 {
         let lead = self.shared.leads().session_lead();
+        let heard_after = u128::from(self.shared.heard_after_ns.load(Ordering::Relaxed))
+            * u128::from(self.capture_rate)
+            / 1_000_000_000;
         self.hold_back
             .saturating_add(lead)
             .saturating_sub(self.latency)
+            .saturating_sub(i64::try_from(heard_after).unwrap_or(i64::MAX))
             .max(0)
     }
 
@@ -2749,6 +2768,21 @@ mod tests {
                 s.built_in_off()
             );
         }
+    }
+
+    // covers: S478
+    #[test]
+    fn a_sink_heard_one_quantum_after_the_read_reads_one_quantum_closer() {
+        let mut s = Stepped::new();
+        s.control.set_delay_frames(4800);
+        // 1024 frames at 48 kHz, as a PipeWire null sink reports.
+        s.control.set_heard_after_ns(21_333_334);
+        s.step(100);
+        let lead = s.renderer.shared.leads().session_lead();
+        assert_eq!(
+            s.renderer.reader_delay,
+            4800 + lead - s.renderer.latency - 1024
+        );
     }
 
     // covers: S187

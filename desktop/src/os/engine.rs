@@ -34,9 +34,18 @@ pub fn backend<D: Driver + 'static>(
     restore_records(&mut audio, log, settings_file.path());
     #[cfg(windows)]
     audio.set_restore_guard(crate::restore_guard::keeper());
-    // S473: Linux can't move the default sink, so it gets no copy instead.
+    // S473 while S477's own sink isn't the default.
     #[cfg(target_os = "linux")]
     audio.hold_out_default_sink();
+    #[cfg(target_os = "linux")]
+    if let Some(endpoints) = audio.driver_default_endpoints() {
+        audio.set_default_switch(
+            endpoints,
+            Box::new(settings::DefaultRecordFile(
+                settings_file.path().map(std::path::Path::to_path_buf),
+            )),
+        );
+    }
     let read = settings_file.load();
     start_airplay(&mut audio, log);
     let (cast_file, cast_unread) = start_cast(&mut audio, log);
