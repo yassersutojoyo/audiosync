@@ -1053,6 +1053,21 @@ mod tests {
         );
     }
 
+    /// Windows debug log, 2026-11-18 03:41: Spotify's "Missing You" showed
+    /// without a cover; its thumbnail can come after the title.
+    #[test]
+    fn a_thumbnail_that_comes_after_the_title_reaches_both_readers() {
+        let (fake, _) = fake(Thumbnail::Empty);
+        let mut reader = Reader::new(fake);
+        let (track, card) = poll(&mut reader);
+        assert!(track.is_some_and(|track| track.artwork.is_none()));
+        assert!(card.is_some_and(|card| card.artwork.is_none()));
+        reader.sessions.thumbnail = Thumbnail::Image;
+        let (track, card) = poll(&mut reader);
+        assert!(track.is_some_and(|track| track.artwork.is_some()));
+        assert!(card.is_some_and(|card| card.artwork.is_some()));
+    }
+
     #[test]
     fn a_good_cover_after_a_decode_failure_clears_it() {
         let (fake, _) = fake(Thumbnail::Undecodable);
