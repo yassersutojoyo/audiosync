@@ -2785,6 +2785,28 @@ mod tests {
         );
     }
 
+    // covers: S478
+    #[test]
+    fn outputs_heard_long_after_the_read_stay_their_delays_apart_at_delay_zero() {
+        let ring = Ring::for_rate(48_000).unwrap();
+        let mut writer = ring.writer().unwrap();
+        let mut outputs = [0, 4800].map(|delay| BuiltInAndBluetooth::output(&ring, false, delay));
+        let block = vec![0.5; 480 * 2];
+        let mut out = vec![0.0; 441 * 2];
+        for now in (1..200).map(|step| step * 10_000_000) {
+            writer.write_at(&block, 480, now);
+            for (renderer, control) in &mut outputs {
+                renderer.render_at(&mut out, now + 1_000_000);
+                // Reported after the first callback: two quanta, more than
+                // the delay-0 output's lead less its converter's latency.
+                if now == 10_000_000 {
+                    control.set_heard_after_ns(42_666_667);
+                }
+            }
+        }
+        assert_eq!(outputs[1].0.reader_delay - outputs[0].0.reader_delay, 4800);
+    }
+
     // covers: S187
     #[test]
     fn a_delay_given_again_at_the_same_value_re_anchors_the_output_once() {
