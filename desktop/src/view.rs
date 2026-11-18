@@ -13553,10 +13553,7 @@ pub(crate) mod tests {
             i_slint_backend_testing::ElementHandle::find_by_element_type_name(&app.main, "Divider")
                 .find(|line| (line.absolute_position().y - top).abs() < 0.5)
                 .expect("the line at the pane's top");
-        assert_eq!(
-            line.absolute_position().x - row.absolute_position().x,
-            54.0
-        );
+        assert_eq!(line.absolute_position().x - row.absolute_position().x, 54.0);
     }
 
     /// With Add by Address under it, the AirPlay delay's note shows whole
@@ -24235,7 +24232,7 @@ pub(crate) mod tests {
     }
 
     /// A speaker's rename field fills its name slot, at least 120 px wide,
-    /// at the Mac's 22 px height, so the row keeps its 49 px step.
+    /// at the Mac's 22 px height, so the row keeps its 54 px step.
     #[test]
     fn a_speaker_rename_field_fills_the_name_slot_at_the_macs_height() {
         let app = narrow_app(MockBackend::new());
