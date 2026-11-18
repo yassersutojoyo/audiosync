@@ -345,8 +345,10 @@ fn a_resume_waits_for_the_pause_flush_behind_a_delay_flush() {
     let (sender, _host, _events, key) = play(&receiver, 1);
     // A busy runner that stalls the sender for L restarts the timeline,
     // whose FLUSH comes first (P143).
+    // A stall may already have sent one; wait for the forced restart's own.
+    let stalled = receiver.log().count("FLUSH");
     sender.restart_timeline();
-    assert!(wait_until(LONG, || receiver.log().count("FLUSH") == 1));
+    assert!(wait_until(LONG, || receiver.log().count("FLUSH") > stalled));
     let restarted = receiver.log().audio.len();
     assert!(wait_until(LONG, || receiver.log().audio.len() >= restarted + 30));
     receiver
@@ -473,8 +475,10 @@ fn a_refused_pause_flush_lets_the_resume_play() {
     let (sender, _host, mut events, key) = play(&receiver, 1);
     // A busy runner that stalls the sender for L restarts the timeline,
     // whose FLUSH comes first (P143).
+    // A stall may already have sent one; wait for the forced restart's own.
+    let stalled = receiver.log().count("FLUSH");
     sender.restart_timeline();
-    assert!(wait_until(LONG, || receiver.log().count("FLUSH") == 1));
+    assert!(wait_until(LONG, || receiver.log().count("FLUSH") > stalled));
     let restarted = receiver.log().audio.len();
     assert!(wait_until(LONG, || receiver.log().audio.len() >= restarted + 30));
     // The restart's FLUSH was refused too; only the pause's refusal counts.
@@ -515,8 +519,10 @@ fn a_speaker_added_or_reconnected_while_paused_waits_for_the_resume() {
     let (sender, _host, mut events, first_key) = play(&first, 1);
     // A busy runner that stalls the sender for L restarts the timeline,
     // whose FLUSH comes before the pause's (P143).
+    // A stall may already have sent one; wait for the forced restart's own.
+    let stalled = first.log().count("FLUSH");
     sender.restart_timeline();
-    assert!(wait_until(LONG, || first.log().count("FLUSH") == 1));
+    assert!(wait_until(LONG, || first.log().count("FLUSH") > stalled));
     let restarted = first.log().audio.len();
     assert!(wait_until(LONG, || first.log().audio.len() >= restarted + 30));
     let flushed = first.log().count("FLUSH");
