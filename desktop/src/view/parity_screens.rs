@@ -381,13 +381,14 @@ fn presets_equalizer_and_calibrate_are_28_high_rows_6_apart_with_no_border() {
 }
 
 #[test]
-fn the_device_volume_fix_reads_in_the_text_colour() {
+fn the_device_volume_fix_reads_in_the_hints_secondary_colour() {
     let source = include_str!("../../ui/widgets.slint").replace("\r\n", "\n");
     let row = component(&source, "SpeakerRow");
     let fix = &row[row.find("fix-button := LinkButton {").expect("the fix")..];
     let fix = &fix[..fix.find("clicked =>").unwrap()];
-    // The Mac's .primary (DeviceVolumeViews.swift:34), not the link teal.
-    assert!(fix.contains("text-color: Tokens.text;"), "{fix}");
+    // The Mac's .primary (DeviceVolumeViews.swift:34) is the primary level of the
+    // hint's Brand.secondaryText (:43), drawn grey in the Mac render.
+    assert!(fix.contains("text-color: Tokens.secondary-text;"), "{fix}");
 }
 
 #[test]
@@ -411,4 +412,34 @@ fn the_equalizer_fills_its_bands_in_the_brand_teal() {
     // The Mac's .tint(Brand.teal) (EqualizerWindow.swift:122), not the system accent.
     assert!(!source.contains("Palette.accent-background"));
     assert!(source.contains("background: Tokens.teal;"));
+}
+
+#[test]
+fn the_text_colour_is_the_macs_primary_label_as_drawn() {
+    let text = crate::tokens::COLORS
+        .iter()
+        .find(|token| token.name == "text")
+        .expect("the text token");
+    // The Mac's Color.primary fill on the master slider as the real app draws it
+    // (MenuBar.swift:3014; MAIN-IDLE-terang-mac-off.png and -gelap-mac-off.png).
+    assert_eq!(text.light, [10, 10, 10]);
+    assert_eq!(text.dark, [240, 240, 240]);
+}
+
+#[test]
+fn the_equalizers_reset_is_the_macs_house_button() {
+    let source = include_str!("../../ui/equalizer.slint");
+    let at = source
+        .find("text: Strings.equalizer-reset;")
+        .expect("Reset");
+    let start = source[..at].rfind("Button {").expect("its button");
+    let button = &source[start - 5..at + source[at..].find("clicked =>").unwrap()];
+    // HouseButtonStyle (EqualizerWindow.swift:183): the teal tint, 13 pt, 26 pt high
+    // (HouseButtonStyle.swift:31-34), as the Add by Address sheet's buttons.
+    assert!(button.starts_with("Small"), "{button}");
+    assert!(button.contains("height: 26px;"), "{button}");
+    assert!(
+        button.contains("font-size: Tokens.font-size-body;"),
+        "{button}"
+    );
 }
