@@ -10,8 +10,7 @@
 #     while streaming, and the stream goes on (S192);
 #   Volume Mixer: with two endpoints, the source app's and AudioSync's mixer
 #     sliders each change what AudioSync's output plays;
-#   muted output: the System slider on a muted default unmutes it (S197), on
-#     a ROOT device only after its stored enumerator name is set to HDAUDIO;
+#   muted output: the System slider on a muted default unmutes it (S197);
 #   restore: with a second endpoint added, the default the app moved and every
 #     output's volume and mute are as found after a kill and an uninstall (S474).
 # Without an endpoint after the install it prints why and exits 0 with
@@ -388,48 +387,6 @@ $default = Get-Defaults
 "default output: $default" | Tee-Object -FilePath "$Work/env.txt" -Append
 if ($count -ne 1) { Not-Tried "$count active output endpoints after installing the driver (one needed)" }
 
-# For A1.8 on a ROOT device: the endpoint's stored enumerator name
-# (PKEY_Device_EnumeratorName) set to HDAUDIO, as on a PC's own sound card,
-# so AudioSync lists it as built-in and This PC gets its System slider. The
-# key belongs to SYSTEM, so a SYSTEM task writes it.
-$script:patched = $false
-if (-not $script:builtIn) {
-  $guid = [Endpoints]::Default(0) -replace '^.*\.', ''
-  $key = "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render\$guid\Properties"
-  $name = '{a45c254e-df1c-4efd-8020-67d146a850e0},24'
-  $read = { (reg query $key /v $name 2>$null | Select-String 'REG_') -replace '\s+', ' ' }
-  "enumerator name before: $(& $read)" | Tee-Object -FilePath "$Work/env.txt" -Append
-  Step 'enumerator route: SYSTEM write and audio services restart'
-  # Run 44356607387 hung past the job's limit and left no log: bounded now.
-  $route = Start-Job -ArgumentList $key, $name, $fixture -ScriptBlock {
-    param($key, $name, $fixture)
-    $cmd = Join-Path $fixture 'enumerator.cmd'
-    "reg add `"$key`" /v `"$name`" /t REG_SZ /d HDAUDIO /f > `"$fixture\enumerator.txt`" 2>&1" | Set-Content -Encoding ascii $cmd
-    $task = 'AudioSyncCI-enumerator'
-    Register-ScheduledTask -TaskName $task -Force -User 'SYSTEM' -RunLevel Highest `
-      -Action (New-ScheduledTaskAction -Execute 'cmd.exe' -Argument "/c `"$cmd`"") | Out-Null
-    Start-ScheduledTask -TaskName $task
-    for ($i = 0; $i -lt 30 -and (Get-ScheduledTask -TaskName $task).State -eq 'Running'; $i++) { Start-Sleep -Seconds 1 }
-    "reg add as SYSTEM: $(Get-Content "$fixture\enumerator.txt" -ErrorAction SilentlyContinue)"
-    Restart-Service -Name AudioEndpointBuilder -Force
-    Start-Service -Name Audiosrv
-    'audio services restarted'
-  }
-  $finished = [bool](Wait-Job $route -Timeout 150)
-  Receive-Job $route -ErrorAction Continue 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath "$Work/env.txt" -Append
-  if (-not $finished) {
-    Stop-Job $route
-    "NOT TRIED A1.8: the SYSTEM write or the audio services restart did not finish in 150 s" |
-      Tee-Object -FilePath "$Work/result.txt" -Append
-  }
-  $count = 0
-  for ($i = 0; $i -lt 60 -and $count -eq 0; $i++) { Start-Sleep -Seconds 1; $count = [Endpoints]::ActiveCount() }
-  $after = & $read
-  "enumerator name after the audio services restart: $after; active output endpoints: $count" | Tee-Object -FilePath "$Work/env.txt" -Append
-  $script:patched = $finished -and "$after" -match 'HDAUDIO'
-  Step "enumerator route done (patched: $script:patched, active output endpoints: $count)"
-}
-
 [Endpoints]::SetMute($false)
 [Endpoints]::SetLevel(0.5)
 
@@ -522,7 +479,8 @@ Step 'A1.8'
 # A1.8: the System slider on the muted default unmutes it.
 Select-String -Path $log -Pattern 'outputs listed' -SimpleMatch -Context 0, 2 -ErrorAction SilentlyContinue |
   Select-Object -First 1 | ForEach-Object { "log: $($_.Line) $($_.Context.PostContext -join ' ')" }
-if (-not ($script:builtIn -or $script:patched)) {
+if (-not $script:builtIn) {
+  # Setting its stored enumerator name and restarting the audio services lost the runner (runs 44356607387, 44365737411).
   "NOT TRIED A1.8: the endpoint is a ROOT device, listed as virtual, so This PC shows no System slider" |
     Tee-Object -FilePath "$Work/result.txt" -Append
 } else {
@@ -535,12 +493,7 @@ if (-not ($script:builtIn -or $script:patched)) {
   }
   $sliderType = New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, [System.Windows.Automation.ControlType]::Slider)
   $slider = Find-All $sliderType | Where-Object { $_.Current.Name -like 'Windows volume of *' } | Select-Object -First 1
-  if (-not $slider -and -not $script:builtIn) {
-    "NOT TRIED A1.8: with the enumerator name set to HDAUDIO, This PC still shows no System slider (opener found: $([bool]$opener))" |
-      Tee-Object -FilePath "$Work/result.txt" -Append
-  } else {
-    Check 'A1.8' ([bool]$slider) "the This PC row's System slider is there (opener found: $([bool]$opener))"
-  }
+  Check 'A1.8' ([bool]$slider) "the This PC row's System slider is there (opener found: $([bool]$opener))"
   if ($slider) {
     $script:main.SetFocus()
     $slider.SetFocus()
