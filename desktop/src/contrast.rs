@@ -259,7 +259,7 @@ fn the_boxed_fields_edge_reaches_3_to_1() {
     }
     let field = component_body(include_str!("../ui/widgets.slint"), "TextField");
     assert!(field.contains(
-        "border-color: root.boxed ? (input.has-focus ? Tokens.focus : Tokens.secondary-text) : root.compact && input.has-focus ? Tokens.teal : Fluent.stroke;"
+        "border-color: root.boxed ? (input.has-focus ? Tokens.focus : Tokens.secondary-text) : root.compact && input.has-focus ? Tokens.teal : root.raised && !Tokens.dark ? #00000026 : Fluent.stroke;"
     ));
 }
 
