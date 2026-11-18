@@ -91,7 +91,8 @@ component Band inherits VerticalLayout {
                         y: min(track.zero-y, track.thumb-y);
                         width: 4px;
                         height: abs(track.thumb-y - track.zero-y);
-                        background: Palette.accent-background;
+                        // The Mac's tint (EqualizerWindow.swift:122), not the system accent.
+                        background: Tokens.teal;
                     }
 
                     Rectangle {
@@ -117,7 +118,7 @@ component Band inherits VerticalLayout {
                             width: slider.has-focus ? 10px : hover.has-hover ? 14px : 12px;
                             height: self.width;
                             border-radius: self.width / 2;
-                            background: slider.has-focus ? Palette.accent-background.with-alpha(0.8) : hover.has-hover ? Palette.accent-background.with-alpha(0.9) : Palette.accent-background;
+                            background: slider.has-focus ? Tokens.teal.with-alpha(0.8) : hover.has-hover ? Tokens.teal.with-alpha(0.9) : Tokens.teal;
                             animate background, width { duration: 150ms; }
                         }
                     }
