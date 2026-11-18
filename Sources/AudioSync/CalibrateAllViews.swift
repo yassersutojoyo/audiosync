@@ -39,6 +39,7 @@ struct CalibrateAllButton: View {
             .modifier(QuickRow())
             .help(blocker.map(t.calibrateAllUnavailable) ?? t.calibrateAllHint)
             .accessibilityLabel(t.calibrateAll)
+            .layarKey(t.calibrateAll)
             .accessibilityHint(blocker.map(t.calibrateAllUnavailable) ?? t.calibrateAllHint)
             // Outside the button, so a disabled button doesn't dim the reason.
             if let off {

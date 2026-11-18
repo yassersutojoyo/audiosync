@@ -2,5 +2,12 @@
  {"key": "Volume", "frame": [300.5, 101, 120, 20], "font": null, "fg": "#0e88ff", "bg": "#ffffff"},
  {"key": "Kitchen", "frame": [20, 102, 200, 22], "font": null, "fg": "#1d1d1f", "bg": "#ffffff"},
  {"key": "Kitchen", "frame": [20, 140, 200, 22], "font": null, "fg": "#3a3a3c", "bg": "#ffffff"},
- {"key": "Streaming to", "frame": [20, 40, 90, 16], "font": {"name": "Segoe UI", "size": 13}, "fg": "#1d1d1f", "bg": "#ffffff"}
+ {"key": "Streaming to", "frame": [20, 40, 90, 16], "font": {"name": "Segoe UI", "size": 13}, "fg": "#1d1d1f", "bg": "#ffffff"},
+ {"key": "Minimize", "frame": [558, 0, 46, 32], "font": null, "fg": null, "bg": null},
+ {"key": "Maximize", "frame": [604, 0, 46, 32], "font": null, "fg": null, "bg": null},
+ {"key": "Close", "frame": [650, 0, 46, 32], "font": null, "fg": null, "bg": null},
+ {"key": "Windows volume of Kitchen", "frame": [300, 200, 120, 20], "font": null, "fg": null, "bg": null},
+ {"key": "Exit AudioSync", "frame": [20, 560, 120, 20], "font": null, "fg": null, "bg": null},
+ {"key": "Close", "frame": [20, 300, 60, 20], "font": null, "fg": null, "bg": null},
+ {"key": "Windows Laptop", "frame": [20, 400, 120, 20], "font": null, "fg": null, "bg": null}
 ]}

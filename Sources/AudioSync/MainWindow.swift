@@ -369,6 +369,7 @@ struct MainView: View {
                 .allowsHitTesting(false)
             VStack(alignment: .leading, spacing: 2) {
                 Wordmark(size: BrandTokens.Typography.wordmarkSize)
+                    .layarKey(t.appName)
                 // One slot, so the old and the new status cross-fade in place.
                 ZStack(alignment: .leading) {
                     Text(model.mainStatusText)
@@ -377,6 +378,7 @@ struct MainView: View {
                         .id(model.mainStatusText)
                         .transition(.opacity)
                 }
+                .layarKey(model.mainStatusText)
                 .animation(PowerMotion.animation(reduceMotion: reduceMotion), value: model.shownRunning)
             }
             .allowsHitTesting(false)
@@ -1292,6 +1294,8 @@ private struct Reveal: ViewModifier {
             .opacity(shown ? 1 : 0)
             .offset(x: shown || reduceMotion ? 0 : 4)
             .animation(MainMotion.reveal(reduceMotion: reduceMotion), value: shown)
+            // Hidden, it is not on screen: the LAYAR dump leaves it out, as the desktop's does.
+            .transformPreference(LayarMarks.self) { if !shown { $0 = [] } }
     }
 }
 
