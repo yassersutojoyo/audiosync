@@ -69,7 +69,7 @@ final class AppModel: ObservableObject {
         /// The system name when renamed, for VoiceOver labels.
         var renamedFrom: String? { isRenamed ? systemName : nil }
         /// The badge icon, from the reported name so a rename doesn't change it.
-        var symbol: String { tag.symbol(name: systemName.isEmpty ? name : systemName) }
+        var symbol: DeviceIcon { tag.symbol(name: systemName.isEmpty ? name : systemName) }
     }
 
     /// The Hidden Speakers menu, and which sections hold a present speaker
@@ -105,7 +105,7 @@ final class AppModel: ObservableObject {
         var id: String { key }
         let name: String
         /// The badge icon of a dimmed row, by the key's kind.
-        let symbol: String
+        let symbol: DeviceIcon
         /// The row's speaker ID while it is listed; nil shows a dimmed row.
         var speakerID: String?
         /// Why it doesn't play with the zone: not found, part of a target,
@@ -1954,7 +1954,7 @@ struct MenuBarView: View {
         }
     }
 
-    static let zoneSymbol = "square.stack.3d.up.fill"
+    static let zoneSymbol = DeviceIcon.zone
 
     /// `note`: what the speaker's zone says about it, when its own note is empty.
     /// Rows that come or go together do so one after another, 35 ms apart.
@@ -1996,7 +1996,8 @@ private struct FoldClip: Shape {
 
 /// One speaker or group in the panel: the whole row switches it on or off.
 private struct CompactRow: View {
-    let name, symbol: String
+    let name: String
+    let symbol: DeviceIcon
     let state: SpeakerState
     let text: UIStrings
     let height: CGFloat
@@ -2036,7 +2037,7 @@ private struct CompactRow: View {
                     // The button's own label reads the name; the tooltip would repeat it.
                     .accessibilityHidden(true)
                 if let kind {
-                    SpeakerTypeIcon(kind: kind, state: state, text: text, font: .caption, airPlay2: airPlay2, muted: true)
+                    SpeakerTypeIcon(kind: kind, state: state, text: text, airPlay2: airPlay2, muted: true)
                 }
                 Spacer(minLength: 4)
                 if let shownNote {
@@ -2147,10 +2148,21 @@ final class HoverState: ObservableObject {
     @Published var isHovered = false
 }
 
+/// A device icon from brand/icons, drawn 1:1 in points in the foreground style.
+struct DeviceGlyph: View {
+    let path: CGPath
+    let size: CGFloat
+    let evenOdd: Bool
+
+    var body: some View {
+        Path(path).fill(style: FillStyle(eoFill: evenOdd)).frame(width: size, height: size)
+    }
+}
+
 /// The round speaker icon: teal and filled while the speaker plays, outlined
 /// in teal while it waits for streaming to start, grey while it is off.
 struct SpeakerBadge: View {
-    let symbol: String
+    let symbol: DeviceIcon
     let state: SpeakerState
     var size: CGFloat = 30
     /// The panel's look: off is a hairline ring and waiting a thick teal
@@ -2185,9 +2197,9 @@ struct SpeakerBadge: View {
                     .opacity(state == .willPlay ? 1 : 0)
             }
             // Scaled, not inserted, so it grows wherever the row has just moved the badge.
-            Circle().fill(accent).scaleEffect(filled || reduceMotion ? 1 : 0.6).opacity(filled ? 1 : 0)
-            Image(systemName: symbol)
-                .font(.system(size: size * 0.43, weight: .semibold))
+            Circle().fill(Brand.playingDisc).scaleEffect(filled || reduceMotion ? 1 : 0.6).opacity(filled ? 1 : 0)
+            let glyph = DeviceIcon.size(circle: size)
+            DeviceGlyph(path: symbol.path(size: glyph), size: glyph, evenOdd: symbol.evenOdd)
                 .foregroundStyle(iconColor)
         }
         .animation(PowerMotion.animation(reduceMotion: reduceMotion), value: state)
@@ -2266,32 +2278,17 @@ struct SpeakerTypeIcon: View {
     let kind: SpeakerTag
     let state: SpeakerState
     let text: UIStrings
-    var font: Font = .caption
     var airPlay2 = false
     /// Grey whatever the state, as in the panel, where color marks state only.
     var muted = false
 
     var body: some View {
-        glyph
+        DeviceGlyph(path: kind.typeSymbol.path, size: DeviceBadge.size, evenOdd: kind.typeSymbol.evenOdd)
             .foregroundStyle(muted ? Color.secondary : color)
             .fixedSize()
             .layoutPriority(1)   // a long name truncates first; the icon stays whole
             .help(text.speakerTag(kind, airPlay2: airPlay2))
             .accessibilityHidden(true)   // read in the row's label
-    }
-
-    @ViewBuilder
-    private var glyph: some View {
-        if kind == .bluetooth {
-            // SF Symbols has no Bluetooth mark, so the rune is drawn here
-            // (see the Trademarks section of THIRD_PARTY_NOTICES.md).
-            BluetoothRune()
-                .stroke(style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round))
-                .frame(width: 7, height: 11)
-                .padding(.horizontal, 1)
-        } else {
-            Image(systemName: kind.typeSymbol).font(font)
-        }
     }
 
     private var color: Color {
@@ -3079,24 +3076,5 @@ private struct ScrollWatch: NSViewRepresentable {
                 return nil
             }
         }
-    }
-}
-
-/// The Bluetooth rune, drawn as one stroked path in its rect: a vertical
-/// stem with two chevrons that cross it. Own drawing of the public mark; the
-/// Bluetooth word mark and logos are registered trademarks of Bluetooth SIG, Inc.
-struct BluetoothRune: Shape {
-    func path(in rect: CGRect) -> Path {
-        func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
-            CGPoint(x: rect.minX + x * rect.width, y: rect.minY + y * rect.height)
-        }
-        var path = Path()
-        path.move(to: pt(0.0, 0.27))
-        path.addLine(to: pt(1.0, 0.72))
-        path.addLine(to: pt(0.5, 1.0))
-        path.addLine(to: pt(0.5, 0.0))
-        path.addLine(to: pt(1.0, 0.28))
-        path.addLine(to: pt(0.0, 0.73))
-        return path
     }
 }

@@ -2180,8 +2180,7 @@ private struct ZoneMemberCompactRow: View {
                     }
                     Button(action: goToZone) {
                         HStack(spacing: 4) {
-                            Image(systemName: MenuBarView.zoneSymbol)
-                                .font(.system(size: 9))
+                            DeviceGlyph(path: DeviceBadge.zone.path, size: DeviceBadge.size, evenOdd: DeviceBadge.zone.evenOdd)
                             Text(zone.name)
                                 .font(.subheadline.weight(.medium))
                                 .lineLimit(1)
