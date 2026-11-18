@@ -8423,9 +8423,9 @@ pub(crate) mod tests {
     }
 
     /// With Shuffle and Repeat showing, all five buttons keep their size,
-    /// their centres 38 px apart as the Mac's, and stay inside the source
-    /// block at the default 776 px window: the row passes the cover by at
-    /// most a pixel a side, into the block's padding.
+    /// their centres 34 px apart as the Mac's (Previous, Pause and Next at
+    /// 91, 125 and 159 in its frames, MainWindow.swift:453-454), and stay
+    /// inside the source block at the default 776 px window.
     // covers: S450
     #[test]
     fn the_five_transport_buttons_fit_the_narrow_left_column() {
@@ -8477,8 +8477,8 @@ pub(crate) mod tests {
         let widths = buttons.map(|(start, end)| end - start);
         assert_eq!(widths, [32.0; 5], "the buttons keep their size");
         assert!(
-            buttons.windows(2).all(|pair| pair[1].0 - pair[0].0 == 38.0),
-            "centres 38 px apart: {buttons:?}"
+            buttons.windows(2).all(|pair| pair[1].0 - pair[0].0 == 34.0),
+            "centres 34 px apart: {buttons:?}"
         );
         assert!(
             buttons[0].0 >= inner.0 - 1.0 && buttons[4].1 <= inner.1 + 1.0,
