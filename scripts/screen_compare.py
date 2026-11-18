@@ -111,11 +111,13 @@ def colour(text):
 
 def moved(a, b, shifts):
     """Whether b sits elsewhere than a: across by its leading edge or centre,
-    down by its centre less the shift of an element above it in its column
-    (`shifts`, filled in top to bottom), and in size above one line only."""
+    down by its centre less the shift of the nearest element above it in its
+    column (`shifts`, filled in top to bottom), and in size above one line only."""
     (ax, ay, aw, ah), (bx, by, bw, bh) = a["frame"], b["frame"]
     down = by + bh / 2 - ay - ah / 2
-    above = [shift for (x, y, w, _), shift in shifts if y < ay and x < ax + aw and ax < x + w]
+    column = [(y, shift) for (x, y, w, _), shift in shifts if y < ay and x < ax + aw and ax < x + w]
+    nearest = max((y for y, _ in column), default=None)
+    above = [shift for y, shift in column if y == nearest]
     shifts.append((a["frame"], down))
     if min(abs(bx - ax), abs(bx + bw / 2 - ax - aw / 2)) > FRAME_SLACK:
         return True
