@@ -13346,6 +13346,21 @@ pub(crate) mod tests {
         );
     }
 
+    /// The main window opens 632 px high, the Mac's 600 pt content
+    /// (MainWindow.swift:22, :37) under the desktop's 32 px top row, so the
+    /// items held to the bottom of the sidebar sit where the Mac's do.
+    #[test]
+    fn the_main_window_opens_as_high_as_the_macs_content_and_top_row() {
+        let source = include_str!("../ui/main.slint");
+        let window = &source[source
+            .find("export component MainWindow inherits Window")
+            .expect("the main window")..];
+        assert!(
+            window.contains("    preferred-height: 632px;"),
+            "the main window's preferred height"
+        );
+    }
+
     /// The main window over `backend` at its narrowest, 776 px, where the
     /// speaker list takes 524 px. draw_frames sets 1000 px again.
     fn narrow_app(backend: MockBackend) -> Rc<App> {
