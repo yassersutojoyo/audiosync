@@ -767,18 +767,79 @@ fn an_on_speaker_that_reconnects_keeps_the_macs_filled_badge() {
 // covers: S450
 #[test]
 fn the_warning_is_the_macs_solid_triangle() {
-    let widgets = include_str!("../../ui/widgets.slint").replace("
+    let widgets = include_str!("../../ui/widgets.slint").replace(
+        "
 ", "
-");
+",
+    );
     let glyphs = component(&widgets, "Glyphs");
     let everywhere = &glyphs[glyphs
         .find("public pure function drawn-everywhere(")
         .expect("drawn-everywhere")..];
-    let everywhere = &everywhere[..everywhere.find("
-    }").expect("it ends")];
+    let everywhere = &everywhere[..everywhere
+        .find(
+            "
+    }",
+        )
+        .expect("it ends")];
     assert!(everywhere.contains("glyph == root.warning"), "{everywhere}");
-    let outline = &glyphs[glyphs.find("public pure function outline(").expect("outline")
+    let outline = &glyphs[glyphs
+        .find("public pure function outline(")
+        .expect("outline")
         ..glyphs.find("public pure function solid(").expect("solid")];
-    assert!(!outline.contains("root.warning"), "no stroked triangle over it");
+    assert!(
+        !outline.contains("root.warning"),
+        "no stroked triangle over it"
+    );
     assert!(drawing(&glyphs, "solid", "warning").starts_with("return \"M8 1.5 L15 14 H1 Z"));
+}
+
+/// The text between `start` and `end` in a UI file.
+fn between(source: &str, start: &str, end: &str) -> String {
+    let from = source.find(start).unwrap_or_else(|| panic!("{start}"));
+    let rest = &source[from..];
+    rest[..rest.find(end).unwrap_or_else(|| panic!("{end}"))].to_owned()
+}
+
+/// The Mac's running calibration (CalibrationViews.swift:41-60): a grey
+/// small spinner, the step, and Cancel as a small grey push button; the
+/// delay steps' digits 11 px in its 2x photos.
+// covers: S450
+#[test]
+fn a_running_calibration_shows_a_grey_spinner_and_a_small_cancel() {
+    let widgets = include_str!("../../ui/widgets.slint").replace("\r\n", "\n");
+    let sync = between(
+        &widgets,
+        "export component SyncControls ",
+        "export component AirPlayDelayControls ",
+    );
+    assert!(!sync.contains("Spinner {"), "no teal arc");
+    assert!(sync.contains("ProgressSpokes {"), "the Mac's grey spokes");
+    assert!(sync.contains("SmallPushButton {"), "a small grey Cancel");
+    let step = between(&widgets, "component DelayStep ", "component DraftOutline ");
+    assert!(step.contains("font-size: 11px;"), "{step}");
+}
+
+/// The Mac's Presets and Equalizer rows keep 6 pt above the name and under
+/// its line (MainWindow.swift:1234, :569, :915), so a plain row stays 28 high.
+// covers: S450
+#[test]
+fn the_presets_and_equalizer_rows_pad_their_text_as_the_mac() {
+    let main = include_str!("../../ui/main.slint").replace("\r\n", "\n");
+    assert_eq!(
+        main.matches("padding-top: (28px - label.preferred-height) / 2;")
+            .count(),
+        2
+    );
+}
+
+/// The Mac's source menu draws its chevron right after the name
+/// (MenuBar.swift:2470-2484, a borderless menu's indicator), not at the edge.
+// covers: S450
+#[test]
+fn the_source_menus_chevron_follows_the_name() {
+    let main = include_str!("../../ui/main.slint").replace("\r\n", "\n");
+    let menu = between(&main, "component SourceMenu ", "menu := PopupWindow");
+    let name = between(&menu, "text: root.sources[root.index];", "}");
+    assert!(!name.contains("horizontal-stretch: 1;"), "{name}");
 }

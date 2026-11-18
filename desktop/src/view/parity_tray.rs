@@ -256,3 +256,16 @@ fn the_source_tile_is_the_macs_unfilled_square() {
 fn looking_for_speakers_has_no_dot_before_it() {
     assert!(!flyout().contains("a dot that beats"));
 }
+
+/// The Mac panel ends 8 pt under its buttons, its line 8 under the rows
+/// (MenuBar.swift:1765, :1779), and its brand row has no inset above.
+// covers: S450
+#[test]
+fn the_flyout_is_as_tall_as_the_macs_panel() {
+    let source = flyout();
+    assert!(source.contains("fit-height: root.footer-bottom + 8px;"));
+    assert!(source.contains("padding-top: -2px;\n\n                Divider { }"));
+    let brand = &source[source.find("brand := Rectangle {").expect("brand")..];
+    let brand = &brand[..brand.find("brand-mark := BrandMark").expect("mark")];
+    assert!(!brand.contains("padding-top: 2px;"), "{brand}");
+}
