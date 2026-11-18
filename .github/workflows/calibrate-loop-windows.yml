@@ -1,0 +1,81 @@
+name: Calibrate loop (Windows)
+
+# Calibrate All on a clean Windows runner through a digital loop instead of a
+# room: the Scream sound card's stream is relayed into VB-CABLE's input, which
+# is also a speaker, and VB-CABLE's output is the microphone. It proves the
+# flow and the numbers, not acoustics. Runs when its scripts change and by hand.
+#
+# VB-CABLE is donationware (https://vb-audio.com/Services/licensing.htm): the
+# job downloads it from the vendor and installs it on the runner only. It is
+# never bundled, vendored or listed as a dependency of AudioSync.
+on:
+  push:
+    paths:
+      - .github/workflows/calibrate-loop-windows.yml
+      - scripts/stranger/windows_calibrate.ps1
+      - scripts/stranger/scream_relay.py
+  workflow_dispatch:
+
+concurrency:
+  group: calibrate-loop-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  SLINT_COMPILER_DENY_WARNINGS: '1'
+
+jobs:
+  skia:
+    uses: ./.github/workflows/skia.yml
+
+  windows:
+    name: Windows calibrate loop
+    needs: skia
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Rust toolchain (1.99.1)
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal
+          rustup default 1.99.1
+          rustup target add x86_64-pc-windows-msvc
+
+      - name: Skia cache key
+        id: skia
+        run: echo "key=$(bash scripts/skia_cache_key.sh x86_64-pc-windows-msvc)" >> "$GITHUB_OUTPUT"
+
+      - name: Skia (stored by skia.yml)
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: skia-cache
+          key: ${{ steps.skia.outputs.key }}
+          fail-on-cache-miss: true
+
+      - name: Release build
+        working-directory: desktop
+        run: cargo build --locked --release --target x86_64-pc-windows-msvc
+
+      - name: The relay's audio module (PortAudio through sounddevice, MIT)
+        run: python -m pip install --disable-pip-version-check sounddevice==0.5.2
+
+      - name: Calibrate All through the loop
+        shell: pwsh
+        run: ./scripts/stranger/windows_calibrate.ps1 -Exe desktop/target/x86_64-pc-windows-msvc/release/audiosync.exe -Work calibrate-work
+
+      - name: Upload the pictures, record and logs (workflow artifact)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: calibrate-loop-windows
+          path: calibrate-work
+          if-no-files-found: warn
+          retention-days: 7
