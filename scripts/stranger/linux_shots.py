@@ -5,7 +5,8 @@ photographs each state, for scripts/stranger/linux_shots.sh.
 Each state becomes <STATE>-<theme>.png in the work folder, named as the
 Mac's LAYAR photos where a state matches; one the session can't reach gets
 a line in not-set-up.txt as screen_compare.py reads it, and
-atspi-<theme>.txt holds the tree as AT-SPI saw it.
+atspi-<theme>.txt holds the tree as AT-SPI saw it. The nowplaying group
+exits 1 when the Now Playing card lacks Shuffle or Repeat.
 
     linux_shots.py <work> <group> <theme> <pid>
 """
@@ -22,6 +23,7 @@ from gi.repository import Atspi, GLib  # noqa: E402
 
 WORK, GROUP, THEME, PID = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
 missing = []
+failed = []
 
 
 def skip(state, why):
@@ -181,6 +183,13 @@ def run(app, main):
         if use(app, "Streaming", "NOTICE-START"):
             time.sleep(2)
             shot(main, "NOTICE-START")
+    elif GROUP == "nowplaying":
+        # mpris_player.py plays with Shuffle on and LoopStatus Playlist.
+        for name in ("Shuffle", "Repeat"):
+            if find(app, name, seconds=20) is None:
+                print(f"FAIL: no {name} on the Now Playing card ({THEME})")
+                failed.append(name)
+        shot(main, "NOW-PLAYING")
 
 
 def main():
@@ -195,7 +204,8 @@ def main():
         save_tree(app)
     with open(os.path.join(WORK, "not-set-up.txt"), "a", encoding="utf-8") as out:
         out.writelines(line + "\n" for line in missing)
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

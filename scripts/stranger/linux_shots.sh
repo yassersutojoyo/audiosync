@@ -6,8 +6,10 @@
 # stand-in watcher), the accessibility bus switched on, then per theme a
 # launch of the installed audiosync and linux_shots.py driving one screen
 # group over AT-SPI. Pictures and not-set-up.txt land in the work folder.
+# The nowplaying group adds a stand-in MPRIS player (mpris_player.py) and
+# fails when the Now Playing card lacks Shuffle or Repeat.
 #
-#   scripts/stranger/linux_shots.sh <work folder> <sni_watcher_stub> <main|delay|tray|calibrate|notices>
+#   scripts/stranger/linux_shots.sh <work folder> <sni_watcher_stub> <main|delay|tray|calibrate|notices|nowplaying>
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -70,6 +72,13 @@ else
   echo "tray host: the stand-in watcher (no icon drawn; the panel opens through Activate)"
 fi
 sleep 1
+
+if [ "$group" = nowplaying ]; then
+  convert -size 300x300 xc:'#2f6f8f' "$work/cover.png"
+  python3 -I "$here/mpris_player.py" "$work/cover.png" > "$work/player.out" 2>&1 &
+  pids+=($!)
+  sleep 1
+fi
 
 dbus-send --session --print-reply --dest=org.a11y.Bus /org/a11y/bus org.freedesktop.DBus.Properties.Set \
   string:org.a11y.Status string:IsEnabled variant:boolean:true > /dev/null || echo "accessibility bus: not switched on"

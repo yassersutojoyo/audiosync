@@ -4,8 +4,9 @@
 # PipeWire, WirePlumber and its PulseAudio server with a null sink as the
 # default output (the stand-in PC speaker), Xvfb with a StatusNotifier watcher
 # as the tray host, the installed audiosync with AUDIOSYNC_DEBUG=1, the
-# receiver switched on through the web remote, a click train played to the
-# default output while that output's monitor is recorded, then quit,
+# receiver and the stand-in PC speaker switched on through the web remote, a
+# click train played to the default output while that output's monitor is
+# recorded, then quit,
 # uninstall, and the default output checked against the one found.
 #
 #   scripts/stranger/linux_session.sh <work folder> <sni_watcher_stub> <uninstall command...>
@@ -29,8 +30,10 @@ shift 2
 
 export XDG_RUNTIME_DIR="$work/xdg-runtime" TMPDIR="$work/tmp" XDG_STATE_HOME="$work/state" \
   XDG_CONFIG_HOME="$work/config" XDG_DATA_HOME="$work/data" XDG_CACHE_HOME="$work/cache"
-mkdir -p "$XDG_RUNTIME_DIR" "$TMPDIR" "$XDG_STATE_HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME"
+mkdir -p "$XDG_RUNTIME_DIR" "$TMPDIR" "$XDG_STATE_HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME/audiosync" "$XDG_CACHE_HOME"
 chmod 700 "$XDG_RUNTIME_DIR"
+# The stand-in PC speaker is a null sink, which the app lists only with Show Virtual Devices on.
+printf '{"version":3,"show_virtual_devices":true}\n' >"$XDG_DATA_HOME/audiosync/settings.json"
 port=18731
 pids=()
 trap 'kill "${pids[@]}" 2>/dev/null; wait 2>/dev/null || true' EXIT
@@ -84,7 +87,7 @@ else
   echo "tray: icon shown and registered"
 fi
 
-if [ -n "$log" ] && python3 -I "$here/remote.py" "$log" "$port" "Stranger Receiver"; then
+if [ -n "$log" ] && python3 -I "$here/remote.py" "$log" "$port" "Stranger Receiver" "Stranger PC"; then
   python3 -I "$here/heard.py" clicks "$work/clicks.wav" --seconds 45 --rate 48000
   parecord --raw --format=s16le --rate=48000 --channels=2 --latency-msec=20 -d stranger-pc.monitor \
     | python3 -I "$here/heard.py" record "$work/sink.wav" "$work/sink.stamps" --rate 48000 &
@@ -96,7 +99,7 @@ if [ -n "$log" ] && python3 -I "$here/remote.py" "$log" "$port" "Stranger Receiv
   pkill -f 'parecord --raw --format=s16le --rate=48000' || true
   wait "$recorder" || true
 else
-  echo "FAIL: the receiver could not be switched on through the web remote" >&2
+  echo "FAIL: the receiver and the PC speaker could not be switched on through the web remote" >&2
   status=1
 fi
 
