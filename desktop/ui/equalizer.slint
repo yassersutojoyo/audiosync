@@ -3,10 +3,10 @@
 // steps), saving curves, and Reset. Opened with Ctrl+E or from the
 // Equalizer card.
 
-import { Button, Palette } from "std-widgets.slint";
+import { Palette } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { FocusRing, Fluent, Glyph, Glyphs, MenuDivider, MenuPanel, MenuRepaint, MenuRoom, MenuRow, MenuState, NameField, LevelSlider, QuietText, SecondaryText, TextField, ToggleSwitch } from "widgets.slint";
+import { FocusRing, Fluent, Glyph, Glyphs, MenuDivider, MenuPanel, MenuRepaint, MenuRoom, MenuRow, MenuState, NameField, LevelSlider, QuietText, SecondaryText, SmallButton, TextField, ToggleSwitch } from "widgets.slint";
 
 // One vertical gain slider with its value above and its label below.
 component Band inherits VerticalLayout {
@@ -619,7 +619,10 @@ export component EqualizerWindow inherits Window {
                     horizontal-stretch: 1;
                 }
 
-                Button {
+                // The Mac's HouseButtonStyle (EqualizerWindow.swift:183): 13 pt, 26 pt high.
+                SmallButton {
+                    height: 26px;
+                    font-size: Tokens.font-size-body;
                     text: Strings.equalizer-reset;
                     accessible-label: Strings.equalizer-reset;
                     clicked => {
