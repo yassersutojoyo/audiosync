@@ -229,6 +229,12 @@ public static class Input {
     mouse_event(1, 1, 0, 0, UIntPtr.Zero);
   }
 
+  public static void Click(int x, int y) {
+    SetCursorPos(x, y);
+    mouse_event(2, 0, 0, 0, UIntPtr.Zero);
+    mouse_event(4, 0, 0, 0, UIntPtr.Zero);
+  }
+
   [DllImport("user32.dll", CharSet = CharSet.Unicode)]
   static extern IntPtr FindWindowW(string cls, string title);
   [DllImport("user32.dll")]
@@ -508,12 +514,9 @@ foreach ($pass in 'muted', 'low') {
 }
 [Endpoints]::SetLevel(0.5)
 
-if (Test-On $streaming) { $streaming.GetCurrentPattern($TogglePattern).Toggle() }
-Start-Sleep -Seconds 3
-Check 'A1.11' ((Get-Defaults) -eq $default) 'the default output is as found after streaming stops'
-
 # A10.10: a speaker's volume set on its slider is the same after Ctrl+Q and a
-# relaunch. A plain launch, since a test instance saves no settings.
+# relaunch. A plain launch, since a test instance saves no settings. The slider
+# is set while streaming, when its row is on and the slider takes the focus.
 function Get-RowSlider {
   $c = New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, [System.Windows.Automation.ControlType]::Slider)
   Find-All $c | Where-Object { $_.Current.Name -match '(Speakers|Scream).* volume$' -and $_.Current.Name -notlike 'Windows volume of*' } | Select-Object -First 1
@@ -523,18 +526,24 @@ function Get-SliderValue($Slider) {
   catch { [double]$Slider.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value }
 }
 $slider = Get-RowSlider
-Check 'A10.10' ([bool]$slider) "the speaker row's volume slider is there ('$(if ($slider) { $slider.Current.Name })')"
+Check 'A10.10' ([bool]$slider) "the speaker row's volume slider is there ('$(if ($slider) { $slider.Current.Name })', enabled: $(if ($slider) { $slider.Current.IsEnabled }))"
+$set = $null
 if ($slider) {
-  $script:main.SetFocus()
-  $slider.SetFocus()
+  $r = $slider.Current.BoundingRectangle
+  [Input]::Click([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2))
   Start-Sleep -Milliseconds 500
   [System.Windows.Forms.SendKeys]::SendWait('{HOME}{PGUP}{PGUP}{PGUP}{RIGHT}{RIGHT}{RIGHT}{RIGHT}{RIGHT}{RIGHT}{RIGHT}')
   Start-Sleep -Seconds 3
   $set = Get-SliderValue $slider
   "A10.10 volume memory: slider set to $set" | Tee-Object -FilePath "$Work/result.txt" -Append
   Save-Shot 'A10.10-volume-set'
-  $script:main.SetFocus()
-  Start-Sleep -Milliseconds 500
+}
+
+if (Test-On $streaming) { $streaming.GetCurrentPattern($TogglePattern).Toggle() }
+Start-Sleep -Seconds 3
+Check 'A1.11' ((Get-Defaults) -eq $default) 'the default output is as found after streaming stops'
+
+if ($slider) {
   [System.Windows.Forms.SendKeys]::SendWait('^q')
   $quit = $script:app.WaitForExit(20000)
   Check 'A10.10' $quit 'Ctrl+Q quit the app within 20 s'
