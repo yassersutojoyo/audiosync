@@ -6,8 +6,8 @@ Each state becomes <STATE>-<theme>.png in the work folder, named as the
 Mac's LAYAR photos where a state matches; one the session can't reach gets
 a line in not-set-up.txt as screen_compare.py reads it, and
 atspi-<theme>.txt holds the tree as AT-SPI saw it. The nowplaying group
-exits 1 when the Now Playing card lacks Shuffle or Repeat drawn on, or its
-cover reads as one colour.
+exits 1 when the Now Playing card, with the pointer over it, lacks Shuffle or
+Repeat drawn on, or its cover reads as one colour.
 
     linux_shots.py <work> <group> <theme> <pid>
 """
@@ -205,9 +205,12 @@ def run(app, main):
             print(f"FAIL: no Now Playing card ({THEME})")
             failed.append("card")
             return
+        box = extents(card)
+        # Shuffle and Repeat show while the pointer is over the card, as on the Mac.
+        subprocess.run(["xdotool", "mousemove", str(box.x + box.width // 2), str(box.y + box.width // 2)],
+                       check=True)
         time.sleep(2)
         shot(card, "NOW-PLAYING")
-        box = extents(card)
         # The cover is the card's top square; 10 px in clears its rounded corners.
         side = box.width - 20
         colours = int(pixels((side, side, box.x + 10, box.y + 10), "-format", "%k", "info:"))
