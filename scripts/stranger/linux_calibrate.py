@@ -274,13 +274,24 @@ def drive(work, pid, log_path, port):
             tree(app, "atspi-all-cancelled.txt")
         press(app, "Close the calibration results", "CAL-ALL-CANCELLED", within=found, seconds=3)
 
-    # Calibrate All to the end, Apply, then Done.
-    found = open_sheet("CAL-ALL-RESULTS")
-    if found is not None:
+    # Calibrate All to the end, Apply, then Done. Run 44382163449's virtual microphone
+    # dropped audio mid-run (MicrophoneSkipped), so that one stop gets a second run.
+    for attempt in range(2):
+        found = open_sheet("CAL-ALL-RESULTS")
+        if found is None:
+            break
         press(app, "Include Anyway, Headset", "CAL-ALL-RESULTS", within=found)
         at = mark()
-        if start(found, "CAL-ALL-RESULTS"):
-            line = wait_log(r"Calibrate All ended[^\n]*", at, 240)
+        started = start(found, "CAL-ALL-RESULTS")
+        line = wait_log(r"Calibrate All ended[^\n]*", at, 240) if started else None
+        if attempt == 0 and "stopped: MicrophoneSkipped" in log_text()[at:]:
+            note("all: the microphone skipped, running once more")
+            press(app, "Close the calibration results", "CAL-ALL-RESULTS", within=found, seconds=3)
+            time.sleep(3)
+            continue
+        break
+    if found is not None:
+        if started:
             note(f"all: {line}")
             time.sleep(2)
             shot("CAL-ALL-RESULTS")
