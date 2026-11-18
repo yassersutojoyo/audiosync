@@ -96,5 +96,6 @@ mod tests {
             assert_eq!(name(bad, None, true), None, "{bad:?}");
         }
         assert_eq!(name("qa_2-x", None, true).as_deref(), Some("qa_2-x"));
+        assert_eq!(name("QA", None, true), name("qa", None, true));
     }
 }

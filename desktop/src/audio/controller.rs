@@ -1265,6 +1265,10 @@ impl<D: Driver> Controller<D> {
         self.default_output = Some((endpoints, store));
     }
 
+    /// Leaves Windows' default output, apps' outputs and the outputs' own
+    /// levels as they are: a test copy (S511).
+    pub fn leave_system_outputs(&mut self) {}
+
     /// Holds the default output out of a whole-system stream, where the
     /// host can't move it (S473).
     #[cfg_attr(
@@ -7174,6 +7178,26 @@ mod tests {
 
     fn player_output(fake: &app_fakes::Shared<app_fakes::Fake>) -> String {
         fake.0.borrow().output("player.exe", Role::Console)
+    }
+
+    // covers: S511
+    #[test]
+    fn a_test_copy_moves_neither_the_default_nor_an_app() {
+        let mut backend = backend();
+        backend.leave_system_outputs();
+        let (_, fake, _) = with_switch(&mut backend);
+        let (apps, _) = with_app_outputs(&mut backend, None);
+        let console_before = console(&fake);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(console(&fake), console_before);
+        backend.stop();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.poll();
+        assert_eq!(player_output(&apps), "");
     }
 
     // covers: S470, S471

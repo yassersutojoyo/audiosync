@@ -532,6 +532,29 @@ mod tests {
         assert_eq!(hint(&backend, HEADPHONES), None);
     }
 
+    // covers: S511
+    #[test]
+    fn a_test_copy_writes_no_remembered_level() {
+        let mut backend = backend();
+        backend.leave_system_outputs();
+        let record = backend.volume_record();
+        backend.set_output_level(HEADPHONES, 0.18);
+        backend.poll();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.poll();
+        backend.set_output_level(HEADPHONES, 0.6);
+        backend.poll();
+        backend.set_output_enabled(HEADPHONES, false).unwrap();
+        backend.poll();
+        backend.set_output_level(HEADPHONES, 0.18);
+        backend.poll();
+        backend.set_output_enabled(HEADPHONES, true).unwrap();
+        backend.poll();
+        backend.stop();
+        backend.poll();
+        assert!(record.writes().is_empty(), "{:?}", record.writes());
+    }
+
     // covers: S472
     #[test]
     fn a_settings_file_read_late_keeps_the_found_level_of_an_output_that_plays() {
