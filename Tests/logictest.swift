@@ -6364,37 +6364,28 @@ do {
               "EC2 Bluetooth fresh link: the first stream after a refused start, 3 s later, still restarts once",
               "\(decision)")
     }
-    // covers: S325 (a link that left the list and came back mid-session gets one more restart once it is calm)
+    // covers: S325 (a link back mid-session restarts once, 2 s after its start, and nothing restarts it at 305 s)
     do {
-        let links = FreshLinkWatch()
-        links.noteListing(["bt", "usb"], now: 0, session: 1)
-        links.noteListing(["usb"], now: 10, session: 1)
-        let armed = links.noteListing(["bt", "usb"], now: 20, session: 1)
-        let quick = links.decide(uid: "bt", bluetooth: true, now: 20.5, session: 1)
-        let quickTicket = links.pendingTicket(uid: "bt") ?? -1
-        let quickRan = links.begin(uid: "bt", ticket: quickTicket, session: 1)
-        links.release(uid: "bt")
-        let calmTicket = armed["bt"] ?? -1
-        check(FreshLinkWatch.calmRestartAfterS == 305 && armed.keys.sorted() == ["bt"] && quick == .restart(linkAgeS: 0.5)
-                && quickRan && calmTicket != quickTicket,
-              "EC2 Bluetooth fresh link: one that came back mid-session arms a second restart after the 2 s one",
-              "\(armed) \(quick)")
-        // covers: S325
-        check(links.begin(uid: "bt", ticket: calmTicket, session: 1) && links.held == ["bt"],
-              "EC2 Bluetooth fresh link: the second restart runs once its time after the return has come")
-        links.release(uid: "bt")
-        // covers: S325
-        check(!links.begin(uid: "bt", ticket: calmTicket, session: 1) && links.held.isEmpty,
-              "EC2 Bluetooth fresh link: the second restart runs only once")
+        let onceLinks = FreshLinkWatch()
+        onceLinks.noteListing(["bt", "usb"], now: 0, session: 1)
+        onceLinks.noteListing(["usb"], now: 10, session: 1)
+        onceLinks.noteListing(["bt", "usb"], now: 20, session: 1)
+        let onceQuick = onceLinks.decide(uid: "bt", bluetooth: true, now: 20.5, session: 1)
+        let onceRan = onceLinks.begin(uid: "bt", ticket: onceLinks.pendingTicket(uid: "bt") ?? -1, session: 1)
+        onceLinks.release(uid: "bt")
+        let laterRestarts = (0...20).filter { onceLinks.begin(uid: "bt", ticket: $0, session: 1) }
+        check(onceQuick == .restart(linkAgeS: 0.5) && onceRan && laterRestarts.isEmpty && onceLinks.held.isEmpty,
+              "EC2 Bluetooth fresh link: one that came back mid-session restarts once, 2 s after its start, and not again",
+              "\(onceQuick) \(onceRan) \(laterRestarts)")
     }
-    // covers: S325 (a link back mid-session re-seats the other outputs at its first start and its calm restart only)
+    // covers: S325 (a link back mid-session re-seats the other outputs at its first start only)
     do {
         let reseatLinks = FreshLinkWatch()
         reseatLinks.noteListing(["bt", "builtin", "usb"], now: 0, session: 1)
         _ = reseatLinks.decide(uid: "bt", bluetooth: true, now: 0.5, session: 1)
         let atSessionStart = reseatLinks.takeReseat(uid: "bt", session: 1, now: 0.5)
         reseatLinks.noteListing(["builtin", "usb"], now: 10, session: 1)
-        let reseatArmed = reseatLinks.noteListing(["bt", "builtin", "usb"], now: 20, session: 1)
+        reseatLinks.noteListing(["bt", "builtin", "usb"], now: 20, session: 1)
         _ = reseatLinks.decide(uid: "bt", bluetooth: true, now: 20.5, session: 1)
         let atReturn = reseatLinks.takeReseat(uid: "bt", session: 1, now: 20.5)
         let atReturnAgain = reseatLinks.takeReseat(uid: "bt", session: 1, now: 20.5)
@@ -6402,22 +6393,19 @@ do {
         reseatLinks.release(uid: "bt")
         _ = reseatLinks.decide(uid: "bt", bluetooth: true, now: 23.5, session: 1)
         let atQuickRestart = reseatLinks.takeReseat(uid: "bt", session: 1, now: 23.5)
-        _ = reseatLinks.begin(uid: "bt", ticket: reseatArmed["bt"] ?? -1, session: 1)
-        reseatLinks.release(uid: "bt")
         _ = reseatLinks.decide(uid: "bt", bluetooth: true, now: 326.5, session: 1)
-        let atCalmRestart = reseatLinks.takeReseat(uid: "bt", session: 1, now: 326.5)
-        let atCalmAgain = reseatLinks.takeReseat(uid: "bt", session: 1, now: 326.5)
+        let atLaterStart = reseatLinks.takeReseat(uid: "bt", session: 1, now: 326.5)
         reseatLinks.noteListing(["builtin", "usb"], now: 400, session: 1)
         reseatLinks.noteListing(["bt", "builtin", "usb"], now: 410, session: 1)
         let reseatNextSession = reseatLinks.takeReseat(uid: "bt", session: 2, now: 700)
         let reseatCalls = FreshLinkWatch.reseats(of: "bt", running: ["bt", "builtin", "usb"],
                                                  holdBacks: ["bt": 0, "builtin": 211, "usb": 361],
                                                  before: ["bt": 0, "builtin": 211, "usb": 361])
-        check(!atSessionStart && atReturn && !atReturnAgain && !atQuickRestart && atCalmRestart && !atCalmAgain
+        check(!atSessionStart && atReturn && !atReturnAgain && !atQuickRestart && !atLaterStart
                 && !reseatNextSession && reseatCalls == ["builtin": 211, "usb": 361],
               "EC2 Bluetooth fresh link: a link back mid-session gives every other output one call at its current "
-                + "hold-back at its first start and at its calm restart, none at an ordinary start",
-              "\(atSessionStart) \(atReturn) \(atReturnAgain) \(atQuickRestart) \(atCalmRestart) \(atCalmAgain) "
+                + "hold-back at its first start, none at an ordinary start",
+              "\(atSessionStart) \(atReturn) \(atReturnAgain) \(atQuickRestart) \(atLaterStart) "
                 + "\(reseatNextSession) \(reseatCalls)")
     }
     // covers: S325 (a re-seat comes at most once per 5 minutes per speaker, skips an output this sync re-timed, ends with a sleep)
@@ -6428,11 +6416,12 @@ do {
         flapLinks.noteListing(["bt", "builtin"], now: 10, session: 1)
         let flapFirst = flapLinks.takeReseat(uid: "bt", session: 1, now: 10.5)
         flapLinks.noteListing(["builtin"], now: 60, session: 1)
-        let flapArmed = flapLinks.noteListing(["bt", "builtin"], now: 70, session: 1)
+        flapLinks.noteListing(["bt", "builtin"], now: 70, session: 1)
         let flapSecond = flapLinks.takeReseat(uid: "bt", session: 1, now: 70.5)
-        _ = flapLinks.begin(uid: "bt", ticket: flapArmed["bt"] ?? -1, session: 1)
-        flapLinks.release(uid: "bt")
-        let flapCalm = flapLinks.takeReseat(uid: "bt", session: 1, now: 375.5)
+        let flapLaterStart = flapLinks.takeReseat(uid: "bt", session: 1, now: 375.5)
+        flapLinks.noteListing(["builtin"], now: 380, session: 1)
+        flapLinks.noteListing(["bt", "builtin"], now: 390, session: 1)
+        let flapThird = flapLinks.takeReseat(uid: "bt", session: 1, now: 390.5)
         let nappedLinks = FreshLinkWatch()
         nappedLinks.noteListing(["bt"], now: 0, session: 1)
         nappedLinks.noteListing([], now: 5, session: 1)
@@ -6442,10 +6431,12 @@ do {
         let reseatSkipped = FreshLinkWatch.reseats(of: "bt", running: ["bt", "builtin", "usb"],
                                                    holdBacks: ["bt": 0, "builtin": 211, "usb": 361],
                                                    before: ["bt": 0, "builtin": 0, "usb": 361])
-        check(flapFirst && !flapSecond && flapCalm && !nappedReseat && reseatSkipped == ["usb": 361],
-              "EC2 Bluetooth fresh link: a return 60 s after a re-seat re-seats nothing, its calm restart 305 s on does; "
+        check(flapFirst && !flapSecond && !flapLaterStart && flapThird && !nappedReseat
+                && reseatSkipped == ["usb": 361],
+              "EC2 Bluetooth fresh link: a return 60 s after a re-seat re-seats nothing, nor does a start 305 s on, "
+                + "a return 380 s after it does; "
                 + "a sleep drops a re-seat due, and an output this sync re-timed is not re-seated again",
-              "\(flapFirst) \(flapSecond) \(flapCalm) \(nappedReseat) \(reseatSkipped)")
+              "\(flapFirst) \(flapSecond) \(flapLaterStart) \(flapThird) \(nappedReseat) \(reseatSkipped)")
     }
     do {
         var defaultLog = DefaultDeviceLog()
@@ -6462,29 +6453,8 @@ do {
               "\(String(describing: launchLine)) \(String(describing: sameLine)) \(String(describing: headsetLine)) "
                 + "\(String(describing: handsFreeInLine)) \(String(describing: goneLine))")
     }
-    // covers: S325 (what cancels the second restart, and a new return starting its clock over)
+    // covers: S325 (a sleep cancels the 2 s restart)
     do {
-        func cameBack(_ links: FreshLinkWatch, at now: Double) -> Int {
-            links.noteListing(["bt"], now: now - 5, session: 1)
-            links.noteListing([], now: now - 1, session: 1)
-            return links.noteListing(["bt"], now: now, session: 1)["bt"] ?? -1
-        }
-        let toggled = FreshLinkWatch()
-        let toggledTicket = cameBack(toggled, at: 10)
-        toggled.cancel(uid: "bt")
-        check(!toggled.begin(uid: "bt", ticket: toggledTicket, session: 1),
-              "EC2 Bluetooth fresh link: switching the speaker off and on before the second restart cancels it")
-        let ended = FreshLinkWatch()
-        let endedTicket = cameBack(ended, at: 10)
-        // covers: S325
-        check(!ended.begin(uid: "bt", ticket: endedTicket, session: 2) && ended.held.isEmpty,
-              "EC2 Bluetooth fresh link: the end of the session cancels the second restart")
-        let slept = FreshLinkWatch()
-        let sleptTicket = cameBack(slept, at: 10)
-        slept.sleeping()
-        // covers: S325
-        check(!slept.begin(uid: "bt", ticket: sleptTicket, session: 1),
-              "EC2 Bluetooth fresh link: a sleep cancels the second restart")
         let dozed = FreshLinkWatch()
         dozed.noteListing([], now: 0)
         dozed.noteListing(["bt"], now: 1)
@@ -6494,21 +6464,6 @@ do {
         check(quickTicket != nil && dozed.pendingTicket(uid: "bt") == nil
                 && !dozed.begin(uid: "bt", ticket: quickTicket ?? -1, session: 1),
               "EC2 Bluetooth fresh link: a sleep before the 2 s restart is due cancels it")
-        let flapping = FreshLinkWatch()
-        let firstTicket = cameBack(flapping, at: 10)
-        flapping.noteListing([], now: 100, session: 1)
-        // covers: S325
-        check(!flapping.begin(uid: "bt", ticket: firstTicket, session: 1),
-              "EC2 Bluetooth fresh link: leaving the list again cancels the second restart")
-        let secondTicket = flapping.noteListing(["bt"], now: 200, session: 1)["bt"]
-        check(secondTicket != nil && flapping.begin(uid: "bt", ticket: secondTicket ?? -1, session: 1),
-              "EC2 Bluetooth fresh link: a new return starts the second restart's clock over")
-        let stopped = FreshLinkWatch()
-        stopped.noteListing(["bt"], now: 0, session: nil)
-        stopped.noteListing([], now: 1, session: nil)
-        // covers: S325
-        check(stopped.noteListing(["bt"], now: 2, session: nil).isEmpty,
-              "EC2 Bluetooth fresh link: a return while nothing plays arms no second restart")
     }
 
     // EC4 / EC9: the capture rate changes under a running session.
