@@ -8500,9 +8500,9 @@ pub(crate) mod tests {
     }
 
     /// With Shuffle and Repeat showing, all five buttons keep their size,
-    /// their centres 38 px apart as the Mac's, and stay inside the source
-    /// block at the default 776 px window: the row passes the cover by at
-    /// most a pixel a side, into the block's padding.
+    /// their centres 34 px apart as the Mac's (Previous, Pause and Next at
+    /// 91, 125 and 159 in its frames, MainWindow.swift:453-454), and stay
+    /// inside the source block at the default 776 px window.
     // covers: S450
     #[test]
     fn the_five_transport_buttons_fit_the_narrow_left_column() {
@@ -8554,8 +8554,8 @@ pub(crate) mod tests {
         let widths = buttons.map(|(start, end)| end - start);
         assert_eq!(widths, [32.0; 5], "the buttons keep their size");
         assert!(
-            buttons.windows(2).all(|pair| pair[1].0 - pair[0].0 == 38.0),
-            "centres 38 px apart: {buttons:?}"
+            buttons.windows(2).all(|pair| pair[1].0 - pair[0].0 == 34.0),
+            "centres 34 px apart: {buttons:?}"
         );
         assert!(
             buttons[0].0 >= inner.0 - 1.0 && buttons[4].1 <= inner.1 + 1.0,
@@ -13619,6 +13619,23 @@ pub(crate) mod tests {
         );
     }
 
+    /// The line above the AirPlay delay starts at the names, as the lines
+    /// between speaker rows do (MainWindow.swift:636).
+    #[test]
+    fn the_line_above_the_airplay_delay_starts_at_the_names() {
+        let app = narrow_app(MockBackend::new());
+        advance_clock(Duration::from_millis(400));
+        draw_frames_at(776, 900);
+        let row = element(&app, "SpeakerRow::hover").expect("a speaker row");
+        let pane = element(&app, "MainWindow::delay-pane").expect("the delay pane");
+        let top = pane.absolute_position().y;
+        let line =
+            i_slint_backend_testing::ElementHandle::find_by_element_type_name(&app.main, "Divider")
+                .find(|line| (line.absolute_position().y - top).abs() < 0.5)
+                .expect("the line at the pane's top");
+        assert_eq!(line.absolute_position().x - row.absolute_position().x, 54.0);
+    }
+
     /// With Add by Address under it, the AirPlay delay's note shows whole
     /// once the speaker list is scrolled to its end, at a short and a tall
     /// window: its pane keeps the note's second line and its padding, and
@@ -13904,6 +13921,44 @@ pub(crate) mod tests {
         assert_eq!(
             note.accessible_role(),
             Some(i_slint_backend_testing::AccessibleRole::Text)
+        );
+    }
+
+    /// A row's code note leads with the Mac's lock, 10 px at the caption's
+    /// size and 3 px before the text (AvailabilityNote, MenuBar.swift:2311-2318).
+    #[test]
+    fn a_rows_code_note_leads_with_a_lock_3_px_before_its_text() {
+        let app = narrow_app(MockBackend::new());
+        draw_frames_at(776, 680);
+        let note = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+            &app.main,
+            "Asks for a code",
+        )
+        .next()
+        .expect("the code note");
+        let (top, left) = (note.absolute_position().y, note.absolute_position().x);
+        let in_note = |part: &i_slint_backend_testing::ElementHandle| {
+            let at = part.absolute_position();
+            (top - 0.5..=top + note.size().height).contains(&at.y)
+                && (left - 0.5..=left + note.size().width).contains(&at.x)
+        };
+        let label = i_slint_backend_testing::ElementHandle::find_by_element_id(
+            &app.main,
+            "SpeakerRow::note-label",
+        )
+        .find(&in_note)
+        .expect("its text");
+        let lock = i_slint_backend_testing::ElementHandle::find_by_element_id(
+            &app.main,
+            "SpeakerRow::note-icon",
+        )
+        .find(&in_note)
+        .expect("the lock");
+        let text_x = label.absolute_position().x;
+        assert_eq!(lock.size().width, 10.0);
+        assert_eq!(
+            text_x - (lock.absolute_position().x + lock.size().width),
+            3.0
         );
     }
 
@@ -14942,6 +14997,30 @@ pub(crate) mod tests {
             (18.0, 18.0),
             "x centre from the card's right and top"
         );
+    }
+
+    /// A one-line notice with its time is 48 px high, as the Mac's: 10 pt
+    /// padding round a 13 pt caption line, 2 pt, a 13 pt caption2 line
+    /// (MenuBar.swift:2788-2808, :2833).
+    #[test]
+    fn a_one_line_notice_is_as_high_as_the_macs() {
+        let app = main_window_over(MockBackend::new());
+        let notice = NoticeItem {
+            id: 1,
+            message: "A notice".into(),
+            time: "09.40".into(),
+            ..NoticeItem::default()
+        };
+        app.main
+            .set_notices(ModelRc::from(Rc::new(VecModel::from(vec![notice]))));
+        draw_frames();
+        let card = i_slint_backend_testing::ElementHandle::find_by_element_id(
+            &app.main,
+            "NoticeStack::row",
+        )
+        .next()
+        .expect("the notice");
+        assert_eq!(card.size().height, 48.0);
     }
 
     // covers: S308
@@ -18751,6 +18830,44 @@ pub(crate) mod tests {
             at(left + 30.0, top - 6.0)[0],
             brightest,
         )
+    }
+
+    /// A dark row's knob has the Mac's light edge on top only: #ad over its
+    /// #95 fill (the Mac's dark photos, 18 Nov), nothing lighter at the bottom.
+    #[test]
+    fn a_dark_rows_knob_has_the_macs_light_top_edge() {
+        use slint::language::ColorScheme;
+        let app = narrow_app(MockBackend::new());
+        app.main
+            .global::<Palette>()
+            .set_color_scheme(ColorScheme::Dark);
+        draw_frames();
+        let label = app
+            .main
+            .global::<crate::Strings>()
+            .invoke_volume_of("Speakers".into());
+        let (left, top, width, height) = slider_box(&app.main, &label);
+        let at = pixels(app.main.window());
+        let rows: Vec<u8> = ((top - 2.0) as i32..(top + height + 2.0) as i32)
+            .map(|y| {
+                (0..width as i32)
+                    .map(|dx| at(left + dx as f32, y as f32)[0])
+                    .max()
+                    .unwrap_or_default()
+            })
+            .collect();
+        let knob: Vec<usize> = (0..rows.len()).filter(|&i| rows[i] > 0x60).collect();
+        let (first, last) = (knob[0], knob[knob.len() - 1]);
+        let fill = rows[(first + last) / 2];
+        assert!(fill >= 0x90, "an on row's knob: {rows:02x?}");
+        assert!(
+            rows[first].max(rows[first + 1]) >= 0xab,
+            "top edge {rows:02x?}"
+        );
+        assert!(
+            rows[last].max(rows[last - 1]) <= fill,
+            "no edge at the bottom {rows:02x?}"
+        );
     }
 
     /// An off speaker's slider keeps the Mac's contrast on its row, plain or
@@ -24270,7 +24387,7 @@ pub(crate) mod tests {
     }
 
     /// A speaker's rename field fills its name slot, at least 120 px wide,
-    /// at the Mac's 22 px height, so the row keeps its 49 px step.
+    /// at the Mac's 22 px height, so the row keeps its 54 px step.
     #[test]
     fn a_speaker_rename_field_fills_the_name_slot_at_the_macs_height() {
         let app = narrow_app(MockBackend::new());

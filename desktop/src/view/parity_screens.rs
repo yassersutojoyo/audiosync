@@ -278,10 +278,10 @@ fn the_left_column_takes_the_macs_spacing() {
         "the transport's 26 high row 6 under the artist"
     );
     assert!(
-        card.contains("y: 3px;"),
-        "its 32 px buttons centred on that row"
+        card.contains("y: 1px;"),
+        "its 32 px buttons 2 px above centred on that row"
     );
-    assert!(card.contains("spacing: root.shuffle >= 0 || root.repeat >= 0 ? 6px : 22px;"));
+    assert!(card.contains("spacing: root.shuffle >= 0 || root.repeat >= 0 ? 2px : 18px;"));
     assert!(card.contains("glyph-size: 22px;"), "Play and Pause at 22");
     let window = component(&main, "MainWindow");
     assert_eq!(window.matches("- 28px;").count(), 2, "both covers");

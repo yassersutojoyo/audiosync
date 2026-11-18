@@ -97,8 +97,8 @@ export global Fluent {
     // A 1 px edge that sets a card off a light background.
     out property <brush> stroke: Tokens.dark ? Tokens.separator : #0000001a;
     // The main window: white on light, the Mac's system window color on dark
-    // (#323232, Brand.swift:17-21).
-    out property <color> main-window: Tokens.dark ? #323232 : #ffffff;
+    // as its photos show it (#2b2b29, MainWindow.swift:32-36).
+    out property <color> main-window: Tokens.dark ? #2b2b2b : #ffffff;
     // The style's slider thumb and its edge, for a slider AudioSync draws itself.
     out property <color> thumb: Tokens.dark ? #454545 : #ffffff;
     out property <color> thumb-edge: Tokens.dark ? #ffffff17 : #00000029;
@@ -402,6 +402,7 @@ export global Glyphs {
     out property <string> check: "\u{E73E}";
     out property <string> microphone: "\u{E720}";
     out property <string> gear: "\u{E713}";
+    out property <string> lock: "\u{E72E}";
 
     // A switched-on output's own volume in Windows: the muted speaker while
     // muted, the speaker with one wave while low (spec S198).
@@ -435,7 +436,7 @@ export global Glyphs {
     // outlines where the Mac's are filled, so these are drawn on Windows too;
     // its Presets, Equalizer, microphone and timer are filled where the Mac's are outlines.
     public pure function drawn-everywhere(glyph: string) -> bool {
-        return glyph == root.shuffle || glyph == root.repeat-all || glyph == root.repeat-one || glyph == root.more || glyph == root.previous || glyph == root.next || glyph == root.play || glyph == root.pause || glyph == root.volume-low || glyph == root.volume-mid || glyph == root.volume-high || glyph == root.volume-muted || glyph == root.presets || glyph == root.equalizer || glyph == root.microphone || glyph == root.timer;
+        return glyph == root.shuffle || glyph == root.repeat-all || glyph == root.repeat-one || glyph == root.more || glyph == root.previous || glyph == root.next || glyph == root.play || glyph == root.pause || glyph == root.volume-low || glyph == root.volume-mid || glyph == root.volume-high || glyph == root.volume-muted || glyph == root.presets || glyph == root.equalizer || glyph == root.microphone || glyph == root.timer || glyph == root.lock;
     }
 
     // Shuffle and Repeat are drawn on a 20-unit box with 2-unit strokes and
@@ -458,6 +459,9 @@ export global Glyphs {
     }
 
     public pure function outline(glyph: string) -> string {
+        if glyph == root.lock {
+            return "M5 7 V5 A3 3 0 0 1 11 5 V7";
+        }
         if glyph == root.more {
             return "M8 1.5 A6.5 6.5 0 0 1 8 14.5 A6.5 6.5 0 0 1 8 1.5 Z";
         }
@@ -557,6 +561,10 @@ export global Glyphs {
     }
 
     public pure function solid(glyph: string) -> string {
+        // The Mac's lock.fill, filled where the icon font's Lock is an outline.
+        if glyph == root.lock {
+            return "M4 7 H12 A1 1 0 0 1 13 8 V14 A1 1 0 0 1 12 15 H4 A1 1 0 0 1 3 14 V8 A1 1 0 0 1 4 7 Z";
+        }
         if glyph == root.shuffle {
             return "M15 2.6 L19 6 L15 9.4 Z M15 10.6 L19 14 L15 17.4 Z";
         }
@@ -1834,7 +1842,7 @@ export component LevelSlider inherits Rectangle {
     }
 
     min-width: root.vertical ? root.knob : 48px;
-    // A row's knob reaches 1 px past its 14 px line, which keeps the rows' 49 px step.
+    // A row's knob reaches 1 px past its 14 px line, which keeps the rows' 54 px step.
     min-height: root.vertical ? 48px : root.small ? 14px : root.knob;
     preferred-height: root.small ? 16px : 22px;
     forward-focus: focus;
@@ -1938,13 +1946,30 @@ export component LevelSlider inherits Rectangle {
         // is see-through like its track: white at 13 % on dark, 56 % on light.
         background: !root.small ? #ffffff : (Tokens.dark ? #ffffff22 : #ffffff90).mix(Tokens.dark ? #959595 : touch.pressed ? #ebebeb : #ffffff, root.dim);
         // The Mac's small knob: on light a faint ring and a soft shadow keep it
-        // off a white window at 100; on dark the shadow alone, which an idle
-        // knob would show through.
+        // off a white window at 100; on dark the shadow and the top edge below.
         border-width: root.small && Tokens.dark ? 0px : 1px;
         border-color: root.small ? #0000001f : Tokens.secondary-text;
         drop-shadow-blur: root.small && !Tokens.dark ? 3px : 1.5px;
         drop-shadow-offset-y: root.small && !Tokens.dark ? 1px : 0.5px;
         drop-shadow-color: (root.small && !Tokens.dark ? #00000033 : #0000004d).transparentize(root.dim);
+
+        // The Mac's small knob on dark has a light edge round its top only,
+        // #ad over its #95 fill and #54 over #46 idle (its dark photos, 18 Nov).
+        // Slint's software renderer draws a gradient border evenly all round.
+        if root.small && Tokens.dark: Rectangle {
+            y: 0;
+            height: 6px;
+            clip: true;
+
+            Rectangle {
+                y: 0;
+                width: root.knob;
+                height: root.knob;
+                border-radius: self.width / 2;
+                border-width: 1px;
+                border-color: #ffffff6e.mix(#ffffff1c, 1 - root.dim);
+            }
+        }
     }
 
     touch := TouchArea {
@@ -4002,14 +4027,26 @@ export component SpeakerRow inherits Rectangle {
                                     // An AirPlay speaker's note can be long; it ends in "…"
                                     // rather than run into the delay column (Narrator reads
                                     // the whole note from the toggle).
-                                    if root.note != "": Rectangle {
+                                    if root.note != "": note-box := Rectangle {
+                                        // The Mac's AvailabilityNote leads with its lock or warning, 3 pt before the text (MenuBar.swift:2311-2318).
+                                        property <length> lead: root.availability-note != "" && root.note == Strings.speaker-caption(Strings.row-note(root.item.state, root.item.name), root.availability-note) ? Tokens.font-size-caption + 3px : 0px;
                                         horizontal-stretch: 1;
                                         min-width: 0px;
-                                        preferred-width: note-label.preferred-width;
-                                        max-width: note-label.preferred-width;
+                                        preferred-width: note-label.preferred-width + self.lead;
+                                        max-width: note-label.preferred-width + self.lead;
+
+                                        if note-box.lead > 0: note-icon := Glyph {
+                                            x: 0;
+                                            width: Tokens.font-size-caption;
+                                            height: 100%;
+                                            glyph: root.item.availability == Availability.needs-code || (root.item.code-every-time && root.item.availability == Availability.open) ? Glyphs.lock : Glyphs.warning;
+                                            font-size: Tokens.font-size-caption;
+                                            color: Tokens.secondary-text;
+                                        }
 
                                         note-label := Text {
-                                            width: 100%;
+                                            x: note-box.lead;
+                                            width: parent.width - note-box.lead;
                                             height: 100%;
                                             text: root.note;
                                             font-size: Tokens.font-size-caption;
@@ -5848,7 +5885,9 @@ export component NoticeStack inherits VerticalLayout {
                         message-box := Rectangle {
                             property <bool> cut: root.capped && message.preferred-height > self.three-lines;
                             property <length> three-lines: 3 * line.preferred-height;
-                            height: self.cut ? self.three-lines : message.preferred-height;
+                            // Segoe UI's 10 px line is 13.3 px and the Mac's caption 13
+                            // (MenuBar.swift:2800): a few lines come out a pixel over the Mac.
+                            height: self.cut ? self.three-lines : message.preferred-height - 1px;
 
                             // Any one line of text: its height.
                             line := Text {
@@ -5860,7 +5899,7 @@ export component NoticeStack inherits VerticalLayout {
 
                             message := Text {
                                 width: parent.width;
-                                height: parent.height;
+                                height: message-box.cut ? parent.height : self.preferred-height;
                                 text: notice.message;
                                 color: Tokens.text;
                                 font-size: Tokens.font-size-caption;
@@ -5879,7 +5918,9 @@ export component NoticeStack inherits VerticalLayout {
                             }
                         }
 
+                        // The Mac's caption2 line is 13 high (MenuBar.swift:2806).
                         if !root.compact: QuietText {
+                            height: 13px;
                             text: notice.time;
                         }
                     }
