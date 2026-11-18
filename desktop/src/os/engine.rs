@@ -34,7 +34,7 @@ pub fn backend<D: Driver + 'static>(
     restore_records(&mut audio, log, settings_file.path());
     #[cfg(windows)]
     audio.set_restore_guard(crate::restore_guard::keeper());
-    // S473 while S490's own sink isn't the default.
+    // S473 while S477's own sink isn't the default.
     #[cfg(target_os = "linux")]
     audio.hold_out_default_sink();
     #[cfg(target_os = "linux")]

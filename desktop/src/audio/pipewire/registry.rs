@@ -4,7 +4,7 @@
 //! reads a copy of the [`Graph`] and never waits for the daemon; volume
 //! fixes the user clicks reach the thread through a PipeWire channel. Each
 //! connection also keeps AudioSync's own null sink, the default sink while
-//! the whole system streams (S490), which [`SinkDefaults`] moves.
+//! the whole system streams (S477), which [`SinkDefaults`] moves.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -111,7 +111,7 @@ struct Shared {
     watched: Mutex<BTreeSet<String>>,
     volume_changes: Mutex<BTreeSet<String>>,
     /// The node name `default.configured.audio.sink` holds: the user's
-    /// choice, or S490's move.
+    /// choice, or S477's move.
     configured_sink: Mutex<Option<String>>,
 }
 
@@ -195,7 +195,7 @@ impl Registry {
         copy(&self.shared)
     }
 
-    /// The default sink's seam for S469's switch, as S490 moves it.
+    /// The default sink's seam for S469's switch, as S477 moves it.
     pub fn sink_defaults(&self) -> SinkDefaults {
         SinkDefaults {
             shared: Arc::clone(&self.shared),
@@ -302,7 +302,7 @@ fn copy(shared: &Shared) -> Result<Graph, BackendError> {
     Ok(locked(&shared.graph).clone())
 }
 
-/// The default sink as S469's switch reads and moves it (S490): the
+/// The default sink as S469's switch reads and moves it (S477): the
 /// configured one, else the one in use, set through the `default`
 /// metadata on the graph thread. Both roles are the one default sink.
 pub struct SinkDefaults {
@@ -871,7 +871,7 @@ fn bind_node(
     })
 }
 
-/// AudioSync's own null sink (S490): low in priority, so the session
+/// AudioSync's own null sink (S477): low in priority, so the session
 /// manager never makes it the default by itself, and gone with the
 /// connection that made it.
 fn own_sink(core: &pw::core::CoreRc) -> Option<NodeProxy> {

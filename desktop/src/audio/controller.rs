@@ -508,7 +508,7 @@ pub trait Driver: Send {
     }
 
     /// The default output's seam for S469's switch, where the driver keeps
-    /// one itself (S490).
+    /// one itself (S477).
     fn default_endpoints(&self) -> Option<Box<dyn DefaultEndpoints>> {
         None
     }

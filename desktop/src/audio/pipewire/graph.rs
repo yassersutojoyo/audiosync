@@ -15,7 +15,7 @@ use crate::audio::process::ProcessTable;
 use crate::audio::routing::{EndpointAudio, EndpointVolume};
 
 pub const SINK_CLASS: &str = "Audio/Sink";
-/// The node name of AudioSync's own null sink (S490).
+/// The node name of AudioSync's own null sink (S477).
 pub const OWN_SINK: &str = "audiosync-silent";
 pub const STREAM_CLASS: &str = "Stream/Output/Audio";
 const SOURCE_CLASSES: [&str; 2] = ["Audio/Source", "Audio/Source/Virtual"];
@@ -330,7 +330,7 @@ impl Graph {
 
     /// The outputs to list, by node name: every sink but a Bluetooth
     /// hands-free one, PipeWire's own AirPlay sinks, which AudioSync
-    /// reaches through its own sender, and AudioSync's own sink (S490).
+    /// reaches through its own sender, and AudioSync's own sink (S477).
     pub fn listing(&self) -> Listing {
         let mut listing = Listing::default();
         for (_, node) in self.sinks() {
