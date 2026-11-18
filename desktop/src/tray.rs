@@ -78,11 +78,12 @@ thread_local! {
     static FLYOUT_FOCUSED: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Whether a focus change hides the flyout, noting it in `had`.
+/// Whether a focus change hides the flyout, noting it in `had`: only the
+/// loss of a focus it had, since winit reports a loss to the flyout it just
+/// mapped where no window manager gives it the focus.
 #[cfg(any(windows, target_os = "linux"))]
 fn focus_hides_flyout(focused: bool, had: &Cell<bool>) -> bool {
-    had.set(focused);
-    !focused
+    had.replace(focused) && !focused
 }
 
 pub struct Tray {
@@ -466,6 +467,7 @@ fn on_menu_event(id: MenuId) {
 fn show_flyout(app: &App, icon: Bounds) {
     let flyout = app.flyout.window();
     app.prepare_flyout_open(platform::animation_effects());
+    FLYOUT_FOCUSED.with(|had| had.set(false));
     platform::set_cloaked(flyout, true);
     if flyout.show().is_err() {
         return;
