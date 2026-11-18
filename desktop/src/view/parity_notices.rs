@@ -114,3 +114,34 @@ fn the_tray_notices_footer_sits_under_the_notice_text() {
     );
     assert!(column.contains("spacing: 6px;"), "{column}");
 }
+
+#[test]
+fn the_rename_field_is_at_most_220_wide() {
+    let widgets = include_str!("../../ui/widgets.slint").replace("\r\n", "\n");
+    let editor = component(&widgets, "NameEditor");
+    // MainWindow.swift:2248 .frame(maxWidth: 220), for speakers and zones.
+    assert!(editor.contains("max-width: 220px;"), "{editor}");
+    let row = component(&widgets, "SpeakerRow");
+    let field = between(
+        &row,
+        "if root.item.renaming: Rectangle {",
+        "text: root.item.name-text;",
+    );
+    // Placed in a Rectangle, so its width is set rather than stretched.
+    assert!(
+        field.contains("width: min(parent.width, 220px);"),
+        "{field}"
+    );
+}
+
+#[test]
+fn a_message_in_the_name_dialog_has_ok_only() {
+    let dialogs = include_str!("../../ui/dialogs.slint").replace("\r\n", "\n");
+    let dialog = component(&dialogs, "ZoneNameDialog");
+    // AppDelegate+Zones.swift:290 showAlert(.informational): OK, no Cancel.
+    let cancel = between(&dialog, "DialogButton {\n        text: root.confirm-label;", "text: Strings.cancel;");
+    assert!(
+        cancel.trim_end().ends_with("if root.show-field: DialogButton {"),
+        "{cancel}"
+    );
+}
