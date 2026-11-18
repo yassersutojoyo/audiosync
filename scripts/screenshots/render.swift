@@ -389,7 +389,9 @@ func layarMain(_ model: AppModel, look: Look, size: NSSize = NSSize(width: 696, 
                             styleMask: [.titled, .resizable, .closable, .miniaturizable],
                             backing: .buffered, defer: false)
     window.appearance = look.appearance
-    window.backgroundColor = look == .dark ? .windowBackgroundColor : .white
+    // The real dark window measures #2b2b29; offscreen on the CI runner .windowBackgroundColor draws #1e1e1e.
+    window.backgroundColor = look == .dark
+        ? NSColor(srgbRed: 0x2b / 255, green: 0x2b / 255, blue: 0x29 / 255, alpha: 1) : .white
     window.contentViewController = host
     window.titleVisibility = .hidden
     window.titlebarAppearsTransparent = true
@@ -463,6 +465,8 @@ func layarModel(_ configure: (AppModel) -> Void = { _ in }) -> AppModel {
     model.deviceVolumes = ["speakers": .low(percent: 13)]
     model.builtInVolume = 0.13
     model.airPlayDelayMs = 1750
+    // Google Cast on, as in the real app, so the list offers Add by Address.
+    model.castCanAdd = true
     configure(model)
     return model
 }
