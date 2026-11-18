@@ -1,6 +1,6 @@
 //! The AudioSync Guide (`ui/help.slint`): how to use the Windows app, opened
 //! from the gear's AudioSync Guide (F1). There is one Guide window, made with the
-//! App; opening it again brings that window to the front at the top. Its
+//! App; it opens again where it was left, scrolled and sized as it was. Its
 //! Show How opens the double-audio notice's own guide, and shows only while
 //! that notice does.
 
@@ -22,10 +22,12 @@ impl App {
         let w = weak.clone();
         self.help
             .on_show_how_requested(move || with_app(&w, App::show_help_double_audio));
+        self.help
+            .on_items(|text| slint::ModelRc::from(guide_items(&text).as_slice()));
         let w = weak.clone();
         self.help.on_close_requested(move || {
             with_app(&w, |app| {
-                app.ui.borrow_mut().guide_place = app.guide_place();
+                app.keep_guide_place();
                 // A window that fails to hide stays open; the user can still close it.
                 let _ = app.help.hide();
             })
@@ -33,11 +35,20 @@ impl App {
         let w = weak;
         self.help.window().on_close_requested(move || {
             with_app(&w, |app| {
-                app.ui.borrow_mut().guide_place = app.guide_place();
+                app.keep_guide_place();
                 let _ = app.help.hide();
             });
             slint::CloseRequestResponse::HideWindow
         });
+    }
+
+    /// Keeps the Guide's place, size and scroll outside the window, which
+    /// may be dropped once it closes.
+    fn keep_guide_place(&self) {
+        let place = self.guide_place();
+        let mut ui = self.ui.borrow_mut();
+        ui.guide_place = place;
+        ui.guide_scroll = self.help.get_scrolled();
     }
 
     /// Opens the Guide, or brings it to the front when it is open.
@@ -51,7 +62,14 @@ impl App {
             return;
         }
         if opening {
-            self.help.invoke_scroll_to_top();
+            let size = self.ui.borrow().guide_place.and_then(|place| place.size);
+            if let Some((width, height)) = size {
+                #[allow(clippy::cast_possible_truncation)]
+                let size = slint::LogicalSize::new(width as f32, height as f32);
+                self.help.window().set_size(size);
+            }
+            let scrolled = self.ui.borrow().guide_scroll;
+            self.help.invoke_scroll_to(scrolled);
             self.log.log(|| "AudioSync Guide: opened".to_owned());
         }
         self.help.invoke_take_focus();
@@ -65,9 +83,11 @@ impl App {
             return self.ui.borrow().guide_place;
         }
         let position = window.position();
+        let size = window.size().to_logical(window.scale_factor());
         Some(WindowPlace {
             x: position.x,
             y: position.y,
+            size: Some((f64::from(size.width), f64::from(size.height))),
         })
     }
 
@@ -88,7 +108,9 @@ impl App {
         let window = self.help.window();
         let size = window.size().to_logical(window.scale_factor());
         // Before its first showing the window may have no size yet: the Guide's own.
-        let size = if size.width > 0.0 {
+        let size = if let Some(size) = place.size {
+            size
+        } else if size.width > 0.0 {
             (f64::from(size.width), f64::from(size.height))
         } else {
             (640.0, 600.0)
@@ -112,6 +134,11 @@ impl App {
         self.help
             .set_show_how_shown(guide::notice_with_guide(&state.notices).is_some());
     }
+}
+
+/// The Guide's list items: the paragraphs of `text`.
+fn guide_items(text: &str) -> Vec<slint::SharedString> {
+    text.split("\n\n").map(Into::into).collect()
 }
 
 #[cfg(test)]
@@ -183,11 +210,14 @@ mod tests {
         assert_eq!(scrolled(), 0.0, "Home goes to the top");
         press(window, Key::PageUp);
         assert_eq!(scrolled(), 0.0, "not past the top");
+    }
 
-        press(window, Key::End);
-        press(window, Key::Escape);
-        app.main.invoke_help_requested();
-        assert_eq!(scrolled(), 0.0, "it opens at the top again");
+    #[test]
+    fn guide_lists_are_the_paragraphs_of_a_text() {
+        assert_eq!(
+            super::guide_items("One.\n\nTwo.\n\nThree."),
+            ["One.", "Two.", "Three."]
+        );
     }
 
     #[test]
