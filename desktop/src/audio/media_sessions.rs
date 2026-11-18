@@ -32,7 +32,7 @@ use crate::audio::now_playing::{
 };
 use crate::debug_log::DebugLog;
 use crate::now_playing_card::{
-    ArtworkCache, CardArtwork, CardSource, CardTrack, MediaControls, Transport,
+    ART_HOLD, ArtworkCache, CardArtwork, CardSource, CardTrack, MediaControls, Transport,
 };
 
 /// How soon the sessions are read again after a button: long enough for
@@ -436,6 +436,10 @@ struct Reader<L> {
     misses: HashMap<String, Instant>,
     /// The last track logged as having no thumbnail, so it is said once.
     uncovered: Option<String>,
+    /// The app, album and bytes of the last thumbnail kept.
+    last_cover: Option<(String, String, Vec<u8>)>,
+    /// A track whose thumbnail is still another album's, and since when.
+    stale: Option<(String, Instant)>,
     /// The last listing failed, and said so.
     failing: bool,
     /// The last tracks read, for the log.
@@ -462,6 +466,8 @@ impl<L: SessionList> Reader<L> {
             tiles: ArtworkCache::default(),
             misses: HashMap::new(),
             uncovered: None,
+            last_cover: None,
+            stale: None,
             failing: false,
             last_track: None,
             last_card: None,
@@ -720,7 +726,7 @@ impl<L: SessionList> Reader<L> {
         let image = match read {
             Ok(image) => {
                 self.misses.remove(key);
-                image
+                self.own_cover(session, key, image)
             }
             Err(error) => {
                 if self.misses.len() >= ARTWORK_CACHE && !self.misses.contains_key(key) {
@@ -739,6 +745,34 @@ impl<L: SessionList> Reader<L> {
         };
         listing.thumbnails.push((index, image.clone()));
         image
+    }
+
+    /// `image` unless it is still the last album's cover: Spotify gives a
+    /// new song's title before its thumbnail. Past [`ART_HOLD`] it is
+    /// taken, as another album may share the cover.
+    fn own_cover(
+        &mut self,
+        session: &MediaSession,
+        key: &str,
+        image: Option<Vec<u8>>,
+    ) -> Option<Vec<u8>> {
+        let image = image?;
+        if let Some((app_id, album, last)) = &self.last_cover
+            && *app_id == session.app_id
+            && *album != session.album
+            && *last == image
+        {
+            let since = match &self.stale {
+                Some((stale, since)) if stale == key => *since,
+                _ => Instant::now(),
+            };
+            self.stale = Some((key.to_owned(), since));
+            if since.elapsed() < ART_HOLD {
+                return None;
+            }
+        }
+        self.last_cover = Some((session.app_id.clone(), session.album.clone(), image.clone()));
+        Some(image)
     }
 
     /// Receiver artwork fitted from `image`, kept for the track.
@@ -1094,7 +1128,10 @@ mod tests {
         let (track, card) = poll(&mut reader);
         let card = card.expect("the card shows");
         assert_eq!(card.title, "Next");
-        assert!(card.artwork.is_none(), "the last song's cover is not this one's");
+        assert!(
+            card.artwork.is_none(),
+            "the last song's cover is not this one's"
+        );
         assert!(!card.cover_failed, "its own cover is on its way");
         assert!(track.is_some_and(|track| track.artwork.is_none()));
         reader.sessions.thumbnail = Thumbnail::Image;
