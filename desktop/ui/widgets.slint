@@ -4007,6 +4007,12 @@ export component SpeakerRow inherits Rectangle {
                                             accessible-role: none;
                                         }
 
+                                        // Named by the code or can't-play note, as the Mac's AvailabilityNote (MenuBar.swift:2322-2323).
+                                        if root.availability-note != "": Rectangle {
+                                            accessible-role: text;
+                                            accessible-label: root.availability-note;
+                                        }
+
                                         if root.note-help != "": TouchArea {
                                             clicked => {
                                                 root.box-clicked();
