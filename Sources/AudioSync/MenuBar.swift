@@ -3027,7 +3027,7 @@ struct MasterSlider: View {
                 model.actions.setMaster(MasterTrack.level(at: drag.location.x, width: width))
             }
             // The mouse-down drops the focus asked for in onChanged; a still click has no later event to ask again.
-            .onEnded { _ in click.clicked = true; focused = true })
+            .onEnded { _ in SliderClick.takeWindowFocus(); click.clicked = true; focused = true })
         }
         .frame(height: MasterSlider.height)
         .background(ScrollWatch { event in
