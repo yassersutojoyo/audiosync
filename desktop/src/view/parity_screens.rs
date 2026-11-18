@@ -431,3 +431,33 @@ fn the_equalizers_reset_is_the_macs_house_button() {
         "{button}"
     );
 }
+
+#[test]
+fn the_off_power_switch_is_drawn_in_the_macs_secondary() {
+    let source = include_str!("../../ui/widgets.slint").replace("\r\n", "\n");
+    let switch = component(&source, "PowerSwitch");
+    // Color.secondary and its 15 % fill (MenuBar.swift:2934-2935): black at 50 % on
+    // light and white at 55 % on dark, as the off toggle glyph's.
+    assert!(
+        switch.contains("Tokens.teal : Tokens.dark ? #ffffff15 : #00000013;"),
+        "{switch}"
+    );
+    assert!(
+        switch.contains("border-color: Tokens.dark ? #ffffff8c : #00000080;"),
+        "{switch}"
+    );
+}
+
+#[test]
+fn the_panels_mute_button_is_drawn_in_the_secondary_text() {
+    let widgets = include_str!("../../ui/widgets.slint").replace("\r\n", "\n");
+    let volume = component(&widgets, "MasterVolume");
+    assert!(volume.contains("color: root.icon-color;"), "{volume}");
+    // The panel's mute glyph is Brand.secondaryText, the window's .primary (MenuBar.swift:2978).
+    let flyout = include_str!("../../ui/flyout.slint").replace("\r\n", "\n");
+    let row = &flyout[flyout.find("MasterVolume {").expect("the flyout's master volume")..];
+    assert!(
+        row[..row.find("mute-toggled").unwrap()].contains("icon-color: Tokens.secondary-text;"),
+        "{row}"
+    );
+}
