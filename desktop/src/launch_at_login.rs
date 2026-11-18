@@ -352,7 +352,6 @@ fn settled(message: &NoticeMessage, status: Status) -> bool {
 /// autostart file on Linux, memory elsewhere, in a test copy and in tests,
 /// so no test reads or changes the user's startup list.
 pub fn system_store() -> Box<dyn StartupStore> {
-    // A test copy must not touch the user's startup entry.
     if crate::test_instance::current().is_some() {
         return Box::new(MemoryStore::default());
     }

@@ -51,8 +51,7 @@ pub fn enabled() -> bool {
 
 /// A package's files are read-only and the Microsoft Store updates them.
 fn runs(release: bool, package: Option<&crate::package::Package>, instance: Option<&str>) -> bool {
-    let _ = instance;
-    release && package.is_none()
+    release && package.is_none() && instance.is_none()
 }
 
 fn marked(value: Option<&str>) -> bool {

@@ -26,7 +26,7 @@ pub fn name_for(
         && name
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
-    valid.then(|| name.to_owned())
+    valid.then(|| name.to_ascii_lowercase())
 }
 
 /// This launch's test copy name, read once.

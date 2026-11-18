@@ -991,6 +991,8 @@ pub struct Controller<D: Driver> {
     default_switch: DefaultSwitch,
     /// Whether the default output gets no copy of the whole system (S473).
     holds_out_default_sink: bool,
+    /// A test copy's: no default, app or level moves (S511).
+    leaves_system_outputs: bool,
     /// Where one captured app's own output is moved to the silent endpoint,
     /// and where its restore record is kept (S471); `None` where it isn't.
     app_output: Option<(Box<dyn AppEndpoints>, Box<dyn AppRecordStore>)>,
@@ -1095,6 +1097,7 @@ impl<D: Driver> Controller<D> {
             default_output: None,
             default_switch: DefaultSwitch::default(),
             holds_out_default_sink: false,
+            leaves_system_outputs: false,
             app_output: None,
             app_redirect: AppRedirect::default(),
             app_checked: None,
@@ -1256,6 +1259,9 @@ impl<D: Driver> Controller<D> {
         mut endpoints: Box<dyn DefaultEndpoints>,
         mut store: Box<dyn RecordStore>,
     ) {
+        if self.leaves_system_outputs {
+            return;
+        }
         let lines = self
             .default_switch
             .restore_at_launch(endpoints.as_mut(), store.as_mut());
@@ -1267,7 +1273,9 @@ impl<D: Driver> Controller<D> {
 
     /// Leaves Windows' default output, apps' outputs and the outputs' own
     /// levels as they are: a test copy (S511).
-    pub fn leave_system_outputs(&mut self) {}
+    pub fn leave_system_outputs(&mut self) {
+        self.leaves_system_outputs = true;
+    }
 
     /// Holds the default output out of a whole-system stream, where the
     /// host can't move it (S473).
@@ -1287,6 +1295,9 @@ impl<D: Driver> Controller<D> {
         mut endpoints: Box<dyn AppEndpoints>,
         mut store: Box<dyn AppRecordStore>,
     ) {
+        if self.leaves_system_outputs {
+            return;
+        }
         let running = match store.load() {
             Ok(Some(record)) => self.recorded_running(&record),
             _ => Vec::new(),
@@ -2323,7 +2334,9 @@ impl<D: Driver> Controller<D> {
             // Its remembered level goes on before its first audio (S472).
             let current = self.driver.endpoint_volume(&endpoint.id);
             let current = current.ok().map(|volume| f64::from(volume.level));
-            if let Some(level) = self.local_volumes.switched_on(&endpoint.id, current) {
+            if !self.leaves_system_outputs
+                && let Some(level) = self.local_volumes.switched_on(&endpoint.id, current)
+            {
                 let set = self.driver.set_endpoint_level(&endpoint.id, level as f32);
                 if set.is_err() {
                     self.local_volumes.refused(&endpoint.id);
