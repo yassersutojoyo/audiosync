@@ -15726,6 +15726,32 @@ pub(crate) mod tests {
         assert_eq!(name.absolute_position().x, title.absolute_position().x);
     }
 
+    /// The source, the title and the artist keep the Mac panel's line
+    /// boxes, 16, 19 and 16 pt, 2 and 1 pt apart (MenuBar.swift:2382-2393),
+    /// so the hero is as tall as the Mac's and the rows under it don't sink.
+    #[test]
+    fn the_flyout_song_lines_keep_the_macs_line_boxes() {
+        let app = app_over(MockBackend::new());
+        app.flyout.set_now_playing_shown(true);
+        app.flyout.set_now_playing_title("A track title".into());
+        app.flyout.set_now_playing_subtitle("Artist".into());
+        app.flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        let source = flyout_element(&app, "SourceMenu::label");
+        let title = flyout_element(&app, "TrayFlyout::song-title");
+        let artist = flyout_element(&app, "TrayFlyout::song-artist");
+        let top = |e: &i_slint_backend_testing::ElementHandle| e.absolute_position().y;
+        assert_eq!(
+            (
+                top(&title) - top(&source),
+                top(&artist) - top(&title),
+                artist.size().height
+            ),
+            (18.0, 20.0, 16.0),
+            "title under the source, artist under the title, artist line"
+        );
+    }
+
     /// The source, the title and the artist stack beside the cover with
     /// none cut short, and the wave sits below the artist, as in the Mac
     /// panel.
