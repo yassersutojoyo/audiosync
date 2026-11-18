@@ -237,11 +237,6 @@ const FRESH_RESTART_POLLS: u32 = 4;
 /// new start: 1 s.
 const FRESH_REST_POLLS: u32 = 2;
 
-/// Polls from a Bluetooth endpoint's return mid-session to its output's
-/// second restart, 305 s: a link back mid-session may still be noisy at its
-/// 2 s restart and only calm minutes later (S325).
-const CALM_RESTART_POLLS: u64 = 610;
-
 /// A sender that couldn't start is tried again this many polls later, 10 s
 /// (S101), until one runs.
 const AIRPLAY_RESTART_POLLS: u32 = 20;
@@ -1034,12 +1029,6 @@ pub struct Controller<D: Driver> {
     /// The outputs restarting once because their Bluetooth link was new
     /// when they started (S325).
     fresh_restarts: BTreeMap<String, FreshRestart<D::Renderer>>,
-    /// The endpoints that left the list while the session played.
-    left_mid_session: BTreeSet<String>,
-    /// The poll at which each Bluetooth endpoint that left the list while
-    /// the session played came back: its output restarts once more
-    /// [`CALM_RESTART_POLLS`] later (S325).
-    calm_restarts: BTreeMap<String, u64>,
     /// Where the PC is in a sleep (S332).
     power: PowerState,
     /// Resume Playback After Sleep (S465).
@@ -1121,8 +1110,6 @@ impl<D: Driver> Controller<D> {
             appeared: BTreeMap::new(),
             relinked: BTreeMap::new(),
             fresh_restarts: BTreeMap::new(),
-            left_mid_session: BTreeSet::new(),
-            calm_restarts: BTreeMap::new(),
             power: PowerState::default(),
             resume_after_sleep: false,
             wake_resume: None,
@@ -2051,30 +2038,9 @@ impl<D: Driver> Controller<D> {
         }
         self.listing_error = None;
         if self.listed_once {
-            for known in &self.present {
-                if !listed.iter().any(|endpoint| endpoint.id == known.id) {
-                    self.calm_restarts.remove(&known.id);
-                    if self.session.is_some() {
-                        self.left_mid_session.insert(known.id.clone());
-                    }
-                }
-            }
             for endpoint in &listed {
                 if !self.present.iter().any(|known| known.id == endpoint.id) {
                     self.appeared.insert(endpoint.id.clone(), self.polls);
-                    if self.left_mid_session.remove(&endpoint.id)
-                        && endpoint.kind == OutputKind::Bluetooth
-                    {
-                        self.calm_restarts.insert(endpoint.id.clone(), self.polls);
-                        self.log.log(|| {
-                            format!(
-                                "output {}: its Bluetooth link came back mid-session; one more \
-                                 quiet restart in {} s",
-                                label(&self.names, &endpoint.id),
-                                CALM_RESTART_POLLS / 2
-                            )
-                        });
-                    }
                 }
             }
         }
@@ -2706,26 +2672,6 @@ impl<D: Driver> Controller<D> {
                 self.fresh_restarts.insert(id, next);
             }
         }
-        let polls = self.polls;
-        let due: Vec<String> = self
-            .calm_restarts
-            .iter()
-            .filter(|(_, back)| polls - **back >= CALM_RESTART_POLLS)
-            .map(|(id, _)| id.clone())
-            .collect();
-        for id in due {
-            self.calm_restarts.remove(&id);
-            if self.fresh_restarts.contains_key(&id) {
-                continue;
-            }
-            let why = format!(
-                "its Bluetooth link came back {} s ago",
-                CALM_RESTART_POLLS / 2
-            );
-            if let Some(restart) = self.begin_fresh_restart(&id, &why) {
-                self.fresh_restarts.insert(id, restart);
-            }
-        }
     }
 
     /// Fades out output `id` for its restart, its start lead still counted
@@ -2757,8 +2703,6 @@ impl<D: Driver> Controller<D> {
     /// listed. One fading goes on fading as a switched-off output does; one
     /// out of its stream whose device left is lost.
     fn cancel_stale_fresh_restarts(&mut self) {
-        self.calm_restarts
-            .retain(|id, _| self.policy.settings(id).enabled);
         let stale: Vec<(String, bool)> = self
             .fresh_restarts
             .keys()
@@ -2789,7 +2733,6 @@ impl<D: Driver> Controller<D> {
     /// timing before it says nothing about the link after. One already
     /// fading or resting is out of its stream and finishes as it would.
     fn cancel_fresh_restarts_for_sleep(&mut self) {
-        self.calm_restarts.clear();
         let due: Vec<String> = self
             .fresh_restarts
             .iter()
@@ -2862,8 +2805,6 @@ impl<D: Driver> Controller<D> {
         }
         // The session's end cancels every restart for a new Bluetooth link
         // (S325); one fading fades on with the session's outputs.
-        self.calm_restarts.clear();
-        self.left_mid_session.clear();
         for (id, restart) in std::mem::take(&mut self.fresh_restarts) {
             if let FreshRestart::Fading { playing, .. } = restart {
                 outputs.push(playing);
@@ -5080,7 +5021,6 @@ impl<D: Driver> AudioBackend for Controller<D> {
         // Switched off, a busy or stalled output no longer waits for its
         // device: switched on again, it is tried at once.
         if !enabled {
-            self.calm_restarts.remove(id);
             self.lost.remove(id);
             self.stalled.remove(id);
             self.hung.remove(id);
@@ -5815,7 +5755,6 @@ impl<D: Driver> AudioBackend for Controller<D> {
                 .collect();
             // Released before the log says why they ended (S126).
             for (id, _) in &stopped {
-                self.calm_restarts.remove(id);
                 let Some(playing) = session.outputs.remove(id) else {
                     continue;
                 };
@@ -11355,15 +11294,6 @@ mod tests {
         assert!(backend.policy().settings(BUDS).enabled, "it stays on");
     }
 
-    /// Bluetooth earbuds listed at launch and switched on.
-    fn buds_from_launch() -> MockBackend {
-        let mut backend = backend();
-        backend.connect_output_as(BUDS, "Buds", OutputKind::Bluetooth);
-        backend.set_output_enabled(BUDS, true).unwrap();
-        backend.list_outputs().unwrap();
-        backend
-    }
-
     /// Polls `count` times, whatever the events.
     fn run_polls(backend: &mut MockBackend, count: u32) {
         for _ in 0..count {
@@ -11407,106 +11337,6 @@ mod tests {
             "{lines:?}"
         );
         let _ = std::fs::remove_dir_all(dir);
-    }
-
-    // covers: S325
-    #[test]
-    fn a_bluetooth_output_back_mid_session_restarts_again_305_s_after_its_return() {
-        let (mut backend, log, dir) = logged_backend("controller-calm-restart");
-        backend.connect_output_as(BUDS, "Buds", OutputKind::Bluetooth);
-        backend.set_output_enabled(BUDS, true).unwrap();
-        backend.list_outputs().unwrap();
-        backend.start(&SourceId::WholeSystem).unwrap();
-        power_cycle_buds(&mut backend);
-        run_polls(&mut backend, 20);
-        assert_eq!(
-            buds_restarts(&backend),
-            (3, 1),
-            "back, then its 2 s restart"
-        );
-        run_polls(&mut backend, 585);
-        assert_eq!(buds_restarts(&backend), (3, 1), "not before 305 s");
-        run_polls(&mut backend, 15);
-        assert_eq!(buds_restarts(&backend), (4, 2), "one quiet restart");
-        run_polls(&mut backend, 2000);
-        assert_eq!(buds_restarts(&backend), (4, 2), "only one");
-        assert!(playing(&backend).contains(&BUDS.to_owned()));
-        assert_in_order(
-            &logged(&log, &dir),
-            &[
-                "output \"Buds\" (buds): its Bluetooth link came back mid-session; one more \
-                 quiet restart in 305 s",
-                "output \"Buds\" (buds) restarts: its Bluetooth link came back 305 s ago",
-                "output \"Buds\" (buds) started: ",
-            ],
-        );
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    // covers: S325
-    #[test]
-    fn a_new_return_starts_the_second_restarts_clock_over() {
-        let mut backend = buds_from_launch();
-        backend.start(&SourceId::WholeSystem).unwrap();
-        power_cycle_buds(&mut backend);
-        run_polls(&mut backend, 200);
-        power_cycle_buds(&mut backend);
-        run_polls(&mut backend, 20);
-        let before = buds_restarts(&backend);
-        run_polls(&mut backend, 400);
-        assert_eq!(
-            buds_restarts(&backend),
-            before,
-            "305 s after the first return"
-        );
-        run_polls(&mut backend, 200);
-        assert_eq!(
-            buds_restarts(&backend),
-            (before.0 + 1, before.1 + 1),
-            "305 s after the second"
-        );
-    }
-
-    // covers: S325, S332
-    #[test]
-    fn a_switch_off_a_loss_the_sessions_end_or_a_sleep_cancels_the_second_restart() {
-        let switch: fn(&mut MockBackend) = |backend| {
-            backend.set_output_enabled(BUDS, false).unwrap();
-            run_polls(backend, 10);
-            backend.set_output_enabled(BUDS, true).unwrap();
-        };
-        let switch_within_a_poll: fn(&mut MockBackend) = |backend| {
-            backend.set_output_enabled(BUDS, false).unwrap();
-            backend.set_output_enabled(BUDS, true).unwrap();
-        };
-        let lost: fn(&mut MockBackend) = |backend| backend.end_renderer(BUDS);
-        let new_session: fn(&mut MockBackend) = |backend| {
-            backend.stop();
-            run_polls(backend, 10);
-            backend.start(&SourceId::WholeSystem).unwrap();
-        };
-        let sleep: fn(&mut MockBackend) = sleep_two_hours;
-        for cancel in [switch, switch_within_a_poll, lost, new_session, sleep] {
-            let mut backend = buds_from_launch();
-            backend.start(&SourceId::WholeSystem).unwrap();
-            power_cycle_buds(&mut backend);
-            run_polls(&mut backend, 20);
-            cancel(&mut backend);
-            run_polls(&mut backend, 20);
-            let before = buds_restarts(&backend);
-            run_polls(&mut backend, 700);
-            assert_eq!(buds_restarts(&backend), before);
-            assert!(playing(&backend).contains(&BUDS.to_owned()));
-        }
-
-        // Back while stopped, it gets only its 2 s restart.
-        let mut backend = buds_from_launch();
-        power_cycle_buds(&mut backend);
-        backend.start(&SourceId::WholeSystem).unwrap();
-        run_polls(&mut backend, 20);
-        assert_eq!(buds_restarts(&backend), (2, 1));
-        run_polls(&mut backend, 700);
-        assert_eq!(buds_restarts(&backend), (2, 1));
     }
 
     fn microphone(backend: &mut MockBackend) -> SourceId {
