@@ -410,11 +410,85 @@ fn presets_equalizer_and_calibrate_are_28_high_rows_6_apart_with_no_border() {
 }
 
 #[test]
-fn the_device_volume_fix_reads_in_the_text_colour() {
+fn the_device_volume_fix_reads_in_the_hints_secondary_colour() {
     let source = include_str!("../../ui/widgets.slint").replace("\r\n", "\n");
     let row = component(&source, "SpeakerRow");
     let fix = &row[row.find("fix-button := LinkButton {").expect("the fix")..];
     let fix = &fix[..fix.find("clicked =>").unwrap()];
-    // The Mac's .primary (DeviceVolumeViews.swift:34), not the link teal.
-    assert!(fix.contains("text-color: Tokens.text;"), "{fix}");
+    // The Mac's .primary (DeviceVolumeViews.swift:34) is the primary level of the
+    // hint's Brand.secondaryText (:43), drawn grey in the Mac render.
+    assert!(fix.contains("text-color: Tokens.secondary-text;"), "{fix}");
+}
+
+#[test]
+fn the_tray_panels_empty_note_is_set_at_the_macs_subheadline() {
+    let source = include_str!("../../ui/flyout.slint").replace("\r\n", "\n");
+    let note = &source[source
+        .find("none-note := HorizontalLayout")
+        .expect("the note")..];
+    let text = &note[note.find("SecondaryText {").unwrap()..];
+    let text = &text[..text.find('}').unwrap()];
+    // The Mac panel's .subheadline (MenuBar.swift:1865), not the caption size.
+    assert!(
+        text.contains("font-size: Tokens.font-size-subheadline;"),
+        "{text}"
+    );
+}
+
+#[test]
+fn the_equalizer_fills_its_bands_in_the_brand_teal() {
+    let source = include_str!("../../ui/equalizer.slint");
+    // The Mac's .tint(Brand.teal) (EqualizerWindow.swift:122), not the system accent.
+    assert!(!source.contains("Palette.accent-background"));
+    assert!(source.contains("background: Tokens.teal;"));
+}
+
+#[test]
+fn the_equalizers_reset_is_the_macs_house_button() {
+    let source = include_str!("../../ui/equalizer.slint");
+    let at = source
+        .find("text: Strings.equalizer-reset;")
+        .expect("Reset");
+    let start = source[..at].rfind("Button {").expect("its button");
+    let button = &source[start - 5..at + source[at..].find("clicked =>").unwrap()];
+    // HouseButtonStyle (EqualizerWindow.swift:183): the teal tint, 13 pt, 26 pt high
+    // (HouseButtonStyle.swift:31-34), as the Add by Address sheet's buttons.
+    assert!(button.starts_with("Small"), "{button}");
+    assert!(button.contains("height: 26px;"), "{button}");
+    assert!(
+        button.contains("font-size: Tokens.font-size-body;"),
+        "{button}"
+    );
+}
+
+#[test]
+fn the_off_power_switch_is_drawn_in_the_macs_secondary() {
+    let source = include_str!("../../ui/widgets.slint").replace("\r\n", "\n");
+    let switch = component(&source, "PowerSwitch");
+    // Color.secondary and its 15 % fill (MenuBar.swift:2934-2935): black at 50 % on
+    // light and white at 55 % on dark, as the off toggle glyph's.
+    assert!(
+        switch.contains("Tokens.teal : Tokens.dark ? #ffffff15 : #00000013;"),
+        "{switch}"
+    );
+    assert!(
+        switch.contains("border-color: Tokens.dark ? #ffffff8c : #00000080;"),
+        "{switch}"
+    );
+}
+
+#[test]
+fn the_panels_mute_button_is_drawn_in_the_secondary_text() {
+    let widgets = include_str!("../../ui/widgets.slint").replace("\r\n", "\n");
+    let volume = component(&widgets, "MasterVolume");
+    assert!(volume.contains("color: root.icon-color;"), "{volume}");
+    // The panel's mute glyph is Brand.secondaryText, the window's .primary (MenuBar.swift:2978).
+    let flyout = include_str!("../../ui/flyout.slint").replace("\r\n", "\n");
+    let row = &flyout[flyout
+        .find("MasterVolume {")
+        .expect("the flyout's master volume")..];
+    assert!(
+        row[..row.find("mute-toggled").unwrap()].contains("icon-color: Tokens.secondary-text;"),
+        "{row}"
+    );
 }

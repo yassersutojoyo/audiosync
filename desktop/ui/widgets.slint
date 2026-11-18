@@ -1669,11 +1669,12 @@ export component PowerSwitch inherits Rectangle {
     width: 38px;
     height: 22px;
     border-radius: self.height / 2;
-    background: root.checked ? Tokens.teal : Tokens.secondary-text.with-alpha(0.15);
+    // Color.secondary and its 15 % (MenuBar.swift:2934-2935): black 50 % light, white 55 % dark.
+    background: root.checked ? Tokens.teal : Tokens.dark ? #ffffff15 : #00000013;
     animate background { duration: root.turn; easing: ease-in-out; }
     // One device pixel at 100 %, the Mac's half point at 200 %.
     border-width: root.checked ? 0px : max(0.5px, 1phx);
-    border-color: Tokens.secondary-text;
+    border-color: Tokens.dark ? #ffffff8c : #00000080;
     forward-focus: focus;
     accessible-role: button;
     accessible-label: root.text;
@@ -2256,6 +2257,7 @@ export component MasterVolume inherits HorizontalLayout {
     in property <length> button-size: 32px;
     // The row's height; the button overhangs a lower row, centred on it.
     in property <length> row-height: root.button-size;
+    in property <color> icon-color: Tokens.text;
     out property <bool> slider-focused: slider.slider-focused;
     callback changed(float);
     callback mute-toggled();
@@ -2278,6 +2280,7 @@ export component MasterVolume inherits HorizontalLayout {
             speaker := Glyph {
                 x: (parent.width - self.width) / 2;
                 width: 16px;
+                color: root.icon-color;
                 glyph: Glyphs.master-volume(root.waves);
             }
         }
@@ -4580,8 +4583,9 @@ export component SpeakerRow inherits Rectangle {
 
                                         fix-button := LinkButton {
                                             text: Strings.device-volume-fix(hint-box.hint);
-                                            // The Mac's primary text (DeviceVolumeViews.swift:34).
-                                            text-color: Tokens.text;
+                                            // The Mac's .primary (DeviceVolumeViews.swift:34) is the primary
+                                            // level of the hint's Brand.secondaryText (:43).
+                                            text-color: Tokens.secondary-text;
                                             label: Strings.device-volume-fix-label(root.item.name, hint-box.hint);
                                             changed keyboard-focused => {
                                                 root.fix-focused = self.keyboard-focused;

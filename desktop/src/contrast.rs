@@ -386,7 +386,10 @@ fn the_master_volume_draws_its_levels_waves_and_a_3_to_1_track() {
     ));
     let master = component_body(&widgets, "MasterVolume");
     assert!(
-        master.contains("width: 16px;\n                glyph: Glyphs.master-volume(root.waves);"),
+        master.contains(
+            "width: 16px;\n                color: root.icon-color;\n                \
+             glyph: Glyphs.master-volume(root.waves);"
+        ),
         "one slot for every wave count, so the slider never moves"
     );
     assert!(master.contains("track: Tokens.secondary-text;"));

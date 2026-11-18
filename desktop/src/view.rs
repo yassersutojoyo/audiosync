@@ -16505,6 +16505,47 @@ pub(crate) mod tests {
         assert!(heights.iter().all(|h| *h == 36.0), "{heights:?}");
     }
 
+    /// The tray panel with no speakers spaces its volume and buttons as the
+    /// Mac panel (MenuBar.swift:1730-1771).
+    #[test]
+    fn the_empty_flyout_spaces_its_volume_and_buttons_as_the_macs() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.refresh();
+        app.flyout.set_this_pc(ModelRc::default());
+        app.flyout.set_speakers(ModelRc::default());
+        app.flyout.set_zones(ModelRc::default());
+        app.flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        let height = app.fit_flyout(1000.0);
+        app.flyout
+            .window()
+            .set_size(slint::LogicalSize::new(300.0, height));
+        draw_frames();
+        let card = flyout_element(&app, "TrayFlyout::hero-card");
+        let card_bottom = card.absolute_position().y + card.size().height;
+        let strings = app.flyout.global::<Strings>();
+        let mute = ElementHandle::find_by_accessible_label(&app.flyout, &strings.get_mute_master())
+            .next()
+            .expect("the mute button");
+        let centre = mute.absolute_position().y + mute.size().height / 2.0;
+        let line = flyout_element(&app, "TrayFlyout::rows-divider")
+            .absolute_position()
+            .y;
+        // The stack's 10, cardToVolume's 2 and half the 18 pt row; then the other half
+        // and rowsToDivider's 7 (WindowRules.swift:1128, :1135; MenuBar.swift:2974).
+        assert_eq!(centre - card_bottom, 21.0);
+        assert_eq!(line - centre, 16.0);
+        let last_line = ElementHandle::find_by_element_type_name(&app.flyout, "Divider")
+            .map(|line| line.absolute_position().y + line.size().height)
+            .fold(0.0, f32::max);
+        let exit = ElementHandle::find_by_accessible_label(&app.flyout, &strings.get_exit_app())
+            .next()
+            .expect("Exit");
+        // The stack's 10 less the buttons' 8 (MenuBar.swift:1770).
+        assert_eq!(exit.absolute_position().y - last_line, 2.0);
+    }
+
     fn flyout_element(app: &App, id: &str) -> i_slint_backend_testing::ElementHandle {
         i_slint_backend_testing::ElementHandle::find_by_element_id(&app.flyout, id)
             .next()

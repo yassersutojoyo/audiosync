@@ -1472,12 +1472,16 @@ export component TrayFlyout inherits Window {
                             VerticalLayout {
                                 // The knob 12 px from the preset icon and this PC's first circle, as in the
                                 // Mac panel: the icon sits 10 px over its row's bottom, the knob 8 px inside.
-                                padding-top: root.presets.length > 0 ? -16px : 0px;
+                                // Under the card, the Mac's 2 px cardToVolume over its 18 pt row
+                                // (WindowRules.swift:1128) puts the knob 21 px down, not this 32 px row's 26.
+                                padding-top: root.presets.length > 0 ? -16px : -5px;
                                 spacing: -1px;
 
                                 MasterVolume {
                                     volume: root.master-volume;
                                     waves: root.master-volume-waves;
+                                    // Brand.secondaryText in the panel (MenuBar.swift:2978).
+                                    icon-color: Tokens.secondary-text;
                                     // As far from the track as the speaker: half the 32 px
                                     // button around its 16 px glyph, the spacing and half the knob.
                                     number-gap: 20px;
@@ -1540,7 +1544,9 @@ export component TrayFlyout inherits Window {
                                 Rectangle {
                                     height: 6px;
                                     rows-divider := Divider {
-                                        y: 8px;
+                                        // With none, rowsToDivider's 7 px under the Mac's 18 pt
+                                        // volume row (WindowRules.swift:1135), 16 under the knob.
+                                        y: root.this-pc.length > 0 ? 8px : 2px;
                                     }
                                 }
                             }
@@ -1582,6 +1588,8 @@ export component TrayFlyout inherits Window {
                                 SecondaryText {
                                     text: none-note.text;
                                     horizontal-stretch: 1;
+                                    // The Mac panel's .subheadline (MenuBar.swift:1865).
+                                    font-size: Tokens.font-size-subheadline;
                                 }
                             }
                         }
@@ -1734,6 +1742,8 @@ export component TrayFlyout inherits Window {
                     // The words 17 px from the panel's edges, as on the Mac.
                     padding-left: -3px;
                     padding-right: -3px;
+                    // 2 px under the line: the stack's 10 less the Mac's 8 (MenuBar.swift:1770).
+                    padding-top: -8px;
 
                     FooterButton {
                         text: Strings.open-app;

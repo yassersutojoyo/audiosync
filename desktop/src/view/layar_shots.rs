@@ -23,8 +23,8 @@ use audiosync_core::eq::{EqSettings, UserCurve};
 use audiosync_core::policy::device_volume::Hint;
 use audiosync_core::policy::source_quit::WhenSourceQuits;
 use i_slint_backend_testing::{ElementHandle, ElementQuery};
-use slint::platform::{Key, PointerEventButton, WindowEvent};
-use slint::{ComponentHandle, LogicalPosition, LogicalSize, SharedString};
+use slint::platform::{PointerEventButton, WindowEvent};
+use slint::{ComponentHandle, LogicalPosition, LogicalSize};
 
 use super::tests::{advance_clock, app_over, hold_clock, leaked};
 use super::{App, RenamePlace};
@@ -256,8 +256,14 @@ impl Scene {
         let equalizer = &self.app.equalizer();
         equalizer.show().map_err(|error| error.to_string())?;
         equalizer.invoke_enabled_toggled(true);
-        equalizer.invoke_gain_changed(1, 6.0);
-        equalizer.invoke_gain_changed(4, -4.5);
+        // As the Mac render's Mock.equalizer: on, preamp -2 dB, the Loudness curve.
+        equalizer.invoke_preamp_changed(-2.0);
+        let loudness = audiosync_core::eq::PRESETS
+            .iter()
+            .find(|p| p.id == "loudness");
+        for (band, gain) in loudness.expect("Loudness").gains_db.iter().enumerate() {
+            equalizer.invoke_gain_changed(band as i32, *gain as f32);
+        }
         self.size(equalizer.window(), size);
         Ok(Win(Shown::Equalizer, size))
     }
@@ -595,12 +601,6 @@ fn scroll(window: &slint::Window, position: LogicalPosition, delta_y: f32) {
     settle(window);
 }
 
-fn key(window: &slint::Window, key: Key) {
-    let text: SharedString = key.into();
-    window.dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
-    window.dispatch_event(WindowEvent::KeyReleased { text });
-}
-
 /// A cover drawn here: a two-way gradient, so the ambient art has bands.
 fn cover() -> CardArtwork {
     const SIDE: u32 = 240;
@@ -935,7 +935,7 @@ fn b02() -> Vec<Row> {
             s.play(long_track());
             s.main()
         }),
-        // As the Mac's photo: AirPlay's first look is over and found nothing.
+        // As the Mac render's empty model: AirPlay has looked and found none.
         row("B02", "MAIN-EMPTY", |s| {
             s.edit(|state| {
                 state.speakers.clear();
@@ -1382,7 +1382,7 @@ fn b08() -> Vec<Row> {
             s.play(track(true, true));
             s.flyout()
         }),
-        // As the Mac's photo: AirPlay is still taking its first look.
+        // As the Mac render's empty panel, whose sender is not up yet: it looks.
         row("B08", "TRAY-EMPTY", |s| {
             s.edit(|state| {
                 state.speakers.clear();
@@ -1573,11 +1573,8 @@ fn b10() -> Vec<Row> {
     vec![
         row("B10", "EQ-WINDOW", |s| {
             let win = s.equalizer(EQUALIZER)?;
+            // As the Mac render's: just opened, with no band focused.
             s.app.equalizer().invoke_take_focus();
-            s.app.note_focus_input(FocusInput::Tab);
-            for _ in 0..4 {
-                key(leaked(s.app.equalizer()), Key::Tab);
-            }
             Ok(win)
         }),
         row("B10", "EQ-CURVE-MENU", |s| {
