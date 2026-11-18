@@ -1,0 +1,8 @@
+{"window": [696, 600], "elements": [
+ {"key": "Room", "frame": [256, 100, 32, 32], "font": null, "fg": null, "bg": null},
+ {"key": "Room name", "frame": [300, 100, 57, 16], "font": null, "fg": null, "bg": null},
+ {"key": "Den", "frame": [256, 160, 32, 32], "font": null, "fg": null, "bg": null},
+ {"key": "Hall", "frame": [256, 220, 32, 32], "font": null, "fg": null, "bg": null},
+ {"key": "Gear", "frame": [608, 42, 18, 18], "font": null, "fg": null, "bg": null},
+ {"key": "Notice", "frame": [20, 300, 400, 60], "font": null, "fg": null, "bg": null}
+]}
