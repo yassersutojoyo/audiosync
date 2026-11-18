@@ -3,7 +3,7 @@
 # .github/workflows/calibrate-loop.yml after the package is installed. Null
 # sinks stand in for the PC's own speakers, a desk speaker, a headset and a
 # far speaker; every one but the far speaker is linked into a virtual
-# microphone, the desk speaker through a 40 ms loopback, and the fake AirPlay
+# microphone, the desk speaker starting 60 ms off, and the fake AirPlay
 # receiver (stranger_rx, in a network namespace of its own) plays what it
 # receives into the same microphone. linux_calibrate.py then drives single
 # speaker calibration and Calibrate All over AT-SPI and photographs each state.
@@ -73,18 +73,13 @@ ear() {
 }
 ear stranger-speakers
 ear stranger-headset
+ear stranger-desk
 pw-link stranger-ear:monitor_FL stranger-mic:input_MONO || echo "not linked: ear to microphone" | tee -a "$work/loop.txt"
 pw-link stranger-ear:monitor_FR stranger-mic:input_MONO || true
-pw-loopback --delay=0.04 --capture-props='target.object=stranger-desk stream.capture.sink=true node.name=desk-to-ear' \
-  --playback-props='target.object=stranger-ear node.name=desk-ear node.dont-reconnect=true' > "$work/loopback.out" 2>&1 &
-pids+=($!)
-sleep 2
-if pw-link -l | grep -q desk-ear; then
-  echo "desk speaker: through a 40 ms loopback into the ear" | tee -a "$work/loop.txt"
-else
-  echo "desk speaker: the loopback did not link, so linked straight" | tee -a "$work/loop.txt"
-  ear stranger-desk
-fi
+# Run 44324336345 put the desk speaker behind pw-loopback --delay 0.04: its
+# latency moved about 10 ms between runs, so the desk starts off by a fixed
+# saved +60 ms instead and calibration has to bring it back to 0.
+echo "desk speaker: linked straight, saved delay +60 ms before the first calibration" | tee -a "$work/loop.txt"
 echo "far speaker: not linked, so the microphone never hears it" | tee -a "$work/loop.txt"
 
 # The fake AirPlay receiver on its own address, as a speaker on the LAN; what
@@ -108,7 +103,8 @@ pw-link -l > "$work/links.txt"
 pids+=($!)
 dbus-send --session --print-reply --dest=org.a11y.Bus /org/a11y/bus org.freedesktop.DBus.Properties.Set \
   string:org.a11y.Status string:IsEnabled variant:boolean:true > /dev/null || echo "accessibility bus: not switched on"
-printf '{"version":3,"appearance":"light"}\n' > "$XDG_DATA_HOME/audiosync/settings.json"
+printf '{"version":3,"appearance":"light","outputs":{"stranger-desk":{"enabled":false,"volume":60,"delay_ms":60}}}\n' \
+  > "$XDG_DATA_HOME/audiosync/settings.json"
 
 AUDIOSYNC_DEBUG=1 AUDIOSYNC_WEB_REMOTE=1 AUDIOSYNC_WEB_REMOTE_PORT=$port \
   SLINT_BACKEND=winit-software setsid audiosync > "$work/app.out" 2>&1 &

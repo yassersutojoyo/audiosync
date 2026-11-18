@@ -220,13 +220,14 @@ def drive(work, pid, log_path, port):
             tree(app, "atspi-one-failed.txt")
 
     def open_sheet(state_name):
-        if not press(app, "Calibrate All Speakers", state_name):
-            return None
-        for _ in range(10):
-            found = sheet(app)
-            if found is not None:
-                return found
-            time.sleep(0.5)
+        for _ in range(2):
+            if not press(app, "Calibrate All Speakers", state_name):
+                return None
+            for _ in range(20):
+                found = sheet(app)
+                if found is not None:
+                    return found
+                time.sleep(0.5)
         skip(state_name, "no Calibrate All Speakers sheet")
         return None
 
@@ -333,7 +334,7 @@ def check(work):
             saved = None
             name = re.match(r'Speaker\("([^"]+)"\)', target)
             if name:
-                saved = outputs.get(name.group(1), {}).get("delay_ms")
+                saved = outputs.get(name.group(1).removeprefix("local:"), {}).get("delay_ms")
             else:
                 saved = settings.get("airplay_adjustment_ms")
             lines.append(f"  {target}: applied {new_ms} ms, in the measured sheet: {measured}, saved: {saved}")
@@ -345,6 +346,13 @@ def check(work):
         found = re.search(r"calibration of (\S+): .* offset \S+ -> (-?[\d.]+) ms", line)
         if found:
             lines.append(f"  one speaker {found.group(1)}: measured offset {found.group(2)} ms")
+    # In time: the run after Apply finds every clearly measured speaker within 5 ms of its delay.
+    if ended:
+        lines.append("the run after Apply:")
+        for key, difference in re.findall(r'id: "([^"]+)"[^}]*?difference_ms: (-?[\d.]+)', ended[-1]):
+            lines.append(f"  {key}: still {float(difference):.1f} ms off")
+            if abs(float(difference)) > 5.0:
+                failed.append(f"{key} is {float(difference):.1f} ms off after Apply")
     lines.append("")
     if not applied:
         failed.append("Calibrate All was never applied")
