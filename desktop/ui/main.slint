@@ -4079,7 +4079,11 @@ export component MainWindow inherits Window {
                             open: root.airplay-delay-shown;
 
                             if delay-pane.shown: VerticalLayout {
-                                if root.connected.length > 0: Divider { }
+                                // From the names, as between speaker rows (MainWindow.swift:636).
+                                if root.connected.length > 0: HorizontalLayout {
+                                    padding-left: Fluent.name-inset;
+                                    Divider { }
+                                }
 
                                 AirPlayDelayControls {
                                     width-given: scroll.width - root.scroll-gutter;
