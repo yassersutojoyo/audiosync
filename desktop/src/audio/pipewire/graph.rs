@@ -617,6 +617,21 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn audiosyncs_own_sink_is_not_an_output() {
+        let mut graph = Graph::default();
+        sink(&mut graph, 1, &[("node.name", "audiosync-silent")]);
+        sink(&mut graph, 2, &[("node.name", "alsa_output.speakers")]);
+        graph.default_sink = Some("audiosync-silent".to_owned());
+        let ids: Vec<String> = graph
+            .listing()
+            .endpoints
+            .into_iter()
+            .map(|e| e.id)
+            .collect();
+        assert_eq!(ids, ["alsa_output.speakers"]);
+    }
+
     // covers: S381
     #[test]
     fn kinds_come_from_bus_form_factor_and_name() {

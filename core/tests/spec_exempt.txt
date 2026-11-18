@@ -241,3 +241,4 @@ S473 Linux host only: no copy on the default sink while the whole system streams
 S474 Windows host only: the restore guard process and the uninstaller's restore of S469 and S471; the desktop tests check the guard with a fake of its seam.
 S475 Windows and Linux host only: the test copy's own instance names, data folder and label; the desktop tests check the names and folders.
 S476 Windows host only: the apps the source picker offers and their names; the desktop tests check the list and the names with the mock backend.
+S490 Linux host only: AudioSync's own null sink as the default sink while the whole system streams; the desktop tests check the listing and the switch with fakes, the stranger run checks the PC speaker in step.
