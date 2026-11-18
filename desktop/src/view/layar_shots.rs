@@ -351,7 +351,12 @@ fn elements_json(elements: &[ElementHandle], shot: &Snapshot, scale: f32) -> Str
                 let (fg, bg) = sampled_colours(shot, scale, at, size);
                 serde_json::json!({
                     "key": label.as_str(),
-                    "frame": [at.x, at.y, size.width, size.height],
+                    "frame": listed_frame(
+                        element.accessible_role()
+                            == Some(i_slint_backend_testing::AccessibleRole::Slider),
+                        at,
+                        size,
+                    ),
                     "font": null,
                     "fg": fg,
                     "bg": bg,
@@ -360,6 +365,21 @@ fn elements_json(elements: &[ElementHandle], shot: &Snapshot, scale: f32) -> Str
         })
         .collect();
     serde_json::json!({ "window": [width, height], "elements": listed }).to_string()
+}
+
+/// The frame listed for an element: for a horizontal slider, the style's
+/// track rather than its box, since the Mac's slider frame is its track.
+fn listed_frame(slider: bool, at: LogicalPosition, size: LogicalSize) -> [f32; 4] {
+    [at.x, at.y, size.width, size.height]
+}
+
+#[test]
+fn a_horizontal_slider_is_listed_by_its_track() {
+    let (at, size) = (LogicalPosition::new(290.0, 133.0), LogicalSize::new(334.0, 14.0));
+    assert_eq!(listed_frame(true, at, size), [298.0, 133.0, 318.0, 14.0]);
+    assert_eq!(listed_frame(false, at, size), [290.0, 133.0, 334.0, 14.0]);
+    let band = LogicalSize::new(32.0, 200.0);
+    assert_eq!(listed_frame(true, at, band), [290.0, 133.0, 32.0, 200.0]);
 }
 
 type Snapshot = slint::SharedPixelBuffer<slint::Rgba8Pixel>;
