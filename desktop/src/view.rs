@@ -6858,6 +6858,9 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
     let outcome = match sheet {
         Some(_) if failed => status.clone(),
         Some(sheet) => sheet_outcome(strings, reference, sheet),
+        // A run that failed or stopped before results: the sheet's line
+        // under "Before you start" (CalibrateAllViews.swift:145-148).
+        None if matches!(all.phase, AllPhase::Failed(_) | AllPhase::Ended(_)) => status.clone(),
         None => SharedString::default(),
     };
     let said = if failed || outcome.is_empty() {
@@ -6927,11 +6930,12 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
             .map_or_else(SharedString::default, |zone| {
                 strings.invoke_calibrate_zone_bring(zone.name.as_str().into())
             }),
-        outcome_problem: sheet.is_some_and(|sheet| match &all.phase {
-            AllPhase::Failed(_) | AllPhase::AgainFailed(..) | AllPhase::Stale => true,
+        outcome_problem: match &all.phase {
+            AllPhase::Failed(_) => true,
+            AllPhase::AgainFailed(..) | AllPhase::Stale => sheet.is_some(),
             AllPhase::CannotMeasureAgain(..) => false,
-            _ => sheet.failure.is_some(),
-        }),
+            _ => sheet.is_some_and(|sheet| sheet.failure.is_some()),
+        },
         outcome,
         can_apply: sheet.is_some_and(|sheet| sheet.can_apply),
         applied: sheet.is_some_and(|sheet| sheet.applied),
@@ -8506,7 +8510,7 @@ pub(crate) mod tests {
             repeat: Some(Repeat::Off),
         };
         fake.read(Some(song));
-        // The mock's first speaker starts with a low Windows volume, whose fix shows under Calibrate.
+        // The mock's first speaker starts with a low Windows volume, whose fix shows on its row.
         app.main
             .invoke_device_volume_fix_requested(app.main.get_calibrate_all_volume_id());
         app.poll();
@@ -8566,7 +8570,7 @@ pub(crate) mod tests {
             repeat: Some(Repeat::Off),
         };
         fake.read(Some(song));
-        // The mock's first speaker starts with a low Windows volume, whose fix shows under Calibrate.
+        // The mock's first speaker starts with a low Windows volume, whose fix shows on its row.
         app.main
             .invoke_device_volume_fix_requested(app.main.get_calibrate_all_volume_id());
         app.poll();
@@ -13573,8 +13577,7 @@ pub(crate) mod tests {
             .main
             .global::<crate::Strings>()
             .invoke_device_volume_hint_label("Speakers".into(), DeviceVolumeHint::Low, 13);
-        // Calibrate All's "Before you start" in the left column names the same
-        // hint and fix: take the ones in the speaker list.
+        // Take the hint and fix in the speaker list.
         let find = |label: &str| {
             i_slint_backend_testing::ElementHandle::find_by_accessible_label(&app.main, label)
                 .find(|e| e.absolute_position().x > 300.0)
@@ -19841,68 +19844,6 @@ pub(crate) mod tests {
         }
     }
 
-    // covers: S197, S198
-    #[test]
-    fn calibrate_alls_volume_fix_unmutes_the_reference_and_keeps_the_focus() {
-        use crate::audio::backend::OutputKind;
-        use crate::audio::mock::VolumeWrite;
-        for can_start in [false, true] {
-            let mut audio = crate::audio::mock::MockBackend::empty();
-            audio.connect_output_as("speakers", "Speakers", OutputKind::BuiltIn);
-            audio.connect_output_as("usb", "USB Speakers", OutputKind::UsbSpeakers);
-            audio.mute_output("speakers", true);
-            let record = audio.volume_record();
-            let mut adapter = crate::adapter::AudioAdapter::new(
-                audio,
-                || "09.41".to_owned(),
-                DebugLog::default(),
-            );
-            adapter.set_speaker_enabled("lc:speakers", true);
-            if can_start {
-                adapter.set_speaker_enabled("lc:usb", true);
-                adapter.set_running(true);
-            }
-            let app = app_over(adapter);
-            app.main.show().expect("the main window shows headless");
-            draw_frames();
-            assert_eq!(app.main.get_calibrate_all_can_start(), can_start);
-            assert_eq!(app.main.get_calibrate_all_volume(), DeviceVolumeHint::Muted);
-
-            // The card's stops: Calibrate All while it is enabled, then the fix.
-            let window = app.main.window();
-            let mut tabs = 0;
-            while app.main_focus.borrow().control != Some(MainControl::Calibration) {
-                assert!(tabs < 40, "the card takes the focus");
-                tab(window, 1);
-                tabs += 1;
-            }
-            if can_start {
-                tab(window, 1);
-            }
-            press(window, " ");
-            app.poll();
-            draw_frames();
-            assert_eq!(
-                record.writes(),
-                [VolumeWrite::Unmute {
-                    id: "speakers".to_owned()
-                }],
-                "can start: {can_start}"
-            );
-            assert_eq!(app.main.get_calibrate_all_volume(), DeviceVolumeHint::None);
-            if can_start {
-                // The fix's late focus-lost note clears the slot, so where the
-                // focus is shows by Shift+Tab: from Calibrate All, the card above.
-                press(window, Key::Backtab);
-            }
-            assert_eq!(
-                app.main_focus.borrow().control,
-                Some(MainControl::Equalizer),
-                "can start: {can_start}"
-            );
-        }
-    }
-
     // covers: S353, S354
     #[test]
     fn an_app_only_the_last_mix_holds_is_listed_as_not_running() {
@@ -20208,9 +20149,9 @@ pub(crate) mod tests {
         let app = main_window_with_listed_cable();
         let window = app.main.window();
         // Switch, Several apps, source, Mute, master volume, Save as Preset…,
-        // Equalizer, Calibrate All, the reference's volume fix, then the
-        // rows: This PC's, then the connected speakers' by name.
-        tab(window, 20);
+        // Equalizer, Calibrate All, then the rows: This PC's, then the
+        // connected speakers' by name.
+        tab(window, 19);
         press(window, " ");
         assert!(enabled(&app, "local:cable"), "the cable row has the focus");
         press(window, " ");
@@ -20241,7 +20182,7 @@ pub(crate) mod tests {
         draw_frames();
         // The cable row's toggle, delay and options, then the desk row's
         // toggle, delay, options, two steps and its field.
-        tab(window, 28);
+        tab(window, 27);
         press(window, "5");
         let draft = || {
             let shown = app.snapshot().speaker("local:desk").unwrap().delay_ms;
@@ -20648,7 +20589,7 @@ pub(crate) mod tests {
     fn a_focused_speaker_row_keeps_the_focus_when_its_list_is_rebuilt() {
         let app = main_window_with_listed_cable();
         let window = app.main.window();
-        tab(window, 18);
+        tab(window, 17);
         let bedroom = enabled(&app, "airplay:bedroom");
         press(window, " ");
         assert_ne!(
@@ -21792,7 +21733,7 @@ pub(crate) mod tests {
         let window = app.main.window();
         // As in the example's order without Bedroom's row:
         // the cable row's toggle.
-        tab(window, 18);
+        tab(window, 17);
         press(window, " ");
         assert!(enabled(&app, "local:cable"), "the cable row has the focus");
         press(window, " ");
