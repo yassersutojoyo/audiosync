@@ -11,7 +11,7 @@ mod crash_dump;
 pub mod http;
 
 use std::io::{self, Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -332,8 +332,13 @@ fn server_config(behavior: &Behavior) -> (Arc<ServerConfig>, Vec<u8>) {
 
 impl FakeDevice {
     pub fn start(behavior: Behavior) -> FakeDevice {
+        FakeDevice::start_on(behavior, IpAddr::from([127, 0, 0, 1]))
+    }
+
+    /// The device on `host` instead of 127.0.0.1, for the WSL-only example.
+    pub fn start_on(behavior: Behavior, host: IpAddr) -> FakeDevice {
         let (config, certificate) = server_config(&behavior);
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let listener = TcpListener::bind((host, 0)).expect("bind");
         listener.set_nonblocking(true).expect("nonblocking");
         let address = listener.local_addr().expect("address");
         let mut listener = Some(listener);
