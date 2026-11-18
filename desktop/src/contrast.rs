@@ -2303,7 +2303,9 @@ fn an_off_speakers_slider_is_dimmed_as_the_macs() {
     let slider = component_body(&widgets, "LevelSlider");
     for look in [
         "root.idle ? (Tokens.dark ? #ffffff0e : #00000008)",
-        "background: root.idle ? transparent : root.small ? (Tokens.dark ? #ffffff42 : #000000f5) : Tokens.text;",
+        // An on speaker's fill is the ink the window tints its sliders
+        // (MainWindow.swift:350-351): near white on dark, as the Mac's.
+        "background: root.idle ? transparent : root.small ? (Tokens.dark ? Tokens.text : #000000f5) : Tokens.text;",
         "(Tokens.dark ? #ffffff22 : #ffffff90).mix(",
         "width: root.vertical ? root.thickness : max(0px, piece == 0 ? root.span * root.ratio - root.knob / 2 : root.span * (1 - root.ratio) - root.knob / 2);",
     ] {
