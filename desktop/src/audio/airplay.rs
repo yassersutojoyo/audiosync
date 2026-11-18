@@ -291,6 +291,7 @@ pub fn airplay2_config(switch_env: Option<&str>, auto: bool) -> SenderConfig {
     SenderConfig {
         #[cfg(windows)]
         on_driver_thread: Some(super::wasapi::pro_audio_thread),
+        host_answers_latency: true,
         ..SenderConfig::default()
     }
     .with_airplay2_switch(auto, airplay2_on(switch_env))
@@ -1811,8 +1812,13 @@ impl AirPlaySpeakers {
         let before = self.sent_delays();
         self.reported_us.insert(id.to_owned(), reported_us);
         let rows = self.stream_rows(&[]);
+        let frames = self.latency_frames;
         self.sync_latency(&rows);
         self.send_changed(before);
+        // The answer a first speaker waits for before it sends audio (P201).
+        if self.latency_frames == frames {
+            self.link.set_latency(frames);
+        }
     }
 
     /// The debug line for a new Lf or E: both values, the rows they were
@@ -12437,6 +12443,28 @@ pub mod tests {
         assert!(airplay.ahead_ms() <= 0.0);
     }
 
+    // covers: S283, P201
+    #[test]
+    fn each_latency_report_is_answered_with_the_streams_lf_once() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, den) = kitchen_and_den(&fake, 100.0);
+        fake.take_calls();
+        fake.report_latency(&kitchen, 0, LatencySources::NONE);
+        airplay.poll();
+        assert_eq!(
+            latencies(&fake.take_calls()),
+            [4_410],
+            "Lf unchanged, still answered"
+        );
+        fake.report_latency(&den, 50_000, LatencySources::AUDIO_LATENCY);
+        airplay.poll();
+        assert_eq!(
+            latencies(&fake.take_calls()),
+            [6_615],
+            "the new Lf is the answer"
+        );
+    }
+
     // covers: S401, P99
     #[test]
     fn a_speakers_receiver_offset_counts_in_how_far_airplay_plays_ahead() {
@@ -12466,7 +12494,11 @@ pub mod tests {
         fake.take_calls();
         fake.report_latency(&kitchen, 0, LatencySources::NONE);
         assert!(airplay.poll().is_empty(), "no notice");
-        assert_eq!(fake.take_calls(), [], "Lf and d′ stay");
+        assert_eq!(
+            fake.take_calls(),
+            [Call::Latency(4_410)],
+            "Lf and d′ stay; the report is answered (P201)"
+        );
         assert_eq!(ms(airplay.latency()), 1750);
         assert_eq!(airplay.speakers()[0].reported_latency_ms, 0.0);
         assert!(log.flush(Duration::from_secs(5)));
@@ -12627,7 +12659,11 @@ pub mod tests {
         fake.report_latency(&den, 1_400_000, LatencySources::AUDIO_LATENCY);
         airplay.poll();
         let calls = fake.take_calls();
-        assert_eq!(latencies(&calls), [14_112, 66_150], "one Lf over all three");
+        assert_eq!(
+            latencies(&calls),
+            [14_112, 14_112, 66_150],
+            "one Lf over all three, each report answered"
+        );
         assert_eq!(ms(airplay.latency()), 1750 + 1400, "one E: Den's");
         assert_eq!(
             target_delays(&calls),
@@ -12708,7 +12744,7 @@ pub mod tests {
         fake.report_latency(b2, 50_000, LatencySources::AUDIO_LATENCY);
         fake.report_latency(c3, 1_400_000, LatencySources::AUDIO_LATENCY);
         airplay.poll();
-        assert_eq!(latencies(&fake.take_calls()), [14_112, 66_150]);
+        assert_eq!(latencies(&fake.take_calls()), [14_112, 14_112, 66_150]);
         assert_eq!(ms(airplay.latency()), 3150);
         fake.set_sounding(true);
         airplay.set_enabled(&id_of(c3), false).unwrap();

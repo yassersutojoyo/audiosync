@@ -551,6 +551,9 @@ struct Speaker {
     /// The FLUSH of an explicit pause or a timeline restart is not answered
     /// yet; a resume or the new timeline waits for it (P143, P213).
     awaiting_flush: bool,
+    /// Joined a stream that had sent no audio: it sends none until the
+    /// host answers its latency event (P201).
+    awaiting_latency: bool,
     sync_seq: u16,
     history: Box<[Sent]>,
     own: Option<OwnEncoding>,
@@ -922,6 +925,7 @@ pub struct Stream {
     speakers: Vec<Speaker>,
     /// The host paused the stream (P213): packets are cut but not sent.
     paused: bool,
+    host_answers_latency: bool,
     next_speaker: u64,
     transmits: VecDeque<Transmit>,
     events: VecDeque<StreamEvent>,
@@ -970,6 +974,7 @@ impl Stream {
             silence_alac: Box::new(silence_alac),
             speakers: Vec::new(),
             paused: false,
+            host_answers_latency: config.host_answers_latency,
             next_speaker: 0,
             transmits: VecDeque::new(),
             events: VecDeque::new(),
@@ -1216,7 +1221,7 @@ impl Stream {
                     send_sync(speaker, &context, false, &mut self.transmits);
                 }
             }
-            if paused || speaker.awaiting_flush {
+            if paused || speaker.awaiting_flush || speaker.awaiting_latency {
                 continue;
             }
             if let Some((_, at)) = speaker.pending_delay
@@ -1396,6 +1401,8 @@ impl Stream {
             step_sync: None,
             started: false,
             awaiting_flush: false,
+            awaiting_latency: self.host_answers_latency
+                && !self.speakers.iter().any(|speaker| speaker.started),
             sync_seq: 0,
             history: vec![Sent::default(); HISTORY_PACKETS].into_boxed_slice(),
             own,
@@ -1569,6 +1576,12 @@ impl Stream {
         let frames = frames.max(self.step_floor);
         self.handle_timeout(now);
         let t = self.clock.seconds(now);
+        let mut answered = Vec::new();
+        for speaker in &mut self.speakers {
+            if std::mem::take(&mut speaker.awaiting_latency) {
+                answered.push(speaker.id);
+            }
+        }
         if self.paused || self.sounding(t) {
             if frames == self.latency_frames {
                 self.pending_latency = None;
@@ -1581,6 +1594,14 @@ impl Stream {
         }
         self.pending_latency = None;
         if frames == self.latency_frames {
+            let context = context!(self);
+            for speaker in &mut self.speakers {
+                if answered.contains(&speaker.id) {
+                    let first = context.first_due(speaker.delay, t);
+                    speaker.start_at(first, speaker.first_rtptime);
+                    report_first_sound(speaker, &context, &mut self.events);
+                }
+            }
             return;
         }
         self.latency_frames = frames;

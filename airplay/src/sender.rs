@@ -146,6 +146,10 @@ pub struct SenderConfig {
     /// ends. A host raises the thread's priority here: at normal priority a
     /// busy Windows PC wakes it past a packet's time (P226).
     pub on_driver_thread: Option<fn() -> Box<dyn Any>>,
+    /// The host answers every speaker latency event with
+    /// [`Sender::set_latency`], so a speaker joining a stream that sent no
+    /// audio yet waits for it before it sends any (P201).
+    pub host_answers_latency: bool,
 }
 
 /// The most AirPlay 2 sessions a sender runs at once, each member of a
@@ -272,6 +276,7 @@ impl Default for SenderConfig {
             feedback_interval: crate::ap2::session::FEEDBACK_INTERVAL,
             airplay2_sessions: AIRPLAY2_SESSIONS,
             on_driver_thread: None,
+            host_answers_latency: false,
         }
     }
 }
@@ -709,7 +714,7 @@ impl Sender {
         let stream_config = StreamConfig {
             latency_frames: config.latency_frames,
             input_frames: config.input_frames,
-            ..StreamConfig::default()
+            host_answers_latency: config.host_answers_latency,
         };
         let (stream, writer) = Stream::new(stream_config, clock, Instant::now());
         let stream_counters = stream.counters();

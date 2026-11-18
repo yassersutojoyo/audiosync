@@ -2571,6 +2571,7 @@ pub extern "C" fn asc_airplay2_auto() -> bool {
 fn sender_config(switch: Option<&str>, auto: Option<&str>) -> SenderConfig {
     SenderConfig {
         on_driver_thread: Some(raise_driver_thread),
+        host_answers_latency: true,
         ..SenderConfig::default()
     }
     .with_airplay2_switch(airplay2_auto(auto), airplay2_switch(switch))
