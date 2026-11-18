@@ -156,7 +156,7 @@ jobs:
                 scripts/stranger/linux_session.sh "$WORK" "$STUB" dnf remove -y -q audiosync'
           fi
 
-      - name: Heard once on the receiver, not twice on the stand-in PC speaker, and the offset
+      - name: Heard once on the receiver and the stand-in PC speaker, both on; the offset is logged, not gated until the PC speaker plays through AudioSync's own sink
         if: ${{ !cancelled() }}
         run: |
           scripts/stranger/linux_receiver.sh stop "$WORK"
@@ -264,7 +264,8 @@ jobs:
   # light and dark: the pictures pair with the Mac's LAYAR photos by name.
   # Groups: main (idle, presets list, Settings), delay (two outputs on),
   # tray (the panel from the tray icon), calibrate (the Calibrate All sheet),
-  # notices (streaming on with no speaker). not-set-up.txt names what a
+  # notices (streaming on with no speaker), and on Linux nowplaying (a stand-in
+  # MPRIS player's card with Shuffle and Repeat). not-set-up.txt names what a
   # runner can't reach.
   shots-linux:
     name: Linux screens (${{ matrix.screens }})
@@ -273,7 +274,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        screens: [main, delay, tray, calibrate, notices]
+        screens: [main, delay, tray, calibrate, notices, nowplaying]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:

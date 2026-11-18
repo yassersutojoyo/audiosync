@@ -1938,6 +1938,10 @@ pub struct WindowFrame {
 pub struct WindowPlace {
     pub x: i32,
     pub y: i32,
+    /// The inner width and height in logical pixels; a file saved before
+    /// the size was kept has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<(f64, f64)>,
 }
 
 /// How the main window shows when its frame is remembered.

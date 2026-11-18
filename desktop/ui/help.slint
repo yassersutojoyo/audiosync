@@ -1,6 +1,6 @@
 // The Guide, opened from the gear's AudioSync Guide (F1): how to use AudioSync on
 // Windows, one section per topic, in the Mac Guide's order, with double
-// audio (a Windows topic) last. Escape or Close closes it; the arrow keys,
+// audio (a Windows topic) last. Escape closes it; the arrow keys,
 // Page Up, Page Down, Space, Home and End scroll it. Show How in the
 // double-audio section shows only while that notice does, and opens the
 // notice's own guide (guide.slint).
@@ -9,6 +9,44 @@ import { Button } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { FocusRing, Fluent, OverlayScrollView, SectionTitle } from "widgets.slint";
+
+// Guide text, which can be selected so a step can be copied, as on the Mac.
+// Without `min-height`, a wrapping text gets the height of one line and the
+// sections overlap.
+// A click puts the focus here for Ctrl+C; Slint still adds it to the Tab
+// chain, which the window's Tab handling skips. No caret, as in a
+// read-only Mac text view.
+component HelpText inherits TextInput {
+    read-only: true;
+    single-line: false;
+    text-cursor-width: 0px;
+    wrap: word-wrap;
+    min-height: self.preferred-height;
+    color: Tokens.text;
+}
+
+// A list, its wrapped lines indented past the marker, as the Mac Guide sets
+// its "1. " and "- " items (GuideLayout.swift:40-66).
+component HelpList inherits VerticalLayout {
+    in property <[string]> items;
+    in property <bool> numbered;
+
+    spacing: 6px;
+
+    for item[i] in root.items: HorizontalLayout {
+        Text {
+            horizontal-stretch: 0;
+            text: root.numbered ? (i + 1) + ". " : "- ";
+            color: Tokens.text;
+            accessible-role: none;
+        }
+
+        HelpText {
+            horizontal-stretch: 1;
+            text: item;
+        }
+    }
+}
 
 // A heading and its text. Narrator reads the heading as the group's name,
 // as for the main window's sections, so SectionTitle hides it from Narrator.
@@ -24,13 +62,8 @@ component HelpSection inherits VerticalLayout {
         text: root.title;
     }
 
-    // Without `min-height`, a wrapping text gets the height of one line and
-    // the sections overlap.
-    Text {
+    if root.body != "": HelpText {
         text: root.body;
-        color: Tokens.text;
-        wrap: word-wrap;
-        min-height: self.preferred-height;
     }
 
     @children
@@ -68,6 +101,14 @@ export component HelpWindow inherits Window {
     private property <string> linux-more-body: Strings.help-more-linux;
     private property <string> resume-paragraph: "\n\n" + Strings.help-more-resume-after-sleep;
     private property <string> airplay-body: Platform.os == OperatingSystemType.linux ? Strings.help-airplay-linux : Strings.help-airplay;
+    private property <string> start-body: Platform.os == OperatingSystemType.linux ? Strings.help-start-linux : Strings.help-start;
+    private property <string> sync-body: Strings.help-sync;
+    private property <string> volume-keys: Strings.help-more-volume-keys;
+    private property <string> source-quits: "\n\n" + Strings.help-more-source-quits;
+    private property <string> tune-body: Strings.help-sync-tune;
+    private property <string> bluetooth-body: Strings.help-bluetooth;
+    // The paragraphs of a text, one list item each.
+    pure callback items(string) -> [string];
     callback show-how-requested();
     callback close-requested();
     // Ctrl+Q, the gear's Exit, from this window.
@@ -103,8 +144,9 @@ export component HelpWindow inherits Window {
         keys.focus();
     }
 
-    public function scroll-to-top() {
-        scroll.content-y = 0px;
+    // Where the Guide was scrolled when it last closed.
+    public function scroll-to(offset: length) {
+        scroll.content-y = -offset;
     }
 
     // How far the text is scrolled down, for the tests.
@@ -118,6 +160,54 @@ export component HelpWindow inherits Window {
     }
 
     keys := FocusScope {
+        // Ahead of a clicked text, which would move its selection instead:
+        // the scroll keys still scroll, and Tab goes only between the text
+        // and Show How rather than through every paragraph.
+        capture-key-pressed(event) => {
+            if event.modifiers.control || event.modifiers.alt || event.modifiers.meta {
+                return reject;
+            }
+            if event.text == Key.Tab || event.text == Key.Backtab {
+                if root.show-how-shown && !show-how.has-focus {
+                    show-how.focus();
+                } else {
+                    keys.focus();
+                }
+                return accept;
+            }
+            if event.modifiers.shift {
+                return reject;
+            }
+            if event.text == Key.DownArrow {
+                root.scroll-by(root.line-step);
+                return accept;
+            }
+            if event.text == Key.UpArrow {
+                root.scroll-by(-root.line-step);
+                return accept;
+            }
+            if event.text == Key.PageDown {
+                root.scroll-by(max(root.line-step, scroll.visible-height - root.line-step));
+                return accept;
+            }
+            if event.text == Key.PageUp {
+                root.scroll-by(-max(root.line-step, scroll.visible-height - root.line-step));
+                return accept;
+            }
+            if event.text == Key.Home {
+                scroll.content-y = 0px;
+                return accept;
+            }
+            if event.text == Key.End {
+                scroll.content-y = root.lowest;
+                return accept;
+            }
+            if event.text == Key.Escape {
+                root.close-requested();
+                return accept;
+            }
+            return reject;
+        }
         key-pressed(event) => {
             if event.text == Key.Escape || (event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text.to-lowercase() == "w") {
                 root.close-requested();
@@ -155,30 +245,10 @@ export component HelpWindow inherits Window {
                 root.preset-shortcut(event.text.to-float());
                 return accept;
             }
-            if event.text == Key.DownArrow {
-                root.scroll-by(root.line-step);
-                return accept;
-            }
-            if event.text == Key.UpArrow {
-                root.scroll-by(-root.line-step);
-                return accept;
-            }
             // A focused button takes Space itself, so Space scrolls only
             // from the text.
-            if event.text == Key.PageDown || event.text == Key.Space {
+            if event.text == Key.Space {
                 root.scroll-by(max(root.line-step, scroll.visible-height - root.line-step));
-                return accept;
-            }
-            if event.text == Key.PageUp {
-                root.scroll-by(-max(root.line-step, scroll.visible-height - root.line-step));
-                return accept;
-            }
-            if event.text == Key.Home {
-                scroll.content-y = 0px;
-                return accept;
-            }
-            if event.text == Key.End {
-                scroll.content-y = root.lowest;
                 return accept;
             }
             return reject;
@@ -200,11 +270,20 @@ export component HelpWindow inherits Window {
                         spacing: 18px;
                         alignment: start;
 
-                        Text {
+                        // The Mac Guide's title and byline (Localization.swift:1941-1942),
+                        // the title semibold at body + 4 (GuideLayout.swift:83).
+                        HelpText {
+                            text: Strings.help-title;
+                            font-size: Tokens.font-size-body + 4px;
+                            font-weight: Fluent.weight-semibold;
+                        }
+
+                        HelpText {
+                            text: Strings.help-byline;
+                        }
+
+                        HelpText {
                             text: Strings.help-intro;
-                            color: Tokens.text;
-                            wrap: word-wrap;
-                            min-height: self.preferred-height;
                         }
 
                         HelpArt {
@@ -215,12 +294,19 @@ export component HelpWindow inherits Window {
 
                         HelpSection {
                             title: Strings.help-start-title;
-                            body: Platform.os == OperatingSystemType.linux ? Strings.help-start-linux : Strings.help-start;
+
+                            HelpList {
+                                numbered: true;
+                                items: root.items(root.start-body);
+                            }
                         }
 
                         HelpSection {
-                            title: Strings.help-sync-title;
-                            body: Strings.help-sync;
+                            title: Strings.help-more-title;
+
+                            HelpList {
+                                items: root.items(root.sync-body);
+                            }
 
                             HelpArt {
                                 light: @image-url("../../brand/guide/delay.svg");
@@ -228,24 +314,8 @@ export component HelpWindow inherits Window {
                                 description: Strings.help-art-delay;
                             }
 
-                            Text {
-                                text: Strings.help-sync-cast;
-                                color: Tokens.text;
-                                wrap: word-wrap;
-                                min-height: self.preferred-height;
-                            }
-
-                            HelpArt {
-                                light: @image-url("../../brand/guide/classes.svg");
-                                dark: @image-url("../../brand/guide/classes-dark.svg");
-                                description: Strings.help-art-classes;
-                            }
-
-                            Text {
-                                text: Strings.help-sync-tune;
-                                color: Tokens.text;
-                                wrap: word-wrap;
-                                min-height: self.preferred-height;
+                            HelpList {
+                                items: root.items(Platform.os == OperatingSystemType.linux ? root.linux-more-body + root.resume-paragraph + root.source-quits : root.more-body + root.resume-paragraph + "\n\n" + root.volume-keys + root.source-quits);
                             }
                         }
 
@@ -255,13 +325,19 @@ export component HelpWindow inherits Window {
                         }
 
                         HelpSection {
-                            title: Strings.help-more-title;
-                            body: Platform.os == OperatingSystemType.linux ? root.linux-more-body + root.resume-paragraph : root.more-body + root.resume-paragraph + "\n\n" + Strings.help-more-volume-keys;
+                            title: Strings.help-airplay-title;
+                            body: root.airplay-body;
                         }
 
                         HelpSection {
-                            title: Strings.help-airplay-title;
-                            body: root.airplay-body;
+                            title: Strings.help-cast-title;
+                            body: Strings.help-sync-cast;
+                        }
+
+                        HelpArt {
+                            light: @image-url("../../brand/guide/classes.svg");
+                            dark: @image-url("../../brand/guide/classes-dark.svg");
+                            description: Strings.help-art-classes;
                         }
 
                         HelpSection {
@@ -270,8 +346,16 @@ export component HelpWindow inherits Window {
                         }
 
                         HelpSection {
-                            title: Strings.help-bluetooth-title;
-                            body: Strings.help-bluetooth;
+                            title: Strings.help-remote-title;
+                            body: Platform.os == OperatingSystemType.linux ? Strings.help-remote-linux : Strings.help-remote;
+                        }
+
+                        HelpSection {
+                            title: Strings.help-tips-title;
+
+                            HelpList {
+                                items: root.items(root.tune-body + "\n\n" + root.bluetooth-body);
+                            }
                         }
 
                         HelpSection {
@@ -280,18 +364,16 @@ export component HelpWindow inherits Window {
                         }
 
                         HelpSection {
-                            title: Strings.help-remote-title;
-                            body: Platform.os == OperatingSystemType.linux ? Strings.help-remote-linux : Strings.help-remote;
-                        }
-
-                        HelpSection {
                             title: Strings.help-double-title;
                             body: Platform.os == OperatingSystemType.linux ? Strings.help-double-linux : Strings.help-double;
 
-                            if root.show-how-shown: HorizontalLayout {
+                            // Kept out of an `if` so Tab can reach it by name.
+                            HorizontalLayout {
                                 alignment: start;
+                                max-height: root.show-how-shown ? 1000px : 0px;
 
-                                Button {
+                                show-how := Button {
+                                    visible: root.show-how-shown;
                                     text: Strings.notice-show-how;
                                     accessible-label: Strings.notice-show-how-label;
                                     clicked => {
@@ -308,21 +390,6 @@ export component HelpWindow inherits Window {
                 FocusRing {
                     visible-focus: keys.has-focus;
                     border-radius: 4px;
-                }
-            }
-
-            HorizontalLayout {
-                padding: 12px;
-                padding-left: 18px;
-                padding-right: 18px;
-                alignment: end;
-
-                Button {
-                    text: Strings.guide-close;
-                    accessible-label: Strings.guide-close;
-                    clicked => {
-                        root.close-requested();
-                    }
                 }
             }
         }

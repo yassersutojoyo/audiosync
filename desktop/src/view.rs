@@ -64,12 +64,18 @@ use crate::{
 
 mod engine;
 mod help_window;
+mod on_demand;
+use on_demand::{OnDemand, quit};
 #[cfg(test)]
 mod layar_shots;
 #[cfg(test)]
 mod parity_calibrate;
 #[cfg(test)]
+mod parity_eq_guide;
+#[cfg(test)]
 mod parity_main;
+#[cfg(test)]
+mod parity_presets;
 #[cfg(test)]
 mod parity_rest;
 #[cfg(test)]
@@ -79,6 +85,8 @@ mod parity_tray;
 mod remote_window;
 mod settings_window;
 mod setup_window;
+#[cfg(all(test, windows))]
+mod window_memory;
 
 pub use engine::Engine;
 
@@ -129,6 +137,9 @@ struct UiState {
     rename_place: RenamePlace,
     /// Where the Guide was when it last showed.
     guide_place: Option<WindowPlace>,
+    /// How far the Guide was scrolled down when it last closed, kept
+    /// for its next opening as the Mac keeps its window.
+    guide_scroll: f32,
     /// The open rename's field has had the focus; only then does the focus
     /// moving to another control apply the name.
     rename_focused: bool,
@@ -157,9 +168,6 @@ struct UiState {
     /// The equalizer curve last picked or saved, so the picker tells it from
     /// a curve with the same gains (spec S270).
     chosen_curve: Option<CurveMatch>,
-    /// The gains when Save Curve opened its dialog, which Save stores even
-    /// if the picker, bands or Reset change them meanwhile.
-    save_curve_gains: [f64; eq::BAND_COUNT],
 }
 
 /// The virtual outputs the speaker lists have shown this session. With Show
@@ -805,10 +813,10 @@ pub struct App {
     backend: Engine,
     pub main: MainWindow,
     pub flyout: TrayFlyout,
-    pub equalizer: EqualizerWindow,
-    zone_dialog: ZoneNameDialog,
+    equalizer: OnDemand<EqualizerWindow>,
+    zone_dialog: OnDemand<ZoneNameDialog>,
     /// The PIN prompt of an Apple TV pairing.
-    pin_dialog: PinDialog,
+    pin_dialog: OnDemand<PinDialog>,
     /// The speaker the PIN dialog is open for, while it is.
     pin_for: RefCell<Option<String>>,
     /// The PIN dialog shows a made-up pairing (the PIN preview), which no
@@ -819,28 +827,28 @@ pub struct App {
     /// Runs once, right after the main window first shows without an error.
     after_main_shows: RefCell<Option<Box<dyn FnOnce()>>>,
     /// The password prompt of a speaker protected by a password.
-    password_dialog: PasswordDialog,
+    password_dialog: OnDemand<PasswordDialog>,
     /// The speaker the password dialog is open for, while it is.
     password_for: RefCell<Option<String>>,
     /// The answer of the address check Add by Address… is waiting for.
     cast_check: RefCell<Option<std::sync::mpsc::Receiver<cast_address::CheckAnswer>>>,
     /// Looks for that answer while the check runs.
     cast_check_timer: Timer,
-    about: AboutDialog,
-    guide: GuideWindow,
+    about: OnDemand<AboutDialog>,
+    guide: OnDemand<GuideWindow>,
     /// The paragraphs the guide shows.
     guide_steps: Rc<VecModel<GuideStepItem>>,
     /// The guide is open for the double-audio notice and follows it (not
     /// for a made-up preview notice).
     guide_follows_notice: Cell<bool>,
     /// The AudioSync Guide (the gear's AudioSync Guide), `help_window.rs`.
-    help: crate::HelpWindow,
+    help: OnDemand<crate::HelpWindow>,
     /// Web Remote, `remote_window.rs`.
-    remote_window: crate::RemoteWindow,
+    remote_window: OnDemand<crate::RemoteWindow>,
     /// Settings > Check Setup…, `setup_window.rs`.
-    setup: crate::SetupWindow,
+    setup: OnDemand<crate::SetupWindow>,
     /// Settings… from the gear, `settings_window.rs`.
-    settings: crate::SettingsWindow,
+    settings: OnDemand<crate::SettingsWindow>,
     setup_check: RefCell<setup_window::SetupCheck>,
     remote: RefCell<remote_window::RemoteHost>,
     log: DebugLog,
@@ -875,6 +883,8 @@ pub struct App {
     leaving_notices: RefCell<Vec<NoticeItem>>,
     /// The app itself, for the timer that ends those fades.
     me: RefCell<Weak<App>>,
+    /// What the windows built on demand keep across a rebuild.
+    kept: RefCell<on_demand::Kept>,
     /// Rows that come into or leave the main window's lists ease in and out
     /// (`sync_rows`); the tests' lists change at once unless one turns it on.
     rows_ease: Cell<bool>,
@@ -1255,6 +1265,7 @@ fn guide_place_to_show(
     Some(WindowPlace {
         x: fitted.x.round() as i32,
         y: fitted.y.round() as i32,
+        size: place.size,
     })
 }
 
@@ -1332,25 +1343,25 @@ impl App {
             backend,
             main: MainWindow::new()?,
             flyout: TrayFlyout::new()?,
-            equalizer: EqualizerWindow::new()?,
-            zone_dialog: ZoneNameDialog::new()?,
-            pin_dialog: PinDialog::new()?,
+            equalizer: OnDemand::default(),
+            zone_dialog: OnDemand::default(),
+            pin_dialog: OnDemand::default(),
             pin_for: RefCell::new(None),
             pin_preview: Cell::new(false),
             before_main_shows: RefCell::new(None),
             after_main_shows: RefCell::new(None),
-            password_dialog: PasswordDialog::new()?,
+            password_dialog: OnDemand::default(),
             password_for: RefCell::new(None),
             cast_check: RefCell::default(),
             cast_check_timer: Timer::default(),
-            about: AboutDialog::new()?,
-            guide: GuideWindow::new()?,
+            about: OnDemand::default(),
+            guide: OnDemand::default(),
             guide_steps: Rc::new(VecModel::default()),
             guide_follows_notice: Cell::new(false),
-            help: crate::HelpWindow::new()?,
-            remote_window: crate::RemoteWindow::new()?,
-            setup: crate::SetupWindow::new()?,
-            settings: crate::SettingsWindow::new()?,
+            help: OnDemand::default(),
+            remote_window: OnDemand::default(),
+            setup: OnDemand::default(),
+            settings: OnDemand::default(),
             setup_check: RefCell::default(),
             remote: RefCell::default(),
             log,
@@ -1368,6 +1379,7 @@ impl App {
             closing_notices: RefCell::default(),
             leaving_notices: RefCell::default(),
             me: RefCell::default(),
+            kept: RefCell::default(),
             rows_ease: Cell::new(!cfg!(test)),
             calibration_announced: RefCell::default(),
             calibrate_all_announced: Cell::new(0),
@@ -1433,15 +1445,17 @@ impl App {
         });
         app.connect_main();
         app.connect_flyout();
-        app.connect_equalizer();
-        app.connect_dialogs();
-        app.connect_password_dialog();
         app.connect_cast_address_dialog();
-        app.connect_guide();
-        app.connect_help();
-        app.connect_remote();
-        app.connect_setup();
-        app.connect_settings();
+        app.connect_remote_opener();
+        let w = Rc::downgrade(&app);
+        app.main
+            .on_setup_requested(move || with_app(&w, App::show_setup));
+        let w = Rc::downgrade(&app);
+        app.main
+            .on_help_requested(move || with_app(&w, App::show_help));
+        let w = Rc::downgrade(&app);
+        app.main
+            .on_settings_requested(move || with_app(&w, App::show_settings));
         app.restore_view(true);
         app.restore_remote();
         app.launch_update_check();
@@ -1479,6 +1493,7 @@ impl App {
             .start(TimerMode::Repeated, POLL_INTERVAL, move || {
                 with_app(&weak, |app| {
                     app.poll();
+                    app.drop_closed_windows();
                     app.poll_updater();
                     app.follow_input_level(&weak);
                     app.follow_ambient(&weak);
@@ -2278,7 +2293,9 @@ impl App {
             Appearance::Light => crate::Appearance::Light,
             Appearance::Dark => crate::Appearance::Dark,
         });
-        self.settings.set_appearance(self.main.get_appearance());
+        if let Some(settings) = self.settings.built() {
+            settings.set_appearance(self.main.get_appearance());
+        }
         if appearance == Appearance::System && !self.themed_by_hand.get() {
             return;
         }
@@ -2320,52 +2337,60 @@ impl App {
     /// Gives every window's palette, title bar and the main window's menu
     /// bar the appearance.
     fn follow_appearance(&self) {
-        use slint::language::ColorScheme;
         let dark = self.shows_dark();
-        let scheme = if dark {
-            ColorScheme::Dark
-        } else {
-            ColorScheme::Light
-        };
+        let scheme = self.color_scheme();
         self.main.global::<Palette>().set_color_scheme(scheme);
         self.flyout.global::<Palette>().set_color_scheme(scheme);
-        self.equalizer.global::<Palette>().set_color_scheme(scheme);
-        self.zone_dialog
-            .global::<Palette>()
-            .set_color_scheme(scheme);
-        self.pin_dialog.global::<Palette>().set_color_scheme(scheme);
-        self.password_dialog
-            .global::<Palette>()
-            .set_color_scheme(scheme);
-        self.about.global::<Palette>().set_color_scheme(scheme);
-        self.guide.global::<Palette>().set_color_scheme(scheme);
-        self.help.global::<Palette>().set_color_scheme(scheme);
-        self.remote_window
-            .global::<Palette>()
-            .set_color_scheme(scheme);
-        self.setup.global::<Palette>().set_color_scheme(scheme);
-        self.settings.global::<Palette>().set_color_scheme(scheme);
         crate::backdrop::set_menu_dark(dark);
-        for window in [
-            self.main.window(),
-            self.flyout.window(),
-            self.equalizer.window(),
-            self.zone_dialog.window(),
-            self.pin_dialog.window(),
-            self.password_dialog.window(),
-            self.about.window(),
-            self.guide.window(),
-            self.help.window(),
-            self.remote_window.window(),
-            self.setup.window(),
-            self.settings.window(),
-        ] {
+        for window in [self.main.window(), self.flyout.window()] {
             self.theme_frame(window);
             if !std::ptr::eq(window, self.flyout.window()) {
                 crate::backdrop::set_dark(window, dark);
             }
             crate::platform::repaint_frame(window, false, dark);
         }
+        macro_rules! dress_built {
+            ($($name:ident),+) => {$(
+                if let Some(window) = self.$name.built() {
+                    self.dress(&window);
+                }
+            )+};
+        }
+        dress_built!(
+            equalizer,
+            zone_dialog,
+            pin_dialog,
+            password_dialog,
+            about,
+            guide,
+            help,
+            remote_window,
+            setup,
+            settings
+        );
+    }
+
+    fn color_scheme(&self) -> slint::language::ColorScheme {
+        use slint::language::ColorScheme;
+        if self.shows_dark() {
+            ColorScheme::Dark
+        } else {
+            ColorScheme::Light
+        }
+    }
+
+    /// Gives a window built on demand the appearance: its palette and title bar.
+    fn dress<T: ComponentHandle>(&self, window: &T)
+    where
+        for<'a> Palette<'a>: slint::Global<'a, T>,
+    {
+        let dark = self.shows_dark();
+        window
+            .global::<Palette>()
+            .set_color_scheme(self.color_scheme());
+        self.theme_frame(window.window());
+        crate::backdrop::set_dark(window.window(), dark);
+        crate::platform::repaint_frame(window.window(), false, dark);
     }
 
     /// With Light or Dark, gives every window the appearance again after
@@ -2454,30 +2479,34 @@ impl App {
         }
         self.main.global::<KeyboardFocus>().set_shown(shown);
         self.flyout.global::<KeyboardFocus>().set_shown(shown);
-        self.equalizer.global::<KeyboardFocus>().set_shown(shown);
-        self.help.global::<KeyboardFocus>().set_shown(shown);
+        if let Some(equalizer) = self.equalizer.built() {
+            equalizer.global::<KeyboardFocus>().set_shown(shown);
+        }
+        if let Some(help) = self.help.built() {
+            help.global::<KeyboardFocus>().set_shown(shown);
+        }
     }
 
     /// Gives a titled window (every window but the flyout) its frame each
     /// time it gains the focus, which covers a native window created after
     /// `show` returned, and the brand accent again after a theme change.
-    fn follow_frame(self: &Rc<Self>, window: fn(&App) -> &slint::Window, name: &'static str) {
+    fn follow_frame<T: ComponentHandle + 'static>(self: &Rc<Self>, window: &T, name: &'static str) {
         self.follow_titled_frame(window, name, Titled::Window);
     }
 
     /// `follow_frame` for a dialog, which also keeps only the close button
     /// in its title bar, as Windows dialogs do.
-    fn follow_dialog_frame(
+    fn follow_dialog_frame<T: ComponentHandle + 'static>(
         self: &Rc<Self>,
-        window: fn(&App) -> &slint::Window,
+        window: &T,
         name: &'static str,
     ) {
         self.follow_titled_frame(window, name, Titled::Dialog);
     }
 
-    fn follow_titled_frame(
+    fn follow_titled_frame<T: ComponentHandle + 'static>(
         self: &Rc<Self>,
-        window: fn(&App) -> &slint::Window,
+        component: &T,
         name: &'static str,
         kind: Titled,
     ) {
@@ -2486,11 +2515,12 @@ impl App {
         use slint::winit_030::{EventResult, WinitWindowAccessor};
 
         let weak = Rc::downgrade(self);
+        let handle = component.as_weak();
         // The main window's first event comes once its native window exists,
         // with or without the focus; outside this filter, as it resizes.
         let min_held = std::cell::Cell::new(kind != Titled::Main);
         let keys = RefCell::new(crate::frameless::WindowKeys::default());
-        window(self).on_winit_window_event(move |_, event| {
+        component.window().on_winit_window_event(move |_, event| {
             if let Some(input) = focus_input(event) {
                 with_app(&weak, |app| app.note_focus_input(input));
             }
@@ -2507,31 +2537,35 @@ impl App {
                 }
             }
             if !min_held.replace(true) {
-                let weak = weak.clone();
+                let handle = handle.clone();
                 Timer::single_shot(Duration::ZERO, move || {
-                    with_app(&weak, |app| {
-                        keep_main_min_size(window(app));
-                    });
+                    if let Some(component) = handle.upgrade() {
+                        keep_main_min_size(component.window());
+                    }
                 });
             }
             match event {
                 WindowEvent::Focused(true) => with_app(&weak, |app| {
+                    let Some(component) = handle.upgrade() else {
+                        return;
+                    };
+                    let window = component.window();
                     if kind == Titled::Main {
-                        keep_main_min_size(window(app));
+                        keep_main_min_size(window);
                         crate::frameless::attach_native(&app.main);
                         app.main
                             .global::<ScreenReader>()
                             .set_on(crate::platform::screen_reader_on());
                     }
                     if kind == Titled::Dialog {
-                        window(app).with_winit_window(|window| {
+                        window.with_winit_window(|window| {
                             window.set_enabled_buttons(WindowButtons::CLOSE);
                         });
                         // A PIN dialog opened before the event loop ran had
                         // no native window to fit yet.
                         app.fit_pin_dialog();
                     }
-                    app.apply_frame(window(app), name, Frame::Titled);
+                    app.apply_frame(window, name, Frame::Titled);
                 }),
                 WindowEvent::MouseInput {
                     state: slint::winit_030::winit::event::ElementState::Pressed,
@@ -2549,9 +2583,12 @@ impl App {
                 // returns.
                 WindowEvent::ThemeChanged(_) => {
                     let weak = weak.clone();
+                    let handle = handle.clone();
                     Timer::single_shot(Duration::ZERO, move || {
                         with_app(&weak, |app| {
-                            app.use_brand_accent(window(app));
+                            if let Some(component) = handle.upgrade() {
+                                app.use_brand_accent(component.window());
+                            }
                             if app.themed_by_hand.get() {
                                 app.follow_appearance();
                             }
@@ -2635,17 +2672,6 @@ impl App {
         self.flyout.set_zones(ModelRc::from(m.flyout_zones.clone()));
         self.flyout
             .set_notices(ModelRc::from(m.flyout_notices.clone()));
-        self.equalizer.set_gains(ModelRc::from(m.gains.clone()));
-        self.equalizer
-            .set_preset_names(ModelRc::from(m.presets.clone()));
-        let band_hz: Vec<f32> = eq::BAND_CENTERS_HZ.iter().map(|&hz| hz as f32).collect();
-        self.equalizer
-            .set_band_hz(ModelRc::new(VecModel::from(band_hz)));
-        self.equalizer.set_max_gain(eq::MAX_GAIN_DB as f32);
-        self.equalizer.set_preset_count(count(eq::PRESETS.len()));
-        self.guide
-            .set_steps(ModelRc::from(self.guide_steps.clone()));
-        self.about.set_version(env!("CARGO_PKG_VERSION").into());
     }
 
     /// Reads a snapshot and shows it in every window.
@@ -2899,6 +2925,12 @@ impl App {
         sync_model(&self.models.speaker_presets, preset_items(&state));
         self.main
             .set_can_save_preset(state.presets.len() < MAX_PRESETS);
+        // The caption asks for a speaker; once one is on it has said its piece.
+        if self.main.get_preset_save_note() == self.strings().get_save_preset_needs_speakers()
+            && !ui_model::speakers_on_now(&state).is_empty()
+        {
+            self.main.set_preset_save_note(SharedString::new());
+        }
         let current_preset: SharedString = current_preset_name(&state).into();
         self.main.set_current_preset(current_preset.clone());
         self.flyout.set_current_preset(current_preset);
@@ -3210,7 +3242,9 @@ impl App {
         self.main.set_show_virtual_devices(show_virtual);
         self.main.set_launch_at_login(self.login.borrow().is_on());
         self.main.set_updater_available(self.has_updater());
-        self.help.set_updater_available(self.has_updater());
+        if let Some(help) = self.help.built() {
+            help.set_updater_available(self.has_updater());
+        }
         self.main
             .set_check_updates_automatically(check_updates_automatically);
         self.main.set_volume_keys_available(cfg!(windows));
@@ -3556,19 +3590,21 @@ impl App {
             .unwrap_or_else(|| strings.get_equalizer_custom());
         sync_model(&self.models.presets, names);
         self.main.set_equalizer_curve(curve_name);
-        self.equalizer
-            .set_saved_curve_shown(matches!(shown, Some(CurveMatch::User(_))));
         sync_model(
             &self.models.gains,
             settings.gains_db.iter().map(|&g| g as f32).collect(),
         );
-        self.equalizer.set_enabled(settings.enabled);
-        self.equalizer.set_preamp(settings.preamp_db as f32);
-        self.equalizer.set_preset_index(preset_index);
+        let Some(window) = self.equalizer.built() else {
+            return;
+        };
+        window.set_saved_curve_shown(matches!(shown, Some(CurveMatch::User(_))));
+        window.set_enabled(settings.enabled);
+        window.set_preamp(settings.preamp_db as f32);
+        window.set_preset_index(preset_index);
     }
 
     fn connect_main(self: &Rc<Self>) {
-        self.follow_titled_frame(|app| app.main.window(), "main window", Titled::Main);
+        self.follow_titled_frame(&self.main, "main window", Titled::Main);
         self.follow_windows_theme();
         let main = &self.main;
         let weak = Rc::downgrade(self);
@@ -3870,50 +3906,11 @@ impl App {
         main.on_save_preset_requested(move || with_app(&w, App::ask_save_preset));
         let w = weak.clone();
         main.on_preset_save_named(move |name| with_app(&w, |app| app.save_preset(&name)));
+        main.on_preset_name_blank(|name| name.trim().is_empty());
         let w = weak.clone();
         main.on_preset_rename_named(move |id, name| {
             with_app(&w, |app| app.update(|b| b.rename_preset(&id, &name)));
         });
-        let w = weak.clone();
-        self.equalizer
-            .on_preset_shortcut(move |n| with_app(&w, |app| app.recall_preset_at(n)));
-        let w = weak.clone();
-        self.help
-            .on_preset_shortcut(move |n| with_app(&w, |app| app.recall_preset_at(n)));
-        let w = weak.clone();
-        self.remote_window
-            .on_preset_shortcut(move |n| with_app(&w, |app| app.recall_preset_at(n)));
-        let w = weak.clone();
-        self.guide
-            .on_preset_shortcut(move |n| with_app(&w, |app| app.recall_preset_at(n)));
-        let w = weak.clone();
-        self.settings
-            .on_preset_shortcut(move |n| with_app(&w, |app| app.recall_preset_at(n)));
-        macro_rules! forward_menu_keys {
-            ($($window:expr),+) => {$(
-                let w = weak.clone();
-                $window.on_help_requested(move || with_app(&w, App::show_help));
-                let w = weak.clone();
-                $window.on_new_zone_requested(move || with_app(&w, App::ask_new_zone));
-                let w = weak.clone();
-                $window.on_refresh_devices(move || {
-                    with_app(&w, |app| app.update(|b| b.refresh_devices()))
-                });
-                let w = weak.clone();
-                $window.on_settings_requested(move || with_app(&w, App::show_settings));
-                let w = weak.clone();
-                $window.on_equalizer_requested(move || with_app(&w, App::show_equalizer));
-                let w = weak.clone();
-                $window.on_main_window_requested(move || with_app(&w, App::show_main));
-            )+};
-        }
-        forward_menu_keys!(
-            self.equalizer,
-            self.help,
-            self.remote_window,
-            self.guide,
-            self.settings
-        );
         let w = weak.clone();
         main.on_speaker_move_to_zone_requested(move |id, zone| {
             with_app(&w, |app| app.move_to_zone(&id, &zone))
@@ -4024,38 +4021,20 @@ impl App {
         main.on_exit_requested(|| {
             let _ = slint::quit_event_loop();
         });
-        // Ctrl+Q quits from the windows without a menu bar too, as
-        // Command-Q does from any window on the Mac.
-        let quit = || {
-            let _ = slint::quit_event_loop();
-        };
-        self.equalizer.on_exit_requested(quit);
-        self.help.on_exit_requested(quit);
-        self.guide.on_exit_requested(quit);
-        self.about.on_exit_requested(quit);
-        self.remote_window.on_exit_requested(quit);
         let w = weak.clone();
         main.on_about_requested(move || {
             with_app(&w, |app| {
-                if let Err(error) = app.about.show() {
+                if let Err(error) = app.about().show() {
                     app.show_window_error(&error);
                     return;
                 }
-                app.about.invoke_take_focus();
+                app.about().invoke_take_focus();
             })
         });
         let w = weak;
         main.window().on_close_requested(move || {
             with_app(&w, App::close_main);
             slint::CloseRequestResponse::HideWindow
-        });
-
-        let about = self.about.as_weak();
-        self.about.on_closed(move || {
-            if let Some(about) = about.upgrade() {
-                // A window that fails to hide stays open; the user can still close it.
-                let _ = about.hide();
-            }
         });
     }
 
@@ -4141,8 +4120,8 @@ impl App {
     }
 
     fn connect_equalizer(self: &Rc<Self>) {
-        self.follow_frame(|app| app.equalizer.window(), "equalizer");
-        let eq_window = &self.equalizer;
+        self.follow_dialog_frame(&self.equalizer(), "equalizer");
+        let eq_window = &self.equalizer();
         let weak = Rc::downgrade(self);
         eq_window
             .global::<NameField>()
@@ -4231,29 +4210,46 @@ impl App {
 
     /// Closing the equalizer drops a curve name being typed, as Escape does.
     fn hide_equalizer(&self) {
-        self.equalizer.set_naming_curve(false);
-        let _ = self.equalizer.hide();
+        if let Some(eq) = self.equalizer.built() {
+            eq.set_naming_curve(false);
+            let _ = eq.hide();
+        }
     }
 
-    fn connect_dialogs(self: &Rc<Self>) {
-        self.follow_dialog_frame(|app| app.zone_dialog.window(), "zone name dialog");
-        self.follow_dialog_frame(|app| app.about.window(), "about dialog");
+    fn connect_about(self: &Rc<Self>) {
+        self.follow_dialog_frame(&self.about(), "about dialog");
+        self.about().set_version(env!("CARGO_PKG_VERSION").into());
+        self.about().on_exit_requested(quit);
+        let about = self.about().as_weak();
+        self.about().on_closed(move || {
+            if let Some(about) = about.upgrade() {
+                // A window that fails to hide stays open; the user can still close it.
+                let _ = about.hide();
+            }
+        });
+    }
+
+    fn connect_zone_dialog(self: &Rc<Self>) {
+        self.follow_dialog_frame(&self.zone_dialog(), "zone name dialog");
         let weak = Rc::downgrade(self);
         let w = weak.clone();
-        self.zone_dialog
+        self.zone_dialog()
             .on_confirmed(move |name| with_app(&w, |app| app.confirm_dialog(&name)));
         let w = weak.clone();
-        self.zone_dialog
+        self.zone_dialog()
             .on_cancelled(move || with_app(&w, App::hide_dialog));
         let w = weak.clone();
-        self.zone_dialog.window().on_close_requested(move || {
-            with_app(&w, |app| app.equalizer.set_name_dialog_open(false));
+        self.zone_dialog().window().on_close_requested(move || {
+            with_app(&w, |app| app.equalizer().set_name_dialog_open(false));
             slint::CloseRequestResponse::HideWindow
         });
+    }
 
-        self.follow_dialog_frame(|app| app.pin_dialog.window(), "PIN dialog");
-        let dialog = self.pin_dialog.as_weak();
-        self.pin_dialog.on_pin_edited(move |text| {
+    fn connect_pin_dialog(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        self.follow_dialog_frame(&self.pin_dialog(), "PIN dialog");
+        let dialog = self.pin_dialog().as_weak();
+        self.pin_dialog().on_pin_edited(move |text| {
             if let Some(dialog) = dialog.upgrade() {
                 let digits = pin_digits(&text);
                 if digits != text.as_str() {
@@ -4262,13 +4258,13 @@ impl App {
             }
         });
         let w = weak.clone();
-        self.pin_dialog
+        self.pin_dialog()
             .on_confirmed(move |pin| with_app(&w, |app| app.confirm_pin(&pin)));
         let w = weak.clone();
-        self.pin_dialog
+        self.pin_dialog()
             .on_cancelled(move || with_app(&w, App::cancel_pin));
         let w = weak;
-        self.pin_dialog.window().on_close_requested(move || {
+        self.pin_dialog().window().on_close_requested(move || {
             with_app(&w, App::cancel_pin);
             slint::CloseRequestResponse::HideWindow
         });
@@ -4282,14 +4278,16 @@ impl App {
         if self.pin_preview.get() {
             return;
         }
-        let dialog = &self.pin_dialog;
         let Some(prompt) = prompt else {
-            if self.pin_for.borrow_mut().take().is_some() {
+            if self.pin_for.borrow_mut().take().is_some()
+                && let Some(dialog) = self.pin_dialog.built()
+            {
                 let _ = dialog.hide();
                 self.log.log(|| "PIN dialog: closed".to_owned());
             }
             return;
         };
+        let dialog = &self.pin_dialog();
         let opening = self.pin_for.borrow().as_deref() != Some(prompt.speaker_id.as_str());
         let phase = pin_phase(prompt.phase);
         let new_code = (prompt.wrong_pin && !dialog.get_wrong_pin())
@@ -4314,20 +4312,22 @@ impl App {
     }
 
     fn open_pin_dialog(&self) {
-        if let Err(error) = self.pin_dialog.show() {
+        if let Err(error) = self.pin_dialog().show() {
             self.show_window_error(&error);
             return;
         }
-        self.pin_dialog.invoke_prepare();
+        self.pin_dialog().invoke_prepare();
         self.fit_pin_dialog();
-        crate::platform::bring_to_front(self.pin_dialog.window());
+        crate::platform::bring_to_front(self.pin_dialog().window());
     }
 
     /// Grows the PIN dialog to its layout's lowest height at its width. The
     /// window is made at the height the layout has before the message wraps,
     /// and Windows doesn't grow it when the message gets longer (a wrong PIN).
     fn fit_pin_dialog(&self) {
-        grow_to_fit(self.pin_dialog.window(), self.pin_dialog.get_fit_height());
+        if let Some(dialog) = self.pin_dialog.built() {
+            grow_to_fit(dialog.window(), dialog.get_fit_height());
+        }
     }
 
     /// Pair: the PIN goes to the pairing; the dialog stays open until it
@@ -4350,7 +4350,9 @@ impl App {
             return;
         }
         let id = self.pin_for.borrow_mut().take();
-        let _ = self.pin_dialog.hide();
+        if let Some(dialog) = self.pin_dialog.built() {
+            let _ = dialog.hide();
+        }
         if let Some(id) = id {
             self.update(|b| b.cancel_pairing(&id));
         }
@@ -4358,14 +4360,16 @@ impl App {
 
     fn close_pin_preview(&self) {
         self.pin_preview.set(false);
-        let _ = self.pin_dialog.hide();
+        if let Some(dialog) = self.pin_dialog.built() {
+            let _ = dialog.hide();
+        }
     }
 
     /// Opens the PIN dialog for a made-up Apple TV, to look at it without
     /// one: the PIN preview, debug only. `wrong`: as after a wrong PIN.
     pub fn preview_pin(&self, wrong: bool) {
         self.pin_preview.set(true);
-        let dialog = &self.pin_dialog;
+        let dialog = &self.pin_dialog();
         dialog.set_speaker(self.strings().get_pin_preview_speaker());
         dialog.set_phase(PinPhase::Ready);
         dialog.set_wrong_pin(wrong);
@@ -4374,16 +4378,16 @@ impl App {
     }
 
     fn connect_guide(self: &Rc<Self>) {
-        self.follow_frame(|app| app.guide.window(), "guide");
+        self.follow_frame(&self.guide(), "guide");
         let weak = Rc::downgrade(self);
         let w = weak.clone();
-        self.guide
+        self.guide()
             .on_page_requested(move |page| with_app(&w, |app| app.open_guide_page(page)));
         let w = weak.clone();
-        self.guide
+        self.guide()
             .on_close_requested(move || with_app(&w, App::close_guide));
         let w = weak;
-        self.guide.window().on_close_requested(move || {
+        self.guide().window().on_close_requested(move || {
             with_app(&w, App::close_guide);
             slint::CloseRequestResponse::HideWindow
         });
@@ -4391,7 +4395,7 @@ impl App {
 
     fn close_guide(&self) {
         self.guide_follows_notice.set(false);
-        let _ = self.guide.hide();
+        let _ = self.guide().hide();
     }
 
     /// Opens the microphone privacy settings for the notice or the
@@ -4425,7 +4429,7 @@ impl App {
             self.log
                 .log(|| format!("guide: the shell did not open {}", page.uri()));
         }
-        self.guide.set_settings_failed(!opened);
+        self.guide().set_settings_failed(!opened);
     }
 
     /// Keeps an open guide in step with the double-audio notice it was
@@ -4449,7 +4453,7 @@ impl App {
     /// keeps its focus.
     fn fill_guide(&self, guide: &Guide) {
         let strings = self.strings();
-        self.guide.set_intro(guide_intro(&strings, guide));
+        self.guide().set_intro(guide_intro(&strings, guide));
         let items: Vec<GuideStepItem> = guide
             .steps
             .iter()
@@ -4485,13 +4489,13 @@ impl App {
         };
         self.guide_follows_notice.set(false);
         self.fill_guide(&guide);
-        self.guide.set_settings_failed(false);
-        if let Err(error) = self.guide.show() {
+        self.guide().set_settings_failed(false);
+        if let Err(error) = self.guide().show() {
             self.show_window_error(&error);
             return false;
         }
-        self.guide.invoke_take_focus();
-        crate::platform::bring_to_front(self.guide.window());
+        self.guide().invoke_take_focus();
+        crate::platform::bring_to_front(self.guide().window());
         true
     }
 
@@ -5305,13 +5309,13 @@ impl App {
     }
 
     pub fn show_equalizer(&self) {
-        if let Err(error) = self.equalizer.show() {
+        if let Err(error) = self.equalizer().show() {
             self.show_window_error(&error);
             return;
         }
-        self.apply_frame(self.equalizer.window(), "equalizer", Frame::Titled);
-        self.equalizer.invoke_take_focus();
-        crate::platform::bring_to_front(self.equalizer.window());
+        self.apply_frame(self.equalizer().window(), "equalizer", Frame::Titled);
+        self.equalizer().invoke_take_focus();
+        crate::platform::bring_to_front(self.equalizer().window());
     }
 
     /// The gear's New Zone from Active Speakers… (Ctrl+N): a numbered zone
@@ -5323,7 +5327,7 @@ impl App {
         }
         let strings = self.strings();
         if self.snapshot().active_speakers() == 0 {
-            let dialog = &self.zone_dialog;
+            let dialog = &self.zone_dialog();
             *self.dialog_purpose.borrow_mut() = DialogPurpose::Message;
             dialog.set_heading(strings.get_app_name());
             dialog.set_message(strings.get_new_zone_needs_speakers());
@@ -5383,20 +5387,19 @@ impl App {
             || strings.invoke_numbered_curve(count(state.equalizer_curves.len() + 1)),
             |curve| curve.name.as_str().into(),
         );
-        self.ui.borrow_mut().save_curve_gains = state.equalizer.gains_db;
-        self.equalizer.set_curve_suggestion(name);
-        self.equalizer.set_naming_curve(true);
+        self.equalizer().set_curve_suggestion(name);
+        self.equalizer().set_naming_curve(true);
     }
 
     /// Saves the curve named in the equalizer's field: what was typed, else
     /// the suggestion on Return; the focus leaving an empty field saves
     /// nothing.
     fn finish_curve_name(&self, typed: &str, returned: bool) {
-        if !self.equalizer.get_naming_curve() {
+        if !self.equalizer().get_naming_curve() {
             return;
         }
-        self.equalizer.set_naming_curve(false);
-        let suggested = self.equalizer.get_curve_suggestion();
+        self.equalizer().set_naming_curve(false);
+        let suggested = self.equalizer().get_curve_suggestion();
         let name = if !typed.trim().is_empty() {
             typed
         } else if returned {
@@ -5413,7 +5416,7 @@ impl App {
         if eq::curve_name(name).is_none() {
             return;
         }
-        let gains_db = self.ui.borrow().save_curve_gains;
+        let gains_db = self.snapshot().equalizer.gains_db;
         if let Some(index) = eq::save_curve(&mut curves, name, &gains_db) {
             self.ui.borrow_mut().chosen_curve = Some(CurveMatch::User(index));
             self.update(|b| b.set_equalizer_curves(curves));
@@ -5436,7 +5439,7 @@ impl App {
         };
         let name = state.equalizer_curves[index].name.as_str();
         let strings = self.strings();
-        let dialog = &self.zone_dialog;
+        let dialog = &self.zone_dialog();
         *self.dialog_purpose.borrow_mut() = DialogPurpose::RenameCurve(name.to_owned());
         dialog.set_heading(strings.get_rename_curve_title());
         dialog.set_message(strings.invoke_rename_message(name.into()));
@@ -5452,7 +5455,7 @@ impl App {
     /// dialog is open, a notice and Narrator say it instead, so a name being
     /// typed stays.
     fn show_dialog_message(&self, heading: SharedString, message: SharedString) {
-        if self.zone_dialog.window().is_visible() {
+        if self.zone_dialog.is_visible() {
             self.ui.borrow_mut().dialog_notice = Some(ui_model::Notice {
                 id: DIALOG_NOTICE_ID,
                 subject: "dialog".to_owned(),
@@ -5467,7 +5470,7 @@ impl App {
             self.announce(message);
             return;
         }
-        let dialog = &self.zone_dialog;
+        let dialog = &self.zone_dialog();
         *self.dialog_purpose.borrow_mut() = DialogPurpose::Message;
         dialog.set_heading(heading);
         dialog.set_message(message);
@@ -5606,9 +5609,10 @@ impl App {
             Ok(()) => self.announce(strings.invoke_preset_saved(name.as_str().into())),
             Err(PresetError::Full) => self.say_why_no_preset(strings.get_presets_full()),
             // The last speaker went off while the name was typed.
-            Err(PresetError::NoSpeakerOn) => {
-                self.say_why_no_preset(strings.get_save_preset_needs_speakers());
-            }
+            Err(PresetError::NoSpeakerOn) => self.show_dialog_message(
+                strings.get_save_preset_title(),
+                strings.get_save_preset_needs_speakers(),
+            ),
         }
     }
 
@@ -5647,27 +5651,34 @@ impl App {
     /// Brings the name dialog to the front while it is open: one dialog
     /// serves every name, so a second request would drop the typed one.
     fn dialog_already_open(&self) -> bool {
-        let open = self.zone_dialog.window().is_visible();
+        let open = self.zone_dialog.is_visible();
         if open {
-            crate::platform::bring_to_front(self.zone_dialog.window());
+            crate::platform::bring_to_front(self.zone_dialog().window());
         }
         open
     }
 
     fn open_dialog(&self) {
-        if let Err(error) = self.zone_dialog.show() {
+        if let Err(error) = self.zone_dialog().show() {
             self.show_window_error(&error);
             return;
         }
-        self.zone_dialog.invoke_prepare();
-        grow_to_fit(self.zone_dialog.window(), self.zone_dialog.get_fit_height());
-        self.equalizer.set_name_dialog_open(true);
-        crate::platform::bring_to_front(self.zone_dialog.window());
+        self.zone_dialog().invoke_prepare();
+        grow_to_fit(
+            self.zone_dialog().window(),
+            self.zone_dialog().get_fit_height(),
+        );
+        self.equalizer().set_name_dialog_open(true);
+        crate::platform::bring_to_front(self.zone_dialog().window());
     }
 
     fn hide_dialog(&self) {
-        let _ = self.zone_dialog.hide();
-        self.equalizer.set_name_dialog_open(false);
+        if let Some(dialog) = self.zone_dialog.built() {
+            let _ = dialog.hide();
+        }
+        if let Some(eq) = self.equalizer.built() {
+            eq.set_name_dialog_open(false);
+        }
     }
 
     fn confirm_dialog(&self, name: &str) {
@@ -7604,6 +7615,7 @@ fn preset_items(state: &AppState) -> Vec<PresetItem> {
             id: preset.id.as_str().into(),
             name: preset.name.as_str().into(),
             current: state.current_preset.as_deref() == Some(preset.id.as_str()),
+            picked: state.picked_preset.as_deref() == Some(preset.id.as_str()),
             speakers: count(preset.members.len()),
             master: preset.master,
         })
@@ -7912,7 +7924,9 @@ pub(crate) mod tests {
     /// double-click timers then see two clicks as one double-click however
     /// long a loaded machine takes between them.
     pub(super) fn hold_clock() {
-        HELD_CLOCK.with(|clock| clock.set(Some(CLOCK_START.elapsed())));
+        // Never back: an earlier advance_clock may be ahead of real time.
+        let now = CLOCK_START.elapsed();
+        HELD_CLOCK.with(|clock| clock.set(Some(clock.get().map_or(now, |held| held.max(now)))));
     }
 
     /// Moves the clock [`hold_clock`] stopped on by `by`.
@@ -7961,7 +7975,7 @@ pub(crate) mod tests {
     }
 
     /// Clicks `window` at `x`, `y` (logical pixels), then draws a frame.
-    fn click(window: &slint::Window, x: f32, y: f32) {
+    pub(super) fn click(window: &slint::Window, x: f32, y: f32) {
         let position = slint::LogicalPosition::new(x, y);
         let button = PointerEventButton::Left;
         window.dispatch_event(WindowEvent::PointerMoved { position });
@@ -7988,6 +8002,12 @@ pub(crate) mod tests {
         for _ in 0..times {
             press(window, Key::Tab);
         }
+    }
+
+    /// The native window of a window built on demand, kept built for the
+    /// rest of the test.
+    pub(super) fn leaked<T: ComponentHandle + 'static>(window: T) -> &'static slint::Window {
+        Box::leak(Box::new(window)).window()
     }
 
     /// The App over `backend`, with headless windows.
@@ -8039,14 +8059,16 @@ pub(crate) mod tests {
             ambient::FLYOUT_SLOT,
             false,
         ));
-        app.equalizer.show().expect("the equalizer shows headless");
-        app.equalizer.invoke_enabled_toggled(true);
-        app.equalizer.invoke_gain_changed(1, 6.0);
-        app.equalizer.invoke_gain_changed(4, -4.5);
-        app.equalizer.invoke_take_focus();
+        app.equalizer()
+            .show()
+            .expect("the equalizer shows headless");
+        app.equalizer().invoke_enabled_toggled(true);
+        app.equalizer().invoke_gain_changed(1, 6.0);
+        app.equalizer().invoke_gain_changed(4, -4.5);
+        app.equalizer().invoke_take_focus();
         draw_frames();
         app.note_focus_input(crate::window_rules::FocusInput::Tab);
-        tab(app.equalizer.window(), 4);
+        tab(leaked(app.equalizer()), 4);
         for (suffix, appearance) in [
             ("", ui_model::Appearance::Light),
             ("-dark", ui_model::Appearance::Dark),
@@ -8065,13 +8087,13 @@ pub(crate) mod tests {
             app.flyout
                 .window()
                 .set_size(slint::LogicalSize::new(300.0, fit));
-            app.equalizer
+            app.equalizer()
                 .window()
                 .set_size(slint::LogicalSize::new(660.0, 420.0));
             for (name, window) in [
                 ("main-window", app.main.window()),
                 ("flyout", app.flyout.window()),
-                ("equalizer", app.equalizer.window()),
+                ("equalizer", leaked(app.equalizer())),
             ] {
                 let shot = window
                     .take_snapshot()
@@ -9384,8 +9406,8 @@ pub(crate) mod tests {
             [
                 app.main.global::<Tokens>().get_dark(),
                 app.flyout.global::<Tokens>().get_dark(),
-                app.equalizer.global::<Tokens>().get_dark(),
-                app.help.global::<Tokens>().get_dark(),
+                app.equalizer().global::<Tokens>().get_dark(),
+                app.help().global::<Tokens>().get_dark(),
             ]
         };
         assert_eq!(app.main.get_appearance(), crate::Appearance::System);
@@ -9401,7 +9423,7 @@ pub(crate) mod tests {
         app.main.invoke_appearance_chosen(crate::Appearance::Light);
         assert_eq!(dark(&app), [false; 4]);
         assert_eq!(
-            app.pin_dialog.global::<Palette>().get_color_scheme(),
+            app.pin_dialog().global::<Palette>().get_color_scheme(),
             ColorScheme::Light
         );
 
@@ -9424,7 +9446,7 @@ pub(crate) mod tests {
         });
         let app = app_over(backend);
         assert_eq!(app.main.get_appearance(), crate::Appearance::Dark);
-        assert!(app.about.global::<Tokens>().get_dark());
+        assert!(app.about().global::<Tokens>().get_dark());
 
         app.apply_appearance(ui_model::Appearance::Light);
         app.main.invoke_show_virtual_devices_toggled(true);
@@ -10940,7 +10962,7 @@ pub(crate) mod tests {
         app.main.show().expect("the main window shows");
         draw_frames();
         let shown = || {
-            ElementHandle::find_by_element_id(&app.settings, "SettingsWindow::fade")
+            ElementHandle::find_by_element_id(&app.settings(), "SettingsWindow::fade")
                 .map(|content| content.computed_opacity())
                 .fold(0.0, f32::max)
         };
@@ -10957,7 +10979,7 @@ pub(crate) mod tests {
         let late = after(300);
         assert!(late < 1.0, "still fading 390 ms in: {late}");
         assert_eq!(after(300), 1.0);
-        app.settings.hide().expect("Settings hides");
+        app.settings().hide().expect("Settings hides");
 
         app.main.global::<Motion>().set_on(false);
         app.main.invoke_settings_requested();
@@ -10976,11 +10998,11 @@ pub(crate) mod tests {
         app.main.show().expect("the main window shows");
         draw_frames();
         let shown = || {
-            ElementHandle::find_by_element_id(&app.settings, "SettingsWindow::fade")
+            ElementHandle::find_by_element_id(&app.settings(), "SettingsWindow::fade")
                 .map(|content| content.computed_opacity())
                 .fold(0.0, f32::max)
         };
-        let cloaked = || crate::platform::is_cloaked(app.settings.window());
+        let cloaked = || crate::platform::is_cloaked(leaked(app.settings()));
         for opening in ["first", "second"] {
             app.main.invoke_settings_requested();
             assert!(cloaked(), "{opening}: off the screen as it shows");
@@ -10999,7 +11021,7 @@ pub(crate) mod tests {
             );
             advance_clock(Duration::from_millis(700));
             draw_frames();
-            app.settings.hide().expect("Settings hides");
+            app.settings().hide().expect("Settings hides");
         }
     }
 
@@ -11012,20 +11034,20 @@ pub(crate) mod tests {
         let app = app_over(MockBackend::new());
         app.main.show().expect("the main window shows");
         draw_frames();
-        let cloaked = || crate::platform::is_cloaked(app.settings.window());
+        let cloaked = || crate::platform::is_cloaked(leaked(app.settings()));
         app.main.invoke_settings_requested();
         advance_clock(Duration::from_millis(30));
         draw_frames();
-        app.settings.hide().expect("Settings hides");
+        app.settings().hide().expect("Settings hides");
         app.main.invoke_settings_requested();
         advance_clock(Duration::from_millis(25));
         draw_frames();
         assert!(cloaked(), "the first opening's timer");
-        assert!(!app.settings.get_revealed(), "the first opening's timer");
+        assert!(!app.settings().get_revealed(), "the first opening's timer");
         advance_clock(Duration::from_millis(30));
         draw_frames();
         assert!(!cloaked(), "its own timer");
-        assert!(app.settings.get_revealed(), "its own timer");
+        assert!(app.settings().get_revealed(), "its own timer");
     }
 
     /// New Zone makes "Zone n" at once, with no name dialog, and opens its
@@ -11061,7 +11083,7 @@ pub(crate) mod tests {
 
         let before = ids();
         main.invoke_new_zone_requested();
-        assert!(!app.zone_dialog.window().is_visible(), "no dialog");
+        assert!(!app.zone_dialog.is_visible(), "no dialog");
         let zone = new_zone(&before);
         assert_eq!(zone.name, format!("Zone {}", zones + 1));
         assert!(header(&zone.id).renaming);
@@ -11073,7 +11095,7 @@ pub(crate) mod tests {
 
         let before = ids();
         main.invoke_speaker_new_zone_requested("local:headphones".into());
-        assert!(!app.zone_dialog.window().is_visible(), "no dialog");
+        assert!(!app.zone_dialog.is_visible(), "no dialog");
         let zone = new_zone(&before);
         assert_eq!(
             app.snapshot()
@@ -11097,13 +11119,13 @@ pub(crate) mod tests {
         }
         let zones = app.snapshot().zones.len();
         main.invoke_new_zone_requested();
-        assert!(app.zone_dialog.window().is_visible());
-        assert_eq!(app.zone_dialog.get_heading(), "AudioSync");
+        assert!(app.zone_dialog.is_visible());
+        assert_eq!(app.zone_dialog().get_heading(), "AudioSync");
         assert_eq!(
-            app.zone_dialog.get_message(),
+            app.zone_dialog().get_message(),
             app.strings().get_new_zone_needs_speakers()
         );
-        assert!(!app.zone_dialog.get_show_field());
+        assert!(!app.zone_dialog().get_show_field());
         assert_eq!(app.snapshot().zones.len(), zones, "no zone was made");
     }
 
@@ -11112,9 +11134,9 @@ pub(crate) mod tests {
     #[test]
     fn a_new_zone_from_another_window_shows_the_main_window() {
         let app = app_over(MockBackend::zones_preview());
-        app.equalizer.show().expect("the equalizer shows");
+        app.equalizer().show().expect("the equalizer shows");
         assert!(!app.main.window().is_visible());
-        app.equalizer.invoke_new_zone_requested();
+        app.equalizer().invoke_new_zone_requested();
         assert!(app.main.window().is_visible());
         assert!(app.models.zones.iter().any(|zone| zone.renaming));
     }
@@ -11168,11 +11190,11 @@ pub(crate) mod tests {
         app.main.invoke_settings_requested();
         advance_clock(Duration::from_millis(30));
         draw_frames();
-        app.settings.hide().expect("Settings hides");
+        app.settings().hide().expect("Settings hides");
         app.main.global::<Motion>().set_on(false);
         app.main.invoke_settings_requested();
-        assert!(!crate::platform::is_cloaked(app.settings.window()));
-        assert!(app.settings.get_revealed());
+        assert!(!crate::platform::is_cloaked(leaked(app.settings())));
+        assert!(app.settings().get_revealed());
     }
 
     /// A new zone's empty name field still names the zone for Narrator, as
@@ -13223,7 +13245,7 @@ pub(crate) mod tests {
                 click(window, x, y);
                 click(window, x, y);
                 let hit = found(app);
-                let _ = app.zone_dialog.hide();
+                let _ = app.zone_dialog().hide();
                 app.blank_click();
                 app.backend.replace(Box::new(MockBackend::zones_preview()));
                 {
@@ -13286,7 +13308,7 @@ pub(crate) mod tests {
         click(window, x, y);
         click(window, x, y);
         assert!(
-            !app.zone_dialog.window().is_visible(),
+            !app.zone_dialog.is_visible(),
             "the name is edited in the header, not in a dialog"
         );
         for key in ["D", "e", "n"] {
@@ -13309,7 +13331,7 @@ pub(crate) mod tests {
             "Den",
             "F2 on the zone's switch renames in place too; Escape keeps the name"
         );
-        assert!(!app.zone_dialog.window().is_visible());
+        assert!(!app.zone_dialog.is_visible());
 
         click(window, x, y);
         assert!(
@@ -14685,7 +14707,7 @@ pub(crate) mod tests {
         let text = "Living Room shows a 4-digit code on its screen. Enter it to pair. Cancel \
                     turns the speaker off; turn it on again to retry.";
         assert!(
-            ElementHandle::find_by_accessible_label(&app.pin_dialog, text)
+            ElementHandle::find_by_accessible_label(&app.pin_dialog(), text)
                 .next()
                 .is_some(),
             "the prompt says {text}"
@@ -14699,7 +14721,7 @@ pub(crate) mod tests {
     fn the_pin_dialog_grows_to_show_its_buttons_after_a_wrong_pin() {
         let app = app_over(MockBackend::new());
         app.preview_pin(false);
-        let dialog = &app.pin_dialog;
+        let dialog = &app.pin_dialog();
         // About the client height Windows gave it: too short for the
         // wrong-PIN message at this width.
         dialog
@@ -14740,14 +14762,14 @@ pub(crate) mod tests {
     #[test]
     fn the_zone_dialog_grows_to_show_its_field_and_buttons() {
         let app = app_over(MockBackend::new());
-        let dialog = &app.zone_dialog;
+        let dialog = &app.zone_dialog();
         // The size X11 gave it.
         dialog
             .window()
             .set_size(slint::LogicalSize::new(380.0, 153.0));
-        app.equalizer.invoke_save_curve();
-        app.equalizer.invoke_curve_named("Bass".into(), true);
-        app.equalizer.invoke_rename_curve();
+        app.equalizer().invoke_save_curve();
+        app.equalizer().invoke_curve_named("Bass".into(), true);
+        app.equalizer().invoke_rename_curve();
         assert!(dialog.window().is_visible());
         assert_window_fits(dialog.window(), dialog.get_fit_height(), "Rename");
     }
@@ -14955,13 +14977,13 @@ pub(crate) mod tests {
         ] {
             assert!(updates.contains(&named), "{named} in: {updates}");
         }
-        assert!(!app.help.get_updater_available());
+        assert!(!app.help().get_updater_available());
         #[cfg(windows)]
         {
             let (updater, _) = crate::updater::tests::updater("guide-updates");
             *app.updater.borrow_mut() = Some(updater);
             app.refresh();
-            assert!(app.help.get_updater_available());
+            assert!(app.help().get_updater_available());
         }
     }
 
@@ -17448,7 +17470,7 @@ pub(crate) mod tests {
         let app = app_over(MockBackend::zones_preview());
         let office = || app.models.zones.row_data(2).unwrap();
         app.main.invoke_zone_rename_requested("zone:office".into());
-        assert!(!app.zone_dialog.window().is_visible(), "no dialog");
+        assert!(!app.zone_dialog.is_visible(), "no dialog");
         assert!(office().renaming && office().name_text == "Office");
         slint::platform::update_timers_and_animations();
         assert_eq!(app.main.get_focus_zone_part(), RowPart::Name);
@@ -17873,12 +17895,12 @@ pub(crate) mod tests {
     fn escape_on_the_pin_dialog_buttons_cancels() {
         let app = app_over(MockBackend::new());
         app.preview_pin(false);
-        let window = app.pin_dialog.window();
+        let window = leaked(app.pin_dialog());
         assert!(window.is_visible());
         // From the field to Cancel: Pair waits for four digits.
         tab(window, 1);
         press(window, "5");
-        assert_eq!(app.pin_dialog.get_pin(), "", "the field lost the focus");
+        assert_eq!(app.pin_dialog().get_pin(), "", "the field lost the focus");
         press(window, Key::Escape);
         assert!(!window.is_visible(), "Escape on Cancel closed the dialog");
         assert!(!app.pin_preview.get(), "through its Cancel path");
@@ -17894,9 +17916,9 @@ pub(crate) mod tests {
     #[test]
     fn the_password_dialog_pairs_with_what_was_typed() {
         let app = app_asking_password(false);
-        let window = app.password_dialog.window();
+        let window = leaked(app.password_dialog());
         assert!(window.is_visible(), "it opens with the prompt");
-        assert!(!app.password_dialog.get_wrong());
+        assert!(!app.password_dialog().get_wrong());
         press(window, Key::Return);
         assert!(window.is_visible(), "Enter waits for a password");
         for key in ["p", "w"] {
@@ -17905,7 +17927,7 @@ pub(crate) mod tests {
         press(window, Key::Return);
         assert!(!window.is_visible());
         assert_eq!(
-            app.password_dialog.get_password(),
+            app.password_dialog().get_password(),
             "",
             "not kept in the field"
         );
@@ -17928,7 +17950,7 @@ pub(crate) mod tests {
     fn a_focus_change_pending_as_the_pin_dialog_opens_is_handled() {
         let app = app_over(MockBackend::new());
         turn_on_with_a_focus_change_pending(&app, "airplay:living");
-        assert!(app.pin_dialog.window().is_visible());
+        assert!(app.pin_dialog.is_visible());
     }
 
     #[test]
@@ -17937,20 +17959,20 @@ pub(crate) mod tests {
         backend.ask_password_when_on("airplay:kitchen");
         let app = app_over(backend);
         turn_on_with_a_focus_change_pending(&app, "airplay:kitchen");
-        assert!(app.password_dialog.window().is_visible());
+        assert!(app.password_dialog.is_visible());
     }
 
     #[test]
     fn escape_on_the_password_dialog_cancels_from_the_field_or_a_button() {
         for tabs in [0, 2] {
             let app = app_asking_password(true);
-            let window = app.password_dialog.window();
-            assert!(app.password_dialog.get_wrong(), "says it was turned down");
+            let window = leaked(app.password_dialog());
+            assert!(app.password_dialog().get_wrong(), "says it was turned down");
             press(window, "x");
             tab(window, tabs);
             press(window, Key::Escape);
             assert!(!window.is_visible(), "Escape closed it ({tabs} tabs)");
-            assert_eq!(app.password_dialog.get_password(), "");
+            assert_eq!(app.password_dialog().get_password(), "");
             let state = app.snapshot();
             assert_eq!(state.password_prompt, None);
             assert!(!state.speaker("airplay:kitchen").unwrap().enabled);
@@ -18074,7 +18096,8 @@ pub(crate) mod tests {
             "That isn't an IP address or host name. Check it and try again."
         );
 
-        // The field took the cursor back with its text selected.
+        // The field took the cursor back; the text stays as typed, unselected.
+        dialog.set_address(SharedString::new());
         type_text(window, "speaker.invalid");
         press(window, Key::Return);
         settle_cast_check(&app);
@@ -18084,6 +18107,7 @@ pub(crate) mod tests {
             "AudioSync couldn't find a speaker at that address. Check that it's on and try again."
         );
 
+        dialog.set_address(SharedString::new());
         type_text(window, "speaker.local");
         press(window, Key::Return);
         settle_cast_check(&app);
@@ -18096,7 +18120,7 @@ pub(crate) mod tests {
 
     /// Waits for the address check Add by Address… started, if any, and
     /// takes its answer.
-    fn settle_cast_check(app: &App) {
+    pub(super) fn settle_cast_check(app: &App) {
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         while app.cast_check.borrow().is_some() && std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(1));
@@ -18169,6 +18193,7 @@ pub(crate) mod tests {
             "Enter on the same address"
         );
 
+        app.cast_sheet().set_address(SharedString::new());
         type_text(window, "speaker.invalid");
         press(window, Key::Return);
         settle_cast_check(&app);
@@ -18185,20 +18210,20 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn add_waits_for_an_address_and_enter_on_a_blank_field_does_nothing() {
+    fn add_waits_for_an_address_and_enter_on_a_blank_field_says_it_isnt_one() {
         let app = app_over(MockBackend::new());
         app.main.invoke_cast_add_address_requested();
         let dialog = app.cast_sheet();
         let window = app.main.window();
         assert!(!dialog.get_can_add(), "Add is off on an empty field");
-        press(window, Key::Return);
         type_text(window, "   ");
         assert!(!dialog.get_can_add(), "spaces alone are no address");
+        // As the Mac's onSubmit, Enter runs Add anyway (CastAddressSheet.swift:38).
         press(window, Key::Return);
         assert!(app.cast_sheet().get_shown(), "Enter didn't add or close");
-        assert_eq!(dialog.get_error(), "", "no reason for an empty field");
-        assert_eq!(cast_address_said(&app), (String::new(), String::new()));
+        assert_eq!(dialog.get_error(), app.strings().get_cast_address_invalid());
 
+        dialog.set_address(SharedString::new());
         type_text(window, "speaker.local");
         assert!(dialog.get_can_add());
         press(window, Key::Return);
@@ -18425,17 +18450,17 @@ pub(crate) mod tests {
     #[test]
     fn escape_on_the_zone_dialog_buttons_cancels() {
         let app = app_over(MockBackend::new());
-        app.equalizer.invoke_save_curve();
-        app.equalizer.invoke_curve_named("Bass".into(), true);
-        app.equalizer.invoke_rename_curve();
-        let window = app.zone_dialog.window();
+        app.equalizer().invoke_save_curve();
+        app.equalizer().invoke_curve_named("Bass".into(), true);
+        app.equalizer().invoke_rename_curve();
+        let window = leaked(app.zone_dialog());
         assert!(window.is_visible());
-        assert!(app.zone_dialog.get_show_field());
-        app.zone_dialog.set_name(SharedString::new());
+        assert!(app.zone_dialog().get_show_field());
+        app.zone_dialog().set_name(SharedString::new());
         // From the name field to the confirm button.
         tab(window, 1);
         press(window, "x");
-        assert_eq!(app.zone_dialog.get_name(), "", "the field lost the focus");
+        assert_eq!(app.zone_dialog().get_name(), "", "the field lost the focus");
         press(window, Key::Escape);
         assert!(
             !window.is_visible(),
@@ -18453,17 +18478,17 @@ pub(crate) mod tests {
     fn ctrl_n_while_a_curve_is_named_keeps_the_open_dialog() {
         let app = app_over(MockBackend::new());
         let zones = app.snapshot().zones.len();
-        app.equalizer.invoke_save_curve();
-        app.equalizer.invoke_curve_named("Bass".into(), true);
-        app.equalizer.invoke_rename_curve();
-        app.zone_dialog.set_name("Late night".into());
-        let heading = app.zone_dialog.get_heading();
+        app.equalizer().invoke_save_curve();
+        app.equalizer().invoke_curve_named("Bass".into(), true);
+        app.equalizer().invoke_rename_curve();
+        app.zone_dialog().set_name("Late night".into());
+        let heading = app.zone_dialog().get_heading();
 
         app.main.invoke_new_zone_requested();
-        assert!(app.zone_dialog.window().is_visible());
-        assert_eq!(app.zone_dialog.get_heading(), heading);
-        assert_eq!(app.zone_dialog.get_name(), "Late night");
-        app.zone_dialog.invoke_confirmed("Late night".into());
+        assert!(app.zone_dialog.is_visible());
+        assert_eq!(app.zone_dialog().get_heading(), heading);
+        assert_eq!(app.zone_dialog().get_name(), "Late night");
+        app.zone_dialog().invoke_confirmed("Late night".into());
         assert_eq!(app.snapshot().equalizer_curves[0].name, "Late night");
         assert_eq!(app.snapshot().zones.len(), zones, "no zone was made");
     }
@@ -18474,7 +18499,7 @@ pub(crate) mod tests {
         let mut mock = MockBackend::new();
         mock.add_zone("zone:office", "Office", &[]);
         let app = app_over(mock);
-        let eq_window = &app.equalizer;
+        let eq_window = &app.equalizer();
         let presets = eq::PRESETS.len();
         let names = || eq_window.get_preset_names().iter().collect::<Vec<_>>();
         assert_eq!(names().len(), presets);
@@ -18510,9 +18535,9 @@ pub(crate) mod tests {
         assert!(state.equalizer.enabled, "picking a curve turns it on");
 
         eq_window.invoke_rename_curve();
-        assert_eq!(app.zone_dialog.get_name(), "Desk");
-        assert_eq!(app.zone_dialog.get_field_label(), "Curve name");
-        app.zone_dialog.invoke_confirmed("Office".into());
+        assert_eq!(app.zone_dialog().get_name(), "Desk");
+        assert_eq!(app.zone_dialog().get_field_label(), "Curve name");
+        app.zone_dialog().invoke_confirmed("Office".into());
         assert_eq!(app.snapshot().equalizer_curves[0].name, "Office");
 
         eq_window.invoke_delete_curve();
@@ -18536,7 +18561,7 @@ pub(crate) mod tests {
     #[test]
     fn the_curve_buttons_are_disabled_while_the_name_dialog_is_open() {
         let app = app_over(MockBackend::new());
-        let eq_window = &app.equalizer;
+        let eq_window = &app.equalizer();
         eq_window.invoke_save_curve();
         eq_window.invoke_curve_named("Bass".into(), true);
         // The curve menu's Save, Rename and Delete wait while `naming`.
@@ -18552,24 +18577,24 @@ pub(crate) mod tests {
         assert_enabled(false, "while the name dialog is open");
         // A button that kept the keyboard focus still reaches the handler.
         eq_window.invoke_delete_curve();
-        app.zone_dialog.invoke_confirmed("Low end".into());
+        app.zone_dialog().invoke_confirmed("Low end".into());
         assert_eq!(app.snapshot().equalizer_curves[0].name, "Low end");
         assert_enabled(true, "after Rename");
 
         eq_window.invoke_rename_curve();
-        app.zone_dialog.invoke_cancelled();
+        app.zone_dialog().invoke_cancelled();
         assert_enabled(true, "after Cancel");
 
         eq_window.invoke_rename_curve();
-        press(app.zone_dialog.window(), Key::Escape);
-        assert!(!app.zone_dialog.window().is_visible());
+        press(leaked(app.zone_dialog()), Key::Escape);
+        assert!(!app.zone_dialog.is_visible());
         assert_enabled(true, "after Escape");
 
         eq_window.invoke_rename_curve();
-        app.zone_dialog
+        app.zone_dialog()
             .window()
             .dispatch_event(slint::platform::WindowEvent::CloseRequested);
-        assert!(!app.zone_dialog.window().is_visible());
+        assert!(!app.zone_dialog.is_visible());
         assert_enabled(true, "after the dialog's close button");
     }
 
@@ -18577,7 +18602,7 @@ pub(crate) mod tests {
     #[test]
     fn a_full_list_still_saves_over_a_curve_from_a_preset_and_refuses_a_new_name() {
         let app = app_over(MockBackend::new());
-        let eq_window = &app.equalizer;
+        let eq_window = &app.equalizer();
         let curves = (1..=eq::MAX_USER_CURVES)
             .map(|n| eq::UserCurve {
                 name: if n == 1 {
@@ -18606,7 +18631,7 @@ pub(crate) mod tests {
         eq_window.invoke_curve_named("Late night".into(), true);
         assert_eq!(*app.dialog_purpose.borrow(), DialogPurpose::Message);
         assert_eq!(
-            app.zone_dialog.get_message(),
+            app.zone_dialog().get_message(),
             app.strings().invoke_curves_full(count(eq::MAX_USER_CURVES))
         );
         let state = app.snapshot();
@@ -18621,9 +18646,9 @@ pub(crate) mod tests {
 
     // covers: S270
     #[test]
-    fn the_curve_saved_has_the_gains_shown_when_save_was_chosen() {
+    fn the_curve_saved_has_the_gains_shown_when_its_name_is_confirmed() {
         let app = app_over(MockBackend::new());
-        let eq_window = &app.equalizer;
+        let eq_window = &app.equalizer();
         let warm = [3.0, 2.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 3.0];
         for (band, gain) in warm.iter().enumerate() {
             eq_window.invoke_gain_changed(band as i32, *gain as f32);
@@ -18639,7 +18664,7 @@ pub(crate) mod tests {
         eq_window.invoke_curve_named("Warm".into(), true);
         let state = app.snapshot();
         assert_eq!(state.equalizer_curves.len(), 1);
-        assert_eq!(state.equalizer_curves[0].gains_db, warm);
+        assert_eq!(state.equalizer_curves[0].gains_db, [0.0; eq::BAND_COUNT]);
         assert_eq!(state.equalizer.gains_db, [0.0; eq::BAND_COUNT]);
     }
 
@@ -18647,7 +18672,7 @@ pub(crate) mod tests {
     #[test]
     fn a_saved_curve_with_a_presets_gains_can_be_picked_renamed_and_deleted() {
         let app = app_over(MockBackend::new());
-        let eq_window = &app.equalizer;
+        let eq_window = &app.equalizer();
         let presets = eq::PRESETS.len() as i32;
         let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap() as i32;
         eq_window.invoke_preset_selected(rock);
@@ -18670,8 +18695,8 @@ pub(crate) mod tests {
         assert_eq!(app.main.get_equalizer_curve(), "Mine");
         assert!(eq_window.get_saved_curve_shown());
         eq_window.invoke_rename_curve();
-        assert_eq!(app.zone_dialog.get_name(), "Mine");
-        app.zone_dialog.invoke_confirmed("Ours".into());
+        assert_eq!(app.zone_dialog().get_name(), "Mine");
+        app.zone_dialog().invoke_confirmed("Ours".into());
         assert_eq!(
             app.main.get_equalizer_curve(),
             "Ours",
@@ -18712,7 +18737,7 @@ pub(crate) mod tests {
         let app = app_over(MockBackend::new());
         app.update(|b| b.set_speaker_enabled("local:desk", true));
         app.save_preset("Flat");
-        let eq_window = &app.equalizer;
+        let eq_window = &app.equalizer();
         let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap() as i32;
         eq_window.invoke_preset_selected(rock);
         eq_window.invoke_save_curve();
@@ -18736,7 +18761,7 @@ pub(crate) mod tests {
     fn a_recall_or_band_move_with_the_same_gains_keeps_rock_picked() {
         let app = app_over(MockBackend::new());
         app.update(|b| b.set_speaker_enabled("local:desk", true));
-        let eq_window = &app.equalizer;
+        let eq_window = &app.equalizer();
         let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap();
         eq_window.invoke_preset_selected(rock as i32);
         eq_window.invoke_save_curve();
@@ -18755,7 +18780,7 @@ pub(crate) mod tests {
     #[test]
     fn a_band_moved_off_the_picked_curve_and_back_shows_the_first_match() {
         let app = app_over(MockBackend::new());
-        let eq_window = &app.equalizer;
+        let eq_window = &app.equalizer();
         let presets = eq::PRESETS.len() as i32;
         let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap();
         let first_gain = eq::PRESETS[rock].gains_db[0] as f32;
@@ -18784,7 +18809,7 @@ pub(crate) mod tests {
     #[test]
     fn a_full_list_saves_over_a_taken_name_and_refuses_a_new_one() {
         let app = app_over(MockBackend::new());
-        let eq_window = &app.equalizer;
+        let eq_window = &app.equalizer();
         let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap();
         let mut curves = Vec::new();
         eq::save_curve(&mut curves, "Mine", &eq::PRESETS[rock].gains_db);
@@ -18799,7 +18824,7 @@ pub(crate) mod tests {
 
         eq_window.invoke_save_curve();
         eq_window.invoke_curve_named("Mine".into(), true);
-        assert!(!app.zone_dialog.window().is_visible(), "no full message");
+        assert!(!app.zone_dialog.is_visible(), "no full message");
         let state = app.snapshot();
         assert_eq!(state.equalizer_curves.len(), eq::MAX_USER_CURVES);
         assert_eq!(state.equalizer_curves[0].gains_db[0], f64::from(moved));
@@ -18809,7 +18834,7 @@ pub(crate) mod tests {
         eq_window.invoke_curve_named("New".into(), true);
         assert_eq!(*app.dialog_purpose.borrow(), DialogPurpose::Message);
         assert_eq!(
-            app.zone_dialog.get_message(),
+            app.zone_dialog().get_message(),
             "You can keep up to 50 saved curves. Delete one, then save again."
         );
         assert_eq!(app.snapshot().equalizer_curves.len(), eq::MAX_USER_CURVES);
@@ -18822,10 +18847,12 @@ pub(crate) mod tests {
     #[test]
     fn an_equalizer_band_moves_with_the_left_and_right_arrow_keys() {
         let app = app_over(MockBackend::new());
-        app.equalizer.show().expect("the equalizer shows headless");
-        app.equalizer.invoke_take_focus();
+        app.equalizer()
+            .show()
+            .expect("the equalizer shows headless");
+        app.equalizer().invoke_take_focus();
         draw_frames();
-        let window = app.equalizer.window();
+        let window = leaked(app.equalizer());
         // The switch, the curve picker, the preamp, then the first band.
         tab(window, 4);
         press(window, Key::UpArrow);
@@ -18842,10 +18869,12 @@ pub(crate) mod tests {
     #[test]
     fn home_end_page_up_and_page_down_leave_an_equalizer_band_where_it_is() {
         let app = app_over(MockBackend::new());
-        app.equalizer.show().expect("the equalizer shows headless");
-        app.equalizer.invoke_take_focus();
+        app.equalizer()
+            .show()
+            .expect("the equalizer shows headless");
+        app.equalizer().invoke_take_focus();
         draw_frames();
-        let window = app.equalizer.window();
+        let window = leaked(app.equalizer());
         tab(window, 4);
         press(window, Key::UpArrow);
         assert_eq!(first_band_gain(&app), 0.5, "the first band has the focus");
@@ -19411,10 +19440,12 @@ pub(crate) mod tests {
     #[test]
     fn a_flat_equalizer_band_is_empty_with_its_0_db_tick_showing() {
         let app = app_over(MockBackend::new());
-        app.equalizer.show().expect("the equalizer shows headless");
+        app.equalizer()
+            .show()
+            .expect("the equalizer shows headless");
         draw_frames();
-        let (x, y, width, height) = slider_box(&app.equalizer, "32 Hz");
-        let pixel = pixels(app.equalizer.window());
+        let (x, y, width, height) = slider_box(&app.equalizer(), "32 Hz");
+        let pixel = pixels(leaked(app.equalizer()));
         let center = x + width / 2.0;
         assert_eq!(
             pixel(center, y + height - 14.0),
@@ -19434,11 +19465,13 @@ pub(crate) mod tests {
     #[test]
     fn a_raised_equalizer_band_fills_from_0_db_to_its_thumb() {
         let app = app_over(MockBackend::new());
-        app.equalizer.show().expect("the equalizer shows headless");
-        app.equalizer.invoke_gain_changed(0, 6.0);
+        app.equalizer()
+            .show()
+            .expect("the equalizer shows headless");
+        app.equalizer().invoke_gain_changed(0, 6.0);
         draw_frames();
-        let (x, y, width, height) = slider_box(&app.equalizer, "32 Hz");
-        let pixel = pixels(app.equalizer.window());
+        let (x, y, width, height) = slider_box(&app.equalizer(), "32 Hz");
+        let pixel = pixels(leaked(app.equalizer()));
         let center = x + width / 2.0;
         let zero = y + height / 2.0;
         let thumb = y + 10.0 + (height - 20.0) / 4.0;
@@ -19462,15 +19495,18 @@ pub(crate) mod tests {
         use i_slint_backend_testing::ElementHandle;
         let app = app_over(MockBackend::new());
         app.apply_appearance(ui_model::Appearance::Light);
-        app.equalizer.show().expect("the equalizer shows headless");
-        app.equalizer.invoke_gain_changed(0, 6.0);
+        app.equalizer()
+            .show()
+            .expect("the equalizer shows headless");
+        app.equalizer().invoke_gain_changed(0, 6.0);
         draw_frames();
-        assert_eq!(app.equalizer.get_preset_index(), -1);
-        let picker = ElementHandle::find_by_element_id(&app.equalizer, "EqualizerWindow::presets")
-            .next()
-            .expect("the curve picker");
+        assert_eq!(app.equalizer().get_preset_index(), -1);
+        let picker =
+            ElementHandle::find_by_element_id(&app.equalizer(), "EqualizerWindow::presets")
+                .next()
+                .expect("the curve picker");
         let (at, size) = (picker.absolute_position(), picker.size());
-        let pixel = pixels(app.equalizer.window());
+        let pixel = pixels(leaked(app.equalizer()));
         let darkest = (0..size.height as i32)
             .flat_map(|dy| (12..(size.width - 36.0) as i32).map(move |dx| (dx, dy)))
             .map(|(dx, dy)| pixel(at.x + dx as f32, at.y + dy as f32)[0])
@@ -19486,11 +19522,13 @@ pub(crate) mod tests {
     #[test]
     fn a_focused_slider_shows_a_focus_ring() {
         let app = app_over(MockBackend::new());
-        app.equalizer.show().expect("the equalizer shows headless");
-        app.equalizer.invoke_take_focus();
+        app.equalizer()
+            .show()
+            .expect("the equalizer shows headless");
+        app.equalizer().invoke_take_focus();
         draw_frames();
-        let window = app.equalizer.window();
-        let (x, y, _, height) = slider_box(&app.equalizer, "32 Hz");
+        let window = leaked(app.equalizer());
+        let (x, y, _, height) = slider_box(&app.equalizer(), "32 Hz");
         let (left, middle) = (x - 2.0, y + height / 2.0);
         let before = pixels(window)(left, middle);
         // What the windows' winit filter reports for a Tab.
@@ -19795,10 +19833,12 @@ pub(crate) mod tests {
     #[test]
     fn an_equalizer_band_ignores_the_left_and_right_arrows_with_a_modifier() {
         let app = app_over(MockBackend::new());
-        app.equalizer.show().expect("the equalizer shows headless");
-        app.equalizer.invoke_take_focus();
+        app.equalizer()
+            .show()
+            .expect("the equalizer shows headless");
+        app.equalizer().invoke_take_focus();
         draw_frames();
-        let window = app.equalizer.window();
+        let window = leaked(app.equalizer());
         tab(window, 4);
         press(window, Key::UpArrow);
         for modifier in [Key::Control, Key::Shift, Key::Alt] {
@@ -19818,14 +19858,18 @@ pub(crate) mod tests {
     /// Shows the equalizer and finds where a click above the middle of the
     /// first band's track raises it; the double-click time has run out after.
     fn first_band_point(app: &App) -> (f32, f32) {
-        app.equalizer.show().expect("the equalizer shows headless");
+        app.equalizer()
+            .show()
+            .expect("the equalizer shows headless");
         draw_frames();
-        let window = app.equalizer.window();
-        let y = 250.0;
-        let x = (0..1000)
-            .step_by(8)
-            .map(|x| x as f32)
-            .find(|&x| {
+        let window = leaked(app.equalizer());
+        // From the bottom up, so the first hit is just above the track's
+        // middle and no click reaches the switch or the picker above it.
+        let (x, y) = (40..400)
+            .rev()
+            .step_by(20)
+            .flat_map(|y| (0..1000).step_by(8).map(move |x| (x as f32, y as f32)))
+            .find(|&(x, y)| {
                 click(window, x, y);
                 advance_clock(Duration::from_secs(1));
                 draw_frames();
@@ -19840,7 +19884,7 @@ pub(crate) mod tests {
         hold_clock();
         let app = app_over(MockBackend::new());
         let (x, y) = first_band_point(&app);
-        let window = app.equalizer.window();
+        let window = leaked(app.equalizer());
         click(window, x, y);
         click(window, x, y);
         assert_eq!(first_band_gain(&app), 0.0);
@@ -19851,10 +19895,12 @@ pub(crate) mod tests {
         hold_clock();
         let app = app_over(MockBackend::new());
         let preamp = || app.snapshot().equalizer.preamp_db;
-        app.equalizer.show().expect("the equalizer shows headless");
-        app.equalizer.invoke_take_focus();
+        app.equalizer()
+            .show()
+            .expect("the equalizer shows headless");
+        app.equalizer().invoke_take_focus();
         draw_frames();
-        let window = app.equalizer.window();
+        let window = leaked(app.equalizer());
         // The switch, the curve picker, then the preamp.
         tab(window, 3);
         press(window, Key::UpArrow);
@@ -19867,11 +19913,13 @@ pub(crate) mod tests {
 
         advance_clock(Duration::from_secs(1));
         draw_frames();
-        let y = 250.0;
-        let x = (0..1000)
-            .step_by(8)
-            .map(|x| x as f32)
-            .find(|&x| {
+        // From the bottom up, so the first hit is just above the track's
+        // middle and no click reaches the switch or the picker above it.
+        let (x, y) = (40..400)
+            .rev()
+            .step_by(20)
+            .flat_map(|y| (0..1000).step_by(8).map(move |x| (x as f32, y as f32)))
+            .find(|&(x, y)| {
                 click(window, x, y);
                 advance_clock(Duration::from_secs(1));
                 draw_frames();
@@ -19888,7 +19936,7 @@ pub(crate) mod tests {
         hold_clock();
         let app = app_over(MockBackend::new());
         let (x, y) = first_band_point(&app);
-        let window = app.equalizer.window();
+        let window = leaked(app.equalizer());
         let raised = first_band_gain(&app);
         click(window, x, y);
         advance_clock(Duration::from_secs(1));
@@ -19926,9 +19974,9 @@ pub(crate) mod tests {
         hold_clock();
         let app = app_over(MockBackend::new());
         let (x, y) = first_band_point(&app);
-        let window = app.equalizer.window();
+        let window = leaked(app.equalizer());
         let shown = || {
-            let value = ElementHandle::find_by_accessible_label(&app.equalizer, "32 Hz")
+            let value = ElementHandle::find_by_accessible_label(&app.equalizer(), "32 Hz")
                 .find_map(|band| band.accessible_value())
                 .expect("the 32 Hz band");
             value
@@ -19960,7 +20008,7 @@ pub(crate) mod tests {
     #[test]
     fn a_delete_while_a_rename_is_open_keeps_the_curve_being_renamed() {
         let app = app_over(MockBackend::new());
-        let eq_window = &app.equalizer;
+        let eq_window = &app.equalizer();
         let presets = eq::PRESETS.len();
         for (gain, name) in [(1.0, "A"), (2.0, "B"), (3.0, "C")] {
             eq_window.invoke_gain_changed(0, gain);
@@ -19972,7 +20020,7 @@ pub(crate) mod tests {
 
         eq_window.invoke_rename_curve();
         eq_window.invoke_delete_curve();
-        app.zone_dialog.invoke_confirmed("X".into());
+        app.zone_dialog().invoke_confirmed("X".into());
         let names: Vec<String> = app
             .snapshot()
             .equalizer_curves
@@ -19985,39 +20033,41 @@ pub(crate) mod tests {
     #[test]
     fn a_zone_name_longer_than_its_field_keeps_the_cursor_in_view() {
         let app = app_over(MockBackend::new());
-        app.equalizer.invoke_save_curve();
-        app.equalizer.invoke_curve_named("Bass".into(), true);
-        app.equalizer.invoke_rename_curve();
-        app.zone_dialog.set_name(SharedString::new());
-        let window = app.zone_dialog.window();
+        app.equalizer().invoke_save_curve();
+        app.equalizer().invoke_curve_named("Bass".into(), true);
+        app.equalizer().invoke_rename_curve();
+        app.zone_dialog().set_name(SharedString::new());
+        let window = leaked(app.zone_dialog());
         // Wider than the 1000 px the headless windows draw at.
         let name = "Living Room and Kitchen and Bedroom and Office Speakers, ".repeat(4);
         let name = name.trim_end();
         for character in name.chars() {
             press(window, character.to_string());
             assert!(
-                app.zone_dialog.get_name_caret_in_view(),
+                app.zone_dialog().get_name_caret_in_view(),
                 "the cursor is in view after {:?}",
-                app.zone_dialog.get_name()
+                app.zone_dialog().get_name()
             );
         }
-        assert_eq!(app.zone_dialog.get_name(), name);
+        assert_eq!(app.zone_dialog().get_name(), name);
         press(window, Key::Home);
-        assert!(app.zone_dialog.get_name_caret_in_view(), "at the start");
+        assert!(app.zone_dialog().get_name_caret_in_view(), "at the start");
         press(window, Key::End);
-        assert!(app.zone_dialog.get_name_caret_in_view(), "at the end");
+        assert!(app.zone_dialog().get_name_caret_in_view(), "at the end");
     }
 
     #[test]
     fn escape_closes_the_about_dialog() {
         let app = app_over(MockBackend::new());
-        let window = app.about.window();
+        let window = leaked(app.about());
         app.main.invoke_about_requested();
         assert!(window.is_visible());
         press(window, Key::Escape);
         assert!(!window.is_visible(), "Escape right after it opened");
 
         app.main.invoke_about_requested();
+        // A poll in between may have dropped the closed one.
+        let window = leaked(app.about());
         assert!(window.is_visible());
         tab(window, 1);
         press(window, Key::Escape);
@@ -20027,7 +20077,7 @@ pub(crate) mod tests {
     #[test]
     fn enter_closes_the_about_dialog() {
         let app = app_over(MockBackend::new());
-        let window = app.about.window();
+        let window = leaked(app.about());
         app.main.invoke_about_requested();
         assert!(window.is_visible());
         press(window, Key::Return);
@@ -20050,7 +20100,7 @@ pub(crate) mod tests {
                     app.show_equalizer();
                     app
                 },
-                |app| app.equalizer.window(),
+                |app| leaked(app.equalizer()),
             ),
             (
                 "AudioSync Guide",
@@ -20059,17 +20109,17 @@ pub(crate) mod tests {
                     app.show_help();
                     app
                 },
-                |app| app.help.window(),
+                |app| leaked(app.help()),
             ),
             (
                 "double-audio guide",
                 || {
                     let app = app_over(MockBackend::new());
-                    app.guide.show().expect("the guide shows headless");
-                    app.guide.invoke_take_focus();
+                    app.guide().show().expect("the guide shows headless");
+                    app.guide().invoke_take_focus();
                     app
                 },
-                |app| app.guide.window(),
+                |app| leaked(app.guide()),
             ),
             (
                 "About dialog",
@@ -20078,7 +20128,7 @@ pub(crate) mod tests {
                     app.main.invoke_about_requested();
                     app
                 },
-                |app| app.about.window(),
+                |app| leaked(app.about()),
             ),
             (
                 "Web Remote window",
@@ -20087,18 +20137,18 @@ pub(crate) mod tests {
                     app.show_remote();
                     app
                 },
-                |app| app.remote_window.window(),
+                |app| leaked(app.remote_window()),
             ),
             (
                 "zone name dialog",
                 || {
                     let app = app_over(MockBackend::new());
-                    app.equalizer.invoke_save_curve();
-                    app.equalizer.invoke_curve_named("Bass".into(), true);
-                    app.equalizer.invoke_rename_curve();
+                    app.equalizer().invoke_save_curve();
+                    app.equalizer().invoke_curve_named("Bass".into(), true);
+                    app.equalizer().invoke_rename_curve();
                     app
                 },
-                |app| app.zone_dialog.window(),
+                |app| leaked(app.zone_dialog()),
             ),
             (
                 "PIN dialog",
@@ -20107,12 +20157,12 @@ pub(crate) mod tests {
                     app.preview_pin(false);
                     app
                 },
-                |app| app.pin_dialog.window(),
+                |app| leaked(app.pin_dialog()),
             ),
             (
                 "password dialog",
                 || app_asking_password(false),
-                |app| app.password_dialog.window(),
+                |app| leaked(app.password_dialog()),
             ),
         ];
         assert_eq!(
@@ -20145,9 +20195,9 @@ pub(crate) mod tests {
             app.update(|b| b.set_speaker_enabled(&speaker.id, false));
         }
         app.ask_new_zone();
-        let window = app.zone_dialog.window();
+        let window = leaked(app.zone_dialog());
         assert!(window.is_visible());
-        assert!(!app.zone_dialog.get_show_field());
+        assert!(!app.zone_dialog().get_show_field());
         press(window, Key::Return);
         assert!(!window.is_visible(), "Enter on the message closed it");
     }
@@ -20824,7 +20874,7 @@ pub(crate) mod tests {
     }
 
     /// The App over `backend`, with its main window shown and drawn once.
-    fn main_window_over(backend: MockBackend) -> Rc<App> {
+    pub(super) fn main_window_over(backend: MockBackend) -> Rc<App> {
         let app = app_over(backend);
         app.main.show().expect("the main window shows headless");
         draw_frames();
@@ -21478,30 +21528,32 @@ pub(crate) mod tests {
         app.save_preset("Party");
         app.update(|b| b.set_master_volume(55.0));
 
-        app.equalizer.show().expect("the equalizer shows headless");
+        app.equalizer()
+            .show()
+            .expect("the equalizer shows headless");
         draw_frames();
-        ctrl(app.equalizer.window(), "1");
+        ctrl(leaked(app.equalizer()), "1");
         assert_eq!(preset_rows(&app)[0], ("Evening".into(), true));
         assert!(!app.main.window().is_visible(), "a recall opens nothing");
-        assert!(!app.zone_dialog.window().is_visible());
+        assert!(!app.zone_dialog.is_visible());
 
-        ctrl(app.equalizer.window(), "2");
+        ctrl(leaked(app.equalizer()), "2");
         assert_eq!(preset_rows(&app)[1], ("Party".into(), true));
         app.update(|b| b.set_master_volume(55.0));
-        ctrl(app.equalizer.window(), "3");
+        ctrl(leaked(app.equalizer()), "3");
         assert!(
             preset_rows(&app).iter().all(|(_, current)| !current),
             "an empty place does nothing"
         );
         assert_eq!(app.snapshot().master_volume, 55.0);
 
-        app.help.invoke_preset_shortcut(1);
+        app.help().invoke_preset_shortcut(1);
         assert_eq!(preset_rows(&app)[0], ("Evening".into(), true));
-        app.remote_window.invoke_preset_shortcut(2);
+        app.remote_window().invoke_preset_shortcut(2);
         assert_eq!(preset_rows(&app)[1], ("Party".into(), true));
         app.show_settings();
         draw_frames();
-        ctrl(app.settings.window(), "1");
+        ctrl(leaked(app.settings()), "1");
         assert_eq!(preset_rows(&app)[0], ("Evening".into(), true), "Settings");
     }
 
@@ -21514,28 +21566,28 @@ pub(crate) mod tests {
         let windows: [(&str, Open); 5] = [
             ("equalizer", |app| {
                 app.show_equalizer();
-                app.equalizer.window()
+                leaked(app.equalizer())
             }),
             ("Guide", |app| {
                 app.show_help();
-                app.help.window()
+                leaked(app.help())
             }),
             ("notice guide", |app| {
-                app.guide.show().expect("the guide shows headless");
-                app.guide.invoke_take_focus();
-                app.guide.window()
+                app.guide().show().expect("the guide shows headless");
+                app.guide().invoke_take_focus();
+                leaked(app.guide())
             }),
             ("web remote", |app| {
                 app.show_remote();
-                app.remote_window.window()
+                leaked(app.remote_window())
             }),
             ("settings", |app| {
                 app.show_settings();
-                app.settings.window()
+                leaked(app.settings())
             }),
         ];
         for (name, open) in windows {
-            let _ = app.help.hide();
+            let _ = app.help().hide();
             let window = open(&app);
             draw_frames();
             let before = refreshes.get();
@@ -21545,17 +21597,14 @@ pub(crate) mod tests {
             held(window, &[Key::Control, Key::Shift], "w");
             assert!(window.is_visible(), "Ctrl+Shift+W in the {name}");
             assert_eq!(
-                app.help.window().is_visible(),
+                app.help.is_visible(),
                 name == "Guide",
                 "Shift+F1 in the {name}"
             );
-            assert!(
-                !app.zone_dialog.window().is_visible(),
-                "Ctrl+Shift+N in the {name}"
-            );
+            assert!(!app.zone_dialog.is_visible(), "Ctrl+Shift+N in the {name}");
             assert_eq!(refreshes.get(), before, "Shift+F5 in the {name}");
             press(window, Key::F1);
-            assert!(app.help.window().is_visible(), "F1 in the {name}");
+            assert!(app.help.is_visible(), "F1 in the {name}");
             let zones = app.snapshot().zones.len();
             ctrl(window, "n");
             assert_eq!(
@@ -21570,9 +21619,9 @@ pub(crate) mod tests {
 
         // T33: an open name dialog comes to the front as it is.
         app.ask_save_curve();
-        let heading = app.zone_dialog.get_heading();
-        ctrl(app.equalizer.window(), "n");
-        assert_eq!(app.zone_dialog.get_heading(), heading);
+        let heading = app.zone_dialog().get_heading();
+        ctrl(leaked(app.equalizer()), "n");
+        assert_eq!(app.zone_dialog().get_heading(), heading);
     }
 
     /// The main window draws its own menus, so it runs their shortcuts
@@ -21593,9 +21642,9 @@ pub(crate) mod tests {
         assert!(preset_rows(&app)[0].1, "Ctrl+1");
 
         assert!(app.main.invoke_shortcut("e".into(), true, false));
-        assert!(app.equalizer.window().is_visible(), "Ctrl+E");
+        assert!(app.equalizer.is_visible(), "Ctrl+E");
         assert!(app.main.invoke_shortcut(Key::F1.into(), false, false));
-        assert!(app.help.window().is_visible(), "F1");
+        assert!(app.help.is_visible(), "F1");
         assert!(app.main.invoke_shortcut("r".into(), true, false), "Ctrl+R");
     }
 
@@ -21610,38 +21659,38 @@ pub(crate) mod tests {
         let windows: [(&str, Open); 5] = [
             ("equalizer", |app| {
                 app.show_equalizer();
-                app.equalizer.window()
+                leaked(app.equalizer())
             }),
             ("Guide", |app| {
                 app.show_help();
-                app.help.window()
+                leaked(app.help())
             }),
             ("notice guide", |app| {
-                app.guide.show().expect("the guide shows headless");
-                app.guide.invoke_take_focus();
-                app.guide.window()
+                app.guide().show().expect("the guide shows headless");
+                app.guide().invoke_take_focus();
+                leaked(app.guide())
             }),
             ("web remote", |app| {
                 app.show_remote();
-                app.remote_window.window()
+                leaked(app.remote_window())
             }),
             ("settings", |app| {
                 app.show_settings();
-                app.settings.window()
+                leaked(app.settings())
             }),
         ];
         for (name, open) in windows {
             let window = open(&app);
             draw_frames();
             if name != "settings" {
-                let _ = app.settings.hide();
+                let _ = app.settings().hide();
                 ctrl(window, ",");
-                assert!(app.settings.window().is_visible(), "Ctrl+, in the {name}");
+                assert!(app.settings.is_visible(), "Ctrl+, in the {name}");
             }
             if name != "equalizer" {
-                let _ = app.equalizer.hide();
+                let _ = app.equalizer().hide();
                 ctrl(window, "e");
-                assert!(app.equalizer.window().is_visible(), "Ctrl+E in the {name}");
+                assert!(app.equalizer.is_visible(), "Ctrl+E in the {name}");
             }
             let _ = app.main.hide();
             ctrl(window, "0");
@@ -21658,9 +21707,11 @@ pub(crate) mod tests {
         app.save_preset("Evening");
         app.update(|b| b.set_master_volume(30.0));
 
-        app.equalizer.show().expect("the equalizer shows headless");
+        app.equalizer()
+            .show()
+            .expect("the equalizer shows headless");
         draw_frames();
-        held(app.equalizer.window(), &[Key::Control, Key::Meta], "1");
+        held(leaked(app.equalizer()), &[Key::Control, Key::Meta], "1");
         assert!(!preset_rows(&app)[0].1, "Ctrl+Win+1 in the equalizer");
 
         app.flyout.show().expect("the flyout shows headless");
@@ -21670,14 +21721,14 @@ pub(crate) mod tests {
         held(app.flyout.window(), &[Key::Control, Key::Meta], "1");
         assert!(!preset_rows(&app)[0].1, "Ctrl+Win+1 in the flyout");
 
-        app.equalizer.invoke_save_curve();
-        app.equalizer.invoke_curve_named("Bass".into(), true);
-        app.equalizer.invoke_rename_curve();
+        app.equalizer().invoke_save_curve();
+        app.equalizer().invoke_curve_named("Bass".into(), true);
+        app.equalizer().invoke_rename_curve();
         draw_frames();
-        held(app.zone_dialog.window(), &[Key::Control, Key::Shift], "w");
-        assert!(app.zone_dialog.window().is_visible(), "Ctrl+Shift+W");
-        ctrl(app.zone_dialog.window(), "w");
-        assert!(!app.zone_dialog.window().is_visible(), "Ctrl+W");
+        held(leaked(app.zone_dialog()), &[Key::Control, Key::Shift], "w");
+        assert!(app.zone_dialog.is_visible(), "Ctrl+Shift+W");
+        ctrl(leaked(app.zone_dialog()), "w");
+        assert!(!app.zone_dialog.is_visible(), "Ctrl+W");
     }
 
     #[test]
@@ -21685,9 +21736,9 @@ pub(crate) mod tests {
         let app = app_over(MockBackend::new());
         let exits = Rc::new(Cell::new(0));
         let counted = exits.clone();
-        app.about
+        app.about()
             .on_exit_requested(move || counted.set(counted.get() + 1));
-        let window = app.about.window();
+        let window = leaked(app.about());
         app.main.invoke_about_requested();
         draw_frames();
         held(window, &[Key::Control, Key::Shift], "w");
@@ -21709,7 +21760,7 @@ pub(crate) mod tests {
         app.flyout.invoke_preset_recall_requested(id.into());
         assert_eq!(app.flyout.get_current_preset(), "Evening");
         assert!(!app.main.window().is_visible());
-        assert!(!app.zone_dialog.window().is_visible());
+        assert!(!app.zone_dialog.is_visible());
         assert_eq!(app.flyout.get_presets().row_count(), 1);
     }
 
@@ -21719,7 +21770,7 @@ pub(crate) mod tests {
         let app = main_window_over(MockBackend::new());
         app.ask_save_preset();
         assert!(app.main.get_preset_saving(), "a name field in the list");
-        assert!(!app.zone_dialog.window().is_visible(), "Save asks nothing");
+        assert!(!app.zone_dialog.is_visible(), "Save asks nothing");
         app.main.invoke_preset_save_named("Evening".into());
         assert_eq!(preset_rows(&app), [("Evening".into(), true)]);
         assert_eq!(app.main.get_notice_announcement(), "Evening saved");
@@ -21727,10 +21778,7 @@ pub(crate) mod tests {
         let id = preset_ids(&app)[0].clone();
         app.ask_rename_preset(&id);
         assert_eq!(app.main.get_preset_renaming(), id.as_str());
-        assert!(
-            !app.zone_dialog.window().is_visible(),
-            "Rename asks nothing"
-        );
+        assert!(!app.zone_dialog.is_visible(), "Rename asks nothing");
         app.main
             .invoke_preset_rename_named(id.as_str().into(), "   ".into());
         assert_eq!(preset_rows(&app)[0].0, "Evening", "a blank name keeps it");
@@ -21741,19 +21789,13 @@ pub(crate) mod tests {
         app.save_preset("Party");
         app.update(|b| b.set_master_volume(30.0));
         app.update_preset(&id);
-        assert!(
-            !app.zone_dialog.window().is_visible(),
-            "Update asks nothing"
-        );
+        assert!(!app.zone_dialog.is_visible(), "Update asks nothing");
         assert_eq!(preset_ids(&app)[0], id, "it keeps its ID and place");
         assert_eq!(preset_rows(&app)[0], ("Late".into(), true));
         assert_eq!(app.main.get_notice_announcement(), "Late updated");
 
         app.delete_preset(&id);
-        assert!(
-            !app.zone_dialog.window().is_visible(),
-            "Delete asks nothing"
-        );
+        assert!(!app.zone_dialog.is_visible(), "Delete asks nothing");
         assert_eq!(preset_rows(&app), [("Party".into(), false)]);
         assert_eq!(app.main.get_notice_announcement(), "Late deleted");
     }
@@ -21766,7 +21808,7 @@ pub(crate) mod tests {
             app.update(|b| b.set_speaker_enabled(&speaker.id, false));
         }
         app.ask_save_preset();
-        assert!(!app.zone_dialog.window().is_visible());
+        assert!(!app.zone_dialog.is_visible());
         assert!(!app.main.get_preset_saving());
         assert_eq!(
             app.main.get_preset_save_note(),
@@ -21783,17 +21825,17 @@ pub(crate) mod tests {
         for speaker in app.snapshot().speakers {
             app.update(|b| b.set_speaker_enabled(&speaker.id, false));
         }
-        app.equalizer.invoke_save_curve();
-        app.equalizer.invoke_curve_named("Bass".into(), true);
-        app.equalizer.invoke_rename_curve();
-        app.zone_dialog.set_name("Late night".into());
-        let heading = app.zone_dialog.get_heading();
+        app.equalizer().invoke_save_curve();
+        app.equalizer().invoke_curve_named("Bass".into(), true);
+        app.equalizer().invoke_rename_curve();
+        app.zone_dialog().set_name("Late night".into());
+        let heading = app.zone_dialog().get_heading();
 
         app.update_preset(&id);
         let why = "Turn on the speakers you want in the preset first, then save it.";
-        assert!(app.zone_dialog.window().is_visible());
-        assert_eq!(app.zone_dialog.get_heading(), heading);
-        assert_eq!(app.zone_dialog.get_name(), "Late night");
+        assert!(app.zone_dialog.is_visible());
+        assert_eq!(app.zone_dialog().get_heading(), heading);
+        assert_eq!(app.zone_dialog().get_name(), "Late night");
         assert_eq!(
             *app.dialog_purpose.borrow(),
             DialogPurpose::RenameCurve("Bass".to_owned())
@@ -21963,7 +22005,6 @@ pub(crate) mod tests {
         let strings = app.strings();
         assert_eq!(strings.get_presets(), "Presets");
         assert_eq!(strings.get_save_preset(), "Save as Preset…");
-        assert_eq!(strings.get_no_presets(), "No Presets");
         assert_eq!(strings.get_choose_preset(), "Choose a Preset");
         assert_eq!(strings.get_update_preset(), "Update to Current Settings");
         assert_eq!(strings.get_rename_preset(), "Rename…");
@@ -21993,10 +22034,10 @@ pub(crate) mod tests {
         app.save_preset("Party");
         app.update(|b| b.set_master_volume(55.0));
 
-        app.guide.show().expect("the guide shows headless");
-        app.guide.invoke_take_focus();
+        app.guide().show().expect("the guide shows headless");
+        app.guide().invoke_take_focus();
         draw_frames();
-        ctrl(app.guide.window(), "1");
+        ctrl(leaked(app.guide()), "1");
         assert_eq!(preset_rows(&app)[0], ("Evening".into(), true));
 
         app.flyout.show().expect("the flyout shows headless");
@@ -22017,7 +22058,7 @@ pub(crate) mod tests {
         let app = main_window_over(backend);
         assert!(!app.main.get_can_save_preset());
         app.ask_save_preset();
-        assert!(!app.zone_dialog.window().is_visible());
+        assert!(!app.zone_dialog.is_visible());
         assert!(!app.main.get_preset_saving());
         assert_eq!(
             app.main.get_preset_save_note(),
@@ -24206,15 +24247,17 @@ pub(crate) mod tests {
         app.update(|b| b.set_master_volume(60.0));
         app.refresh();
         app.flyout.show().expect("the flyout shows headless");
-        app.equalizer.show().expect("the equalizer shows headless");
+        app.equalizer()
+            .show()
+            .expect("the equalizer shows headless");
         draw_frames();
         let strings = app.strings();
         toggles(
-            &app.equalizer,
+            &app.equalizer(),
             &strings.get_equalizer_curve(),
             &strings.get_equalizer_save_curve(),
         );
-        assert!(app.equalizer.get_naming_curve(), "Save Curve… ran");
+        assert!(app.equalizer().get_naming_curve(), "Save Curve… ran");
         toggles(&app.flyout, &strings.get_presets(), "Party");
         draw_frames();
         assert_eq!(app.flyout.get_current_preset(), "Party", "the last preset");
@@ -24441,10 +24484,10 @@ pub(crate) mod tests {
                 present: false,
             })
             .collect();
-        app.settings
+        app.settings()
             .set_hidden_speakers(ModelRc::new(VecModel::from(hidden)));
         // A screen with 700 px of room, whatever the test machine's screen is.
-        app.settings.set_room(700.0);
+        app.settings().set_room(700.0);
         draw_frames();
         let strings = app.main.global::<crate::Strings>();
         let label = if cfg!(windows) {
@@ -24453,12 +24496,15 @@ pub(crate) mod tests {
             strings.get_unhide()
         };
         let check_setup = || {
-            i_slint_backend_testing::ElementHandle::find_by_accessible_label(&app.settings, &label)
-                .last()
-                .expect("Settings' last control")
+            i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+                &app.settings(),
+                &label,
+            )
+            .last()
+            .expect("Settings' last control")
         };
         for _ in 0..40 {
-            scroll(app.settings.window(), 200.0, 300.0, -120.0);
+            scroll(leaked(app.settings()), 200.0, 300.0, -120.0);
         }
         let (at, size) = (check_setup().absolute_position(), check_setup().size());
         assert!(
@@ -24473,7 +24519,7 @@ pub(crate) mod tests {
     fn the_speakers_box_holds_the_whole_unhide_row() {
         let app = app_over(MockBackend::new());
         assert!(app.main.invoke_shortcut(",".into(), true, false));
-        app.settings
+        app.settings()
             .set_hidden_speakers(ModelRc::new(VecModel::from(vec![HiddenItem {
                 id: "local:usb".into(),
                 name: "Speakers (2- Thronmax MDrill Zero Plus)".into(),
@@ -24481,12 +24527,12 @@ pub(crate) mod tests {
                 present: true,
             }])));
         // Updates follows Speakers on every system; Check Setup only on Windows.
-        app.settings.set_updater_available(true);
+        app.settings().set_updater_available(true);
         draw_frames_at(460, 900);
         let strings = app.main.global::<crate::Strings>();
         let find = |label: SharedString| {
             let e = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
-                &app.settings,
+                &app.settings(),
                 &label,
             )
             .next()
@@ -24526,7 +24572,7 @@ pub(crate) mod tests {
                 .iter()
                 .map(|label| {
                     let e = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
-                        &app.settings,
+                        &app.settings(),
                         label,
                     )
                     .next()
@@ -24548,25 +24594,25 @@ pub(crate) mod tests {
     fn settings_shows_the_main_windows_settings_and_changes_them_through_its_callbacks() {
         let app = app_over(MockBackend::new());
         assert!(app.main.invoke_shortcut(",".into(), true, false));
-        assert!(app.settings.window().is_visible());
-        assert!(!app.settings.get_show_virtual_devices());
-        app.settings.invoke_show_virtual_devices_toggled(true);
+        assert!(app.settings.is_visible());
+        assert!(!app.settings().get_show_virtual_devices());
+        app.settings().invoke_show_virtual_devices_toggled(true);
         assert!(app.main.get_show_virtual_devices());
-        assert!(app.settings.get_show_virtual_devices());
-        app.settings.invoke_resume_after_sleep_toggled(true);
+        assert!(app.settings().get_show_virtual_devices());
+        app.settings().invoke_resume_after_sleep_toggled(true);
         assert!(app.snapshot().resume_after_sleep);
-        assert!(app.settings.get_resume_after_sleep());
-        app.settings
+        assert!(app.settings().get_resume_after_sleep());
+        app.settings()
             .invoke_appearance_chosen(crate::Appearance::Dark);
-        assert_eq!(app.settings.get_appearance(), crate::Appearance::Dark);
+        assert_eq!(app.settings().get_appearance(), crate::Appearance::Dark);
         app.main.invoke_speaker_hide_requested("local:desk".into());
-        let hidden = app.settings.get_hidden_speakers();
+        let hidden = app.settings().get_hidden_speakers();
         assert_eq!(hidden.row_count(), 1);
-        app.settings
+        app.settings()
             .invoke_speaker_unhide_requested(hidden.row_data(0).unwrap().id);
-        assert_eq!(app.settings.get_hidden_speakers().row_count(), 0);
-        app.settings.invoke_close_requested();
-        assert!(!app.settings.window().is_visible());
+        assert_eq!(app.settings().get_hidden_speakers().row_count(), 0);
+        app.settings().invoke_close_requested();
+        assert!(!app.settings.is_visible());
     }
 
     /// A speaker's rename field fills its name slot, at least 120 px wide,
@@ -24742,7 +24788,7 @@ pub(crate) mod tests {
         // The list folds open over 250 ms.
         advance_clock(Duration::from_secs(1));
         draw_frames();
-        assert!(!app.zone_dialog.window().is_visible(), "no dialog");
+        assert!(!app.zone_dialog.is_visible(), "no dialog");
         assert!(app.main.get_presets_open(), "the list folds open");
         let field = element(&app, "PresetsCard::save-field").expect("a name field in the list");
         assert_eq!(
@@ -24772,7 +24818,7 @@ pub(crate) mod tests {
         let id = preset_ids(&app)[0].clone();
         app.ask_rename_preset(&id);
         draw_frames();
-        assert!(!app.zone_dialog.window().is_visible(), "no dialog");
+        assert!(!app.zone_dialog.is_visible(), "no dialog");
         let field = element(&app, "PresetListRow::name-field").expect("a name field in the row");
         assert_eq!(field.accessible_value().as_deref(), Some("Evening"));
         type_text(app.main.window(), "Late");
@@ -24794,7 +24840,7 @@ pub(crate) mod tests {
         app.ask_save_preset();
         draw_frames();
         let why = "Turn on the speakers you want in the preset first, then save it.";
-        assert!(!app.zone_dialog.window().is_visible(), "no dialog");
+        assert!(!app.zone_dialog.is_visible(), "no dialog");
         let note = element(&app, "PresetsCard::save-note").expect("a caption under Save");
         assert_eq!(note.accessible_label().as_deref(), Some(why));
         assert_eq!(app.main.get_notice_announcement(), why);

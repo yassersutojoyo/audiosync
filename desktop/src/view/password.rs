@@ -14,16 +14,16 @@ use crate::ui_model::PasswordPrompt;
 
 impl App {
     pub(super) fn connect_password_dialog(self: &Rc<Self>) {
-        self.follow_frame(|app| app.password_dialog.window(), "password dialog");
+        self.follow_frame(&self.password_dialog(), "password dialog");
         let weak = Rc::downgrade(self);
         let w = weak.clone();
-        self.password_dialog
+        self.password_dialog()
             .on_confirmed(move |password| with_app(&w, |app| app.confirm_password(&password)));
         let w = weak.clone();
-        self.password_dialog
+        self.password_dialog()
             .on_cancelled(move || with_app(&w, App::cancel_password));
         let w = weak;
-        self.password_dialog.window().on_close_requested(move || {
+        self.password_dialog().window().on_close_requested(move || {
             with_app(&w, App::cancel_password);
             slint::CloseRequestResponse::HideWindow
         });
@@ -32,15 +32,17 @@ impl App {
     /// Opens, updates or closes the password dialog for the speaker that
     /// asks for its password.
     pub(super) fn show_password_prompt(&self, prompt: Option<&PasswordPrompt>) {
-        let dialog = &self.password_dialog;
         let Some(prompt) = prompt else {
-            if self.password_for.borrow_mut().take().is_some() {
+            if self.password_for.borrow_mut().take().is_some()
+                && let Some(dialog) = self.password_dialog.built()
+            {
                 let _ = dialog.hide();
                 dialog.set_password(SharedString::new());
                 self.log.log(|| "password dialog: closed".to_owned());
             }
             return;
         };
+        let dialog = &self.password_dialog();
         let opening = self.password_for.borrow().as_deref() != Some(prompt.speaker_id.as_str());
         let turned_down = prompt.wrong && !dialog.get_wrong();
         dialog.set_speaker(prompt.name.as_str().into());
@@ -68,17 +70,19 @@ impl App {
             return;
         }
         let id = self.password_for.borrow().clone();
-        self.password_dialog.set_password(SharedString::new());
+        self.password_dialog().set_password(SharedString::new());
         if let Some(id) = id {
             self.update(|b| b.submit_password(&id, password));
         }
     }
 
     /// Cancel, Escape or the close button: the speaker stays off.
-    fn cancel_password(&self) {
+    pub(super) fn cancel_password(&self) {
         let id = self.password_for.borrow_mut().take();
-        let _ = self.password_dialog.hide();
-        self.password_dialog.set_password(SharedString::new());
+        if let Some(dialog) = self.password_dialog.built() {
+            let _ = dialog.hide();
+            dialog.set_password(SharedString::new());
+        }
         if let Some(id) = id {
             self.update(|b| b.cancel_password(&id));
         }
