@@ -18463,6 +18463,30 @@ pub(crate) mod tests {
         }
     }
 
+    /// A row's volume track starts where its name does, as the Mac's slider
+    /// under the name (MainWindow.swift:2433); the track starts half the
+    /// 16 px knob inside the slider.
+    #[test]
+    fn a_rows_volume_track_starts_under_its_name() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = narrow_app(MockBackend::new());
+        let label = app
+            .main
+            .global::<crate::Strings>()
+            .invoke_volume_of("Headphones".into());
+        let (x, y, _, _) = slider_box(&app.main, &label);
+        let name = ElementHandle::find_by_element_id(&app.main, "SpeakerRow::name-label")
+            .filter(|n| n.absolute_position().y < y)
+            .max_by(|a, b| a.absolute_position().y.total_cmp(&b.absolute_position().y))
+            .expect("the row's name");
+        let track = x + 16.0 / 2.0;
+        assert!(
+            (track - name.absolute_position().x).abs() < 0.5,
+            "track at {track}, name at {}",
+            name.absolute_position().x
+        );
+    }
+
     /// A row's volume number sits centred on its slider's track, as on the
     /// Mac, whose digits' ink and track share one centre line.
     #[test]
