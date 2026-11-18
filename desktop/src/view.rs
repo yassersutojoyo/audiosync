@@ -83,6 +83,8 @@ mod parity_rest;
 #[cfg(test)]
 mod parity_screens;
 #[cfg(test)]
+mod parity_sheets;
+#[cfg(test)]
 mod parity_theme_text;
 #[cfg(test)]
 mod parity_tray;
