@@ -1,7 +1,7 @@
 // Settings > Check Setup… (S435): what AudioSync needs from Windows, one row per
 // need with its state in words and an icon, and a line under the heading that
 // names the rows needing the user. The network and microphone rows change by
-// themselves while it shows. Escape, Ctrl+W or Close closes it.
+// themselves while it shows. Escape, Return, Ctrl+W or Done closes it.
 
 import { Button } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
@@ -224,6 +224,8 @@ export component SetupWindow inherits Window {
     // How often each row's state changed since the window opened.
     in property <int> network-changes;
     in property <int> microphone-changes;
+    // False when it opened by itself on a first install (SetupWindow.swift:21).
+    in property <bool> checking: true;
     // What Narrator says without moving the focus (see Announcer).
     in property <string> announcement;
 
@@ -256,7 +258,7 @@ export component SetupWindow inherits Window {
         return Strings.setup-microphone-not-used;
     }
 
-    title: Strings.setup-title;
+    title: Strings.setup-window-title;
     icon: @image-url("../res/audiosync-256.png");
     background: Tokens.background;
     min-width: 360px;
@@ -275,7 +277,7 @@ export component SetupWindow inherits Window {
 
     keys := FocusScope {
         key-pressed(event) => {
-            if event.text == Key.Escape || (event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text.to-lowercase() == "w") {
+            if event.text == Key.Escape || event.text == Key.Return || (event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text.to-lowercase() == "w") {
                 root.close-requested();
                 return accept;
             }
@@ -296,7 +298,7 @@ export component SetupWindow inherits Window {
 
                 VerticalLayout {
                     Text {
-                        text: Strings.setup-title;
+                        text: root.checking ? Strings.setup-summary-heading(root.network-needs-attention) : Strings.setup-heading;
                         font-family: Fluent.display-font;
                         font-size: Tokens.font-size-title2;
                         font-weight: Fluent.weight-semibold;
@@ -304,7 +306,7 @@ export component SetupWindow inherits Window {
                     }
 
                     Text {
-                        text: Strings.setup-summary(root.network-needs-attention, root.microphone-needs-attention);
+                        text: root.checking ? Strings.setup-summary(root.network-needs-attention, root.microphone-needs-attention) : Strings.setup-intro;
                         color: Tokens.secondary-text;
                         wrap: word-wrap;
                         min-height: self.preferred-height;
@@ -386,9 +388,9 @@ export component SetupWindow inherits Window {
                     alignment: end;
 
                     Button {
-                        text: Strings.setup-close;
+                        text: Strings.setup-done;
                         primary: true;
-                        accessible-label: Strings.setup-close;
+                        accessible-label: Strings.setup-done;
                         clicked => {
                             root.close-requested();
                         }

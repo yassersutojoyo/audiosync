@@ -51,6 +51,19 @@ impl App {
 
     /// Opens Check Setup, or brings it to the front when it is open.
     pub fn show_setup(&self) {
+        self.setup.set_checking(true);
+        self.open_setup();
+    }
+
+    /// Opens it by itself once, with the first install's heading
+    /// (AppDelegate+Windows.swift:234-238).
+    pub fn show_setup_at_first_install(&self) {
+        self.log.log(|| "Setup: first install".to_owned());
+        self.setup.set_checking(false);
+        self.open_setup();
+    }
+
+    fn open_setup(&self) {
         let opening = !self.setup.window().is_visible();
         if opening {
             self.setup.set_network_changes(0);
@@ -143,12 +156,12 @@ impl App {
                 setup.invoke_microphone_status(setup_microphone(microphone))
             ));
         }
-        if attention != attention_before {
-            said.push(
-                strings
-                    .invoke_setup_summary(attention.network, attention.microphone)
-                    .to_string(),
-            );
+        if attention != attention_before && setup.get_checking() {
+            said.push(format!(
+                "{}. {}",
+                strings.invoke_setup_summary_heading(attention.network),
+                strings.invoke_setup_summary(attention.network, attention.microphone)
+            ));
         }
         setup.set_announcement(said.join(" ").into());
     }
@@ -317,6 +330,17 @@ mod tests {
         assert!(setup.contains(
             "root.checking ? Strings.setup-summary-heading(root.network-needs-attention) : Strings.setup-heading"
         ));
+    }
+
+    #[test]
+    fn the_first_install_shows_the_intro_and_check_setup_the_summary() {
+        let app = app_over(MockBackend::new());
+        app.show_setup_at_first_install();
+        assert!(app.setup.window().is_visible());
+        assert!(!app.setup.get_checking(), "Before you start");
+        app.setup.invoke_close_requested();
+        app.main.invoke_setup_requested();
+        assert!(app.setup.get_checking(), "Ready to stream or not");
     }
 
     // AppDelegate.swift:477, AppDelegate+Windows.swift:234-238: a first

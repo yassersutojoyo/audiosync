@@ -267,6 +267,10 @@ impl From<slint::PlatformError> for StartError {
 
 /// Shows the main window and runs the UI until the user exits.
 fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
+    // Read before the engine starts: its first change writes the file. Linux
+    // has no Setup window yet.
+    let first_install = cfg!(windows)
+        && settings::SettingsFile::default_path().is_some_and(|path| !path.exists());
     #[cfg(windows)]
     let renderer_record = renderer_choice::select(log);
     #[cfg(feature = "mock-backend")]
@@ -388,6 +392,9 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
                 launch_at_login::BACKGROUND_FLAG
             )
         });
+    }
+    if first_install {
+        app.show_setup_at_first_install();
     }
     // To look at the double-audio guide without streaming: a made-up notice,
     // only while the debug log is on.
