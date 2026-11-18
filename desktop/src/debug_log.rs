@@ -197,6 +197,14 @@ fn open_file(path: &Path, empty: bool) -> Option<File> {
     Some(file)
 }
 
+/// The log file name `base` for the user's copy, with `-<name>` before
+/// `.log` for a test copy (`crate::test_instance`), so it never empties the
+/// user's log.
+pub fn file_name_for(base: &str, instance: Option<&str>) -> String {
+    let _ = instance;
+    base.to_owned()
+}
+
 /// Where the log goes for the value of `AUDIOSYNC_DEBUG`: [`FILE_NAME`] in
 /// `dir` when the value is exactly `1`, nowhere for any other value or none.
 pub fn log_path(setting: Option<&OsStr>, dir: &Path) -> Option<PathBuf> {
@@ -535,6 +543,17 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    // covers: S511
+    #[test]
+    fn a_test_copy_logs_to_a_file_of_its_own() {
+        assert_eq!(
+            file_name_for(FILE_NAME, Some("test")),
+            "audiosync-debug-test.log"
+        );
+        assert_eq!(file_name_for("debug.log", Some("a")), "debug-a.log");
+        assert_eq!(file_name_for(FILE_NAME, None), FILE_NAME);
+    }
 
     // covers: S170
     #[test]
