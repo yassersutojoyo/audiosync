@@ -194,6 +194,32 @@ fn the_guide_opens_where_it_was_kept_on_a_monitor() {
     );
 }
 
+// Mac AppDelegate+Windows.swift:966 restores the Guide's frame through
+// AppKit, which keeps it on the screen; :936 sets its 440 x 300 minimum.
+#[test]
+fn a_saved_guide_larger_than_the_work_area_opens_fitted_to_it() {
+    let work = Bounds {
+        x: 0.0,
+        y: 0.0,
+        width: 1280.0,
+        height: 720.0,
+    };
+    let place = WindowPlace {
+        x: 40,
+        y: 30,
+        size: Some((1800.0, 1100.0)),
+    };
+    let shown = guide_place_to_show(place, (1800.0, 1100.0), true, Some((work, 1.0)));
+    assert_eq!(
+        shown,
+        Some(WindowPlace {
+            x: 0,
+            y: 0,
+            size: Some((1280.0 - GUIDE_CHROME.0, 720.0 - GUIDE_CHROME.1)),
+        })
+    );
+}
+
 #[test]
 fn the_guide_keeps_its_place_once_shown_and_none_before() {
     use super::tests::app_over;

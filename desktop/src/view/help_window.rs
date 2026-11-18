@@ -117,6 +117,8 @@ impl App {
         };
         if let Some(place) = guide_place_to_show(place, size, on_a_monitor, monitor) {
             window.set_position(slint::PhysicalPosition::new(place.x, place.y));
+            // show_help sizes the window from here once it shows.
+            self.ui.borrow_mut().guide_place = Some(place);
         }
     }
 

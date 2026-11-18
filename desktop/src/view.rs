@@ -1271,7 +1271,12 @@ fn guide_place_to_show(
     Some(WindowPlace {
         x: fitted.x.round() as i32,
         y: fitted.y.round() as i32,
-        size: place.size,
+        size: place.size.map(|(width, height)| {
+            (
+                (fitted.width / scale - GUIDE_CHROME.0).min(width),
+                (fitted.height / scale - GUIDE_CHROME.1).min(height),
+            )
+        }),
     })
 }
 
