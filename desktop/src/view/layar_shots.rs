@@ -42,7 +42,7 @@ use crate::{Motion, RowPart};
 type Size = (f32, f32);
 
 /// main.slint's preferred size and its smallest (min-width, min-height).
-const MAIN: Size = (696.0, 680.0);
+const MAIN: Size = (696.0, 632.0);
 const MAIN_SMALLEST: Size = (696.0, 440.0);
 /// equalizer.slint's fixed width; 420 is the height the older shot test used.
 const EQUALIZER: Size = (520.0, 420.0);
