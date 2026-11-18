@@ -433,9 +433,10 @@ export global Glyphs {
     // The icon font's Repeat reads poorly at 16 px, it has no circled
     // ellipsis (the Mac's options glyph) and its transport glyphs are
     // outlines where the Mac's are filled, so these are drawn on Windows too;
-    // its Presets, Equalizer, microphone and timer are filled where the Mac's are outlines.
+    // its Presets, Equalizer, microphone and timer are filled where the Mac's
+    // are outlines, and its bolt is an outline where the Mac's is filled.
     public pure function drawn-everywhere(glyph: string) -> bool {
-        return glyph == root.shuffle || glyph == root.repeat-all || glyph == root.repeat-one || glyph == root.more || glyph == root.previous || glyph == root.next || glyph == root.play || glyph == root.pause || glyph == root.volume-low || glyph == root.volume-mid || glyph == root.volume-high || glyph == root.volume-muted || glyph == root.presets || glyph == root.equalizer || glyph == root.microphone || glyph == root.timer || glyph == root.lock;
+        return glyph == root.shuffle || glyph == root.repeat-all || glyph == root.repeat-one || glyph == root.more || glyph == root.previous || glyph == root.next || glyph == root.play || glyph == root.pause || glyph == root.volume-low || glyph == root.volume-mid || glyph == root.volume-high || glyph == root.volume-muted || glyph == root.presets || glyph == root.equalizer || glyph == root.microphone || glyph == root.timer || glyph == root.lock || glyph == root.auto-connect;
     }
 
     // Shuffle and Repeat are drawn on a 20-unit box with 2-unit strokes and
@@ -516,9 +517,6 @@ export global Glyphs {
         if glyph == root.timer {
             return "M8 3.5 A5.5 5.5 0 0 1 8 14.5 A5.5 5.5 0 0 1 8 3.5 Z M6.5 1.5 H9.5 M8 1.5 V3.5 M8 9 V6 M12 4.5 L13 3.5";
         }
-        if glyph == root.auto-connect {
-            return "M9.5 1.5 L3.5 9 H8 L6.5 14.5 L12.5 7 H8 Z";
-        }
         if glyph == root.volume-low {
             return "M0.5 5.5 H3.5 L7.5 2 V14 L3.5 10.5 H0.5 Z M9.75 5.5 A3 3 0 0 1 9.75 10.5";
         }
@@ -581,6 +579,9 @@ export global Glyphs {
         }
         if glyph == root.more {
             return "M5 7.1 A0.9 0.9 0 0 1 5 8.9 A0.9 0.9 0 0 1 5 7.1 Z M8 7.1 A0.9 0.9 0 0 1 8 8.9 A0.9 0.9 0 0 1 8 7.1 Z M11 7.1 A0.9 0.9 0 0 1 11 8.9 A0.9 0.9 0 0 1 11 7.1 Z";
+        }
+        if glyph == root.auto-connect {
+            return "M9.5 1.5 L3.5 9 H8 L6.5 14.5 L12.5 7 H8 Z";
         }
         if glyph == root.warning {
             return "M8 10.75 A0.8 0.8 0 0 1 8 12.35 A0.8 0.8 0 0 1 8 10.75 Z";
