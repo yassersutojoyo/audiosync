@@ -109,13 +109,14 @@ def extents(node):
         return None
 
 
-def shot(node, state):
+def shot(node, state, pad=0):
     path = os.path.join(WORK, f"{state}-{THEME}.png")
     crop = []
     if node is not None:
         box = extents(node)
         if box is not None and box.width > 0 and box.height > 0:
-            crop = ["-crop", f"{box.width}x{box.height}+{max(box.x, 0)}+{max(box.y, 0)}", "+repage"]
+            x, y = max(box.x - pad, 0), max(box.y - pad, 0)
+            crop = ["-crop", f"{box.width + 2 * pad}x{box.height + 2 * pad}+{x}+{y}", "+repage"]
     subprocess.run(["import", "-window", "root", *crop, path], check=True)
     print(f"shot: {os.path.basename(path)}")
 
@@ -229,10 +230,14 @@ def run(app, main):
             return
         box = extents(card)
         # Shuffle and Repeat show while the pointer is over the card, as on the Mac.
+        # 16 px around the card takes in its block and the dots under the toggles.
+        subprocess.run(["xdotool", "mousemove", "1270", "790"], check=True)
+        time.sleep(2)
+        shot(card, "NOW-PLAYING-REST", pad=16)
         subprocess.run(["xdotool", "mousemove", str(box.x + box.width // 2), str(box.y + box.width // 2)],
                        check=True)
         time.sleep(2)
-        shot(card, "NOW-PLAYING")
+        shot(card, "NOW-PLAYING", pad=16)
         # The cover is the card's top square; 10 px in clears its rounded corners.
         side = box.width - 20
         colours = int(pixels((side, side, box.x + 10, box.y + 10), "-format", "%k", "info:"))
