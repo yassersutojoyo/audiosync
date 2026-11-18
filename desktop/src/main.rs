@@ -465,11 +465,12 @@ fn auto_connect_skipped_by(
     preview_play: Option<&str>,
     instance: Option<&str>,
 ) -> Option<&'static str> {
-    let _ = instance;
     if no_auto_connect {
         Some(debug_log::NO_AUTO_CONNECT_VAR)
     } else {
-        preview_play.map(|_| PREVIEW_PLAY_VAR)
+        preview_play
+            .map(|_| PREVIEW_PLAY_VAR)
+            .or(instance.map(|_| test_instance::ENV_VAR))
     }
 }
 
