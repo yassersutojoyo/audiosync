@@ -220,6 +220,30 @@ fn the_guide_keeps_its_size_across_launches() {
     assert_eq!((size.width, size.height), (700.0, 500.0));
 }
 
+// Mac AppDelegate+Windows.swift:966: the frame autosave also keeps a Guide
+// still open when AudioSync quits. The test backend keeps no window position.
+#[test]
+fn the_guide_keeps_its_size_when_audiosync_quits_with_it_open() {
+    let app = app_over(MockBackend::new());
+    let window = leaked(app.help());
+    app.main.invoke_help_requested();
+    draw_frames();
+    window.set_size(slint::LogicalSize::new(820.0, 520.0));
+    app.main.invoke_exit_requested();
+    app.at_quit();
+    let saved = app.backend.borrow().view_settings();
+    let place = saved.guide.expect("the Guide's place is saved");
+    assert_eq!(place.size, Some((820.0, 520.0)));
+
+    let mut backend = MockBackend::new();
+    backend.set_view_settings(saved);
+    let again = app_over(backend);
+    again.main.invoke_help_requested();
+    let help = leaked(again.help());
+    let size = help.size().to_logical(help.scale_factor());
+    assert_eq!((size.width, size.height), (820.0, 520.0));
+}
+
 // A click in the text, which takes the focus for Ctrl+C, leaves the arrow
 // keys scrolling, and Tab skips the paragraphs.
 #[test]
