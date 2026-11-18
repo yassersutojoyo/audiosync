@@ -21,10 +21,20 @@ pub enum Renderer {
 }
 
 impl Renderer {
-    /// The name Slint's backend selector takes, also what the record holds.
+    /// What the record holds.
     pub fn name(self) -> &'static str {
         match self {
             Renderer::Skia => "skia",
+            Renderer::Software => "software",
+        }
+    }
+
+    /// The name Slint's backend selector takes. Skia draws on the CPU: on the
+    /// GPU each window ever shown keeps its own Direct3D 12 context, about
+    /// 70 MB that hiding it never frees (`examples/window_memory_probe.rs`).
+    pub fn selector_name(self) -> &'static str {
+        match self {
+            Renderer::Skia => "skia-software",
             Renderer::Software => "software",
         }
     }
@@ -88,7 +98,7 @@ pub fn select(log: &crate::debug_log::DebugLog) -> Option<PathBuf> {
     });
     if let Err(error) = slint::BackendSelector::new()
         .backend_name("winit".to_owned())
-        .renderer_name(renderer.name().to_owned())
+        .renderer_name(renderer.selector_name().to_owned())
         .select()
     {
         log.log(|| format!("renderer: not selected ({error})"));
@@ -119,6 +129,13 @@ pub fn confirm(record: &Path, log: &crate::debug_log::DebugLog) {
 #[cfg(test)]
 mod tests {
     use super::{Renderer, arm, choose, confirm, for_start};
+
+    #[test]
+    fn skia_draws_on_the_cpu_so_a_hidden_window_keeps_no_gpu_context() {
+        assert_eq!(Renderer::Skia.selector_name(), "skia-software");
+        assert_eq!(Renderer::Software.selector_name(), "software");
+        assert_eq!(Renderer::Skia.name(), "skia", "the record's format stays");
+    }
 
     #[test]
     fn skia_until_three_starts_in_a_row_neither_draw_nor_quit_then_software() {
