@@ -13635,6 +13635,23 @@ pub(crate) mod tests {
         assert_eq!(gap, 4.0, "the fix follows the hint");
     }
 
+    /// The gear's glyph centres where the Mac's 18 pt borderless gear does,
+    /// 12 pt before the switch (MainWindow.swift:365, :397-408); its 32 px
+    /// hit area reaches past that slot on both sides.
+    #[test]
+    fn the_gear_centres_where_the_macs_does() {
+        let app = narrow_app(MockBackend::new());
+        draw_frames_at(776, 680);
+        let gear = element(&app, "MainWindow::gear").expect("the gear");
+        let power = element(&app, "MainWindow::power").expect("the switch");
+        let centre = gear.absolute_position().x + gear.size().width / 2.0;
+        assert_eq!(
+            power.absolute_position().x - centre,
+            12.0 + 9.0,
+            "gear centre to the switch"
+        );
+    }
+
     /// The device volume hint reads where the Mac's does: its text 13 pt
     /// right of the name (a 9 pt symbol, then 4, DeviceVolumeViews.swift:20)
     /// and centred 27.5 pt under the slider's top (the Mac's 16 pt slider,
