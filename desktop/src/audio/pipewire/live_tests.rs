@@ -23,6 +23,7 @@ use crate::audio::SESSION_RATE;
 use crate::audio::calibration::Microphone;
 use crate::audio::capture::Feeds;
 use crate::audio::controller::{CaptureHandle, CaptureState, RendererHandle};
+use crate::audio::default_output::{DefaultEndpoints, Role};
 use crate::audio::routing::EndpointVolume;
 
 mod receivers;
@@ -363,6 +364,47 @@ fn outputs_follow_the_default_and_hotplug() {
     wait();
     assert!(registry.take_outputs_changed());
     assert!(registry.graph().unwrap().named("as-c").is_none());
+}
+
+#[test]
+#[ignore = "needs the CI job's PipeWire daemon and sinks as-a and as-b"]
+fn the_own_sink_becomes_the_default_and_goes_with_the_connection() {
+    set_default("as-a");
+    let registry = Registry::start().unwrap();
+    wait();
+    let graph = registry.graph().unwrap();
+    assert!(graph.named(graph::OWN_SINK).is_some());
+    assert!(
+        graph
+            .listing()
+            .endpoints
+            .iter()
+            .all(|e| e.id != graph::OWN_SINK)
+    );
+    let mut defaults = registry.sink_defaults();
+    let candidates = defaults.endpoints().unwrap();
+    assert_eq!(
+        crate::audio::default_output::silent_endpoint(&candidates, &["as-a"]),
+        Some(graph::OWN_SINK)
+    );
+    defaults
+        .set_default(graph::OWN_SINK, Role::Console)
+        .unwrap();
+    wait();
+    assert_eq!(
+        defaults.default_id(Role::Console).unwrap().as_deref(),
+        Some(graph::OWN_SINK)
+    );
+    // The session manager's choice, read from PipeWire itself: pactl may reach another server.
+    let in_use = || run("pw-metadata", &["0", "default.audio.sink"]);
+    assert!(in_use().contains(graph::OWN_SINK), "{}", in_use());
+    defaults.set_default("as-a", Role::Multimedia).unwrap();
+    wait();
+    assert!(in_use().contains("\"as-a\""), "{}", in_use());
+    drop(defaults);
+    drop(registry);
+    wait();
+    assert!(!run("pw-cli", &["ls", "Node"]).contains(graph::OWN_SINK));
 }
 
 #[test]

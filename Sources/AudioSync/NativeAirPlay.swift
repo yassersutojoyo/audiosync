@@ -783,6 +783,12 @@ final class NativeAirPlay {
             if case .latency = event {
                 syncLatency(canChange: false)
                 sendOffsets()
+                // The answer a first speaker waits for before it sends audio (P201).
+                let frames = model.receiverLatency.frames
+                queue.async { [weak self] in
+                    guard let handle = self?.handle else { return }
+                    asc_airplay_set_latency(handle, frames)
+                }
             }
         }
         // A new E held while a speaker sounded applies once none does.

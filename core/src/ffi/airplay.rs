@@ -2571,6 +2571,7 @@ pub extern "C" fn asc_airplay2_auto() -> bool {
 fn sender_config(switch: Option<&str>, auto: Option<&str>) -> SenderConfig {
     SenderConfig {
         on_driver_thread: Some(raise_driver_thread),
+        host_answers_latency: true,
         ..SenderConfig::default()
     }
     .with_airplay2_switch(airplay2_auto(auto), airplay2_switch(switch))
@@ -5201,11 +5202,18 @@ mod tests {
         seen
     }
 
-    /// The next sender event, if one waits.
+    /// The next sender event, if one waits. A latency event is answered
+    /// with the stream's Lf, as both hosts do (P201).
     fn take_event(handle: *mut AscAirPlay) -> Option<Event> {
         let mut raw = blank_event();
         // SAFETY: a live handle, used by this thread only; a local out struct.
-        unsafe { asc_airplay_next_event(handle, &mut raw) }.then(|| Event {
+        let taken = unsafe { asc_airplay_next_event(handle, &mut raw) };
+        if taken && raw.kind == AIRPLAY_EVENT_LATENCY {
+            let frames = (inside(handle).sender.latency().as_secs_f64() * 44_100.0).round();
+            // SAFETY: as above.
+            unsafe { asc_airplay_set_latency(handle, frames as u32) };
+        }
+        taken.then(|| Event {
             kind: raw.kind,
             id: text(raw.id),
             state: raw.state,
@@ -5890,7 +5898,11 @@ mod tests {
         let c_id = c_string(id);
         // SAFETY: a live handle, used by this thread only; a C string.
         unsafe { assert!(asc_airplay_add_speaker(handle, c_id.as_ptr(), 50.0)) };
-        events_until(handle, |seen| has_state(seen, id, AIRPLAY_STATE_PLAYING));
+        // Taking its latency event answers it, so the speaker sends (P201).
+        events_until(handle, |seen| {
+            seen.iter()
+                .any(|e| e.kind == AIRPLAY_EVENT_LATENCY && e.id == id)
+        });
         let mut copied = AscAirPlayCounters::default();
         assert!(wait_for(|| {
             // SAFETY: a live handle, used by this thread only; a C string.
