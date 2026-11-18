@@ -2339,7 +2339,14 @@ export global Strings {
 
     // File > Check Setup… (setup.slint, S435).
     out property <string> menu-check-setup: @tr("Check Setup…");
-    out property <string> setup-title: @tr("Check Setup");
+    // The Settings box (Localization.swift:1475); the window is "Setup" (1523).
+    out property <string> setup-title: @tr("Permissions");
+    out property <string> setup-window-title: @tr("Setup");
+    // When it opens by itself on a first install (Localization.swift:1476-1477).
+    out property <string> setup-heading: @tr("Before you start");
+    out property <string> setup-intro: @tr("Windows doesn't ask before AudioSync finds speakers or captures sound. Check the network type below, and speakers will show up when you start streaming.");
+    out property <string> setup-needed: @tr("Needed to stream");
+    out property <string> setup-later: @tr("Only when you use them");
     out property <string> setup-capture: @tr("Capture what this PC plays");
     out property <string> setup-capture-detail: @tr("Windows lets apps capture audio without asking.");
     out property <string> setup-capture-status: @tr("No permission needed");
@@ -2356,17 +2363,25 @@ export global Strings {
     out property <string> setup-microphone-not-used: @tr("Not used yet. Checked when AudioSync opens an input.");
     out property <string> setup-microphone-working: @tr("Working");
     out property <string> setup-microphone-blocked: @tr("Windows is blocking microphone access for desktop apps.");
-    out property <string> setup-close: @tr("Close");
+    out property <string> setup-done: @tr("Done");
 
-    // The line under the heading: the rows that need the user, in the
-    // window's order.
+    // Check Setup's heading (Localization.swift:1566-1568); only the network
+    // row is needed to stream.
+    public pure function setup-summary-heading(network: bool) -> string {
+        return network ? @tr("Not ready to stream") : @tr("Ready to stream");
+    }
+
+    // The line under Check Setup's heading (Localization.swift:1569-1582).
     public pure function setup-summary(network: bool, microphone: bool) -> string {
         if network && microphone {
-            return @tr("2 items need your attention: {}, {}.", root.setup-network, root.setup-microphone);
+            return @tr("{} needs your attention. Not allowed, used only when you need them: {}.", root.setup-network, root.setup-microphone);
         }
-        if network || microphone {
-            return @tr("1 item needs your attention: {}.", network ? root.setup-network : root.setup-microphone);
+        if network {
+            return @tr("{} needs your attention.", root.setup-network);
         }
-        return @tr("Windows doesn't ask AudioSync for permissions. Nothing here needs your attention.");
+        if microphone {
+            return @tr("Not allowed, used only when you need them: {}.", root.setup-microphone);
+        }
+        return @tr("Nothing here needs your attention.");
     }
 }
