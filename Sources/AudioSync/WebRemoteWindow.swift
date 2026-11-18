@@ -92,9 +92,11 @@ struct WebRemoteView: View {
             Toggle(t.webRemoteTitle, isOn: Binding(get: { settings.enabled }, set: { settings.actions.setEnabled($0) }))
                 .toggleStyle(.switch)
                 .font(.headline)
+                .layarKey(t.webRemoteTitle)
             Text(t.webRemoteSummary)
                 .foregroundStyle(Brand.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
+                .layarKey(t.webRemoteSummary)
             let rows = RemoteWindowRows(enabled: settings.enabled, listening: isRunning)
             if rows.address, case .running(let port) = settings.status {
                 Divider()
@@ -107,6 +109,7 @@ struct WebRemoteView: View {
                     Label(failure(error, port: port, t), systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(Brand.errorText)
                         .fixedSize(horizontal: false, vertical: true)
+                        .layarKey(failure(error, port: port, t))
                 }
                 Divider()
                 portSection(t)
@@ -120,6 +123,7 @@ struct WebRemoteView: View {
                 .font(.caption)
                 .foregroundStyle(Brand.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
+                .layarKey(t.webRemotePlainHTTP)
         }
         .padding(20)
         .frame(width: 460, alignment: .leading)
@@ -172,11 +176,13 @@ struct WebRemoteView: View {
                         .padding(8)
                         .background(RoundedRectangle(cornerRadius: 8).fill(Color.white))
                         .accessibilityLabel(t.webRemoteQRLabel(first))
+                        .layarKey(t.webRemoteQRLabel(first))
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     Text(t.webRemoteAddressTitle)
                         .font(.subheadline.weight(.semibold))
                         .accessibilityAddTraits(.isHeader)
+                        .layarKey(t.webRemoteAddressTitle)
                     if urls.isEmpty {
                         Text(t.webRemoteNoAddress).foregroundStyle(Brand.errorText)
                     }
@@ -197,6 +203,7 @@ struct WebRemoteView: View {
                             .font(.caption)
                             .foregroundStyle(Brand.secondaryText)
                             .fixedSize(horizontal: false, vertical: true)
+                            .layarKey(t.webRemoteFirewall)
                     }
                 }
             }
@@ -214,6 +221,7 @@ struct WebRemoteView: View {
                 Text(t.webRemoteSetupTitle)
                     .font(.subheadline.weight(.semibold))
                     .accessibilityAddTraits(.isHeader)
+                    .layarKey(t.webRemoteSetupTitle)
                 Spacer(minLength: 8)
                 Picker(t.webRemotePhonePicker, selection: $phone.phone) {
                     Text(t.webRemoteIPhone).tag(WebRemotePhone.iPhone)
@@ -222,6 +230,7 @@ struct WebRemoteView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .fixedSize()
+                .layarKey(t.webRemotePhonePicker)
             }
             ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -232,6 +241,7 @@ struct WebRemoteView: View {
                 }
                 .font(.callout)
                 .accessibilityElement(children: .combine)
+                .layarKey(t.webRemoteStepNumber(index + 1) + " " + step)
             }
             Text(iPhone ? t.webRemoteOrderIPhone : t.webRemoteOrderAndroid)
                 .font(.callout)
@@ -245,6 +255,7 @@ struct WebRemoteView: View {
             Text(t.webRemoteCodeTitle)
                 .font(.subheadline.weight(.semibold))
                 .accessibilityAddTraits(.isHeader)
+                .layarKey(t.webRemoteCodeTitle)
             HStack(alignment: .firstTextBaseline, spacing: 14) {
                 if settings.locked {
                     Text(t.webRemoteLocked).foregroundStyle(Brand.errorText)
@@ -255,6 +266,7 @@ struct WebRemoteView: View {
                         .tracking(4)
                         .textSelection(.enabled)
                         .accessibilityLabel(t.webRemoteCodeLabel(code))
+                        .layarKey(t.webRemoteCodeLabel(code))
                 } else {
                     Text(t.webRemoteCodeExpired)
                         .fixedSize(horizontal: false, vertical: true)
@@ -262,6 +274,7 @@ struct WebRemoteView: View {
                 Spacer(minLength: 0)
                 Button(t.webRemoteNewCode) { settings.actions.newCode() }
                     .buttonStyle(HouseButtonStyle())
+                    .layarKey(t.webRemoteNewCode)
             }
             if !settings.locked {
                 Text(t.webRemoteCodeNote)
@@ -307,9 +320,11 @@ struct WebRemoteView: View {
                     .modifier(HouseFieldLook(focused: portFocused))
                     .frame(width: 80)
                     .accessibilityLabel(t.webRemotePort)
+                    .layarKey(t.webRemotePort)
                     .onSubmit { if let typed { settings.actions.usePort(typed) } }
                 Button(t.webRemoteUsePort) { if let typed { settings.actions.usePort(typed) } }
                     .buttonStyle(HouseButtonStyle())
+                    .layarKey(t.webRemoteUsePort)
                     .disabled(typed == nil || (typed == settings.port && !failedOnPort))
             }
             if typed == nil {

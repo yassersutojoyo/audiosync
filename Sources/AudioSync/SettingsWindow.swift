@@ -175,6 +175,7 @@ struct SettingsView: View {
             SettingsBox(title: t.settingsGeneral) {
                 SettingsRow {
                     Text(t.appearance)
+                        .layarKey(t.appearance)
                     Spacer(minLength: 12)
                     Picker(t.appearance, selection: Binding(get: { model.appearance },
                                                             set: { model.actions.setAppearance($0) })) {
@@ -183,6 +184,7 @@ struct SettingsView: View {
                     .pickerStyle(.segmented)
                     .labelsHidden()
                     .fixedSize()
+                    .layarKey(t.appearance + ", " + t.appearanceName(model.appearance))
                 }
                 Divider()
                 SwitchRow(title: t.launchAtLogin, isOn: Binding(get: { model.launchAtLogin },
@@ -204,6 +206,7 @@ struct SettingsView: View {
                     .padding(.top, 8)
                     .padding(.bottom, 2)
                     .accessibilityAddTraits(.isHeader)
+                    .layarKey(t.hiddenSpeakers)
                 hiddenRows(t)
             }
             .animation(reduceMotion ? .linear(duration: 0.15) : .spring(duration: 0.62, bounce: 0),
@@ -216,6 +219,7 @@ struct SettingsView: View {
                     SettingsRow {
                         Button(t.menuCheckForUpdates) { AppUpdater.checkForUpdates() }
                             .buttonStyle(HouseButtonStyle())
+                            .layarKey(t.menuCheckForUpdates)
                     }
                 }
             }
@@ -223,6 +227,7 @@ struct SettingsView: View {
                 SettingsRow {
                     Button(t.setupMenu, action: setUpPermissions)
                         .buttonStyle(HouseButtonStyle())
+                        .layarKey(t.setupMenu)
                 }
             }
         }
@@ -287,6 +292,7 @@ struct SettingsView: View {
         if model.hidden.menu.isEmpty {
             SettingsRow {
                 Text(t.noHiddenSpeakers).foregroundStyle(Brand.secondaryText)
+                    .layarKey(t.noHiddenSpeakers)
             }
             .transition(.opacity)
         } else {
@@ -317,6 +323,7 @@ private struct SettingsBox<Content: View>: View {
                 .foregroundStyle(Brand.secondaryText)
                 .padding(.leading, 2)
                 .accessibilityAddTraits(.isHeader)
+                .layarKey(title)
             VStack(alignment: .leading, spacing: 0) { content }
                 .padding(.horizontal, 12)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -351,6 +358,7 @@ private struct SwitchRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .toggleStyle(.switch)
+            .layarKey(title)
         }
     }
 }

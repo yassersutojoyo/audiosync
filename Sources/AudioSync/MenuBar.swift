@@ -2813,6 +2813,7 @@ struct NoticeBanner<Footer: View>: View {
                         .lineLimit(lineLimit)
                         .fixedSize(horizontal: false, vertical: true)
                         .help(lineLimit == nil ? "" : notice.text)
+                        .layarKey(notice.text)
                     if showsTime {
                         Text(notice.date, style: .time)
                             .font(.caption2)
@@ -2823,6 +2824,7 @@ struct NoticeBanner<Footer: View>: View {
                 if let pane = notice.settings {
                     NoticeLink(title: text.openSettings) { NSWorkspace.shared.open(pane.url) }
                         .accessibilityHint(text.openSettingsHint)
+                        .layarKey(text.openSettings)
                 }
                 if notice.retriesAirPlay {
                     NoticeLink(title: text.retry, action: retry)

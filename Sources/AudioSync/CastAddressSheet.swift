@@ -22,10 +22,12 @@ struct CastAddressSheet: View {
             Text(t.castAddTitle)
                 .font(.title3.weight(.semibold))
                 .accessibilityAddTraits(.isHeader)
+                .layarKey(t.castAddTitle)
             Text(t.castAddBody)
                 .font(.callout)
                 .foregroundStyle(Brand.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
+                .layarKey(t.castAddBody)
             LabeledContent(t.castAddField) {
                 TextField(t.castAddField, text: $draft.typed)
                     .labelsHidden()
@@ -35,12 +37,14 @@ struct CastAddressSheet: View {
                     .disabled(draft.adding)
                     .onChange(of: draft.typed) { draft.problem = nil }
                     .onSubmit(add)
+                    .layarKey(t.castAddField)
             }
             if let problem = draft.problem {
                 Text(t.castAddProblem(problem))
                     .font(.callout)
                     .foregroundStyle(Brand.errorText)
                     .fixedSize(horizontal: false, vertical: true)
+                    .layarKey(t.castAddProblem(problem))
             }
             HStack(spacing: 8) {
                 if draft.adding { ProgressView().controlSize(.small).accessibilityLabel(t.castAddChecking) }
@@ -48,10 +52,12 @@ struct CastAddressSheet: View {
                 Button(t.cancel) { model.castAddShown = false }
                     .buttonStyle(HouseButtonStyle())
                     .keyboardShortcut(.cancelAction)
+                    .layarKey(t.cancel)
                 Button(draft.adding ? t.castAddChecking : t.castAdd, action: add)
                     .buttonStyle(HouseButtonStyle())
                     .keyboardShortcut(.defaultAction)
                     .disabled(draft.adding || draft.typed.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .layarKey(draft.adding ? t.castAddChecking : t.castAdd)
             }
         }
         .padding(20)
