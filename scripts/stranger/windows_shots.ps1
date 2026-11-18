@@ -38,10 +38,16 @@ function Find-Named([string] $Name, [int] $Seconds = 10) {
   do {
     $windows = Get-AppWindows
     foreach ($w in $windows) { if ($w.Current.Name -eq $Name) { return $w } }
-    foreach ($w in $windows) {
-      $e = $w.FindFirst($Scope::Descendants, $c)
-      if ($e) { return $e }
+    # A group and its button can share a label: the one with a pattern wins.
+    $found = @(foreach ($w in $windows) { $w.FindAll($Scope::Descendants, $c) })
+    foreach ($e in $found) {
+      foreach ($pattern in [System.Windows.Automation.InvokePattern]::Pattern, [System.Windows.Automation.TogglePattern]::Pattern,
+        [System.Windows.Automation.ExpandCollapsePattern]::Pattern) {
+        $p = $null
+        if ($e.TryGetCurrentPattern($pattern, [ref]$p)) { return $e }
+      }
     }
+    if ($found) { return $found[0] }
     Start-Sleep -Milliseconds 500
   } while ((Get-Date) -lt $deadline)
   $null
@@ -181,4 +187,6 @@ foreach ($script:theme in 'terang', 'gelap') {
 $script:missing | Set-Content (Join-Path $Work 'not-set-up.txt')
 $shots = @(Get-ChildItem $Work -Filter '*.png').Count
 "$shots pictures, $($script:missing.Count) states not reached"
-if ($shots -eq 0) { exit 1 }
+# A state the runner can't set up is recorded, not failed; an app with no window fails.
+if ($script:missing -match 'no window') { exit 1 }
+exit 0

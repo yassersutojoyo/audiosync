@@ -267,13 +267,13 @@ jobs:
   # notices (streaming on with no speaker). not-set-up.txt names what a
   # runner can't reach.
   shots-linux:
-    name: Linux screens (${{ matrix.group }})
+    name: Linux screens (${{ matrix.screens }})
     needs: [proven, linux]
     if: ${{ !cancelled() && needs.proven.outputs.skip != 'true' }}
     strategy:
       fail-fast: false
       matrix:
-        group: [main, delay, tray, calibrate, notices]
+        screens: [main, delay, tray, calibrate, notices]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -296,16 +296,16 @@ jobs:
           sudo apt-get install -y "./$(ls pkg/dist/AudioSync-*.deb)"
           chmod +x pkg/desktop/target/release/examples/sni_watcher_stub
 
-      - name: Drive and photograph the ${{ matrix.group }} screens
+      - name: Drive and photograph the ${{ matrix.screens }} screens
         env:
-          GROUP: ${{ matrix.group }}
+          GROUP: ${{ matrix.screens }}
         run: scripts/stranger/linux_shots.sh stranger-shots pkg/desktop/target/release/examples/sni_watcher_stub "$GROUP"
 
       - name: Upload the pictures (workflow artifact)
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
-          name: stranger-shots-linux-${{ matrix.group }}
+          name: stranger-shots-linux-${{ matrix.screens }}
           path: |
             stranger-shots/*.png
             stranger-shots/*.txt
@@ -315,13 +315,13 @@ jobs:
           retention-days: 7
 
   shots-windows:
-    name: Windows screens (${{ matrix.group }})
+    name: Windows screens (${{ matrix.screens }})
     needs: [proven, windows]
     if: ${{ !cancelled() && needs.proven.outputs.skip != 'true' }}
     strategy:
       fail-fast: false
       matrix:
-        group: [main, delay, tray, calibrate, notices]
+        screens: [main, delay, tray, calibrate, notices]
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -334,17 +334,17 @@ jobs:
           name: stranger-windows-setup
           path: pkg
 
-      - name: Install, drive and photograph the ${{ matrix.group }} screens
+      - name: Install, drive and photograph the ${{ matrix.screens }} screens
         shell: pwsh
         env:
-          GROUP: ${{ matrix.group }}
+          GROUP: ${{ matrix.screens }}
         run: ./scripts/stranger/windows_shots.ps1 -Setup pkg/AudioSync-Setup.exe -Work stranger-shots -Group $env:GROUP
 
       - name: Upload the pictures (workflow artifact)
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
-          name: stranger-shots-windows-${{ matrix.group }}
+          name: stranger-shots-windows-${{ matrix.screens }}
           path: stranger-shots
           if-no-files-found: warn
           retention-days: 7

@@ -74,6 +74,7 @@ sleep 1
 dbus-send --session --print-reply --dest=org.a11y.Bus /org/a11y/bus org.freedesktop.DBus.Properties.Set \
   string:org.a11y.Status string:IsEnabled variant:boolean:true > /dev/null || echo "accessibility bus: not switched on"
 
+failed=0
 for theme in terang gelap; do
   appearance=light
   [ "$theme" = terang ] || appearance=dark
@@ -84,7 +85,7 @@ for theme in terang gelap; do
   AUDIOSYNC_DEBUG=1 SLINT_BACKEND=winit-software setsid audiosync > "$work/app-$theme.out" 2>&1 &
   app=$!
   sleep 5
-  python3 -I "$here/linux_shots.py" "$work" "$group" "$theme" "$app" || echo "driver failed for $theme"
+  python3 -I "$here/linux_shots.py" "$work" "$group" "$theme" "$app" || { echo "driver failed for $theme"; failed=1; }
   kill -TERM -- "-$app" 2>/dev/null || true
   sleep 3
   kill -KILL -- "-$app" 2>/dev/null || true
@@ -94,4 +95,5 @@ done
 
 shots=$(find "$work" -maxdepth 1 -name '*.png' | wc -l)
 echo "$shots pictures, $(wc -l < "$work/not-set-up.txt") states not reached"
-[ "$shots" -gt 0 ]
+# A state the runner can't set up is recorded, not failed; an app with no window fails.
+[ "$failed" -eq 0 ] && ! grep -q 'no window' "$work/not-set-up.txt"
