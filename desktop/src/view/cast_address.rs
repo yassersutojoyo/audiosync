@@ -57,6 +57,7 @@ impl App {
         if self.cast_check.borrow().is_some() {
             return;
         }
+        self.cast_sheet().set_error(SharedString::new());
         let check = self.backend.borrow_mut().check_cast_address(text);
         let check = match check {
             Ok(check) => check,

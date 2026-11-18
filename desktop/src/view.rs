@@ -71,6 +71,8 @@ mod parity_calibrate;
 #[cfg(test)]
 mod parity_main;
 #[cfg(test)]
+mod parity_presets;
+#[cfg(test)]
 mod parity_rest;
 #[cfg(test)]
 mod parity_screens;
@@ -2899,6 +2901,12 @@ impl App {
         sync_model(&self.models.speaker_presets, preset_items(&state));
         self.main
             .set_can_save_preset(state.presets.len() < MAX_PRESETS);
+        // The caption asks for a speaker; once one is on it has said its piece.
+        if self.main.get_preset_save_note() == self.strings().get_save_preset_needs_speakers()
+            && !ui_model::speakers_on_now(&state).is_empty()
+        {
+            self.main.set_preset_save_note(SharedString::new());
+        }
         let current_preset: SharedString = current_preset_name(&state).into();
         self.main.set_current_preset(current_preset.clone());
         self.flyout.set_current_preset(current_preset);
@@ -3870,6 +3878,7 @@ impl App {
         main.on_save_preset_requested(move || with_app(&w, App::ask_save_preset));
         let w = weak.clone();
         main.on_preset_save_named(move |name| with_app(&w, |app| app.save_preset(&name)));
+        main.on_preset_name_blank(|name| name.trim().is_empty());
         let w = weak.clone();
         main.on_preset_rename_named(move |id, name| {
             with_app(&w, |app| app.update(|b| b.rename_preset(&id, &name)));
@@ -5606,9 +5615,10 @@ impl App {
             Ok(()) => self.announce(strings.invoke_preset_saved(name.as_str().into())),
             Err(PresetError::Full) => self.say_why_no_preset(strings.get_presets_full()),
             // The last speaker went off while the name was typed.
-            Err(PresetError::NoSpeakerOn) => {
-                self.say_why_no_preset(strings.get_save_preset_needs_speakers());
-            }
+            Err(PresetError::NoSpeakerOn) => self.show_dialog_message(
+                strings.get_save_preset_title(),
+                strings.get_save_preset_needs_speakers(),
+            ),
         }
     }
 
@@ -7604,6 +7614,7 @@ fn preset_items(state: &AppState) -> Vec<PresetItem> {
             id: preset.id.as_str().into(),
             name: preset.name.as_str().into(),
             current: state.current_preset.as_deref() == Some(preset.id.as_str()),
+            picked: state.picked_preset.as_deref() == Some(preset.id.as_str()),
             speakers: count(preset.members.len()),
             master: preset.master,
         })
@@ -18074,7 +18085,8 @@ pub(crate) mod tests {
             "That isn't an IP address or host name. Check it and try again."
         );
 
-        // The field took the cursor back with its text selected.
+        // The field took the cursor back; the text stays as typed, unselected.
+        dialog.set_address(SharedString::new());
         type_text(window, "speaker.invalid");
         press(window, Key::Return);
         settle_cast_check(&app);
@@ -18084,6 +18096,7 @@ pub(crate) mod tests {
             "AudioSync couldn't find a speaker at that address. Check that it's on and try again."
         );
 
+        dialog.set_address(SharedString::new());
         type_text(window, "speaker.local");
         press(window, Key::Return);
         settle_cast_check(&app);
@@ -18096,7 +18109,7 @@ pub(crate) mod tests {
 
     /// Waits for the address check Add by Address… started, if any, and
     /// takes its answer.
-    fn settle_cast_check(app: &App) {
+    pub(super) fn settle_cast_check(app: &App) {
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         while app.cast_check.borrow().is_some() && std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(1));
@@ -18169,6 +18182,7 @@ pub(crate) mod tests {
             "Enter on the same address"
         );
 
+        app.cast_sheet().set_address(SharedString::new());
         type_text(window, "speaker.invalid");
         press(window, Key::Return);
         settle_cast_check(&app);
@@ -18185,20 +18199,20 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn add_waits_for_an_address_and_enter_on_a_blank_field_does_nothing() {
+    fn add_waits_for_an_address_and_enter_on_a_blank_field_says_it_isnt_one() {
         let app = app_over(MockBackend::new());
         app.main.invoke_cast_add_address_requested();
         let dialog = app.cast_sheet();
         let window = app.main.window();
         assert!(!dialog.get_can_add(), "Add is off on an empty field");
-        press(window, Key::Return);
         type_text(window, "   ");
         assert!(!dialog.get_can_add(), "spaces alone are no address");
+        // As the Mac's onSubmit, Enter runs Add anyway (CastAddressSheet.swift:38).
         press(window, Key::Return);
         assert!(app.cast_sheet().get_shown(), "Enter didn't add or close");
-        assert_eq!(dialog.get_error(), "", "no reason for an empty field");
-        assert_eq!(cast_address_said(&app), (String::new(), String::new()));
+        assert_eq!(dialog.get_error(), app.strings().get_cast_address_invalid());
 
+        dialog.set_address(SharedString::new());
         type_text(window, "speaker.local");
         assert!(dialog.get_can_add());
         press(window, Key::Return);
@@ -20818,7 +20832,7 @@ pub(crate) mod tests {
     }
 
     /// The App over `backend`, with its main window shown and drawn once.
-    fn main_window_over(backend: MockBackend) -> Rc<App> {
+    pub(super) fn main_window_over(backend: MockBackend) -> Rc<App> {
         let app = app_over(backend);
         app.main.show().expect("the main window shows headless");
         draw_frames();
@@ -21957,7 +21971,6 @@ pub(crate) mod tests {
         let strings = app.strings();
         assert_eq!(strings.get_presets(), "Presets");
         assert_eq!(strings.get_save_preset(), "Save as Preset…");
-        assert_eq!(strings.get_no_presets(), "No Presets");
         assert_eq!(strings.get_choose_preset(), "Choose a Preset");
         assert_eq!(strings.get_update_preset(), "Update to Current Settings");
         assert_eq!(strings.get_rename_preset(), "Rename…");
