@@ -419,6 +419,8 @@ pub fn source_list(
     sources
 }
 
+pub fn name_apps(_sources: &mut [SourceInfo], _name_of: impl FnMut(u32) -> Option<String>) {}
+
 /// The input devices to offer, from the active capture endpoints Windows
 /// listed, by name, then endpoint ID. An endpoint without an ID can't be
 /// opened. A Bluetooth hands-free one ([`is_hands_free`]) is marked: opening
@@ -1972,6 +1974,51 @@ mod tests {
             .map(|source| source.name)
             .collect();
         assert_eq!(names, ["All System Audio", "Discord", "Spotify", "Steam"]);
+    }
+
+    // covers: S476
+    #[test]
+    fn a_picker_host_and_another_audiosync_are_not_offered_as_the_mac_leaves_out_its_own_bundle_id()
+    {
+        let table = ProcessTable::new([
+            entry(3, 0, None, "svchost.exe"),
+            entry(10, 0, None, "explorer.exe"),
+            entry(20, 10, None, "WhatsApp.Root.exe"),
+            entry(30, 3, None, "PickerHost.exe"),
+            entry(40, 10, None, "AudioSync.exe"),
+            entry(60, 10, None, "Spotify.exe"),
+            entry(99, 10, None, "audiosync.exe"),
+        ]);
+        let names: Vec<String> = source_list(&table, &[60], Some(&[20, 30, 40, 60]), 99)
+            .into_iter()
+            .map(|source| source.name)
+            .collect();
+        assert_eq!(names, ["All System Audio", "Spotify", "WhatsApp.Root"]);
+    }
+
+    // covers: S476
+    #[test]
+    fn apps_show_the_name_they_give_themselves_sorted_by_it_and_else_their_executable() {
+        let table = ProcessTable::new([
+            entry(10, 0, None, "explorer.exe"),
+            entry(20, 10, None, "WhatsApp.Root.exe"),
+            entry(50, 10, None, "ms-teams.exe"),
+            entry(60, 10, None, "Spotify.exe"),
+            entry(70, 10, None, "vlc.exe"),
+            entry(99, 10, None, "audiosync.exe"),
+        ]);
+        let mut sources = source_list(&table, &[60], Some(&[20, 50, 60, 70]), 99);
+        name_apps(&mut sources, |pid| match pid {
+            20 => Some("WhatsApp".to_owned()),
+            50 => Some(" Teams ".to_owned()),
+            60 => Some("  ".to_owned()),
+            _ => None,
+        });
+        let names: Vec<&str> = sources.iter().map(|source| source.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["All System Audio", "Spotify", "Teams", "Vlc", "WhatsApp"]
+        );
     }
 
     // covers: S380
