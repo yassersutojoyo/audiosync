@@ -458,11 +458,14 @@ fn preview_play_env(log: &DebugLog) -> Option<String> {
 }
 
 /// The variable that makes this launch one without auto-connect, if one
-/// does: the preview switch's output stays on for this run only.
+/// does: the preview switch's output stays on for this run only, and a test
+/// copy (`instance`) never starts streaming on its own.
 fn auto_connect_skipped_by(
     no_auto_connect: bool,
     preview_play: Option<&str>,
+    instance: Option<&str>,
 ) -> Option<&'static str> {
+    let _ = instance;
     if no_auto_connect {
         Some(debug_log::NO_AUTO_CONNECT_VAR)
     } else {
@@ -528,18 +531,28 @@ mod tests {
     fn the_preview_play_switch_makes_a_launch_that_saves_nothing() {
         use super::{PREVIEW_PLAY_VAR, auto_connect_skipped_by, debug_log::NO_AUTO_CONNECT_VAR};
         assert_eq!(
-            auto_connect_skipped_by(false, Some("Steam")),
+            auto_connect_skipped_by(false, Some("Steam"), None),
             Some(PREVIEW_PLAY_VAR)
         );
         assert_eq!(
-            auto_connect_skipped_by(true, Some("Steam")),
+            auto_connect_skipped_by(true, Some("Steam"), None),
             Some(NO_AUTO_CONNECT_VAR)
         );
         assert_eq!(
-            auto_connect_skipped_by(true, None),
+            auto_connect_skipped_by(true, None, None),
             Some(NO_AUTO_CONNECT_VAR)
         );
-        assert_eq!(auto_connect_skipped_by(false, None), None);
+        assert_eq!(auto_connect_skipped_by(false, None, None), None);
+    }
+
+    // covers: S511
+    #[test]
+    fn a_test_copy_skips_auto_connect_and_the_first_install_switch_on() {
+        use super::{auto_connect_skipped_by, test_instance};
+        assert_eq!(
+            auto_connect_skipped_by(false, None, Some("test")),
+            Some(test_instance::ENV_VAR)
+        );
     }
 
     #[test]

@@ -51,6 +51,7 @@ pub fn backend<D: Driver + 'static>(
         crate::auto_connect_skipped_by(
             debug_log::env_skips_auto_connect(),
             crate::preview_play_env(log).as_deref(),
+            crate::test_instance::current(),
         ),
     );
     adapter.set_cast_file(cast_file, cast_unread);
