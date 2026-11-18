@@ -1261,7 +1261,7 @@ fn the_double_audio_guide_is_wired_and_worded_in_strings() {
     assert!(guide.contains("root.page-requested(step.page);"));
     // A button that opened nothing says where Settings is, and the log says why.
     assert!(guide.contains("if root.settings-failed: Text {"));
-    assert!(include_str!("view.rs").contains("self.guide.set_settings_failed(!opened);"));
+    assert!(include_str!("view.rs").contains("self.guide().set_settings_failed(!opened);"));
     let wrapping =
         guide.matches("wrap: word-wrap;").count() + guide.matches("SecondaryText {").count();
     assert_eq!(

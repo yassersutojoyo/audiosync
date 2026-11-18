@@ -25,25 +25,22 @@ pub(super) struct SetupCheck {
 
 impl App {
     pub(super) fn connect_setup(self: &Rc<Self>) {
-        self.follow_frame(|app| app.setup.window(), "Check Setup");
+        self.follow_frame(&self.setup(), "Check Setup");
         let weak = Rc::downgrade(self);
         let w = weak.clone();
-        self.main
-            .on_setup_requested(move || with_app(&w, App::show_setup));
-        let w = weak.clone();
-        self.setup
+        self.setup()
             .on_open_network_settings(move || with_app(&w, App::open_network_settings));
         let w = weak.clone();
-        self.setup
+        self.setup()
             .on_open_privacy_settings(move || with_app(&w, App::open_microphone_privacy));
         let w = weak.clone();
-        self.setup
+        self.setup()
             .on_close_requested(move || with_app(&w, App::hide_setup));
-        self.setup.on_exit_requested(|| {
+        self.setup().on_exit_requested(|| {
             let _ = slint::quit_event_loop();
         });
         let w = weak;
-        self.setup.window().on_close_requested(move || {
+        self.setup().window().on_close_requested(move || {
             with_app(&w, App::hide_setup);
             slint::CloseRequestResponse::HideWindow
         });
@@ -51,7 +48,7 @@ impl App {
 
     /// Opens Check Setup, or brings it to the front when it is open.
     pub fn show_setup(&self) {
-        self.setup.set_checking(true);
+        self.setup().set_checking(true);
         self.open_setup();
     }
 
@@ -59,38 +56,46 @@ impl App {
     /// (AppDelegate+Windows.swift:234-238).
     pub fn show_setup_at_first_install(&self) {
         self.log.log(|| "Setup: first install".to_owned());
-        self.setup.set_checking(false);
+        self.setup().set_checking(false);
         self.open_setup();
     }
 
     fn open_setup(&self) {
-        let opening = !self.setup.window().is_visible();
+        let opening = !self.setup.is_visible();
         if opening {
-            self.setup.set_network_changes(0);
-            self.setup.set_microphone_changes(0);
-            self.setup.set_announcement("".into());
+            self.setup().set_network_changes(0);
+            self.setup().set_microphone_changes(0);
+            self.setup().set_announcement("".into());
             // An earlier opening's reading may be stale: the row waits for a new one.
-            self.setup.set_network(SetupNetwork::Unknown);
-            self.setup.set_network_needs_attention(false);
+            self.setup().set_network(SetupNetwork::Unknown);
+            self.setup().set_network_needs_attention(false);
             let profiles = self.remote.borrow().profiles.clone();
             let mut check = self.setup_check.borrow_mut();
             check.network = None;
             check.watch = profiles.map(|source| Watch::start(source, remote_window::PROFILE_CHECK));
+            // A rebuilt window has not seen the last microphone reading.
+            let attention = setup_check::attention(None, check.microphone);
+            self.setup()
+                .set_microphone(setup_microphone(check.microphone));
+            self.setup()
+                .set_microphone_needs_attention(attention.microphone);
         }
-        if let Err(error) = self.setup.show() {
+        if let Err(error) = self.setup().show() {
             self.show_window_error(&error);
             return;
         }
         if opening {
             self.log.log(|| "Check Setup: opened".to_owned());
         }
-        self.setup.invoke_take_focus();
-        crate::platform::bring_to_front(self.setup.window());
+        self.setup().invoke_take_focus();
+        crate::platform::bring_to_front(self.setup().window());
     }
 
-    fn hide_setup(&self) {
+    pub(super) fn hide_setup(&self) {
         // A window that fails to hide stays open; the user can still close it.
-        let _ = self.setup.hide();
+        if let Some(setup) = self.setup.built() {
+            let _ = setup.hide();
+        }
         self.setup_check.borrow_mut().watch = None;
     }
 
@@ -116,7 +121,7 @@ impl App {
         self.show_setup_check(network, microphone);
     }
 
-    fn show_setup_check(&self, network: Option<Network>, microphone: Microphone) {
+    pub(super) fn show_setup_check(&self, network: Option<Network>, microphone: Microphone) {
         let (network_before, microphone_before) = {
             let mut check = self.setup_check.borrow_mut();
             let before = (check.network, check.microphone);
@@ -129,7 +134,10 @@ impl App {
         }
         let attention = setup_check::attention(network, microphone);
         let attention_before = setup_check::attention(network_before, microphone_before);
-        let setup = &self.setup;
+        let Some(setup) = self.setup.built() else {
+            return;
+        };
+        let setup = &setup;
         setup.set_network(setup_network(network));
         setup.set_microphone(setup_microphone(microphone));
         setup.set_network_needs_attention(attention.network);
@@ -189,10 +197,9 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
-    use slint::ComponentHandle;
     use slint::platform::Key;
 
-    use super::super::tests::{app_over, draw_frames, press};
+    use super::super::tests::{app_over, draw_frames, leaked, press};
     use crate::network_profile::{Category, ProfileSource};
     use crate::ui_model::{Backend, MockBackend, NoticeMessage};
     use crate::{SetupMicrophone, SetupNetwork};
@@ -218,7 +225,7 @@ mod tests {
     #[test]
     fn check_setup_opens_from_the_file_menu_and_escape_closes_it() {
         let app = app_over(MockBackend::new());
-        let window = app.setup.window();
+        let window = leaked(app.setup());
         assert!(!window.is_visible());
         app.main.invoke_setup_requested();
         draw_frames();
@@ -236,7 +243,7 @@ mod tests {
             "Return presses Done (SetupWindow.swift:106-107)"
         );
         app.main.invoke_setup_requested();
-        app.setup.invoke_close_requested();
+        app.setup().invoke_close_requested();
         assert!(!window.is_visible(), "Close closes it");
     }
 
@@ -247,32 +254,32 @@ mod tests {
         let app = app_over(MockBackend::new());
         app.remote.borrow_mut().profiles = Some(profiles.clone());
         app.show_setup();
-        poll_until(&app, || app.setup.get_network() == SetupNetwork::Public);
-        assert!(app.setup.get_network_needs_attention());
+        poll_until(&app, || app.setup().get_network() == SetupNetwork::Public);
+        assert!(app.setup().get_network_needs_attention());
         assert_eq!(
-            app.setup.get_network_changes(),
+            app.setup().get_network_changes(),
             0,
             "the first reading fills it"
         );
-        assert_eq!(app.setup.get_announcement(), "");
+        assert_eq!(app.setup().get_announcement(), "");
         assert_eq!(
             app.strings().invoke_setup_summary(true, false),
             "Network type needs your attention."
         );
 
         *profiles.0.lock().expect("not poisoned") = vec![Category::Private];
-        poll_until(&app, || app.setup.get_network() == SetupNetwork::Private);
-        assert!(!app.setup.get_network_needs_attention());
-        assert_eq!(app.setup.get_network_changes(), 1);
+        poll_until(&app, || app.setup().get_network() == SetupNetwork::Private);
+        assert!(!app.setup().get_network_needs_attention());
+        assert_eq!(app.setup().get_network_changes(), 1);
         assert_eq!(
-            app.setup.get_announcement(),
+            app.setup().get_announcement(),
             "Network type: Private network Ready to stream. Nothing here needs your attention."
         );
 
         *profiles.0.lock().expect("not poisoned") = Vec::new();
-        poll_until(&app, || app.setup.get_network() == SetupNetwork::Offline);
-        assert!(app.setup.get_network_needs_attention());
-        app.setup.invoke_close_requested();
+        poll_until(&app, || app.setup().get_network() == SetupNetwork::Offline);
+        assert!(app.setup().get_network_needs_attention());
+        app.setup().invoke_close_requested();
         assert!(
             app.setup_check.borrow().watch.is_none(),
             "no reading while closed"
@@ -293,20 +300,24 @@ mod tests {
         );
         let app = app_over(backend);
         app.show_setup();
-        assert_eq!(app.setup.get_microphone(), SetupMicrophone::Blocked);
-        assert!(app.setup.get_microphone_needs_attention());
+        assert_eq!(app.setup().get_microphone(), SetupMicrophone::Blocked);
+        assert!(app.setup().get_microphone_needs_attention());
         assert_eq!(
             app.strings().invoke_setup_summary(true, true),
             "Network type needs your attention. Not allowed, used only when you need them: Microphone."
         );
 
         app.update(|b| b.dismiss_all_notices());
-        assert_eq!(app.setup.get_microphone(), SetupMicrophone::Blocked, "kept");
+        assert_eq!(
+            app.setup().get_microphone(),
+            SetupMicrophone::Blocked,
+            "kept"
+        );
         app.update(|b| b.set_running(true));
-        assert_eq!(app.setup.get_microphone(), SetupMicrophone::Working);
-        assert_eq!(app.setup.get_microphone_changes(), 1);
+        assert_eq!(app.setup().get_microphone(), SetupMicrophone::Working);
+        assert_eq!(app.setup().get_microphone_changes(), 1);
         assert!(
-            app.setup
+            app.setup()
                 .get_announcement()
                 .starts_with("Microphone: Working")
         );
@@ -339,11 +350,11 @@ mod tests {
     fn the_first_install_shows_the_intro_and_check_setup_the_summary() {
         let app = app_over(MockBackend::new());
         app.show_setup_at_first_install();
-        assert!(app.setup.window().is_visible());
-        assert!(!app.setup.get_checking(), "Before you start");
-        app.setup.invoke_close_requested();
+        assert!(app.setup.is_visible());
+        assert!(!app.setup().get_checking(), "Before you start");
+        app.setup().invoke_close_requested();
         app.main.invoke_setup_requested();
-        assert!(app.setup.get_checking(), "Ready to stream or not");
+        assert!(app.setup().get_checking(), "Ready to stream or not");
     }
 
     // AppDelegate.swift:477, AppDelegate+Windows.swift:234-238: a first

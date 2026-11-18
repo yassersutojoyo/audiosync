@@ -55,10 +55,10 @@ fn return_after_the_last_speaker_went_off_says_so_in_a_save_preset_alert() {
     let app = main_window_over(MockBackend::new());
     all_speakers_off(&app);
     app.main.invoke_preset_save_named("Evening".into());
-    assert!(app.zone_dialog.window().is_visible());
-    assert_eq!(app.zone_dialog.get_heading(), "Save Preset");
+    assert!(app.zone_dialog().window().is_visible());
+    assert_eq!(app.zone_dialog().get_heading(), "Save Preset");
     assert_eq!(
-        app.zone_dialog.get_message(),
+        app.zone_dialog().get_message(),
         "Turn on the speakers you want in the preset first, then save it."
     );
     assert_eq!(app.main.get_presets().row_count(), 0);
