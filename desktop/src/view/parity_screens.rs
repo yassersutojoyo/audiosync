@@ -382,3 +382,13 @@ fn presets_equalizer_and_calibrate_are_28_high_rows_6_apart_with_no_border() {
     assert!(rows.contains("spacing: 6px;"));
     assert!(window.contains("button-size: 24px;"));
 }
+
+#[test]
+fn the_device_volume_fix_reads_in_the_text_colour() {
+    let source = include_str!("../../ui/widgets.slint").replace("\r\n", "\n");
+    let row = component(&source, "SpeakerRow");
+    let fix = &row[row.find("fix-button := LinkButton {").expect("the fix")..];
+    let fix = &fix[..fix.find("clicked =>").unwrap()];
+    // The Mac's .primary (DeviceVolumeViews.swift:34), not the link teal.
+    assert!(fix.contains("text-color: Tokens.text;"), "{fix}");
+}

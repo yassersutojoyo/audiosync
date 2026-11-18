@@ -13716,6 +13716,25 @@ pub(crate) mod tests {
         assert_eq!(line.absolute_position().x - row.absolute_position().x, 54.0);
     }
 
+    /// The AirPlay delay's name starts where the speakers' names do, and its
+    /// value's fill ends 7 px inside the row: the Mac's 10 pt row inset
+    /// (BrandTokens.swift:154) less the 3 px the fill reaches past the value,
+    /// as on the speaker rows.
+    #[test]
+    fn the_airplay_delay_keeps_the_macs_row_inset() {
+        let app = narrow_app(MockBackend::new());
+        advance_clock(Duration::from_millis(400));
+        draw_frames_at(776, 900);
+        let row = element(&app, "SpeakerRow::hover").expect("a speaker row");
+        let name = element(&app, "SpeakerRow::name-label").expect("a speaker's name");
+        let title = element(&app, "AirPlayDelayControls::title").expect("the delay's name");
+        let value = element(&app, "AirPlayDelayControls::value-box").expect("the delay's value");
+        assert_eq!(title.absolute_position().x, name.absolute_position().x);
+        let row_end = row.absolute_position().x + row.size().width;
+        let value_end = value.absolute_position().x + value.size().width;
+        assert_eq!(row_end - value_end, 7.0);
+    }
+
     /// With Add by Address under it, the AirPlay delay's note shows whole
     /// once the speaker list is scrolled to its end, at a short and a tall
     /// window: its pane keeps the note's second line and its padding, and
@@ -16309,6 +16328,24 @@ pub(crate) mod tests {
                 row.accessible_label()
             );
         }
+    }
+
+    /// The tray panel's speaker rows are 36 px tall at the height it fits,
+    /// as the Mac panel's (MenuBar.swift:1692).
+    #[test]
+    fn the_flyout_rows_are_36_px_at_the_fitted_height() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = measured_flyout();
+        let height = app.fit_flyout(1000.0);
+        app.flyout
+            .window()
+            .set_size(slint::LogicalSize::new(300.0, height));
+        draw_frames();
+        let heights: Vec<f32> = ElementHandle::find_by_element_type_name(&app.flyout, "FlyoutRow")
+            .map(|row| row.size().height)
+            .collect();
+        assert!(!heights.is_empty(), "the speaker rows show");
+        assert!(heights.iter().all(|h| *h == 36.0), "{heights:?}");
     }
 
     fn flyout_element(app: &App, id: &str) -> i_slint_backend_testing::ElementHandle {
