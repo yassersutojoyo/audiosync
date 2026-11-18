@@ -32,9 +32,9 @@ export global Tokens {
     // Pastel accent (website backdrop).
     out property <color> aqua: #b5ece2;
 
-    // Body text: the Mac's primary label as the real app draws it (the master slider's
-    // Color.primary fill, MenuBar.swift:3014). The site keeps its charcoal.
-    out property <color> text: root.dark ? #f0f0f0 : #0a0a0a;
+    // Body text: charcoal on light; on dark, the Mac's label color (white at 84.7%) over its
+    // #323232 window.
+    out property <color> text: root.dark ? #e0e0e0 : #292929;
 
     // Secondary text on the website and the Windows app.
     out property <color> muted: root.dark ? #b8c2c0 : #525c5a;

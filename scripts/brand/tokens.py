@@ -213,8 +213,8 @@ def css_value(tokens, reference):
     group, name = reference.split('.', 1)
     token = tokens[group][name]
     if group == 'color':
-        # The site has one appearance, the light one, unless the token names its own.
-        return token.get('site', token['light']).lower()
+        # The site has one appearance, the light one.
+        return token['light'].lower()
     if group == 'alpha':
         r, g, b = rgb(token['color'])
         return f'rgba({r},{g},{b},{css_alpha(token["opacity"])})'
