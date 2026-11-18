@@ -8713,7 +8713,7 @@ pub(crate) mod tests {
             "open with no presets: {opened} px"
         );
         let main = include_str!("../ui/main.slint").replace("\r\n", "\n");
-        assert!(main.contains("padding-top: title-row.height - 1px;"));
+        assert!(main.contains("padding-top: title-row.height + 3px;"));
     }
 
     /// What he sees on opening the app: a song with its cover, This PC's two
@@ -13957,10 +13957,10 @@ pub(crate) mod tests {
         }
     }
 
-    /// Speaker rows in one list step 54 px from badge to badge, divider
-    /// included, as the Mac's rows with a volume slider step 54 pt.
+    /// Speaker rows in one list step 52 px from badge to badge, divider
+    /// included, as the Mac's rows with a volume slider step 52 pt (its 2x photos).
     #[test]
-    fn speaker_rows_step_54_px_as_on_the_mac() {
+    fn speaker_rows_step_52_px_as_on_the_mac() {
         let app = narrow_app(MockBackend::new());
         let tops: Vec<f32> = i_slint_backend_testing::ElementHandle::find_by_element_id(
             &app.main,
@@ -13972,7 +13972,7 @@ pub(crate) mod tests {
             .windows(2)
             .map(|pair| pair[1] - pair[0])
             .fold(f32::MAX, f32::min);
-        assert_eq!(pitch, 54.0, "badge tops {tops:?}");
+        assert_eq!(pitch, 52.0, "badge tops {tops:?}");
         assert!(
             tops.iter().all(|y| y.fract() == 0.0),
             "on whole pixels: {tops:?}"
@@ -14311,8 +14311,8 @@ pub(crate) mod tests {
         assert_eq!(rule.size().width, 1.0);
         assert_eq!(rule.absolute_position().x, header.absolute_position().x);
         assert_eq!(rule.absolute_position().y, top + height);
-        // Both rows and the line between them, as they step 54 px.
-        assert_eq!(rule.size().height, 54.0 + 53.0);
+        // Both rows and the line between them, as they step 52 px.
+        assert_eq!(rule.size().height, 52.0 + 51.0);
     }
 
     /// A long-named copy of the mock's Kitchen speaker.
