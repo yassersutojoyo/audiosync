@@ -2194,9 +2194,11 @@ export component VolumeSlider inherits HorizontalLayout {
         height: 14px;
 
         QuietText {
-            // Skia draws the digits under the box's middle, Segoe's 1 px and
-            // Inter's half that (measured at 1x and 1.5x); the Mac centres their ink on the track.
-            y: Platform.os == OperatingSystemType.windows ? -1px : -0.5px;
+            // Skia draws the digits under the box's middle, Segoe's 1 px and Inter's
+            // less; Inter's quarter pixel keeps the ink on the track at 1.5x wherever
+            // the row lands, where half a pixel rounds a whole one off. The Mac
+            // centres their ink on the track.
+            y: Platform.os == OperatingSystemType.windows ? -1px : -0.25px;
             width: parent.width;
             height: parent.height;
             text: root.percent ? Strings.system-volume-percent(round(slider.value)) : Strings.volume-value(slider.value);
