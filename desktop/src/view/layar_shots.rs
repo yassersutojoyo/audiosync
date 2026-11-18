@@ -300,6 +300,8 @@ impl Scene {
     }
 
     fn size(&self, window: &slint::Window, (width, height): Size) {
+        // The Mac renderer draws at Retina 2x; the testing backend reads no SLINT_SCALE_FACTOR.
+        window.dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor: 2.0 });
         window.set_size(LogicalSize::new(width, height));
         render(window);
     }
