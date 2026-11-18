@@ -1225,10 +1225,24 @@ do {
 
     let kinds: [SpeakerTag] = [.airplay, .systemAirPlay, .builtIn, .bluetooth, .usb, .hdmi, .displayPort,
                                .thunderbolt, .firewire, .pci, .avb, .virtual, .aggregate, .other]
-    let missing = kinds.filter { NSImage(systemSymbolName: $0.typeSymbol, accessibilityDescription: nil) == nil }
-    check(missing.isEmpty, "layout: every type icon is an existing SF Symbol", "\(missing)")
-    check(!kinds.contains { $0.typeSymbol.hasPrefix("bolt") },
-          "layout: no type icon is a bolt (that marks auto-connect)")
+    func fits(_ path: CGPath, _ size: CGFloat) -> Bool {
+        let bounds = path.boundingBoxOfPath
+        return !bounds.isEmpty && bounds.minX >= 0 && bounds.minY >= 0 && max(bounds.maxX, bounds.maxY) <= size + 0.001
+    }
+    let unfit = DeviceBadge.allCases.filter { !fits($0.path, DeviceBadge.size) }.map(\.rawValue)
+        + DeviceIcon.sizes.flatMap { size in
+            DeviceIcon.allCases.filter { !fits($0.path(size: size), size) }.map { "\($0.rawValue) \(size)" }
+        }
+    check(unfit.isEmpty, "layout: every device badge and glyph draws inside its own grid", "\(unfit)")
+    func box(_ icon: DeviceIcon, _ size: CGFloat) -> [Double] {
+        let b = icon.path(size: size).boundingBoxOfPath
+        return [b.minX, b.minY, b.maxX, b.maxY].map { (Double($0) * 1000).rounded() / 1000 }
+    }
+    check(box(.laptop, 18) == [1, 3, 17, 15] && box(.speaker, 18) == [4, 1, 14, 17]
+            && box(.laptop, 14) == [1, 2, 13, 12] && box(.speaker, 14) == [3, 1, 11, 13],
+          "layout: the glyphs are drawn 1:1 in points, straight edges on whole points")
+    check(DeviceIcon.size(circle: 32) == 18 && DeviceIcon.size(circle: 26) == 14 && DeviceIcon.size(circle: 24) == 14,
+          "layout: a circle takes the glyph grid nearest 18 in 32, so the panel's smaller circles get 14 pt glyphs")
     check(kinds.allSatisfy { $0.typeTint(.off) == .muted && $0.typeTint(.willPlay) == .muted },
           "layout: type icons are grey unless the speaker plays")
     check(SpeakerTag.airplay.typeTint(.playing) == .active && SpeakerTag.bluetooth.typeTint(.playing) == .active
@@ -1237,22 +1251,19 @@ do {
           "layout: a playing speaker's type icon takes its own color")
 
     // The badge icon follows the calibration rule: over Bluetooth only a headphone name means headphones.
-    check(SpeakerTag.bluetooth.symbol(name: "soundcore Select 4 Go") == "hifispeaker.fill"
-          && SpeakerTag.bluetooth.symbol(name: "JBL Flip 6") == "hifispeaker.fill"
-          && SpeakerTag.bluetooth.symbol(name: "AirPods Pro") == "headphones"
-          && SpeakerTag.bluetooth.symbol(name: "WH-1000XM5 Headphones") == "headphones"
-          && SpeakerTag.bluetooth.symbol(name: "Galaxy Buds2") == "headphones",
+    check(SpeakerTag.bluetooth.symbol(name: "soundcore Select 4 Go") == .speaker
+          && SpeakerTag.bluetooth.symbol(name: "JBL Flip 6") == .speaker
+          && SpeakerTag.bluetooth.symbol(name: "AirPods Pro") == .headphones
+          && SpeakerTag.bluetooth.symbol(name: "WH-1000XM5 Headphones") == .headphones
+          && SpeakerTag.bluetooth.symbol(name: "Galaxy Buds2") == .headphones,
           "layout: a Bluetooth speaker gets the speaker badge, Bluetooth headphones keep the headphones badge")
-    check(SpeakerTag.builtIn.symbol(name: "AirPods Pro") == "laptopcomputer"
-          && SpeakerTag.usb.symbol(name: "Desk Headphones") == "cable.connector"
-          && SpeakerTag.hdmi.symbol(name: "LG TV") == "display"
-          && SpeakerTag.airplay.symbol(name: "Kitchen") == "homepod.fill"
-          && SpeakerTag.cast.symbol(name: "Nest Audio") == "hifispeaker.fill"
-          && SpeakerTag.virtual.symbol(name: "Headset") == "hifispeaker.fill",
+    check(SpeakerTag.builtIn.symbol(name: "AirPods Pro") == .laptop
+          && SpeakerTag.usb.symbol(name: "Desk Headphones") == .usb
+          && SpeakerTag.hdmi.symbol(name: "LG TV") == .monitor
+          && SpeakerTag.airplay.symbol(name: "Kitchen") == .smartSpeaker
+          && SpeakerTag.cast.symbol(name: "Nest Audio") == .speaker
+          && SpeakerTag.virtual.symbol(name: "Headset") == .device,
           "layout: outside Bluetooth the badge depends on the transport only")
-    let badges = kinds.flatMap { [$0.symbol(name: "Speaker"), $0.symbol(name: "AirPods")] }
-        .filter { NSImage(systemSymbolName: $0, accessibilityDescription: nil) == nil }
-    check(badges.isEmpty, "layout: every badge icon is an existing SF Symbol", "\(badges)")
     check(SpeakerTag.isHeadphoneName("Living Room AirPods Pro") && SpeakerTag.isHeadphoneName("EARBUDS")
           && !SpeakerTag.isHeadphoneName("soundcore Select 4 Go") && !SpeakerTag.isHeadphoneName(""),
           "layout: a headphone word anywhere in the name, in any case, marks headphones")
@@ -20297,6 +20308,50 @@ do {
           "capture start off main: a stop of a start still waiting for a stop's fades leaves the old capture running until those fades are done")
     check(tapOpenPart(tapOpenAppEngine, "func stopEngine(").contains("running: engine.isRunning || engine.isStarting"),
           "capture start off main: a stop of a pending start logs its reason")
+}
+
+// MARK: Speaker rows draw AudioSync's own device icons, not SF Symbols
+do {
+    func read(_ path: String) -> String { (try? String(contentsOfFile: path, encoding: .utf8)) ?? "" }
+    func part(_ text: String, from start: String, to end: String) -> String {
+        guard let head = text.range(of: start) else { return "" }
+        let rest = text[head.lowerBound...]
+        return String(rest[..<(rest.range(of: end)?.lowerBound ?? rest.endIndex)])
+    }
+    let layout = read("Sources/AudioSync/SpeakerLayout.swift")
+    let menuBar = read("Sources/AudioSync/MenuBar.swift")
+    let window = read("Sources/AudioSync/MainWindow.swift")
+    let icons = read("Sources/AudioSync/DeviceIcons.swift")
+    check(icons.hasPrefix("// Generated by scripts/brand/device_icons_swift.py from brand/icons. Do not edit."),
+          "device icons: the Swift drawings are generated from brand/icons")
+    let kinds = part(layout, from: "var typeSymbol", to: "static func isHeadphoneName")
+    let sfNames = ["airplay.audio", "dot.radiowaves", "wave.3.right", "cable.connector", "\"display\"", "\"network\"",
+                   "laptopcomputer", "hifispeaker", "homepod", "\"headphones\""]
+    check(!kinds.isEmpty && !sfNames.contains { kinds.contains($0) },
+          "device icons: no speaker kind maps to an SF Symbol", "\(sfNames.filter { kinds.contains($0) })")
+    let badge = part(menuBar, from: "struct SpeakerBadge: View {", to: "private var iconColor")
+    let typeIcon = part(menuBar, from: "struct SpeakerTypeIcon: View {", to: "private var color: Color")
+    check(!badge.isEmpty && !typeIcon.isEmpty
+            && !badge.contains("Image(systemName:") && !typeIcon.contains("Image(systemName:"),
+          "device icons: the round speaker icon and the type icon after the name draw no SF Symbol")
+    check(!menuBar.contains("static let zoneSymbol = \"square.stack.3d.up.fill\"")
+            && !window.contains("Image(systemName: MenuBarView.zoneSymbol)"),
+          "device icons: a zone's circle and its tag on a zoned speaker use the zone icon")
+    let small = read("brand/icons/14/laptop.svg")
+    check(small.contains("viewBox=\"0 0 14 14\"") && icons.contains("static let sizes: [CGFloat] = [14, 16, 18]")
+            && badge.contains("DeviceIcon.size(circle: size)"),
+          "device icons: a smaller circle takes a glyph drawn on its own smaller grid, as 18 in 32 on the sheet")
+    // From the Mac: Monitor Kantor, not found, showed the generic device glyph instead of its display.
+    let monitorKey = SpeakerKey.make(id: "monitor-uid", kind: .local)
+    let storedZone = "[{\"id\":\"z\",\"name\":\"Kantor\",\"members\":[\"\(monitorKey)\"],\"volume\":100,"
+        + "\"memberIcons\":{\"\(monitorKey)\":\"monitor\"}}]"
+    let readBack = (try? JSONDecoder().decode([SpeakerZone].self, from: Data(storedZone.utf8)))
+        .flatMap { try? JSONEncoder().encode($0) }.map { String(decoding: $0, as: UTF8.self) } ?? ""
+    check(readBack.contains("\"memberIcons\"") && readBack.contains(":\"monitor\""),
+          "device icons: a zone keeps the glyph each member was last listed with, across a relaunch", readBack)
+    let zonesApp = read("Sources/AudioSync/AppDelegate+Zones.swift")
+    check(!zonesApp.contains("guard let device = localDevices[member.appID] else { return SpeakerTag.other.symbol(name: name) }"),
+          "device icons: a member that isn't listed keeps its remembered glyph rather than the generic device")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
