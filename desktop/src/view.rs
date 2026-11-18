@@ -13666,6 +13666,19 @@ pub(crate) mod tests {
             (drop - 27.5).abs() <= 1.0,
             "hint centred {drop} px under the slider's top"
         );
+        // The symbol is drawn whole in its narrower slot, as wide as the Mac's.
+        let left_of = name.absolute_position().x - 4.0;
+        let (left, _, right, _) = ink(
+            app.main.window(),
+            left_of,
+            y,
+            x - 2.0 - left_of,
+            hint.size().height,
+        );
+        assert!(
+            right - left >= 8.0 && left >= left_of + 1.0,
+            "symbol ink {left}..{right}"
+        );
     }
 
     /// A row's options button is the Mac's borderless ellipsis.circle menu

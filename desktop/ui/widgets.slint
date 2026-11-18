@@ -4467,17 +4467,22 @@ export component SpeakerRow inherits Rectangle {
                                     duration: Motion.on ? 350ms : 0ms;
                                     easing: ease-out;
                                 }
-                                height: self.progress * (hint-line.preferred-height + 2px);
+                                height: self.progress * (hint-line.preferred-height + 4px);
                                 clip: true;
 
+                                // The Mac's 5 pt line gap under its 16 pt slider
+                                // (MainWindow.swift:2352): 4 px under this 14 px one,
+                                // after the column's 2.
                                 hint-line := HorizontalLayout {
                                     visible: hint-box.progress > 0;
-                                    y: 2px;
+                                    y: 4px;
                                     width: parent.width;
                                     height: self.preferred-height;
                                     spacing: 4px;
 
+                                    // The Mac's small symbol is 9 pt wide (its frame on the Mac's window).
                                     Glyph {
+                                        width: 9px;
                                         glyph: Glyphs.device-volume(hint-box.hint);
                                         font-size: 12px;
                                         color: Tokens.secondary-text;
