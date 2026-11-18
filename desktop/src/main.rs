@@ -546,7 +546,7 @@ mod tests {
         assert_eq!(auto_connect_skipped_by(false, None, None), None);
     }
 
-    // covers: S511
+    // covers: S475
     #[test]
     fn a_test_copy_skips_auto_connect_and_the_first_install_switch_on() {
         use super::{auto_connect_skipped_by, test_instance};

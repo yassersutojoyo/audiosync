@@ -535,7 +535,7 @@ mod tests {
         assert_eq!(hint(&backend, HEADPHONES), None);
     }
 
-    // covers: S511
+    // covers: S475
     #[test]
     fn a_test_copy_writes_no_remembered_level() {
         let mut backend = backend();

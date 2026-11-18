@@ -1104,7 +1104,7 @@ pub mod tests {
         assert!(!runs(false, None, None));
     }
 
-    // covers: S511
+    // covers: S475
     #[test]
     fn a_test_copy_never_updates_the_installed_exe() {
         assert!(!runs(true, None, Some("test")));

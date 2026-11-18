@@ -991,7 +991,7 @@ pub struct Controller<D: Driver> {
     default_switch: DefaultSwitch,
     /// Whether the default output gets no copy of the whole system (S473).
     holds_out_default_sink: bool,
-    /// Set in a test copy (S511): it never moves the default output or an
+    /// Set in a test copy (S475): it never moves the default output or an
     /// app's output and never writes an output's own level.
     leaves_system_outputs: bool,
     /// Where one captured app's own output is moved to the silent endpoint,
@@ -1273,7 +1273,7 @@ impl<D: Driver> Controller<D> {
     }
 
     /// Leaves Windows' default output, apps' outputs and the outputs' own
-    /// levels as they are: a test copy (S511).
+    /// levels as they are: a test copy (S475).
     pub fn leave_system_outputs(&mut self) {
         self.leaves_system_outputs = true;
     }
@@ -7194,7 +7194,7 @@ mod tests {
         fake.0.borrow().output("player.exe", Role::Console)
     }
 
-    // covers: S511
+    // covers: S475
     #[test]
     fn a_test_copy_moves_neither_the_default_nor_an_app() {
         let mut backend = backend();

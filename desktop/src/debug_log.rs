@@ -548,7 +548,7 @@ mod tests {
 
     use super::*;
 
-    // covers: S511
+    // covers: S475
     #[test]
     fn a_test_copy_logs_to_a_file_of_its_own() {
         assert_eq!(
