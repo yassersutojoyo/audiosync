@@ -30,9 +30,9 @@ enum BrandTokens {
         static let sky = BrandRGB(red: 143 / 255, green: 211 / 255, blue: 232 / 255)
         /// Pastel accent (website backdrop).
         static let aqua = BrandRGB(red: 181 / 255, green: 236 / 255, blue: 226 / 255)
-        /// Body text: charcoal on light; on dark, the Mac's label color (white at 84.7%) over its
-        /// #323232 window.
-        static let text = BrandRGB(red: 41 / 255, green: 41 / 255, blue: 41 / 255)
+        /// Body text: the Mac's primary label as the real app draws it (the master slider's
+        /// Color.primary fill, MenuBar.swift:3014). The site keeps its charcoal.
+        static let text = BrandRGB(red: 10 / 255, green: 10 / 255, blue: 10 / 255)
         /// Secondary text on the website and the Windows app.
         static let muted = BrandRGB(red: 82 / 255, green: 92 / 255, blue: 90 / 255)
         /// Window and page background.
@@ -88,9 +88,9 @@ enum BrandTokens {
         static let sky = BrandRGB(red: 143 / 255, green: 211 / 255, blue: 232 / 255)
         /// Pastel accent (website backdrop).
         static let aqua = BrandRGB(red: 181 / 255, green: 236 / 255, blue: 226 / 255)
-        /// Body text: charcoal on light; on dark, the Mac's label color (white at 84.7%) over its
-        /// #323232 window.
-        static let text = BrandRGB(red: 224 / 255, green: 224 / 255, blue: 224 / 255)
+        /// Body text: the Mac's primary label as the real app draws it (the master slider's
+        /// Color.primary fill, MenuBar.swift:3014). The site keeps its charcoal.
+        static let text = BrandRGB(red: 240 / 255, green: 240 / 255, blue: 240 / 255)
         /// Secondary text on the website and the Windows app.
         static let muted = BrandRGB(red: 184 / 255, green: 194 / 255, blue: 192 / 255)
         /// Window and page background.
