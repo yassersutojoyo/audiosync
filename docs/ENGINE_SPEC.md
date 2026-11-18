@@ -3988,7 +3988,7 @@ The checks for S235 to S241 in the Rust core (`core/tests/calibrate_all.rs`, syn
 | an_airplay_delay_clamped_at_0_applies_against_the_runs_sender_latency (`desktop/src/adapter.rs`) | S238 |
 | an_off_airplay_row_first_in_a_zone_leaves_apply_on_the_measured_rows_l_s (`desktop/src/adapter.rs`) | S238, S255 |
 | a_speaker_that_leaves_after_apply_keeps_its_delay_and_undo_stays (`desktop/src/adapter.rs`) | S238 |
-| calibrate_all_results_go_once_the_reference_changes_before_apply (`desktop/src/adapter.rs`) | S238 |
+| calibrate_all_results_stay_once_the_reference_changes_before_apply (`desktop/src/adapter.rs`) | S238 |
 | an_apply_before_the_next_poll_writes_nothing_once_the_reference_changed (`desktop/src/adapter.rs`) | S238 |
 | a_new_sender_latency_after_apply_keeps_undo_and_undo_restores_the_adjustment (`desktop/src/adapter.rs`) | S238 |
 | an_airplay_delay_changed_after_apply_still_drops_undo (`desktop/src/adapter.rs`) | S238 |

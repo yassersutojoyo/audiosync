@@ -10014,6 +10014,38 @@ pub(crate) mod tests {
         );
     }
 
+    // covers: S174
+    #[test]
+    fn headphones_on_the_pc_jack_say_why_calibration_has_no_reference() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let mut state = app.snapshot();
+        state.reference_name = None;
+        state.calibrate_all.phase = AllPhase::Idle;
+        state.calibrate_all.other_running = false;
+        state.calibrate_all.blocked = Some(Failure::NoReference);
+        let desk = state.speaker("local:desk").unwrap().clone();
+        let lines = |state: &AppState| {
+            [
+                calibration_status(&strings, state, &desk).to_string(),
+                calibrate_all_card(&strings, state).status.to_string(),
+            ]
+        };
+        let unlisted =
+            "Calibration measures against the PC's own speakers, and they aren't listed.";
+        assert_eq!(lines(&state), [unlisted, unlisted]);
+
+        // Mac Localization.swift:489-490, the Mac's word made the PC's.
+        let phones = "Headphones are plugged into the PC, so its own speakers are silent. Unplug them to calibrate.";
+        state
+            .speakers
+            .iter_mut()
+            .find(|speaker| speaker.id == "local:speakers")
+            .unwrap()
+            .kind = ui_model::SpeakerKind::Headphones;
+        assert_eq!(lines(&state), [phones, phones]);
+    }
+
     // covers: S362
     #[test]
     fn a_calibration_that_cannot_start_names_only_what_is_off() {

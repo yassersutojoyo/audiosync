@@ -15056,7 +15056,7 @@ mod tests {
 
     // covers: S238
     #[test]
-    fn calibrate_all_results_go_once_the_reference_changes_before_apply() {
+    fn calibrate_all_results_stay_once_the_reference_changes_before_apply() {
         let mut audio = reference_audio();
         audio.connect_output_as("builtin2", "Headphones", OutputKind::BuiltIn);
         let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
@@ -15077,11 +15077,19 @@ mod tests {
         // Its endpoint disabled in Windows Sound, the other built-in output
         // becomes the reference (S174).
         unplug(&mut adapter, "builtin");
+        // The results stay, as on the Mac (AppDelegate+CalibrateAll.swift:158-163).
+        assert!(adapter.snapshot().calibrate_all.sheet.is_some());
         adapter.apply_calibrate_all();
         let state = adapter.snapshot().calibrate_all;
-        assert_eq!(state.sheet, None, "measured against a reference that went");
+        assert!(state.sheet.is_some_and(|sheet| !sheet.applied));
         assert_eq!(state.phase, AllPhase::Stale);
         assert_eq!(speaker_of(&adapter, &key("bluetooth")).delay_ms, Some(80.0));
+
+        adapter.measure_again(1);
+        assert!(matches!(
+            adapter.snapshot().calibrate_all.phase,
+            AllPhase::AgainFailed(_, Failure::NoReference)
+        ));
     }
 
     // covers: S238
@@ -15109,7 +15117,7 @@ mod tests {
         adapter.refresh_devices();
         adapter.apply_calibrate_all();
         let state = adapter.snapshot().calibrate_all;
-        assert_eq!(state.sheet, None, "measured against a reference that went");
+        assert!(state.sheet.is_some_and(|sheet| !sheet.applied));
         assert_eq!(state.phase, AllPhase::Stale);
         assert_eq!(speaker_of(&adapter, &key("bluetooth")).delay_ms, Some(80.0));
     }
