@@ -1549,6 +1549,8 @@ export component TrayFlyout inherits Window {
                                 SecondaryText {
                                     text: none-note.text;
                                     horizontal-stretch: 1;
+                                    // The Mac panel's .subheadline (MenuBar.swift:1865).
+                                    font-size: Tokens.font-size-subheadline;
                                 }
                             }
                         }
