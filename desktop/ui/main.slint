@@ -3662,8 +3662,8 @@ export component MainWindow inherits Window {
 
     VerticalLayout {
         padding: Fluent.window-margin;
-        // The header as high as the Mac's at 1:1, a pixel into the top row.
-        padding-top: title-row.height - 1px;
+        // The header as high as the Mac's: its 2x photos put the mark 4 pt lower than 1 px into the top row.
+        padding-top: title-row.height + 3px;
         // The notices and the columns bring their gap above them, so a
         // notice opens and closes its gap with it.
         spacing: 0px;
