@@ -167,6 +167,7 @@ final class OutputRenderer: FadingOutput {
     private var aliveListener: (device: AudioObjectID, block: AudioObjectPropertyListenerBlock)?
     private var overloadListener: (device: AudioObjectID, block: AudioObjectPropertyListenerBlock)?
     private var formatListener: (device: AudioObjectID, block: AudioObjectPropertyListenerBlock)?
+    private var bluetoothProbe: BluetoothProbe?
     /// The device's format as the latest start read it.
     private var startedFormat: OutputDeviceFormat?
     private var formatCheckQueued = false
@@ -354,6 +355,9 @@ final class OutputRenderer: FadingOutput {
         installDeviceAliveListener(device)
         installOverloadListener(device)
         installFormatListener(device)
+        if bluetooth, DebugTrace.enabled, let target {
+            bluetoothProbe = BluetoothProbe(device: device, target: target, nominalRate: started.rate)
+        }
         startDebugReport()
     }
 
@@ -406,6 +410,8 @@ final class OutputRenderer: FadingOutput {
         uninstallDeviceAliveListener()
         uninstallOverloadListener()
         uninstallFormatListener()
+        bluetoothProbe?.stop()
+        bluetoothProbe = nil
         debugTimer?.cancel()
         debugTimer = nil
         lateTimer?.cancel()
@@ -912,6 +918,128 @@ final class OutputRenderer: FadingOutput {
         }
     }
 
+    // MARK: - Bluetooth probes (debug log only)
+
+    /// One Bluetooth start's property listeners and IO pacing report
+    /// (`BluetoothWatch`). Reads and logs on a utility queue of its own,
+    /// never on the render thread; `stop` removes everything.
+    private final class BluetoothProbe {
+        private struct Watched {
+            let object: AudioObjectID
+            let address: AudioObjectPropertyAddress
+            let label: String
+            let frames: Bool
+        }
+
+        private let queue = DispatchQueue(label: "io.github.yassersutojoyo.audiosync.bt-probe", qos: .utility)
+        private let watched: [Watched]
+        private var installed: [(Watched, AudioObjectPropertyListenerBlock)] = []
+        private var timer: DispatchSourceTimer?
+        /// Queue only.
+        private var name = ""
+        private var values: [UInt32?] = []
+
+        init(device: AudioObjectID, target: RenderTarget, nominalRate: Double) {
+            func address(_ selector: AudioObjectPropertySelector, _ scope: AudioObjectPropertyScope)
+                -> AudioObjectPropertyAddress {
+                AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain)
+            }
+            let output = kAudioObjectPropertyScopeOutput, global = kAudioObjectPropertyScopeGlobal
+            var list = [
+                Watched(object: device, address: address(kAudioDevicePropertyLatency, output),
+                        label: "device latency", frames: true),
+                Watched(object: device, address: address(kAudioDevicePropertySafetyOffset, output),
+                        label: "safety offset", frames: true),
+                Watched(object: device, address: address(kAudioDevicePropertyBufferFrameSize, global),
+                        label: "buffer frame size", frames: true),
+                Watched(object: device, address: address(kAudioDevicePropertyDeviceIsRunningSomewhere, global),
+                        label: "running somewhere", frames: false),
+                Watched(object: device, address: address(kAudioDevicePropertyDataSource, output),
+                        label: "data source", frames: false)]
+            if let stream = OutputRenderer.firstOutputStream(device) {
+                list.append(Watched(object: stream, address: address(kAudioStreamPropertyLatency, global),
+                                    label: "stream latency", frames: true))
+            }
+            watched = list
+            // First on the serial queue, so every listener call finds the start's values.
+            queue.async {
+                self.name = OutputRenderer.deviceName(device) ?? "Bluetooth output"
+                self.values = list.map { self.read($0) }
+                let start = zip(list, self.values).map { item, value in
+                    "\(item.label) \(value.map { String($0) } ?? "n/a")"
+                }.joined(separator: ", ")
+                DebugTrace.log("[AudioSync] \"\(self.name)\" Bluetooth probes on: \(start)")
+            }
+            for (index, item) in list.enumerated() {
+                let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.changed(index) }
+                var address = item.address
+                let status = AudioObjectAddPropertyListenerBlock(item.object, &address, queue, block)
+                if status == noErr { installed.append((item, block)) }
+            }
+            startPacing(target: target, nominalRate: nominalRate)
+        }
+
+        private func read(_ item: Watched) -> UInt32? {
+            var address = item.address
+            var value: UInt32 = 0
+            var size = UInt32(MemoryLayout<UInt32>.size)
+            guard AudioObjectGetPropertyData(item.object, &address, 0, nil, &size, &value) == noErr else { return nil }
+            return value
+        }
+
+        private func changed(_ index: Int) {
+            let item = watched[index]
+            let new = read(item)
+            let old = values[index]
+            values[index] = new
+            if let line = BluetoothWatch.changeLine(name: name, property: item.label, old: old, new: new,
+                                                    frames: item.frames) {
+                DebugTrace.log(line)
+            }
+        }
+
+        /// The anchor and the callback interval come from the render
+        /// callback's lateness timing, which runs only with the debug log on.
+        private func startPacing(target: RenderTarget, nominalRate: Double) {
+            var previous: (anchorNs: Int64, hostNs: UInt64)?
+            let timer = DispatchSource.makeTimerSource(queue: queue)
+            let every = BluetoothWatch.pacingEveryS
+            timer.schedule(deadline: .now() + .seconds(every), repeating: .seconds(every))
+            timer.setEventHandler { [weak self] in
+                guard let self else { return }
+                let longest = target.intervalMaxNs.exchange(0, ordering: .relaxed)
+                guard target.anchorBase.load(ordering: .relaxed) != .min else { return }
+                let anchorNs = target.anchorLast.load(ordering: .relaxed)
+                let hostNs = HostClock.now()
+                var measured: Double?
+                if let previous {
+                    if let step = BluetoothWatch.anchorStep(previousNs: previous.anchorNs, currentNs: anchorNs) {
+                        DebugTrace.log(BluetoothWatch.stepLine(name: self.name, stepNs: step))
+                    }
+                    measured = BluetoothWatch.measuredRate(nominal: nominalRate,
+                                                           anchorDeltaNs: anchorNs &- previous.anchorNs,
+                                                           hostDeltaNs: hostNs &- previous.hostNs)
+                }
+                previous = (anchorNs, hostNs)
+                DebugTrace.log(BluetoothWatch.pacingLine(name: self.name, nominal: nominalRate, measured: measured,
+                                                         maxIntervalNs: longest))
+            }
+            timer.resume()
+            self.timer = timer
+        }
+
+        /// Main queue, from `halt`.
+        func stop() {
+            timer?.cancel()
+            timer = nil
+            for (item, block) in installed {
+                var address = item.address
+                AudioObjectRemovePropertyListenerBlock(item.object, &address, queue, block)
+            }
+            installed = []
+        }
+    }
+
     // MARK: - Debug log
 
     /// While the debug log is on: one line for each second in which this
@@ -1231,6 +1359,46 @@ struct AnchorSpan: Equatable {
     }
 }
 
+/// Debug-log probes on a Bluetooth output, for a delay that grows mid-stream
+/// with every counter flat; they only report, nothing acts on them.
+enum BluetoothWatch {
+    static let pacingEveryS = 5
+    /// A device clock 100 ppm off moves the anchor 0.5 ms between two pacing lines.
+    static let anchorStepToleranceNs: Int64 = 2_000_000
+
+    /// One line for a property that changed, nil when it didn't.
+    static func changeLine(name: String, property: String, old: UInt32?, new: UInt32?, frames: Bool) -> String? {
+        guard old != new else { return nil }
+        func text(_ value: UInt32?) -> String { value.map { String($0) } ?? "n/a" }
+        return "[AudioSync] \"\(name)\" \(property) \(text(old)) -> \(text(new))\(frames ? " frames" : "")"
+    }
+
+    /// The anchor's move between two reads when it is beyond the tolerance.
+    static func anchorStep(previousNs: Int64, currentNs: Int64) -> Int64? {
+        let step = currentNs &- previousNs
+        return step.magnitude > anchorStepToleranceNs.magnitude ? step : nil
+    }
+
+    static func stepLine(name: String, stepNs: Int64) -> String {
+        "[AudioSync] \"\(name)\" device anchor stepped " + String(format: "%+.1f ms", Double(stepNs) / 1e6)
+    }
+
+    /// The anchor is host time minus sample time at the nominal rate, so a
+    /// move of `anchorDeltaNs` over `hostDeltaNs` means the samples ran at
+    /// nominal × (1 − move / span).
+    static func measuredRate(nominal: Double, anchorDeltaNs: Int64, hostDeltaNs: UInt64) -> Double? {
+        guard nominal > 0, hostDeltaNs > 0 else { return nil }
+        return nominal * (1 - Double(anchorDeltaNs) / Double(hostDeltaNs))
+    }
+
+    static func pacingLine(name: String, nominal: Double, measured: Double?, maxIntervalNs: UInt64) -> String {
+        let rate = measured.map { String(format: "%.2f Hz (%+.1f ppm)", $0, ($0 / nominal - 1) * 1e6) } ?? "n/a"
+        let interval = maxIntervalNs > 0 ? String(format: "%.1f ms", Double(maxIntervalNs) / 1e6) : "n/a"
+        return "[AudioSync] \"\(name)\" IO pacing over \(pacingEveryS) s: sample rate vs host clock \(rate), "
+            + "longest callback interval \(interval)"
+    }
+}
+
 /// The Mac's Wi-Fi link as the debug log shows it once per session (S229):
 /// band, channel and signal strength, never the network's name or address.
 enum WiFiNote {
@@ -1277,6 +1445,10 @@ private final class RenderTarget {
     let anchorLow = Atomic<Int64>(.max)
     let anchorHigh = Atomic<Int64>(.min)
     let anchorLast = Atomic<Int64>(0)
+    /// The previous callback's start on the host clock, and the longest
+    /// interval between two starts since the Bluetooth probe's last take.
+    let previousStartNs = Atomic<UInt64>(0)
+    let intervalMaxNs = Atomic<UInt64>(0)
 
     init(owner: OutputRenderer, renderer: CoreRenderer, channels: Int, leadNs: UInt64, rate: Double) {
         self.owner = owner
@@ -1295,6 +1467,14 @@ private final class RenderTarget {
         let startNs = clock.nanoseconds(ticks: stamp.mHostTime)
         let expectedNs = expectedStartNs.load(ordering: .relaxed)
         expectedStartNs.store(startNs &+ UInt64(Double(max(frames, 0)) * nsPerFrame), ordering: .relaxed)
+        let previousNs = previousStartNs.exchange(startNs, ordering: .relaxed)
+        if previousNs != 0, startNs > previousNs {
+            let interval = startNs - previousNs
+            let longest = intervalMaxNs.load(ordering: .relaxed)
+            if interval > longest {
+                _ = intervalMaxNs.compareExchange(expected: longest, desired: interval, ordering: .relaxed)
+            }
+        }
         guard expectedNs != 0, startNs > expectedNs &+ LateCallbackLog.thresholdNs else { return }
         lateLatest.store(LateCallbackLog.pack(startNs: startNs, lateNs: startNs - expectedNs), ordering: .relaxed)
         _ = lateCount.wrappingAdd(1, ordering: .releasing)
