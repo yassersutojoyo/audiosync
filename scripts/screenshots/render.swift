@@ -297,8 +297,8 @@ func panelShot(_ model: AppModel, look: Look) -> NSBitmapImageRep {
 // MARK: - LAYAR states
 
 /// The commonest pixel in `rect` (points from the top left) as the background,
-/// and the commonest one whose channels differ from it by more than 96 in sum
-/// as the foreground, one sample per point: the desktop's layar_shots samples
+/// and the one farthest from it (channel sum, more than 96) as the foreground,
+/// one sample per point: the desktop's layar_shots samples
 /// its photos the same way (`sampled_colours`). The capture leaves the window's
 /// background out (transparent pixels read as black), so each pixel is laid
 /// over `behind` (0-255 sRGB) first, as the window shows it.
@@ -321,9 +321,11 @@ func sampledColours(_ rep: NSBitmapImageRep, _ rect: CGRect, behind: [Int]) -> (
     }
     guard let bg = commonest({ _ in true }) else { return (nil, nil) }
     func channels(_ rgb: UInt32) -> [Int] { [Int(rgb >> 16 & 255), Int(rgb >> 8 & 255), Int(rgb & 255)] }
-    let far = { (rgb: UInt32) in zip(channels(rgb), channels(bg)).map { abs($0 - $1) }.reduce(0, +) > 96 }
+    let distance = { (rgb: UInt32) in zip(channels(rgb), channels(bg)).map { abs($0 - $1) }.reduce(0, +) }
+    let farthest = counts.filter { distance($0.key) > 96 }
+        .max { (distance($0.key), $0.value, $0.key) < (distance($1.key), $1.value, $1.key) }?.key
     let hex = { (rgb: UInt32) in String(format: "#%06x", rgb) }
-    return (commonest(far).map(hex), hex(bg))
+    return (farthest.map(hex), hex(bg))
 }
 
 /// The `layarKey` marks of the view last drawn, in its points from the top left.
@@ -387,7 +389,9 @@ func layarMain(_ model: AppModel, look: Look, size: NSSize = NSSize(width: 696, 
                             styleMask: [.titled, .resizable, .closable, .miniaturizable],
                             backing: .buffered, defer: false)
     window.appearance = look.appearance
-    window.backgroundColor = look == .dark ? .windowBackgroundColor : .white
+    // The real dark window measures #2b2b29; offscreen on the CI runner .windowBackgroundColor draws #1e1e1e.
+    window.backgroundColor = look == .dark
+        ? NSColor(srgbRed: 0x2b / 255, green: 0x2b / 255, blue: 0x29 / 255, alpha: 1) : .white
     window.contentViewController = host
     window.titleVisibility = .hidden
     window.titlebarAppearsTransparent = true
@@ -461,6 +465,8 @@ func layarModel(_ configure: (AppModel) -> Void = { _ in }) -> AppModel {
     model.deviceVolumes = ["speakers": .low(percent: 13)]
     model.builtInVolume = 0.13
     model.airPlayDelayMs = 1750
+    // Google Cast on, as in the real app, so the list offers Add by Address.
+    model.castCanAdd = true
     configure(model)
     return model
 }
@@ -584,6 +590,34 @@ func layarRemote(look: Look, _ configure: (WebRemoteSettings) -> Void = { _ in }
     return (window, content)
 }
 
+/// The desktop's six extra AirPlay speakers (layar_shots.rs `more_speakers`),
+/// so the list is longer than the window.
+func layarMoreSpeakers(_ model: AppModel) {
+    for name in ["Office", "Garage", "Hallway", "Studio", "Patio", "Guest Room"] {
+        model.airplay.append(AppModel.Speaker(id: name.lowercased(), name: name, tag: .airplay, enabled: false,
+                                              volume: 60, offsetMs: nil))
+    }
+}
+
+/// Scrolls the scroll view with the most overflow down by `points`, as the
+/// desktop's MAIN-SCROLLED wheel turn does.
+func layarScrolled(_ shown: (NSWindow, NSView), by points: CGFloat) -> (NSWindow, NSView) {
+    shown.1.layoutSubtreeIfNeeded()
+    settle()
+    func scrollViews(in view: NSView) -> [NSScrollView] {
+        (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap { scrollViews(in: $0) }
+    }
+    func room(_ scroll: NSScrollView) -> CGFloat {
+        max(0, (scroll.documentView?.frame.height ?? 0) - scroll.contentView.bounds.height)
+    }
+    if let scroll = scrollViews(in: shown.1).max(by: { room($0) < room($1) }), let document = scroll.documentView {
+        let down = min(points, room(scroll))
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: document.isFlipped ? down : room(scroll) - down))
+        scroll.reflectScrolledClipView(scroll.contentView)
+    }
+    return shown
+}
+
 /// The desktop's three presets (ui_model.rs `presets_preview`), Evening in use.
 func layarPresets(_ model: AppModel) {
     model.presets = [
@@ -622,6 +656,12 @@ let layarRows: [(id: String, draw: (Look) -> (NSWindow, NSView))] = [
         $0.airplayFoundNone = true
         $0.localNetworkHint = .possible
     }, look: $0) }),
+    ("MAIN-NO-SPEAKER-ON", { layarMain(layarModel { model in
+        for at in model.local.indices { model.local[at].enabled = false }
+        for at in model.airplay.indices { model.airplay[at].enabled = false }
+        model.nowPlaying = layarTrack()
+    }, look: $0) }),
+    ("MAIN-SCROLLED", { layarScrolled(layarMain(layarModel { layarMoreSpeakers($0) }, look: $0), by: 240) }),
     ("MAIN-LONGNAME", { layarMain(layarModel {
         layarRename($0, "kitchen")
         $0.nowPlaying = layarTrack(long: true)
@@ -673,6 +713,7 @@ let layarRows: [(id: String, draw: (Look) -> (NSWindow, NSView))] = [
     ("MAIN-AIRPLAY-DELAY-OPEN", { layarMain(layarModel(), look: $0) }),
     ("MAIN-SYSVOL-FOLDED", { layarMain(layarModel(), look: $0) }),
     ("MAIN-SYSVOL-OPEN", { layarMain(layarModel { $0.toggleDelayPanel("speakers") }, look: $0) }),
+    ("MAIN-SYSVOL-PANEL", { layarMain(layarModel { $0.toggleDelayPanel("speakers") }, look: $0) }),
     ("MAIN-CAST-SEARCHING", { layarMain(layarModel { $0.castList = .searching }, look: $0) }),
     ("MAIN-CAST-NONEFOUND", { layarMain(layarModel { $0.castList = .noneFound }, look: $0) }),
     ("MAIN-CAST-FAILED", { layarMain(layarModel { $0.castList = .failed }, look: $0) }),
@@ -680,6 +721,7 @@ let layarRows: [(id: String, draw: (Look) -> (NSWindow, NSView))] = [
         $0.notices.post($0.text.sourceTerminated(name: "Music Player"), subject: Notice.source)
     }, look: $0) }),
     ("TRAY-IDLE", { layarPanel(layarModel { $0.running = false }, look: $0) }),
+    ("TRAY-HEADER-OFF", { layarPanel(layarModel { $0.running = false }, look: $0) }),
     ("TRAY-PLAYING", { layarPanel(layarModel { $0.nowPlaying = layarTrack() }, look: $0) }),
     ("TRAY-EMPTY", { layarPanel(layarModel {
         $0.local = []
@@ -833,7 +875,7 @@ let layarRows: [(id: String, draw: (Look) -> (NSWindow, NSView))] = [
 /// not-set-up.txt as layar_shots writes its own, for scripts/screen_compare.py.
 let layarNotSetUp: [(ids: [String], reason: String)] = [
     (["MAIN-ROW-HOVER", "MAIN-ROW-OFF-HOVER", "MAIN-TRANSPORT-HOVER", "MAIN-EQ-BUTTON-HOVER", "TRAY-HOVER",
-      "TRAY-ROW-OFF-HOVER", "MAIN-ROW-FOCUS", "MAIN-SCROLLED", "MAIN-ZONE-PLACEHOLDER", "EQ-SLIDER-DRAG"],
+      "TRAY-ROW-OFF-HOVER", "MAIN-ROW-FOCUS", "MAIN-ZONE-PLACEHOLDER", "EQ-SLIDER-DRAG"],
      "needs a pointer, keyboard focus or scroll the renderer does not drive"),
     (["MAIN-ROW-MENU", "MAIN-ROW-MOVE-ZONE-MENU", "MAIN-SOURCE-MENU", "MAIN-SOURCE-MENU-LONG", "MAIN-GEAR-MENU",
       "MAIN-ZONE-MENU", "MAIN-PRESET-ROW-MENU", "TRAY-SOURCE-MENU", "EQ-CURVE-MENU"],

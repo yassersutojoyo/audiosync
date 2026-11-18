@@ -400,8 +400,9 @@ fn a_horizontal_slider_is_listed_by_its_track() {
 
 type Snapshot = slint::SharedPixelBuffer<slint::Rgba8Pixel>;
 
-/// The commonest pixel inside the frame as the background, and the commonest
-/// one whose channels differ from it by more than 96 in sum as the foreground.
+/// The commonest pixel inside the frame as the background, and the one farthest
+/// from it (channel sum, more than 96) as the foreground: the commonest far
+/// pixel was often an anti-aliased edge, not the ink.
 fn sampled_colours(
     shot: &Snapshot,
     scale: f32,
@@ -431,15 +432,48 @@ fn sampled_colours(
     let Some(bg) = commonest(&|_| true) else {
         return (None, None);
     };
-    let far = |rgb: &[u8; 3]| {
+    let distance = |rgb: &[u8; 3]| {
         rgb.iter()
             .zip(bg)
             .map(|(a, b)| u32::from(a.abs_diff(b)))
             .sum::<u32>()
-            > 96
     };
+    let farthest = counts
+        .iter()
+        .filter(|(rgb, _)| distance(rgb) > 96)
+        .max_by_key(|(rgb, count)| (distance(rgb), **count, **rgb))
+        .map(|(rgb, _)| *rgb);
     let hex = |[r, g, b]: [u8; 3]| format!("#{r:02x}{g:02x}{b:02x}");
-    (commonest(&far).map(hex), Some(hex(bg)))
+    (farthest.map(hex), Some(hex(bg)))
+}
+
+#[test]
+fn text_colour_is_the_pixel_farthest_from_the_background() {
+    // 10x1: six background pixels, three anti-aliased edge pixels, one ink pixel.
+    let mut shot = Snapshot::new(10, 1);
+    let row = [
+        [255, 255, 255],
+        [255, 255, 255],
+        [255, 255, 255],
+        [255, 255, 255],
+        [255, 255, 255],
+        [255, 255, 255],
+        [160, 160, 160],
+        [160, 160, 160],
+        [160, 160, 160],
+        [32, 32, 32],
+    ];
+    for (pixel, [r, g, b]) in shot.make_mut_slice().iter_mut().zip(row) {
+        *pixel = slint::Rgba8Pixel { r, g, b, a: 255 };
+    }
+    let (fg, bg) = sampled_colours(
+        &shot,
+        1.0,
+        LogicalPosition::new(0.0, 0.0),
+        LogicalSize::new(10.0, 1.0),
+    );
+    assert_eq!(fg.as_deref(), Some("#202020"));
+    assert_eq!(bg.as_deref(), Some("#ffffff"));
 }
 
 /// Draws a frame of `window`, which builds the list rows a change added.
@@ -837,6 +871,15 @@ fn b01() -> Vec<Row> {
             });
             s.main()
         }),
+        row("B01", "MAIN-NO-SPEAKER-ON", |s| {
+            s.edit(|state| {
+                for speaker in &mut state.speakers {
+                    speaker.enabled = false;
+                }
+            });
+            s.play(track(true, true));
+            s.main()
+        }),
     ]
 }
 
@@ -1133,6 +1176,10 @@ fn b05() -> Vec<Row> {
             s.app.toggle_sync(SPEAKERS);
             s.main()
         }),
+        row("B05", "MAIN-SYSVOL-PANEL", |s| {
+            s.app.toggle_sync(SPEAKERS);
+            s.main()
+        }),
     ]
 }
 
@@ -1275,6 +1322,10 @@ fn b07() -> Vec<Row> {
 fn b08() -> Vec<Row> {
     vec![
         row("B08", "TRAY-IDLE", |s| {
+            s.edit(|state| state.running = false);
+            s.flyout()
+        }),
+        row("B08", "TRAY-HEADER-OFF", |s| {
             s.edit(|state| state.running = false);
             s.flyout()
         }),
