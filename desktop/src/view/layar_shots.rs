@@ -843,8 +843,12 @@ fn b02() -> Vec<Row> {
             s.play(long_track());
             s.main()
         }),
+        // As the Mac render's empty model: AirPlay has looked and found none.
         row("B02", "MAIN-EMPTY", |s| {
-            s.edit(|state| state.speakers.clear());
+            s.edit(|state| {
+                state.speakers.clear();
+                state.airplay_none_found = true;
+            });
             s.main()
         }),
         row("B02", "MAIN-SMALLEST", |s| s.main_at(MAIN_SMALLEST)),
@@ -1276,8 +1280,12 @@ fn b08() -> Vec<Row> {
             s.play(track(true, true));
             s.flyout()
         }),
+        // As the Mac render's empty panel, whose sender is not up yet: it looks.
         row("B08", "TRAY-EMPTY", |s| {
-            s.edit(|state| state.speakers.clear());
+            s.edit(|state| {
+                state.speakers.clear();
+                state.airplay_searching = true;
+            });
             s.flyout()
         }),
         row("B08", "TRAY-LONGNAME", |s| {
