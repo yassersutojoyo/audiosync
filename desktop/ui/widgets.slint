@@ -6,7 +6,7 @@
 // focus ring while it has keyboard focus, acts on Space and Enter, and
 // carries an accessible role, label and (where it has one) value.
 
-import { Button, ComboBox, Spinner } from "std-widgets.slint";
+import { Button, ComboBox } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { Availability, CastState, DeviceVolumeHint, NoticeItem, RowPart, UpdateButton, RowState, SourceLook, SourceRowKind, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
@@ -2525,7 +2525,7 @@ export component TextField inherits Rectangle {
 // is a number out of range. Drawn in the spacing around the field instead of
 // taking room, so the row is no taller than its buttons.
 // A delay step, as the Mac panel's small bordered button (MainWindow.swift:3500-3515):
-// 10 px digits on a faint grey pill with no border or shadow, #f4f4f4 on white and
+// 11 px digits on a faint grey pill with no border or shadow, #f4f4f4 on white and
 // #282828 on #1e1e1e in the Mac's 2x render. 22 high, the field's height, where
 // the Mac's is 20 beside a 22 field.
 component DelayStep inherits Rectangle {
@@ -2573,7 +2573,7 @@ component DelayStep inherits Rectangle {
         y: -Fluent.digit-lift;
         height: parent.height;
         text: Strings.delay-step(root.delta);
-        font-size: Tokens.font-size-caption;
+        font-size: 11px;
         color: Tokens.text;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -2583,6 +2583,92 @@ component DelayStep inherits Rectangle {
     FocusRing {
         visible-focus: focus.has-focus;
         border-radius: root.border-radius;
+    }
+}
+
+// The Mac's small push button (controlSize .small, CalibrationViews.swift:53-56):
+// 11 px text on the delay steps' faint grey, 20 high in its 2x photos.
+component SmallPushButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    out property <bool> has-focus: focus.has-focus;
+    callback clicked();
+
+    height: 20px;
+    min-width: label.preferred-width + 20px;
+    border-radius: 5px;
+    background: Tokens.text.with-alpha(root.enabled && touch.pressed ? (Tokens.dark ? 0.3 : 0.1) : 0.05);
+    animate background { duration: Fluent.fast; }
+    forward-focus: focus;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if root.enabled {
+            root.clicked();
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    focus := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if event.text == " " || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    label := Text {
+        text: root.text;
+        font-size: 11px;
+        color: root.enabled ? Tokens.text : Tokens.text.with-alpha(0.5);
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+
+    FocusRing {
+        visible-focus: focus.has-focus;
+        border-radius: root.border-radius;
+    }
+}
+
+// The Mac's small spinner (ProgressView, CalibrationViews.swift:43-45): eight
+// grey spokes, the lit one going round once a second. Paths, as the software
+// renderer draws no rotation.
+component ProgressSpokes inherits Rectangle {
+    property <float> lit: Motion.on ? mod(floor(animation-tick() / 125ms), 8) : 0;
+    width: 16px;
+    height: 16px;
+    accessible-role: none;
+
+    for i in 8: Path {
+        width: 16px;
+        height: 16px;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        stroke: Tokens.secondary-text.with-alpha(1 - mod(root.lit - i + 8, 8) / 8 * 0.75);
+        stroke-width: 2px;
+        stroke-line-cap: round;
+
+        MoveTo {
+            x: 8 + 3.5 * sin(i * 45deg);
+            y: 8 - 3.5 * cos(i * 45deg);
+        }
+
+        LineTo {
+            x: 8 + 7 * sin(i * 45deg);
+            y: 8 - 7 * cos(i * 45deg);
+        }
     }
 }
 
@@ -2807,12 +2893,7 @@ export component SyncControls inherits VerticalLayout {
             if root.calibrating: VerticalLayout {
                 alignment: center;
 
-                Spinner {
-                    indeterminate: true;
-                    width: 16px;
-                    height: 16px;
-                    accessible-role: none;
-                }
+                ProgressSpokes { }
             }
 
             if root.calibrating: QuietText {
@@ -2822,7 +2903,7 @@ export component SyncControls inherits VerticalLayout {
 
             // One button for both, so the keyboard focus stays on it when
             // a calibration starts or ends.
-            Button {
+            SmallPushButton {
                 text: root.calibrating ? Strings.calibration-cancel : Strings.calibrate-with-microphone;
                 enabled: root.calibrating || root.calibration-enabled;
                 accessible-label: root.calibrating ? Strings.calibration-cancel-label(root.name) : Strings.calibrate-label(root.name);

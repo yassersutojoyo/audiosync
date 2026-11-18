@@ -1031,7 +1031,7 @@ export component TrayFlyout inherits Window {
     // sizes the window to: Slint's own preferred height counts a wrapped
     // notice as one line. The parts sit at the top, so this holds at any
     // window height.
-    out property <length> fit-height: root.footer-bottom + 12px;
+    out property <length> fit-height: root.footer-bottom + 8px;
     // Each frame of a zone's fold changes it; the app then sizes the window
     // again, so no gap opens under the rows and nothing is cut.
     callback fit-height-changed();
@@ -1145,7 +1145,6 @@ export component TrayFlyout inherits Window {
                         HorizontalLayout {
                             padding-left: 6px;
                             padding-right: 6px;
-                            padding-top: 2px;
                             padding-bottom: 2px;
                             spacing: 9px;
 
@@ -1718,7 +1717,12 @@ export component TrayFlyout inherits Window {
                 }
             }
 
-            Divider { }
+            VerticalLayout {
+                // 8 under the rows, as the Mac's (MenuBar.swift:1765).
+                padding-top: -2px;
+
+                Divider { }
+            }
 
             footer := IntroPart {
                 index: 6;
