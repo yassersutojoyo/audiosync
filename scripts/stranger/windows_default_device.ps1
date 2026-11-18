@@ -8,7 +8,9 @@
 #     log says it gets no copy (S470);
 #   volume keys: a volume set on the default as the taskbar does it stays
 #     while streaming, and the stream goes on (S192);
-#   muted output: the System slider on a muted default unmutes it (S197).
+#   muted output: the System slider on a muted default unmutes it (S197);
+#   restore: with a second endpoint added, the default the app moved and every
+#     output's volume and mute are as found after a kill and an uninstall (S474).
 # Without an endpoint after the install it prints why and exits 0 with
 # "not tried", since no check could run.
 #
@@ -38,6 +40,7 @@ interface IMMDeviceEnumerator {
 [ComImport, Guid("0BD7A1BE-7A1A-44DB-8397-CC5392387B5E"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
 interface IMMDeviceCollection {
   [PreserveSig] int GetCount(out uint count);
+  [PreserveSig] int Item(uint index, out IMMDevice device);
 }
 
 [ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -129,6 +132,31 @@ public static class Endpoints {
   public static void SetMute(bool mute) {
     Marshal.ThrowExceptionForHR(Volume().SetMute(mute, ref Writer));
   }
+
+  // Every active output as "<id> <level>% muted|unmuted", one per line.
+  public static string Readings() {
+    var lines = new System.Text.StringBuilder();
+    IMMDeviceCollection devices;
+    Marshal.ThrowExceptionForHR(Enumerator().EnumAudioEndpoints(Render, Active, out devices));
+    uint count;
+    Marshal.ThrowExceptionForHR(devices.GetCount(out count));
+    for (uint i = 0; i < count; i++) {
+      IMMDevice device;
+      Marshal.ThrowExceptionForHR(devices.Item(i, out device));
+      string id;
+      Marshal.ThrowExceptionForHR(device.GetId(out id));
+      Guid iid = typeof(IAudioEndpointVolume).GUID;
+      object face;
+      Marshal.ThrowExceptionForHR(device.Activate(ref iid, 23, IntPtr.Zero, out face));
+      var volume = (IAudioEndpointVolume)face;
+      float level;
+      bool muted;
+      Marshal.ThrowExceptionForHR(volume.GetMasterVolumeLevelScalar(out level));
+      Marshal.ThrowExceptionForHR(volume.GetMute(out muted));
+      lines.AppendFormat("{0} {1:F1}% {2}\n", id, level * 100, muted ? "muted" : "unmuted");
+    }
+    return lines.ToString().TrimEnd();
+  }
 }
 
 // cfgmgr32's software device API (swdevice.h): a device under SWD\, whose
@@ -192,6 +220,7 @@ function Not-Tried([string] $Why) {
     Format-Table -AutoSize Status, Class, FriendlyName, InstanceId | Out-String -Width 200 |
     Tee-Object -FilePath "$Work/env.txt" -Append
   Write-Output "::warning::default-device rows not tried: $Why"
+  if ($log -and (Test-Path $log)) { Copy-Item $log (Join-Path $Work 'audiosync-debug.log') }
   exit 0
 }
 
@@ -229,8 +258,9 @@ $created = [SoftwareDevice]::Create('AudioSyncCI', '*Scream', 'Speakers')
 # Run 44292105824 (Server 2025) refused SWD with 0x8007007E: a ROOT device
 # instead, which AudioSync lists as virtual, so This PC has no System slider.
 $script:builtIn = $created.StartsWith('0x00000000')
+$devcon = Join-Path $fixture 'scream/Install/helpers/devcon-x64.exe'
 if (-not $script:builtIn) {
-  & (Join-Path $fixture 'scream/Install/helpers/devcon-x64.exe') install (Join-Path $driver 'Scream.inf') '*Scream' |
+  & $devcon install (Join-Path $driver 'Scream.inf') '*Scream' |
     Tee-Object -FilePath "$Work/env.txt" -Append
 }
 
@@ -286,20 +316,29 @@ function Test-Alive { -not $script:app.HasExited }
 $log = Join-Path $env:TEMP 'audiosync-debug.log'
 function Get-LogLines([string] $Pattern) { @(Select-String -Path $log -Pattern $Pattern -SimpleMatch -ErrorAction SilentlyContinue) }
 
-$env:AUDIOSYNC_DEBUG = '1'
-$script:app = Start-Process -FilePath $exe -WorkingDirectory $dir -PassThru
-Remove-Item Env:AUDIOSYNC_DEBUG
-$main = $null
-for ($i = 0; $i -lt 30 -and -not $main; $i++) { Start-Sleep -Seconds 1; $main = @(Get-AppWindows)[0] }
-if (-not $main) { throw 'no AudioSync window within 30 s' }
-Start-Sleep -Seconds 3
-$main.SetFocus()
+function Start-App {
+  $env:AUDIOSYNC_DEBUG = '1'
+  $script:app = Start-Process -FilePath $exe -WorkingDirectory $dir -PassThru
+  Remove-Item Env:AUDIOSYNC_DEBUG
+  $script:main = $null
+  for ($i = 0; $i -lt 30 -and -not $script:main; $i++) { Start-Sleep -Seconds 1; $script:main = @(Get-AppWindows)[0] }
+  if (-not $script:main) { throw 'no AudioSync window within 30 s' }
+  Start-Sleep -Seconds 3
+  $script:main.SetFocus()
+}
+
+# Show Virtual Devices on, as a user with a virtual card would set it: the
+# endpoint is ROOT-enumerated, which hides its row otherwise.
+$data = Join-Path $env:LOCALAPPDATA 'AudioSync'
+New-Item -ItemType Directory -Force -Path $data | Out-Null
+'{"version":3,"show_virtual_devices":true}' | Set-Content -Encoding ascii (Join-Path $data 'settings.json')
+Start-App
 
 $toggles = Get-Toggles
 "toggles: $(($toggles | ForEach-Object { "'$($_.Current.Name)'=$(Test-On $_)" }) -join ', ')" | Tee-Object -FilePath "$Work/result.txt" -Append
 $streaming = $toggles | Where-Object { $_.Current.Name -eq 'Streaming' } | Select-Object -First 1
 $row = $toggles | Where-Object { $_.Current.Name -match 'Speakers|Scream' } | Select-Object -First 1
-if (-not $row -and -not $script:builtIn) { Not-Tried 'the ROOT endpoint has no row in the main window' }
+if (-not $row -and -not $script:builtIn) { Not-Tried 'the endpoint has no row in the main window' }
 if (-not $streaming -or -not $row) { throw 'no Streaming switch or no row for the endpoint (see toggles above)' }
 if (-not (Test-On $row)) { $row.GetCurrentPattern($TogglePattern).Toggle(); Start-Sleep -Seconds 2 }
 $streaming.GetCurrentPattern($TogglePattern).Toggle()
@@ -336,7 +375,7 @@ if (-not $script:builtIn) {
   $slider = Find-All $sliderType | Where-Object { $_.Current.Name -like 'Windows volume of *' } | Select-Object -First 1
   Check 'A1.8' ([bool]$slider) "the This PC row's System slider is there (opener found: $([bool]$opener))"
   if ($slider) {
-    $main.SetFocus()
+    $script:main.SetFocus()
     $slider.SetFocus()
     Start-Sleep -Milliseconds 500
     [System.Windows.Forms.SendKeys]::SendWait('{LEFT}')
@@ -354,6 +393,62 @@ Check 'A1.11' ((Get-Defaults) -eq $default) 'the default output is as found afte
 if (Test-Alive) { Stop-Process -Id $script:app.Id -Force }
 Start-Sleep -Seconds 2
 if (Test-Path $log) { Copy-Item $log (Join-Path $Work 'audiosync-debug.log') }
+
+# A1.1: with a second, silent endpoint the app moves the default while the
+# whole system streams (S469); a kill and the uninstall each must leave the
+# default, volume and mute as found (S474).
+function Get-Found { "$(Get-Defaults)`n$([Endpoints]::Readings())" }
+
+function Get-Rows { @(Get-Toggles | Where-Object { $_.Current.Name -match 'Speakers|Scream' }) }
+
+function Set-Toggle([string] $Name, [int] $Index, [bool] $On) {
+  $e = if ($Name) { Get-Toggles | Where-Object { $_.Current.Name -eq $Name } | Select-Object -First 1 } else { (Get-Rows)[$Index] }
+  if ((Test-On $e) -ne $On) { $e.GetCurrentPattern($TogglePattern).Toggle(); Start-Sleep -Seconds 2 }
+}
+
+# Streams with one row on at a time until the default moves; whether it did.
+function Start-MovedStream([string] $Before) {
+  $rows = (Get-Rows).Count
+  for ($pick = 0; $pick -lt $rows; $pick++) {
+    Set-Toggle 'Streaming' 0 $false
+    for ($r = 0; $r -lt $rows; $r++) { Set-Toggle '' $r ($r -eq $pick) }
+    Set-Toggle 'Streaming' 0 $true
+    Start-Sleep -Seconds 6
+    if ((Get-Defaults) -ne $Before) { return $true }
+  }
+  $false
+}
+
+& $devcon install (Join-Path $driver 'Scream.inf') '*Scream' | Tee-Object -FilePath "$Work/env.txt" -Append
+$count = 0
+for ($i = 0; $i -lt 60 -and $count -ne 2; $i++) { Start-Sleep -Seconds 1; $count = [Endpoints]::ActiveCount() }
+if ($count -ne 2) {
+  "NOT TRIED A1.1: $count active output endpoints after adding a second one (two needed)" | Tee-Object -FilePath "$Work/result.txt" -Append
+} else {
+  [Endpoints]::SetMute($false)
+  [Endpoints]::SetLevel(0.42)
+  $defaults = Get-Defaults
+  $found = Get-Found
+  "A1.1 before the app starts:`n$found" | Tee-Object -FilePath "$Work/result.txt" -Append
+  foreach ($leg in 'kill', 'uninstall') {
+    Start-App
+    $moved = Start-MovedStream $defaults
+    $copies = @(Get-Process audiosync -ErrorAction SilentlyContinue).Count
+    "A1.1 $leg, while streaming: $(Get-Defaults); moved: $moved; audiosync processes: $copies" | Tee-Object -FilePath "$Work/result.txt" -Append
+    if ($leg -eq 'kill') {
+      Stop-Process -Id $script:app.Id -Force
+    } else {
+      Start-Process -FilePath (Join-Path $dir 'unins000.exe') -Wait -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
+      for ($i = 0; $i -lt 60 -and (Test-Path $exe); $i++) { Start-Sleep -Seconds 1 }
+    }
+    for ($i = 0; $i -lt 15 -and (Get-Found) -ne $found; $i++) { Start-Sleep -Seconds 1 }
+    $now = Get-Found
+    "A1.1 after the ${leg}:`n$now" | Tee-Object -FilePath "$Work/result.txt" -Append
+    if (-not $moved) { "WEAK A1.1 ${leg}: the app moved no default, so nothing was restored" | Tee-Object -FilePath "$Work/result.txt" -Append }
+    Check 'A1.1' ($now -eq $found) "after the $leg the default output and every output's volume and mute are as found"
+    if (Test-Path $log) { Copy-Item $log (Join-Path $Work "audiosync-debug-a11-$leg.log") }
+  }
+}
 
 if ($script:failed) { "$($script:failed.Count) checks failed"; exit 1 }
 'every default-device check passed'
