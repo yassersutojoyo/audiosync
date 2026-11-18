@@ -13847,6 +13847,44 @@ pub(crate) mod tests {
         );
     }
 
+    /// A row's code note leads with the Mac's lock, 10 px at the caption's
+    /// size and 3 px before the text (AvailabilityNote, MenuBar.swift:2311-2318).
+    #[test]
+    fn a_rows_code_note_leads_with_a_lock_3_px_before_its_text() {
+        let app = narrow_app(MockBackend::new());
+        draw_frames_at(776, 680);
+        let note = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+            &app.main,
+            "Asks for a code",
+        )
+        .next()
+        .expect("the code note");
+        let (top, left) = (note.absolute_position().y, note.absolute_position().x);
+        let in_note = |part: &i_slint_backend_testing::ElementHandle| {
+            let at = part.absolute_position();
+            (top - 0.5..=top + note.size().height).contains(&at.y)
+                && (left - 0.5..=left + note.size().width).contains(&at.x)
+        };
+        let label = i_slint_backend_testing::ElementHandle::find_by_element_id(
+            &app.main,
+            "SpeakerRow::note-label",
+        )
+        .find(&in_note)
+        .expect("its text");
+        let lock = i_slint_backend_testing::ElementHandle::find_by_element_id(
+            &app.main,
+            "SpeakerRow::note-icon",
+        )
+        .find(&in_note)
+        .expect("the lock");
+        let text_x = label.absolute_position().x;
+        assert_eq!(lock.size().width, 10.0);
+        assert_eq!(
+            text_x - (lock.absolute_position().x + lock.size().width),
+            3.0
+        );
+    }
+
     /// The master volume row is the Mac's 18 high (MasterMuteButton and
     /// MasterSlider, MenuBar.swift:2958 and :2976), so the rows under it sit
     /// where the Mac's do; the mute button keeps its 24 px target over it.
