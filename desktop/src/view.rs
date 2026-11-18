@@ -12873,7 +12873,22 @@ pub(crate) mod tests {
         app.main
             .invoke_speaker_rename_edited("local:desk".into(), "Desk".into());
         draw_frames();
-        click(app.main.window(), 600.0, 370.0);
+        // Between the name field and the delay value: the row itself, not a
+        // control, wherever the font puts the row.
+        let at = |label: &str| {
+            let element =
+                i_slint_backend_testing::ElementHandle::find_by_accessible_label(&app.main, label)
+                    .next()
+                    .unwrap_or_else(|| panic!("{label}"));
+            (element.absolute_position(), element.size())
+        };
+        let (field, field_size) = at("Name for Desk Speaker");
+        let (delay, delay_size) = at("Show controls for Desk Speaker delay");
+        click(
+            app.main.window(),
+            (field.x + field_size.width + delay.x) / 2.0,
+            delay.y + delay_size.height / 2.0,
+        );
         assert_eq!(name_of(&app, "local:desk"), "Desk");
         assert!(app.ui.borrow().rename.is_none());
         assert!(app.ui.borrow().sync_open.is_empty(), "no delay panel");
@@ -13530,6 +13545,69 @@ pub(crate) mod tests {
         )
         .count();
         assert_eq!(capitals, 3, "This PC, Zones and Connected Speakers");
+    }
+
+    /// This PC and Connected Speakers stand 18 px apart, the Mac's
+    /// sectionGap (BrandTokens.swift:156, used at MainWindow.swift:292).
+    #[test]
+    fn the_speaker_sections_stand_the_macs_section_gap_apart() {
+        let app = narrow_app(MockBackend::new());
+        draw_frames_at(776, 680);
+        let sections: Vec<_> = i_slint_backend_testing::ElementHandle::find_by_element_type_name(
+            &app.main,
+            "SpeakerSection",
+        )
+        .collect();
+        assert_eq!(sections.len(), 2, "This PC and Connected Speakers");
+        let end = sections[0].absolute_position().y + sections[0].size().height;
+        assert_eq!(sections[1].absolute_position().y - end, 18.0);
+    }
+
+    /// The device volume hint and its fix share one line, 4 px apart, as the
+    /// Mac's HStack(spacing: 4) with a one-line text (DeviceVolumeViews.swift:20-29).
+    #[test]
+    fn the_device_volume_hint_and_its_fix_share_one_line_as_on_the_mac() {
+        let app = narrow_app(MockBackend::new());
+        draw_frames_at(776, 680);
+        let label = app
+            .main
+            .global::<crate::Strings>()
+            .invoke_device_volume_hint_label("Speakers".into(), DeviceVolumeHint::Low, 13);
+        // Calibrate All's "Before you start" in the left column names the same
+        // hint and fix: take the ones in the speaker list.
+        let find = |label: &str| {
+            i_slint_backend_testing::ElementHandle::find_by_accessible_label(&app.main, label)
+                .find(|e| e.absolute_position().x > 300.0)
+                .unwrap_or_else(|| panic!("{label}"))
+        };
+        let (hint, fix) = (find(&label), find("Set to 75%, Speakers"));
+        let middle = |e: &i_slint_backend_testing::ElementHandle| {
+            e.absolute_position().y + e.size().height / 2.0
+        };
+        assert!(
+            (middle(&hint) - middle(&fix)).abs() <= 1.0,
+            "one line: hint at {}, fix at {}",
+            middle(&hint),
+            middle(&fix)
+        );
+        let gap = fix.absolute_position().x - (hint.absolute_position().x + hint.size().width);
+        assert_eq!(gap, 4.0, "the fix follows the hint");
+    }
+
+    /// A row's options button is the Mac's borderless ellipsis.circle menu
+    /// (optionsMenu, MainWindow.swift:2643-2653), 21 × 15 as measured on the
+    /// Mac photo, so the delay chip before it sits where the Mac's does.
+    #[test]
+    fn a_rows_options_button_is_the_macs_size() {
+        let app = narrow_app(MockBackend::new());
+        draw_frames_at(776, 680);
+        let options = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+            &app.main,
+            "Options for Headphones",
+        )
+        .next()
+        .expect("the Headphones row's options");
+        assert_eq!((options.size().width, options.size().height), (21.0, 15.0));
     }
 
     /// A zone's speakers are set apart by a 1 px rule down their leading

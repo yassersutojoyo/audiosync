@@ -1480,7 +1480,7 @@ export component SpeakerBadge inherits Rectangle {
         opacity: root.fill;
     }
 
-    property <color> ink: root.plays ? #ffffff : root.state == RowState.off ? (Tokens.dark ? #e8eaea : #3a3f3f) : Tokens.teal-text;
+    property <color> ink: root.plays ? #ffffff : root.state == RowState.off ? (Tokens.dark ? #ffffff8c : #00000080) : Tokens.teal-text;
     animate ink {
         duration: Motion.on ? 250ms : 150ms;
         easing: Motion.on ? ease-in-out : linear;
@@ -4318,8 +4318,9 @@ export component SpeakerRow inherits Rectangle {
                             VerticalLayout {
                                 alignment: center;
                                 options := IconButton {
-                                    // The name line's height, as the Mac's text-sized menu.
-                                    height: 16px;
+                                    // The Mac's borderless ellipsis.circle menu, 21 x 15.
+                                    width: 21px;
+                                    height: 15px;
                                     glyph: Glyphs.more;
                                     label: Strings.speaker-options(root.item.name);
                                     glyph-color: Tokens.secondary-text;
@@ -4465,43 +4466,40 @@ export component SpeakerRow inherits Rectangle {
                                         vertical-alignment: top;
                                     }
 
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
+                                    Text {
+                                        text: Strings.device-volume-hint(hint-box.hint, hint-box.percent);
+                                        font-size: Tokens.font-size-caption;
+                                        color: Tokens.secondary-text;
+                                        // One line, as the Mac's lineLimit(1).
+                                        overflow: elide;
+                                        vertical-alignment: center;
+                                        accessible-role: text;
+                                        accessible-label: hint-box.open ? Strings.device-volume-hint-label(root.item.name, hint-box.hint, hint-box.percent) : "";
+                                    }
+
+                                    HorizontalLayout {
                                         alignment: start;
+                                        horizontal-stretch: 1;
 
-                                        Text {
-                                            text: Strings.device-volume-hint(hint-box.hint, hint-box.percent);
-                                            font-size: Tokens.font-size-caption;
-                                            color: Tokens.secondary-text;
-                                            wrap: word-wrap;
-                                            min-height: self.preferred-height;
-                                            accessible-role: text;
-                                            accessible-label: hint-box.open ? Strings.device-volume-hint-label(root.item.name, hint-box.hint, hint-box.percent) : "";
-                                        }
-
-                                        HorizontalLayout {
-                                            alignment: start;
-
-                                            fix-button := LinkButton {
-                                                text: Strings.device-volume-fix(hint-box.hint);
-                                                label: Strings.device-volume-fix-label(root.item.name, hint-box.hint);
-                                                changed keyboard-focused => {
-                                                    root.fix-focused = self.keyboard-focused;
+                                        fix-button := LinkButton {
+                                            text: Strings.device-volume-fix(hint-box.hint);
+                                            label: Strings.device-volume-fix-label(root.item.name, hint-box.hint);
+                                            changed keyboard-focused => {
+                                                root.fix-focused = self.keyboard-focused;
+                                            }
+                                            clicked => {
+                                                // A shutting hint is stale: its link does nothing.
+                                                if !hint-box.open {
+                                                    return;
                                                 }
-                                                clicked => {
-                                                    // A shutting hint is stale: its link does nothing.
-                                                    if !hint-box.open {
-                                                        return;
-                                                    }
-                                                    // The button goes with the hint once
-                                                    // Windows reports the change: hand
-                                                    // the keyboard focus to the slider
-                                                    // first, so it stays in the row.
-                                                    if fix-button.keyboard-focused {
-                                                        volume-slider.focus-slider();
-                                                    }
-                                                    root.device-volume-fix();
+                                                // The button goes with the hint once
+                                                // Windows reports the change: hand
+                                                // the keyboard focus to the slider
+                                                // first, so it stays in the row.
+                                                if fix-button.keyboard-focused {
+                                                    volume-slider.focus-slider();
                                                 }
+                                                root.device-volume-fix();
                                             }
                                         }
                                     }

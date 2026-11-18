@@ -49,7 +49,7 @@ pub const COLORS: &[ColorToken] = &[
     ColorToken {
         name: "text",
         light: [41, 41, 41],
-        dark: [246, 246, 246],
+        dark: [224, 224, 224],
     },
     ColorToken {
         name: "muted",
