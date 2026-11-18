@@ -14931,7 +14931,7 @@ pub(crate) mod tests {
             id: 1,
             title: "Kitchen reconnecting".into(),
             heading: "Kitchen is reconnecting after the network dropped it twice".into(),
-            message: vec!["Speakers grouping gyp"; 9].join(" ").into(),
+            message: ["Speakers grouping gyp"; 9].join(" ").into(),
             time: "09.40".into(),
             ..NoticeItem::default()
         };
