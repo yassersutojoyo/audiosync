@@ -6763,7 +6763,7 @@ fn calibration_status(
                     SharedString::default()
                 }
             },
-            |failure| calibration_failure(strings, reference, failure),
+            |failure| failure_text(strings, state, reference, failure),
         ),
         Phase::Running(Step::Preparing) => strings.get_calibration_preparing(),
         Phase::Running(Step::Measuring(Which::Reference)) => {
@@ -6783,7 +6783,7 @@ fn calibration_status(
         }
         Phase::Cancelled => strings.get_calibration_cancelled(),
         Phase::Failed(failure) => {
-            strings.invoke_calibration_failed(calibration_failure(strings, reference, failure))
+            strings.invoke_calibration_failed(failure_text(strings, state, reference, failure))
         }
     }
 }
@@ -6889,7 +6889,7 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
             strings.invoke_calibrate_all_stopped(strings.invoke_calibrate_zone_nothing(zone.into()))
         }
         AllPhase::Failed(failure) => {
-            strings.invoke_calibrate_all_stopped(calibration_failure(strings, reference, *failure))
+            strings.invoke_calibrate_all_stopped(failure_text(strings, state, reference, *failure))
         }
         AllPhase::Stale => strings.get_calibrate_all_stale(),
         AllPhase::Ended(reason) => {
@@ -6904,12 +6904,11 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
         ),
         AllPhase::Idle if all.other_running => strings.get_calibrate_all_busy(),
         AllPhase::Idle => match all.blocked {
-            Some(Failure::NoReference) => strings.get_calibration_no_reference(),
             Some(Failure::NothingToMeasure) => {
                 strings.invoke_calibrate_all_nothing(reference.into())
             }
             Some(Failure::OnlyLeftOut) => strings.get_calibrate_all_only_left_out(),
-            Some(failure) => calibration_failure(strings, reference, failure),
+            Some(failure) => failure_text(strings, state, reference, failure),
             None => strings.invoke_calibrate_all_hint(reference.into()),
         },
     };
@@ -7261,6 +7260,25 @@ fn airplay_moves_line(strings: &Strings<'_>, moves: &AirPlayMoves) -> Option<Sha
         (None, true) => Some(strings.get_calibrate_zone_airplay_no_zone()),
         (Some(named), false) => Some(strings.invoke_calibrate_zone_airplay_zones(named)),
         (Some(named), true) => Some(strings.invoke_calibrate_zone_airplay_both(named)),
+    }
+}
+
+/// Why a calibration can't run, where headphones on the PC's jack leave no
+/// reference listed (Mac Localization.swift:489-490).
+fn failure_text(
+    strings: &Strings<'_>,
+    state: &AppState,
+    reference: &str,
+    failure: Failure,
+) -> SharedString {
+    let jack = state
+        .speakers
+        .iter()
+        .any(|speaker| speaker.kind == ui_model::SpeakerKind::Headphones);
+    if failure == Failure::NoReference && jack {
+        strings.get_calibration_reference_headphones()
+    } else {
+        calibration_failure(strings, reference, failure)
     }
 }
 
@@ -10031,6 +10049,9 @@ pub(crate) mod tests {
                 calibrate_all_card(&strings, state).status.to_string(),
             ]
         };
+        state
+            .speakers
+            .retain(|speaker| speaker.kind != ui_model::SpeakerKind::Headphones);
         let unlisted =
             "Calibration measures against the PC's own speakers, and they aren't listed.";
         assert_eq!(lines(&state), [unlisted, unlisted]);
