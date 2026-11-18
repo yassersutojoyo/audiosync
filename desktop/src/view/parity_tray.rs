@@ -1,6 +1,13 @@
 //! The tray flyout's speaker rows, header and backing against the Mac's
 //! menu bar panel (MenuBar.swift, PanelColors.swift).
 
+use std::time::Duration;
+
+use super::App;
+use super::tests::{advance_clock, app_over, draw_frames, hold_clock};
+use crate::ui_model::{MockBackend, NoticeMessage};
+use slint::{ComponentHandle, Model};
+
 fn flyout() -> String {
     include_str!("../../ui/flyout.slint").replace("\r\n", "\n")
 }
@@ -117,4 +124,65 @@ fn this_pcs_rows_show_in_full_and_parts_stand_10_apart() {
     let source = flyout();
     assert!(!source.contains("min(this-pc-list.preferred-height, 144px)"));
     assert!(source.contains("padding-bottom: 8px;\n            spacing: 10px;"));
+}
+
+/// MenuBar.swift:1754-1760, 2098-2116 AirPlayProblemView(compact): while
+/// AirPlay has stopped, a red triangle and the message sit under the speaker
+/// list with an underlined Retry, in Brand.errorText; it goes with the notice.
+#[test]
+fn an_airplay_stop_shows_in_red_under_the_list_with_retry() {
+    let mut backend = MockBackend::new();
+    backend.post("airplay", NoticeMessage::AirPlayStopped, "09.40");
+    let app = app_over(backend);
+    assert_eq!(
+        app.flyout.get_airplay_problem(),
+        app.strings().get_notice_airplay_stopped()
+    );
+    let id = app.snapshot().notices[0].id;
+    app.dismiss_notice(id);
+    assert_eq!(app.flyout.get_airplay_problem(), "");
+
+    let row = component("AirPlayProblemRow");
+    assert!(row.contains("glyph: Glyphs.warning;"), "{row}");
+    assert_eq!(row.matches("color: Tokens.error-text;").count(), 3, "{row}");
+    assert!(row.contains("text: Strings.notice-retry;"), "{row}");
+    assert!(flyout().contains("root.notice-retry-requested(-1);"));
+}
+
+/// MenuBar.swift:1961-1965 rowTransition, WindowRules.swift:857-862: a row
+/// that comes or goes fades and moves 6 px over 0.35 s ease-out, 35 ms after
+/// the row before it, and a leaving one stays listed until it has faded.
+#[test]
+fn a_speaker_leaving_the_flyout_fades_out_before_it_goes() {
+    let ease = component("RowEase");
+    assert!(ease.contains("delay: Motion.on ? root.index * 35ms : 0ms;"), "{ease}");
+    assert!(ease.contains("y: (root.shown - 1) * 6px;"), "{ease}");
+    assert!(ease.contains("duration: Motion.on ? 350ms : 0ms;"), "{ease}");
+    assert_eq!(flyout().matches("]: RowEase {").count(), 2);
+
+    let app = app_over(MockBackend::new());
+    app.rows_ease.set(true);
+    app.prepare_flyout_open(true);
+    app.flyout.show().expect("the flyout shows headless");
+    hold_clock();
+    draw_frames();
+    let listed = |app: &App, id: &str| {
+        app.flyout
+            .get_speakers()
+            .iter()
+            .chain(app.flyout.get_this_pc().iter())
+            .find(|row| row.id == id)
+            .map(|row| row.leaving)
+    };
+    let id = app.flyout.get_speakers().row_data(0).expect("a speaker").id;
+    app.hide_speaker(&id);
+    assert_eq!(listed(&app, &id), Some(true), "it stays while it fades");
+    advance_clock(Duration::from_millis(2000));
+    draw_frames();
+    assert_eq!(listed(&app, &id), None);
+
+    app.hide_flyout();
+    let id = app.flyout.get_speakers().row_data(0).expect("a speaker").id;
+    app.hide_speaker(&id);
+    assert_eq!(listed(&app, &id), None, "hidden, it goes at once");
 }

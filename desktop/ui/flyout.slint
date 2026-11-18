@@ -823,6 +823,8 @@ export component TrayFlyout inherits Window {
     // What Narrator says about a new notice, while the app wants it said
     // here (empty otherwise).
     in property <string> notice-announcement;
+    // Why AirPlay stopped, while its notice is up; empty otherwise.
+    in property <string> airplay-problem;
     callback power-toggled(bool);
     callback source-selected(int);
     // Several Apps… under the source: opens the main window's list.
