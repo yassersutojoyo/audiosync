@@ -1924,8 +1924,8 @@ export component LevelSlider inherits Rectangle {
         width: root.vertical ? root.thickness : root.span * root.ratio;
         height: root.vertical ? root.span * root.ratio : root.thickness;
         border-radius: root.thickness / 2;
-        // On dark the Mac's small slider fill is grey, not white.
-        background: root.idle ? transparent : root.small ? (Tokens.dark ? #ffffff42 : #000000f5) : Tokens.text;
+        // The window tints its sliders in ink (MainWindow.swift:350-351): near white on dark.
+        background: root.idle ? transparent : root.small ? (Tokens.dark ? Tokens.text : #000000f5) : Tokens.text;
         animate background {
             duration: Motion.on ? 250ms : 150ms;
             easing: Motion.on ? ease-in-out : linear;
