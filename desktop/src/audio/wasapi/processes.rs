@@ -9,21 +9,26 @@ use windows::Win32::Media::Audio::{
     AudioSessionStateExpired, DEVICE_STATE_ACTIVE, IAudioSessionControl2, IAudioSessionManager2,
     eRender,
 };
+use windows::Win32::Storage::FileSystem::{
+    GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
+};
+use windows::Win32::Storage::Packaging::Appx::GetApplicationUserModelId;
 use windows::Win32::System::Com::CLSCTX_ALL;
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::Threading::{
-    GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
-    WaitForSingleObject,
+    GetProcessTimes, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_SYNCHRONIZE, QueryFullProcessImageNameW, WaitForSingleObject,
 };
+use windows::Win32::UI::Shell::{IShellItem, SHCreateItemFromParsingName, SIGDN_NORMALDISPLAY};
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GW_OWNER, GWL_EXSTYLE, GetWindow, GetWindowLongPtrW, GetWindowTextLengthW,
     GetWindowThreadProcessId, IsWindowVisible, WS_EX_TOOLWINDOW,
 };
-use windows::core::{BOOL, HRESULT, Interface};
+use windows::core::{BOOL, HRESULT, HSTRING, Interface, PCWSTR, PWSTR};
 
-use super::com::{Apartment, Handle, system_error};
+use super::com::{Apartment, Handle, system_error, take_com_string};
 use super::devices::enumerator;
 use crate::audio::backend::BackendError;
 use crate::audio::process::{ProcessEntry, ProcessTable};
@@ -137,6 +142,95 @@ unsafe extern "system" fn collect_window_pid(window: HWND, pids: LPARAM) -> BOOL
         }
     }
     true.into()
+}
+
+/// The name process `pid`'s app gives itself: a packaged app's name in the
+/// Start menu, else its executable's file description, as Task Manager shows.
+pub(super) fn app_name(pid: u32) -> Option<String> {
+    // SAFETY: opens the process for limited queries; the handle is owned
+    // below.
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
+    let process = Handle::new(process);
+    let mut wide = [0u16; 1024];
+    let mut length = wide.len() as u32;
+    // SAFETY: a handle with query access and a writable buffer of `length`
+    // units.
+    if unsafe {
+        GetApplicationUserModelId(process.raw(), &mut length, Some(PWSTR(wide.as_mut_ptr())))
+    }
+    .is_ok()
+        && let Some(name) = start_menu_name(&executable_name(&wide))
+    {
+        return Some(name);
+    }
+    let mut length = wide.len() as u32;
+    // SAFETY: as above.
+    unsafe {
+        QueryFullProcessImageNameW(
+            process.raw(),
+            PROCESS_NAME_WIN32,
+            PWSTR(wide.as_mut_ptr()),
+            &mut length,
+        )
+    }
+    .ok()?;
+    file_description(&executable_name(&wide[..length as usize]))
+}
+
+/// The Start menu's name for the packaged app `app_id`.
+fn start_menu_name(app_id: &str) -> Option<String> {
+    let _apartment = Apartment::enter().ok()?;
+    let path = HSTRING::from(format!("shell:AppsFolder\\{app_id}"));
+    // SAFETY: a NUL-terminated path; the item is released on drop, and the
+    // name COM allocated is taken and freed once.
+    unsafe {
+        let item: IShellItem = SHCreateItemFromParsingName(&path, None).ok()?;
+        take_com_string(item.GetDisplayName(SIGDN_NORMALDISPLAY).ok()?)
+    }
+}
+
+/// The file description in the version resource of the executable at `path`,
+/// in the resource's first language.
+fn file_description(path: &str) -> Option<String> {
+    let path = HSTRING::from(path);
+    // SAFETY: a NUL-terminated path and a buffer of the size Windows asked
+    // for; the pointers VerQueryValueW returns point into that buffer.
+    unsafe {
+        let size = GetFileVersionInfoSizeW(&path, None);
+        if size == 0 {
+            return None;
+        }
+        let mut data = vec![0u8; size as usize];
+        GetFileVersionInfoW(&path, None, size, data.as_mut_ptr().cast()).ok()?;
+        let mut value = std::ptr::null_mut();
+        let mut length = 0u32;
+        if !VerQueryValueW(
+            data.as_ptr().cast(),
+            &HSTRING::from("\\VarFileInfo\\Translation"),
+            &mut value,
+            &mut length,
+        )
+        .as_bool()
+            || length < 4
+        {
+            return None;
+        }
+        let language = *value.cast::<u16>();
+        let code_page = *value.cast::<u16>().add(1);
+        let key = format!("\\StringFileInfo\\{language:04x}{code_page:04x}\\FileDescription");
+        if !VerQueryValueW(
+            data.as_ptr().cast(),
+            &HSTRING::from(key),
+            &mut value,
+            &mut length,
+        )
+        .as_bool()
+            || length == 0
+        {
+            return None;
+        }
+        PCWSTR(value.cast()).to_string().ok()
+    }
 }
 
 /// The IDs of the processes that own an audio session on an active render

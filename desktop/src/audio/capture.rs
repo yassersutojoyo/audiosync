@@ -15,9 +15,10 @@
 //! ancestry can be captured. Where they can't be read, or AudioSync is
 //! missing from the snapshot, AudioSync refuses rather than capture itself.
 
-use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 use audiosync_core::channels::{InputPair, pair_to_stereo};
@@ -33,6 +34,7 @@ use super::calibration::{CalibrationTap, Route};
 use super::cast::CastLease;
 use super::outputs::{EndpointReading, is_hands_free};
 use super::process::{IDLE_PID, ProcessTable, SYSTEM_PID};
+use crate::adapter::compare_app_names;
 
 /// The name of the whole-system source in English, as the macOS app shows
 /// it: for logs and the mock. The UI, and AirPlay receivers while no track
@@ -298,8 +300,9 @@ pub fn display_name(executable: &str) -> String {
 /// Executables whose windows belong to the system shell, to another app they
 /// host, or to a vendor's background helper, so their windows never make them
 /// an app to offer.
-const WINDOW_HOSTS: [&str; 9] = [
+const WINDOW_HOSTS: [&str; 10] = [
     "ApplicationFrameHost.exe",
+    "PickerHost.exe",
     "TextInputHost.exe",
     "msedgewebview2.exe",
     "SystemSettings.exe",
@@ -366,6 +369,10 @@ pub fn source_list(
             })
             .collect()
     });
+    let own_executable = processes
+        .get(own_pid)
+        .map(|entry| entry.executable.as_str())
+        .unwrap_or_default();
     let mut apps: Vec<SourceInfo> = Vec::new();
     let windowed = regular.iter().flatten().map(|&pid| (pid, false));
     for (pid, has_session) in session_pids.iter().map(|&pid| (pid, true)).chain(windowed) {
@@ -386,10 +393,13 @@ pub fn source_list(
             .get(root_pid)
             .map(|entry| entry.executable.clone())
             .unwrap_or_default();
-        if !has_session
-            && apps
-                .iter()
-                .any(|app| app.executable.eq_ignore_ascii_case(&executable))
+        // As the Mac never offers its own bundle ID, another copy of
+        // AudioSync isn't offered either.
+        if executable.eq_ignore_ascii_case(own_executable)
+            || !has_session
+                && apps
+                    .iter()
+                    .any(|app| app.executable.eq_ignore_ascii_case(&executable))
         {
             continue;
         }
@@ -401,12 +411,7 @@ pub fn source_list(
             hands_free: false,
         });
     }
-    apps.sort_by(|a, b| {
-        a.name
-            .to_lowercase()
-            .cmp(&b.name.to_lowercase())
-            .then_with(|| a.executable.cmp(&b.executable))
-    });
+    sort_by_name(&mut apps);
     let mut sources = Vec::with_capacity(apps.len() + 1);
     sources.push(SourceInfo {
         id: SourceId::WholeSystem,
@@ -417,6 +422,105 @@ pub fn source_list(
     });
     sources.extend(apps);
     sources
+}
+
+fn sort_by_name(apps: &mut [SourceInfo]) {
+    apps.sort_by(|a, b| {
+        compare_app_names(&a.name, &b.name).then_with(|| a.executable.cmp(&b.executable))
+    });
+}
+
+/// Reads the name the app whose top process has this ID gives itself.
+pub type NameReader = Arc<dyn Fn(u32) -> Option<String> + Send + Sync>;
+
+/// The names apps give themselves, by executable compared without case.
+#[derive(Default)]
+pub struct AppNames {
+    known: Arc<Mutex<HashMap<String, Option<String>>>>,
+    reading: Option<JoinHandle<()>>,
+}
+
+impl AppNames {
+    /// Starts reading with `read`, on a thread of its own, the names of the
+    /// apps among `sources` whose executable was never asked for: one read
+    /// can take most of a second, and the window lists sources every few
+    /// seconds.
+    pub fn ask(&mut self, sources: &[SourceInfo], read: &NameReader) {
+        let unseen: Vec<(u32, String)> = {
+            let mut known = self.known.lock().unwrap_or_else(PoisonError::into_inner);
+            sources
+                .iter()
+                .filter_map(|source| match source.id {
+                    SourceId::App { root_pid } => {
+                        let key = source.executable.to_lowercase();
+                        (!known.contains_key(&key)).then(|| {
+                            known.insert(key.clone(), None);
+                            (root_pid, key)
+                        })
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        if unseen.is_empty() {
+            return;
+        }
+        let known = Arc::clone(&self.known);
+        let read = Arc::clone(read);
+        let earlier = self.reading.take();
+        self.reading = Some(thread::spawn(move || {
+            if let Some(earlier) = earlier {
+                let _ = earlier.join();
+            }
+            for (pid, key) in unseen {
+                let name = read(pid);
+                known
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(key, name);
+            }
+        }));
+    }
+
+    /// The name read for `executable`, compared without case, once it
+    /// arrived and isn't blank.
+    pub fn name(&self, executable: &str) -> Option<String> {
+        let known = self.known.lock().unwrap_or_else(PoisonError::into_inner);
+        let name = known.get(&executable.to_lowercase())?.as_deref()?.trim();
+        (!name.is_empty()).then(|| name.to_owned())
+    }
+
+    /// The name to show for `executable`: the one read, else its own.
+    pub fn label(&self, executable: &str) -> String {
+        self.name(executable)
+            .unwrap_or_else(|| display_name(executable))
+    }
+
+    #[cfg(test)]
+    pub fn wait(&mut self) {
+        if let Some(reading) = self.reading.take() {
+            let _ = reading.join();
+        }
+    }
+}
+
+/// Names each app among `sources` (a [`source_list`]) by the name it gives
+/// itself as far as `names` read it, as the Mac shows an app's own name, and
+/// sorts the apps again.
+pub fn name_apps(sources: &mut [SourceInfo], names: &AppNames) {
+    for source in sources.iter_mut() {
+        if matches!(source.id, SourceId::App { .. })
+            && let Some(name) = names.name(&source.executable)
+        {
+            source.name = name;
+        }
+    }
+    let first_app = usize::from(
+        sources
+            .first()
+            .is_some_and(|source| source.id == SourceId::WholeSystem),
+    );
+    sort_by_name(&mut sources[first_app..]);
 }
 
 /// The input devices to offer, from the active capture endpoints Windows
@@ -1972,6 +2076,71 @@ mod tests {
             .map(|source| source.name)
             .collect();
         assert_eq!(names, ["All System Audio", "Discord", "Spotify", "Steam"]);
+    }
+
+    // covers: S476
+    #[test]
+    fn a_picker_host_and_another_audiosync_are_not_offered_as_the_mac_leaves_out_its_own_bundle_id()
+    {
+        let table = ProcessTable::new([
+            entry(3, 0, None, "svchost.exe"),
+            entry(10, 0, None, "explorer.exe"),
+            entry(20, 10, None, "WhatsApp.Root.exe"),
+            entry(30, 3, None, "PickerHost.exe"),
+            entry(40, 10, None, "AudioSync.exe"),
+            entry(60, 10, None, "Spotify.exe"),
+            entry(99, 10, None, "audiosync.exe"),
+        ]);
+        let names: Vec<String> = source_list(&table, &[60], Some(&[20, 30, 40, 60]), 99)
+            .into_iter()
+            .map(|source| source.name)
+            .collect();
+        assert_eq!(names, ["All System Audio", "Spotify", "WhatsApp.Root"]);
+    }
+
+    // covers: S476
+    #[test]
+    fn apps_show_the_name_they_give_themselves_read_once_per_executable() {
+        use std::sync::atomic::{AtomicUsize, Ordering as Counted};
+        let table = ProcessTable::new([
+            entry(10, 0, None, "explorer.exe"),
+            entry(20, 10, None, "WhatsApp.Root.exe"),
+            entry(50, 10, None, "ms-teams.exe"),
+            entry(60, 10, None, "Spotify.exe"),
+            entry(70, 10, None, "vlc.exe"),
+            entry(99, 10, None, "audiosync.exe"),
+        ]);
+        let reads = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&reads);
+        let read: NameReader = Arc::new(move |pid| {
+            counted.fetch_add(1, Counted::SeqCst);
+            match pid {
+                20 => Some("WhatsApp".to_owned()),
+                50 => Some(" Teams ".to_owned()),
+                60 => Some("  ".to_owned()),
+                _ => None,
+            }
+        });
+        let listed = source_list(&table, &[60], Some(&[20, 50, 60, 70]), 99);
+        let mut names = AppNames::default();
+        names.ask(&listed, &read);
+        names.wait();
+        let mut sources = listed.clone();
+        name_apps(&mut sources, &names);
+        let shown: Vec<&str> = sources.iter().map(|source| source.name.as_str()).collect();
+        assert_eq!(
+            shown,
+            ["All System Audio", "Spotify", "Teams", "Vlc", "WhatsApp"]
+        );
+        names.ask(&listed, &read);
+        names.wait();
+        assert_eq!(
+            reads.load(Counted::SeqCst),
+            4,
+            "a later listing reads no name again"
+        );
+        assert_eq!(names.label("MS-Teams.exe"), "Teams");
+        assert_eq!(names.label("vlc.exe"), "Vlc");
     }
 
     // covers: S380
