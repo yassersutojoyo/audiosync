@@ -2312,9 +2312,13 @@ impl Renderer {
     /// session lead, less the converter's latency.
     fn wanted_reader_delay(&self) -> i64 {
         let lead = self.shared.leads().session_lead();
+        let heard_after = u128::from(self.shared.heard_after_ns.load(Ordering::Relaxed))
+            * u128::from(self.capture_rate)
+            / 1_000_000_000;
         self.hold_back
             .saturating_add(lead)
             .saturating_sub(self.latency)
+            .saturating_sub(i64::try_from(heard_after).unwrap_or(i64::MAX))
             .max(0)
     }
 

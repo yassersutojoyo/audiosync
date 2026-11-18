@@ -253,6 +253,8 @@ struct Render {
     rate: u32,
     started: bool,
     reported_at_ns: Option<u64>,
+    /// Whether the renderer has the stream's first nonzero latency (S478).
+    heard_after_given: bool,
     #[cfg(test)]
     ring: Arc<audiosync_core::ring::Ring>,
     /// The reader's anchors counted so far.
@@ -302,6 +304,10 @@ impl Render {
                 .reported_at_ns
                 .is_none_or(|at| now_ns.saturating_sub(at) >= LATENCY_INTERVAL_NS)
         {
+            if !self.heard_after_given && latency > 0 {
+                self.control.set_heard_after_ns(latency);
+                self.heard_after_given = true;
+            }
             let used = self.control.set_reported_latency(latency, None);
             self.status.latency_ns.store(used, Ordering::Relaxed);
             self.reported_at_ns = Some(now_ns);
@@ -380,6 +386,7 @@ pub fn start(
         rate: target.rate,
         started: false,
         reported_at_ns: None,
+        heard_after_given: false,
         #[cfg(test)]
         ring,
         #[cfg(test)]
