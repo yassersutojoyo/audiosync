@@ -1398,7 +1398,10 @@ component PresetsCard inherits Rectangle {
                         VerticalLayout {
                             alignment: center;
                             // Turns a quarter with the 250 ms fold, as on the Mac.
+                            // The software renderer draws no rotation, so a down
+                            // chevron, turned back a quarter, fades in as this one fades out.
                             Rectangle {
+                                width: right-chevron.preferred-width;
                                 height: label.preferred-height;
                                 transform-rotation: root.open ? 90deg : 0deg;
                                 animate transform-rotation {
@@ -1406,10 +1409,33 @@ component PresetsCard inherits Rectangle {
                                     easing: ease-in-out;
                                 }
 
-                                Glyph {
-                                    glyph: Glyphs.chevron-right;
-                                    font-size: Tokens.font-size-callout;
-                                    color: Tokens.secondary-text;
+                                Rectangle {
+                                    opacity: root.open ? 0 : 1;
+                                    animate opacity {
+                                        duration: Motion.on ? 250ms : 0ms;
+                                        easing: ease-in-out;
+                                    }
+
+                                    right-chevron := Glyph {
+                                        glyph: Glyphs.chevron-right;
+                                        font-size: Tokens.font-size-callout;
+                                        color: Tokens.secondary-text;
+                                    }
+                                }
+
+                                Rectangle {
+                                    transform-rotation: -90deg;
+                                    opacity: root.open ? 1 : 0;
+                                    animate opacity {
+                                        duration: Motion.on ? 250ms : 0ms;
+                                        easing: ease-in-out;
+                                    }
+
+                                    Glyph {
+                                        glyph: Glyphs.chevron-down;
+                                        font-size: Tokens.font-size-callout;
+                                        color: Tokens.secondary-text;
+                                    }
                                 }
                             }
 
