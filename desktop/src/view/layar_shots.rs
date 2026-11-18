@@ -44,6 +44,8 @@ type Size = (f32, f32);
 /// main.slint's preferred size and its smallest (min-width, min-height).
 const MAIN: Size = (696.0, 632.0);
 const MAIN_SMALLEST: Size = (696.0, 440.0);
+/// The Mac's smallest main window, title bar included (its photos: 984 px at 2x).
+const MAC_SMALLEST: Size = (696.0, 492.0);
 /// equalizer.slint's fixed width; 420 is the height the older shot test used.
 const EQUALIZER: Size = (520.0, 420.0);
 const EQUALIZER_SMALLEST: Size = (520.0, 360.0);
@@ -184,6 +186,8 @@ impl Scene {
     fn new(appearance: ui_model::Appearance) -> Scene {
         let mut data = MockBackend::new().snapshot();
         data.running = true;
+        // The Mac photos' Cast search is off, which hides Add by Address.
+        data.cast_by_address = false;
         let state = Rc::new(RefCell::new(data));
         let app = app_over(Stage(state.clone()));
         app.poll_timer.stop();
@@ -227,6 +231,8 @@ impl Scene {
     fn play(&self, track: CardTrack) {
         self.media.read(Some(track));
         self.app.sync_now_playing();
+        // The poll that draws the Now Playing line is stopped.
+        self.app.follow_ambient(&Rc::downgrade(&self.app));
         render(self.app.main.window());
     }
 
@@ -943,7 +949,7 @@ fn b02() -> Vec<Row> {
             });
             s.main()
         }),
-        row("B02", "MAIN-SMALLEST", |s| s.main_at(MAIN_SMALLEST)),
+        row("B02", "MAIN-SMALLEST", |s| s.main_at(MAC_SMALLEST)),
         row("B02", "MAIN-SMALLEST-PLAYING", |s| {
             s.play(track(true, true));
             s.main_at(MAIN_SMALLEST)
@@ -1349,6 +1355,7 @@ fn b07() -> Vec<Row> {
             s.main()
         }),
         row("B07", "MAIN-ADD-ADDRESS", |s| {
+            s.edit(|state| state.cast_by_address = true);
             s.app.ask_cast_address();
             s.main()
         }),
@@ -1887,6 +1894,7 @@ fn motion_frames_of_a_song_change_and_a_speaker_switched_off() {
 #[test]
 fn a_list_pushed_down_by_a_notice_scrolls_to_add_by_address() {
     let scene = Scene::new(ui_model::Appearance::Light);
+    scene.edit(|state| state.cast_by_address = true);
     scene
         .speaker(SPEAKERS, |speaker| {
             speaker.enabled = true;

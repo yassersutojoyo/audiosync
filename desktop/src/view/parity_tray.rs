@@ -228,7 +228,7 @@ fn a_rows_device_volume_glyph_sits_at_the_right_edge() {
     let at = source
         .find("if root.device-volume != DeviceVolumeHint.none: Glyph {")
         .expect("the glyph");
-    let glyph = &source[at..at + 200];
+    let glyph = &source[at..at + 300];
     assert!(glyph.contains("horizontal-stretch: 0;"), "{glyph}");
 }
 

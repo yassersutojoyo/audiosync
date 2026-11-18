@@ -517,6 +517,8 @@ component FlyoutRow inherits Rectangle {
         if root.device-volume != DeviceVolumeHint.none: Glyph {
             glyph: Glyphs.device-volume(root.device-volume);
             font-size: 12px;
+            // At the row's right edge, as the Mac's: no share of the spare width.
+            horizontal-stretch: 0;
             color: Tokens.secondary-text;
 
             // Narrator reads the hint from the row's description.
@@ -1328,7 +1330,6 @@ export component TrayFlyout inherits Window {
                                                 height: 48px;
                                                 border-radius: 9px;
                                                 clip: true;
-                                                background: Tokens.text.with-alpha(0.06);
                                                 transform-scale: 1 - root.now-playing-look.old-shrink;
                                                 opacity: 1 - root.now-playing-look.old-fade;
 
@@ -1345,7 +1346,8 @@ export component TrayFlyout inherits Window {
                                                     height: parent.height;
                                                     glyph: root.source-is-input ? Glyphs.microphone : Glyphs.volume-high;
                                                     color: Tokens.secondary-text;
-                                                    font-size: 22px;
+                                                    // The Mac's symbol keeps its own size in a 22 pt frame (MenuBar.swift:2509-2522): 17 pt wide in its photos.
+                                                    font-size: 17px;
                                                 }
 
                                                 Rectangle {
@@ -1569,21 +1571,6 @@ export component TrayFlyout inherits Window {
                                 property <string> cast-note: self.both-none || self.list-note == Strings.looking-for-speakers ? "" : Strings.cast-list(root.cast-list);
                                 property <string> text: root.this-pc.length == 0 && root.all-hidden ? Strings.flyout-all-hidden : root.this-pc.length == 0 && root.airplay-none-found ? Strings.no-speakers : self.cast-note == "" ? self.list-note : self.list-note == Strings.connected-none ? self.cast-note : self.list-note + " " + self.cast-note;
                                 spacing: 10px;
-
-                                // While it looks: a dot that beats once a second, still
-                                // with animation effects off.
-                                if none-note.text == Strings.looking-for-speakers || none-note.text == Strings.looking-for-airplay-speakers: Rectangle {
-                                    property <float> beat: Motion.on ? mod(animation-tick() / 1ms, 1000) / 1000 : 1;
-                                    width: 15px;
-
-                                    Rectangle {
-                                        width: 7px * (self.beat < 0.11 ? 1 + 0.6 * self.beat / 0.11 : self.beat < 0.22 ? 1.6 - 0.6 * (self.beat - 0.11) / 0.11 : 1);
-                                        height: self.width;
-                                        border-radius: self.width / 2;
-                                        background: Tokens.secondary-text;
-                                        property <float> beat: parent.beat;
-                                    }
-                                }
 
                                 SecondaryText {
                                     text: none-note.text;

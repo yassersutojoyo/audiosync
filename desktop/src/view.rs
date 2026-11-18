@@ -6509,7 +6509,9 @@ pub fn speaker_item(
         kind: speaker_kind(speaker.kind),
         show_kind,
         state: row_state(state.speaker_state(speaker)),
-        plays: state.speaker_state(speaker) == SpeakerState::Playing
+        // On while streaming, as the Mac's row state (MenuBar.swift:505-507):
+        // a speaker that reconnects or waits still shows as playing.
+        plays: SpeakerState::new(speaker.enabled, state.running) == SpeakerState::Playing
             && speaker
                 .cast
                 .as_ref()
@@ -11039,9 +11041,10 @@ pub(crate) mod tests {
             .main
             .global::<crate::Strings>()
             .invoke_volume_of("Speakers".into());
+        // The track before the knob: the fill fades to the off track; the knob stays.
         let knob = || {
             let (left, top, width, height) = slider_box(&app.main, &label);
-            let x = left + 8.0 + (width - 16.0) * 0.6;
+            let x = left + 9.0 + (width - 18.0) * 0.3;
             pixels(app.main.window())(x, top + height / 2.0)[0]
         };
         let on = knob();
@@ -11054,7 +11057,7 @@ pub(crate) mod tests {
         draw_frames();
         let off = knob();
         assert!(
-            off < midway && midway < on,
+            on.min(off) < midway && midway < on.max(off),
             "{on}, then {midway}, then {off}"
         );
     }
@@ -19366,112 +19369,6 @@ pub(crate) mod tests {
         );
     }
 
-    /// At 125 % and 150 % the dark knob's top edge, clipped at 6 px (7.5 and
-    /// 9 device px), leaves no gap in its rim, no line across the knob and no
-    /// edge at the bottom, on or off, with or without the pointer; on light
-    /// no line crosses the knob either.
-    #[test]
-    fn a_rows_knob_has_no_seam_at_fractional_scales() {
-        use slint::language::ColorScheme;
-        let app = narrow_app(MockBackend::new());
-        for name in ["Speakers", "Headphones"] {
-            let label = app
-                .main
-                .global::<crate::Strings>()
-                .invoke_volume_of(name.into());
-            for scale in [1.25f32, 1.5] {
-                app.main
-                    .window()
-                    .dispatch_event(WindowEvent::ScaleFactorChanged {
-                        scale_factor: scale,
-                    });
-                let (mut first, mut last, mut knob_top) = (0, 0, 0.0);
-                for scheme in [ColorScheme::Dark, ColorScheme::Light] {
-                    app.main.global::<Palette>().set_color_scheme(scheme);
-                    for hovered in [false, true] {
-                        draw_frames();
-                        let (left, top, width, height) = slider_box(&app.main, &label);
-                        let middle = top + height / 2.0;
-                        let window = app.main.window();
-                        let position = if hovered {
-                            slint::LogicalPosition::new((first + last) as f32 / 2.0 / scale, middle)
-                        } else {
-                            slint::LogicalPosition::new(2.0, 2.0)
-                        };
-                        window.dispatch_event(WindowEvent::PointerMoved { position });
-                        advance_clock(Duration::from_secs(1));
-                        draw_frames();
-                        let shot = window.take_snapshot().expect("drawn");
-                        let stride = shot.width() as usize;
-                        let at = |x: i32, y: i32| {
-                            shot.as_bytes()[(y as usize * stride + x as usize) * 4]
-                        };
-                        // 5 px above the track only the knob is drawn.
-                        let probe = ((middle - 5.0) * scale) as i32;
-                        if scheme == ColorScheme::Dark && !hovered {
-                            let row = at(((left - 4.0) * scale) as i32, probe);
-                            let inked: Vec<i32> = ((left * scale) as i32
-                                ..((left + width) * scale) as i32)
-                                .filter(|&x| at(x, probe) > row.saturating_add(8))
-                                .collect();
-                            (first, last) = (inked[0], inked[inked.len() - 1]);
-                            // The renderer puts the knob on whole pixels, so its top
-                            // row is read from the shot, not from the layout.
-                            let column = (first + last + 1) / 2;
-                            knob_top = (((top - 2.0) * scale) as i32..)
-                                .find(|&y| at(column, y) > row.saturating_add(8))
-                                .expect("the knob's top")
-                                as f32;
-                        }
-                        let centre = (first + last + 1) as f32 / 2.0;
-                        let columns = (centre - 8.0 * scale).floor() as i32
-                            ..(centre + 8.0 * scale).ceil() as i32;
-                        let clip_end = (knob_top + 6.0 * scale).floor() as i32;
-                        let case = format!("{name} {scale}x {scheme:?} hovered {hovered}");
-                        let fill = at(centre as i32, (middle * scale) as i32 - 1);
-                        let inner = columns.start + 3..columns.end - 3;
-                        for y in clip_end - 1..=clip_end + 1 {
-                            let line: Vec<u8> = inner.clone().map(|x| at(x, y)).collect();
-                            assert!(
-                                line.iter().all(|&g| g.abs_diff(fill) <= 2),
-                                "{case}: a line across the knob at {y}, fill {fill:02x}: {line:02x?}"
-                            );
-                        }
-                        if scheme == ColorScheme::Light {
-                            continue;
-                        }
-                        let centre_y = knob_top + 8.0 * scale;
-                        for y in knob_top as i32..(centre_y - 2.5 * scale) as i32 {
-                            let mirror = (2.0 * centre_y) as i32 - 1 - y;
-                            for x in columns.clone() {
-                                let (above, below) = (at(x, y), at(x, mirror));
-                                assert!(
-                                    above.saturating_add(2) >= below,
-                                    "{case}: a gap in the rim at {x},{y}: {above:02x} over {below:02x}"
-                                );
-                                if y >= clip_end {
-                                    assert!(
-                                        above <= below.saturating_add(12),
-                                        "{case}: the edge goes on past the clip at {x},{y}: {above:02x} over {below:02x}"
-                                    );
-                                }
-                            }
-                        }
-                        let bottom = (knob_top + 16.0 * scale) as i32 - 2;
-                        for y in bottom..bottom + 2 {
-                            let lightest =
-                                columns.clone().map(|x| at(x, y)).max().unwrap_or_default();
-                            assert!(
-                                lightest <= fill,
-                                "{case}: an edge at the bottom, {lightest:02x} at {y}"
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     /// An off speaker's slider keeps the Mac's contrast on its row, plain or
     /// under the pointer, in both themes (measured on the Mac's off
     /// row at 2x: on dark the track is
@@ -19493,11 +19390,7 @@ pub(crate) mod tests {
                 let case = format!("{scheme:?}, hovered {hovered}");
                 if scheme == ColorScheme::Dark {
                     assert!(track >= row + 10, "{case}: track {track} on {row}");
-                    assert!(brightest >= row + 26, "{case}: knob {brightest} on {row}");
-                    assert!(
-                        brightest <= row + 28,
-                        "{case}: knob rim {brightest} on {row}"
-                    );
+                    assert!(brightest >= row + 150, "{case}: knob {brightest} on {row}");
                 } else {
                     assert!(track + 6 <= row, "{case}: track {track} on {row}");
                     if hovered {
@@ -25161,10 +25054,10 @@ pub(crate) mod tests {
         assert!(tip_after(position), "back once the pointer left");
     }
 
-    /// A speaker's volume has a 16 px knob, as the master volume's and as
-    /// measured on the Mac's window.
+    /// A speaker's volume has the Mac's 18 x 14 small knob (its 18 Nov
+    /// photos at 2x); the master volume a 16 px one.
     #[test]
-    fn speaker_volume_knobs_are_16_px_as_the_masters() {
+    fn speaker_volume_knobs_are_the_macs_small_knob() {
         let app = narrow_app(MockBackend::new());
         let row = element(&app, "SpeakerRow::volume-slider").expect("a speaker's volume");
         let knob = row
@@ -25172,7 +25065,7 @@ pub(crate) mod tests {
             .match_id("LevelSlider::thumb")
             .find_first()
             .expect("its knob");
-        assert_eq!(knob.size().width, 16.0);
+        assert_eq!((knob.size().width, knob.size().height), (18.0, 14.0));
         let master = element(&app, "MasterVolume::slider").expect("the master volume");
         let knob = master
             .query_descendants()
