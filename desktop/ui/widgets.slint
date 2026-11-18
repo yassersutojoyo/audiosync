@@ -53,6 +53,8 @@ export global Fluent {
     // columns and the speaker list's sections.
     out property <length> window-margin: 20px;
     out property <length> gap: 12px;
+    // Above a notice and above the columns, the Mac's NoticeStack.windowGap (MenuBar.swift:2668).
+    out property <length> window-gap: 14px;
     // Between the main window's two columns (main_columns in src/window_rules.rs).
     out property <length> column-gap: 16px;
     // The main window's wordmark and mark, as the Mac's.
@@ -2220,24 +2222,32 @@ export component MasterVolume inherits HorizontalLayout {
     in property <length> number-gap: 6px;
     // The mute button's side: 24 in the main window, as the Mac's.
     in property <length> button-size: 32px;
+    // The row's height; the button overhangs a lower row, centred on it.
+    in property <length> row-height: root.button-size;
     out property <bool> slider-focused: slider.slider-focused;
     callback changed(float);
     callback mute-toggled();
 
     spacing: 4px;
+    height: root.row-height;
 
-    IconButton {
+    Rectangle {
         width: root.button-size;
-        height: root.button-size;
-        label: root.waves == 0 ? Strings.unmute-master : Strings.mute-master;
-        clicked => {
-            root.mute-toggled();
-        }
 
-        speaker := Glyph {
-            x: (parent.width - self.width) / 2;
-            width: 16px;
-            glyph: Glyphs.master-volume(root.waves);
+        IconButton {
+            y: (parent.height - self.height) / 2;
+            width: root.button-size;
+            height: root.button-size;
+            label: root.waves == 0 ? Strings.unmute-master : Strings.mute-master;
+            clicked => {
+                root.mute-toggled();
+            }
+
+            speaker := Glyph {
+                x: (parent.width - self.width) / 2;
+                width: 16px;
+                glyph: Glyphs.master-volume(root.waves);
+            }
         }
     }
 
@@ -3995,6 +4005,12 @@ export component SpeakerRow inherits Rectangle {
                                             vertical-alignment: center;
                                             overflow: elide;
                                             accessible-role: none;
+                                        }
+
+                                        // Named by the code or can't-play note, as the Mac's AvailabilityNote (MenuBar.swift:2322-2323).
+                                        if root.availability-note != "": Rectangle {
+                                            accessible-role: text;
+                                            accessible-label: root.availability-note;
                                         }
 
                                         if root.note-help != "": TouchArea {

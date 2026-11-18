@@ -421,7 +421,8 @@ fn the_source_button_shows_the_chosen_apps_icon_and_presets_the_stack() {
 }
 
 /// The header sits 5 px higher than the gap under the title row gave it, as
-/// the Mac's at 1:1 (gear top 43, card top 86), while the columns stay put.
+/// the Mac's at 1:1 (gear top 43), and the columns start the Mac's 14 px
+/// windowGap under it (MenuBar.swift:2668, MainWindow.swift:330).
 // covers: S450
 #[test]
 fn the_header_sits_as_high_as_the_macs_and_the_columns_stay() {
@@ -438,7 +439,7 @@ fn the_header_sits_as_high_as_the_macs_and_the_columns_stay() {
     };
     let gear = top("MainWindow::gear");
     let column = top("MainWindow::left-column");
-    assert_eq!((gear, column), (33.0, 84.0), "gear, then the left column");
+    assert_eq!((gear, column), (33.0, 81.0), "gear, then the left column");
 }
 
 /// A row or zone that comes or goes opens or shuts its room and fades with it
@@ -665,7 +666,7 @@ fn the_main_window_streaming_switch_has_no_tooltip() {
         .find("power := PowerSwitch {")
         .expect("the header switch");
     let end = main[at..]
-        .find("// The 5 the header moved up")
+        .find("if root.notices.length > 0: NoticeStack {")
         .expect("the header's end");
     assert!(!main[at..at + end].contains("Tooltip"), "none around it");
 }

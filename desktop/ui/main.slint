@@ -1832,25 +1832,15 @@ component CalibrationCard inherits VerticalLayout {
     in property <string> status;
     // The status only says what a run does: it shows as the row's tooltip.
     in property <bool> status-is-hint;
-    // The microphone was blocked: Open Privacy Settings.
-    in property <bool> privacy;
     in property <[LeftOutItem]> left-out;
     // For a Calibrate Zone run: where to bring the PC; empty otherwise.
     in property <string> zone;
-    // Before a run: the reference's device volume when it is low or muted
-    // (spec S197), and the reference's name for Narrator.
-    in property <DeviceVolumeHint> volume;
-    in property <int> volume-percent;
-    in property <string> reference;
     callback start();
     callback cancel();
-    callback privacy-requested();
     // Include Anyway (true) or Leave Out (false) on a left-out row, by its
     // output's ID.
     callback include(string, bool);
     callback focus-changed(bool);
-    // `focused`: the fix had the keyboard focus, which the window places.
-    callback fix-volume(bool);
 
     accessible-role: groupbox;
     accessible-label: Strings.calibrate-all;
@@ -1907,23 +1897,6 @@ component CalibrationCard inherits VerticalLayout {
         }
 
         // What follows the row keeps to the column the row's fill reaches past.
-        if root.privacy: HorizontalLayout {
-            alignment: LayoutAlignment.start;
-            padding-left: 8px;
-            padding-right: 8px;
-
-            Button {
-                changed has-focus => {
-                    root.focus-changed(self.has-focus);
-                }
-                text: Strings.open-microphone-settings;
-                accessible-label: Strings.open-microphone-settings;
-                clicked => {
-                    root.privacy-requested();
-                }
-            }
-        }
-
         if root.zone != "": HorizontalLayout {
             padding-left: 8px;
             padding-right: 8px;
@@ -1933,69 +1906,6 @@ component CalibrationCard inherits VerticalLayout {
                 font-size: Tokens.font-size-body;
                 color: Tokens.text;
                 wrap: word-wrap;
-            }
-        }
-
-        if root.volume != DeviceVolumeHint.none: VerticalLayout {
-            padding-left: 8px;
-            padding-right: 8px;
-            spacing: 4px;
-            accessible-role: groupbox;
-            accessible-label: Strings.calibrate-before-start;
-
-            Text {
-                text: Strings.calibrate-before-start;
-                font-size: Tokens.font-size-caption;
-                font-weight: Fluent.weight-semibold;
-                color: Tokens.secondary-text;
-                accessible-role: none;
-            }
-
-            HorizontalLayout {
-                spacing: 4px;
-
-                Glyph {
-                    glyph: Glyphs.device-volume(root.volume);
-                    font-size: 12px;
-                    color: Tokens.secondary-text;
-                    vertical-alignment: top;
-                }
-
-                VerticalLayout {
-                    horizontal-stretch: 1;
-                    alignment: LayoutAlignment.start;
-
-                    Text {
-                        text: Strings.device-volume-hint(root.volume, root.volume-percent);
-                        font-size: Tokens.font-size-caption;
-                        color: Tokens.secondary-text;
-                        wrap: word-wrap;
-                        min-height: self.preferred-height;
-                        accessible-role: text;
-                        accessible-label: Strings.device-volume-hint-label(root.reference, root.volume, root.volume-percent);
-                    }
-
-                    HorizontalLayout {
-                        alignment: LayoutAlignment.start;
-
-                        volume-fix := LinkButton {
-                            text: Strings.device-volume-fix(root.volume);
-                            label: Strings.device-volume-fix-label(root.reference, root.volume);
-                            changed keyboard-focused => {
-                                root.focus-changed(self.keyboard-focused);
-                            }
-                            clicked => {
-                                // The button goes once Windows reports the
-                                // fix, so the focus moves on first.
-                                let focused = volume-fix.keyboard-focused;
-                                if focused && root.can-start {
-                                    calibrate-button.focus();
-                                }
-                                root.fix-volume(focused);
-                            }
-                        }
-                    }
-                }
             }
         }
 
@@ -2074,6 +1984,13 @@ component CalibrateAllSheet inherits FocusScope {
     in property <bool> can-apply;
     in property <bool> applied;
     in property <bool> can-undo;
+    // Before a run: the reference's device volume when it is low or muted
+    // (spec S197), and the reference's name for Narrator.
+    in property <DeviceVolumeHint> volume;
+    in property <int> volume-percent;
+    in property <string> reference;
+    // The microphone was blocked: Open Privacy Settings.
+    in property <bool> privacy;
     // The height the sheet may take; only the rows scroll past it.
     in property <length> room;
     // The window's width, which the sheet keeps a margin inside.
@@ -2084,8 +2001,12 @@ component CalibrateAllSheet inherits FocusScope {
     callback undo();
     callback close();
     callback focus-changed(bool);
+    callback fix-volume();
+    callback privacy-requested();
     // Set as a run ends with something to apply: Apply then takes the focus.
     property <bool> apply-takes-focus;
+    // Set by a keyboard click on the volume fix, which goes once it works.
+    property <bool> close-takes-focus;
     // Two or three rows stay readable in the smallest window.
     property <length> list-cap: max(120px, root.room - top.preferred-height - bottom.preferred-height - 2 * 14px - 2 * 20px);
 
@@ -2137,6 +2058,67 @@ component CalibrateAllSheet inherits FocusScope {
                 font-size: Tokens.font-size-body;
                 color: Tokens.text;
                 wrap: word-wrap;
+            }
+
+            // Before a run, as the Mac's (CalibrateAllViews.swift:108-109, 177-178).
+            if !root.running && !root.results-shown && root.volume != DeviceVolumeHint.none: before-start := VerticalLayout {
+                spacing: 6px;
+                accessible-role: groupbox;
+                accessible-label: Strings.calibrate-before-start;
+
+                Text {
+                    text: Strings.calibrate-before-start;
+                    font-size: Tokens.font-size-caption;
+                    font-weight: Fluent.weight-semibold;
+                    color: Tokens.secondary-text;
+                    accessible-role: none;
+                }
+
+                HorizontalLayout {
+                    spacing: 4px;
+
+                    Glyph {
+                        glyph: Glyphs.device-volume(root.volume);
+                        font-size: 12px;
+                        color: Tokens.secondary-text;
+                        vertical-alignment: TextVerticalAlignment.top;
+                    }
+
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: LayoutAlignment.start;
+
+                        Text {
+                            text: Strings.device-volume-hint(root.volume, root.volume-percent);
+                            font-size: Tokens.font-size-caption;
+                            color: Tokens.secondary-text;
+                            wrap: word-wrap;
+                            min-height: self.preferred-height;
+                            accessible-role: text;
+                            accessible-label: Strings.device-volume-hint-label(root.reference, root.volume, root.volume-percent);
+                        }
+
+                        HorizontalLayout {
+                            alignment: LayoutAlignment.start;
+
+                            volume-fix := LinkButton {
+                                text: Strings.device-volume-fix(root.volume);
+                                label: Strings.device-volume-fix-label(root.reference, root.volume);
+                                changed keyboard-focused => {
+                                    root.focus-changed(self.keyboard-focused);
+                                }
+                                clicked => {
+                                    // The button goes once Windows reports the
+                                    // fix, so the focus moves on first.
+                                    if volume-fix.keyboard-focused {
+                                        root.close-takes-focus = true;
+                                    }
+                                    root.fix-volume();
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // Before the first results: the run's progress, centered in a box.
@@ -2433,6 +2415,18 @@ component CalibrateAllSheet inherits FocusScope {
                         }
                     }
 
+                    // As on the Mac, the first of the buttons (CalibrateAllViews.swift:470-472).
+                    if root.privacy: Button {
+                        changed has-focus => {
+                            root.focus-changed(self.has-focus);
+                        }
+                        text: Strings.open-microphone-settings;
+                        accessible-label: Strings.open-microphone-settings;
+                        clicked => {
+                            root.privacy-requested();
+                        }
+                    }
+
                     close-button := Button {
                         changed has-focus => {
                             root.focus-changed(self.has-focus);
@@ -2442,6 +2436,15 @@ component CalibrateAllSheet inherits FocusScope {
                         accessible-description: root.outcome;
                         clicked => {
                             root.close();
+                        }
+                    }
+
+                    Timer {
+                        interval: 1ms;
+                        running: root.close-takes-focus;
+                        triggered => {
+                            root.close-takes-focus = false;
+                            close-button.focus();
                         }
                     }
 
@@ -3338,15 +3341,10 @@ export component MainWindow inherits Window {
             }
         }
 
-        // The 5 the header moved up, so the notices and columns stay put.
-        Rectangle {
-            height: 5px;
-        }
-
         if root.notices.length > 0: NoticeStack {
             eased: true;
             staying: root.notices-staying;
-            lead: Fluent.gap;
+            lead: Fluent.window-gap;
             max-width: root.content-max-width;
             padding-right: root.scroll-gutter;
             notices: root.notices;
@@ -3378,7 +3376,7 @@ export component MainWindow inherits Window {
         }
 
         HorizontalLayout {
-            padding-top: Fluent.gap;
+            padding-top: Fluent.window-gap;
             spacing: Fluent.column-gap;
             vertical-stretch: 1;
             // Past the speaker list's widest, the extra width stays empty on the right.
@@ -3537,6 +3535,8 @@ export component MainWindow inherits Window {
                             // 8 px clear of the knob at 100.
                             number-gap: 16px;
                             button-size: 24px;
+                            // The Mac's 18 (MasterMuteButton and MasterSlider, MenuBar.swift:2958, :2976).
+                            row-height: 18px;
                             // Its speaker centred over the rows' icons and the track
                             // starting on their labels' column.
                             padding-left: -2px;
@@ -3618,27 +3618,13 @@ export component MainWindow inherits Window {
                             can-start: root.calibrate-all-can-start;
                             status: root.calibrate-all-status;
                             status-is-hint: root.calibrate-all-status-is-hint;
-                            privacy: root.calibrate-all-privacy;
                             left-out: root.calibrate-all-left-out;
                             zone: root.calibrate-all-zone;
-                            volume: root.calibrate-all-volume;
-                            volume-percent: root.calibrate-all-volume-percent;
-                            reference: root.calibrate-all-reference;
-                            // A focused fix with Calibrate All disabled hands the focus to the card above.
-                            fix-volume(focused) => {
-                                if focused && !root.calibrate-all-can-start {
-                                    equalizer-card.focus();
-                                }
-                                root.device-volume-fix-requested(root.calibrate-all-volume-id);
-                            }
                             start => {
                                 root.calibrate-all-requested();
                             }
                             cancel => {
                                 root.cancel-calibrate-all-requested();
-                            }
-                            privacy-requested => {
-                                root.calibration-privacy-requested();
                             }
                             include(id, included) => {
                                 root.calibrate-all-include-requested(id, included);
@@ -4143,7 +4129,9 @@ export component MainWindow inherits Window {
 
     // Calibrate All's run and results, over everything under the top row:
     // a popup, so Tab stays in the sheet.
-    property <bool> calibrate-sheet-shown: root.calibrate-all-running || root.calibrate-all-results-shown;
+    // A run that failed or stopped before any results keeps the sheet open
+    // with its line, as the Mac's (CalibrateAllViews.swift:145-148).
+    property <bool> calibrate-sheet-shown: root.calibrate-all-running || root.calibrate-all-results-shown || root.calibrate-all-outcome != "";
     changed calibrate-sheet-shown => {
         if self.calibrate-sheet-shown {
             calibrate-sheet.show();
@@ -4189,6 +4177,16 @@ export component MainWindow inherits Window {
             can-apply: root.calibrate-all-can-apply;
             applied: root.calibrate-all-applied;
             can-undo: root.calibrate-all-can-undo;
+            volume: root.calibrate-all-volume;
+            volume-percent: root.calibrate-all-volume-percent;
+            reference: root.calibrate-all-reference;
+            privacy: root.calibrate-all-privacy;
+            fix-volume => {
+                root.device-volume-fix-requested(root.calibrate-all-volume-id);
+            }
+            privacy-requested => {
+                root.calibration-privacy-requested();
+            }
             cancel => {
                 root.cancel-calibrate-all-requested();
             }

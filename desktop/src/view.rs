@@ -6858,6 +6858,9 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
     let outcome = match sheet {
         Some(_) if failed => status.clone(),
         Some(sheet) => sheet_outcome(strings, reference, sheet),
+        // A run that failed or stopped before results: the sheet's line
+        // under "Before you start" (CalibrateAllViews.swift:145-148).
+        None if matches!(all.phase, AllPhase::Failed(_) | AllPhase::Ended(_)) => status.clone(),
         None => SharedString::default(),
     };
     let said = if failed || outcome.is_empty() {
@@ -6927,11 +6930,12 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
             .map_or_else(SharedString::default, |zone| {
                 strings.invoke_calibrate_zone_bring(zone.name.as_str().into())
             }),
-        outcome_problem: sheet.is_some_and(|sheet| match &all.phase {
-            AllPhase::Failed(_) | AllPhase::AgainFailed(..) | AllPhase::Stale => true,
+        outcome_problem: match &all.phase {
+            AllPhase::Failed(_) => true,
+            AllPhase::AgainFailed(..) | AllPhase::Stale => sheet.is_some(),
             AllPhase::CannotMeasureAgain(..) => false,
-            _ => sheet.failure.is_some(),
-        }),
+            _ => sheet.is_some_and(|sheet| sheet.failure.is_some()),
+        },
         outcome,
         can_apply: sheet.is_some_and(|sheet| sheet.can_apply),
         applied: sheet.is_some_and(|sheet| sheet.applied),
@@ -8506,7 +8510,7 @@ pub(crate) mod tests {
             repeat: Some(Repeat::Off),
         };
         fake.read(Some(song));
-        // The mock's first speaker starts with a low Windows volume, whose fix shows under Calibrate.
+        // The mock's first speaker starts with a low Windows volume, whose fix shows on its row.
         app.main
             .invoke_device_volume_fix_requested(app.main.get_calibrate_all_volume_id());
         app.poll();
@@ -8566,7 +8570,7 @@ pub(crate) mod tests {
             repeat: Some(Repeat::Off),
         };
         fake.read(Some(song));
-        // The mock's first speaker starts with a low Windows volume, whose fix shows under Calibrate.
+        // The mock's first speaker starts with a low Windows volume, whose fix shows on its row.
         app.main
             .invoke_device_volume_fix_requested(app.main.get_calibrate_all_volume_id());
         app.poll();
@@ -13573,8 +13577,7 @@ pub(crate) mod tests {
             .main
             .global::<crate::Strings>()
             .invoke_device_volume_hint_label("Speakers".into(), DeviceVolumeHint::Low, 13);
-        // Calibrate All's "Before you start" in the left column names the same
-        // hint and fix: take the ones in the speaker list.
+        // Take the hint and fix in the speaker list.
         let find = |label: &str| {
             i_slint_backend_testing::ElementHandle::find_by_accessible_label(&app.main, label)
                 .find(|e| e.absolute_position().x > 300.0)
@@ -13608,6 +13611,129 @@ pub(crate) mod tests {
         .next()
         .expect("the Headphones row's options");
         assert_eq!((options.size().width, options.size().height), (21.0, 15.0));
+    }
+
+    /// The columns start the Mac's windowGap, 14 px, under the header
+    /// (MenuBar.swift:2668, MainWindow.swift:330).
+    #[test]
+    fn the_columns_start_the_macs_window_gap_under_the_header() {
+        let app = narrow_app(MockBackend::new());
+        draw_frames_at(776, 680);
+        let by_type = |name: &str| {
+            i_slint_backend_testing::ElementHandle::find_by_element_type_name(&app.main, name)
+                .collect::<Vec<_>>()
+        };
+        let bottom =
+            |e: &i_slint_backend_testing::ElementHandle| e.absolute_position().y + e.size().height;
+        // The header's parts are centred in it, at least 36 high: its bottom is
+        // the lowest part's, or 18 under the mark's centre.
+        let mark = by_type("BrandMark").remove(0);
+        let status = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+            &app.main,
+            app.main.get_status().as_str(),
+        )
+        .next()
+        .expect("the status line");
+        let power = by_type("PowerSwitch").remove(0);
+        let header = [
+            mark.absolute_position().y + mark.size().height / 2.0 + 18.0,
+            bottom(&status),
+            bottom(&power),
+        ]
+        .into_iter()
+        .fold(f32::MIN, f32::max);
+        let left = by_type("FadeScrollView")
+            .into_iter()
+            .min_by(|a, b| a.absolute_position().x.total_cmp(&b.absolute_position().x))
+            .expect("the left column");
+        assert_eq!(left.absolute_position().y - header, 14.0);
+    }
+
+    /// A row's code note is its own text element named by the note, as the
+    /// Mac's AvailabilityNote (MenuBar.swift:2322-2323).
+    #[test]
+    fn a_rows_code_note_is_named_as_on_the_mac() {
+        let app = narrow_app(MockBackend::new());
+        draw_frames_at(776, 680);
+        let note = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+            &app.main,
+            "Asks for a code",
+        )
+        .next()
+        .expect("the code note");
+        assert_eq!(
+            note.accessible_role(),
+            Some(i_slint_backend_testing::AccessibleRole::Text)
+        );
+    }
+
+    /// The master volume row is the Mac's 18 high (MasterMuteButton and
+    /// MasterSlider, MenuBar.swift:2958 and :2976), so the rows under it sit
+    /// where the Mac's do; the mute button keeps its 24 px target over it.
+    #[test]
+    fn the_master_volume_row_is_the_macs_height() {
+        let app = narrow_app(MockBackend::new());
+        draw_frames_at(776, 680);
+        let row = i_slint_backend_testing::ElementHandle::find_by_element_type_name(
+            &app.main,
+            "MasterVolume",
+        )
+        .min_by(|a, b| a.absolute_position().x.total_cmp(&b.absolute_position().x))
+        .expect("the main window's master volume");
+        assert_eq!(row.size().height, 18.0);
+        let mute = ["Mute Master Volume", "Unmute Master Volume"]
+            .into_iter()
+            .find_map(|label| {
+                i_slint_backend_testing::ElementHandle::find_by_accessible_label(&app.main, label)
+                    .next()
+            })
+            .expect("the master mute button");
+        assert_eq!(mute.size().height, 24.0);
+        let middle = |e: &i_slint_backend_testing::ElementHandle| {
+            e.absolute_position().y + e.size().height / 2.0
+        };
+        assert_eq!(middle(&mute), middle(&row), "centred on the row");
+
+        // The 3 px it overhangs above and below the row reach the button, not a neighbour.
+        let x = mute.absolute_position().x + mute.size().width / 2.0;
+        let top = row.absolute_position().y;
+        let bottom = top + row.size().height;
+        let before = app.snapshot().master_volume;
+        click(app.main.window(), x, top - 2.0);
+        assert_ne!(
+            app.snapshot().master_volume,
+            before,
+            "the strip above mutes"
+        );
+        click(app.main.window(), x, bottom + 2.0);
+        assert_eq!(
+            app.snapshot().master_volume,
+            before,
+            "the strip below unmutes"
+        );
+
+        // Its focus ring, the button's own size, stays inside the left column's view.
+        let ring = i_slint_backend_testing::ElementHandle::find_by_element_type_name(
+            &app.main,
+            "FocusRing",
+        )
+        .find(|e| e.absolute_position() == mute.absolute_position())
+        .expect("the mute button's focus ring");
+        let column = i_slint_backend_testing::ElementHandle::find_by_element_type_name(
+            &app.main,
+            "FadeScrollView",
+        )
+        .min_by(|a, b| a.absolute_position().x.total_cmp(&b.absolute_position().x))
+        .expect("the left column");
+        let (ring_top, column_top) = (ring.absolute_position().y, column.absolute_position().y);
+        assert!(
+            ring_top >= column_top,
+            "ring top {ring_top}, column top {column_top}"
+        );
+        assert!(
+            ring_top + ring.size().height <= column_top + column.size().height,
+            "the ring's bottom is in view"
+        );
     }
 
     /// A zone's speakers are set apart by a 1 px rule down their leading
@@ -19687,12 +19813,20 @@ pub(crate) mod tests {
         assert!(app.backend.borrow().snapshot().running);
     }
 
+    /// "Before you start" lives only in the Calibrate All sheet, before a run
+    /// and without results (CalibrateAllViews.swift:108-109, 177-206); the
+    /// left column has none (CalibrateAllViews.swift:6-54). From the sheet's
+    /// Close the keyboard reaches the fix, which then hands the focus back.
     // covers: S197, S198
     #[test]
-    fn calibrate_alls_volume_fix_unmutes_the_reference_and_keeps_the_focus() {
+    fn before_you_start_shows_in_the_calibrate_all_sheet_not_the_left_column() {
         use crate::audio::backend::OutputKind;
         use crate::audio::mock::VolumeWrite;
-        for can_start in [false, true] {
+        use i_slint_backend_testing::ElementHandle;
+        let cases = [crate::Appearance::Light, crate::Appearance::Dark]
+            .into_iter()
+            .flat_map(|appearance| [(appearance, true), (appearance, false)]);
+        for (appearance, can_start) in cases {
             let mut audio = crate::audio::mock::MockBackend::empty();
             audio.connect_output_as("speakers", "Speakers", OutputKind::BuiltIn);
             audio.connect_output_as("usb", "USB Speakers", OutputKind::UsbSpeakers);
@@ -19704,27 +19838,50 @@ pub(crate) mod tests {
                 DebugLog::default(),
             );
             adapter.set_speaker_enabled("lc:speakers", true);
-            if can_start {
-                adapter.set_speaker_enabled("lc:usb", true);
-                adapter.set_running(true);
-            }
+            adapter.set_speaker_enabled("lc:usb", true);
+            adapter.set_running(true);
             let app = app_over(adapter);
+            app.main.invoke_appearance_chosen(appearance);
             app.main.show().expect("the main window shows headless");
             draw_frames();
-            assert_eq!(app.main.get_calibrate_all_can_start(), can_start);
             assert_eq!(app.main.get_calibrate_all_volume(), DeviceVolumeHint::Muted);
+            let before = app.strings().get_calibrate_before_start();
+            let in_sheet = || {
+                ElementHandle::find_by_element_id(&app.main, "CalibrateAllSheet::before-start")
+                    .next()
+            };
+            assert_eq!(
+                ElementHandle::find_by_accessible_label(&app.main, &before).count(),
+                0,
+                "{appearance:?}: no hint in the left column"
+            );
+            assert!(in_sheet().is_none(), "{appearance:?}: the sheet is closed");
 
-            // The card's stops: Calibrate All while it is enabled, then the fix.
+            // The mock has no microphone: the run stops at once and the sheet stays.
+            app.main.invoke_calibrate_all_requested();
+            app.poll();
+            draw_frames();
+            let hint = in_sheet().unwrap_or_else(|| panic!("{appearance:?}: hint in the sheet"));
+            assert_eq!(hint.accessible_label().as_deref(), Some(before.as_str()));
+            assert_eq!(
+                ElementHandle::find_by_accessible_label(&app.main, &before).count(),
+                1,
+                "{appearance:?}: only the sheet's"
+            );
+            let line = app.main.get_calibrate_all_outcome();
+            assert!(!line.is_empty(), "{appearance:?}: the run's line");
+            assert_eq!(line, app.main.get_calibrate_all_status());
+            assert!(app.main.get_calibrate_all_outcome_problem());
+            if !can_start {
+                // Calibrate All goes disabled while the sheet shows.
+                app.update(|b| b.set_running(false));
+                draw_frames();
+                assert!(!app.main.get_calibrate_all_can_start());
+                assert!(in_sheet().is_some(), "{appearance:?}: the sheet stays");
+            }
+
             let window = app.main.window();
-            let mut tabs = 0;
-            while app.main_focus.borrow().control != Some(MainControl::Calibration) {
-                assert!(tabs < 40, "the card takes the focus");
-                tab(window, 1);
-                tabs += 1;
-            }
-            if can_start {
-                tab(window, 1);
-            }
+            tab(window, 1);
             press(window, " ");
             app.poll();
             draw_frames();
@@ -19733,20 +19890,46 @@ pub(crate) mod tests {
                 [VolumeWrite::Unmute {
                     id: "speakers".to_owned()
                 }],
-                "can start: {can_start}"
+                "{appearance:?} {can_start}: Tab from Close reaches the fix"
             );
-            assert_eq!(app.main.get_calibrate_all_volume(), DeviceVolumeHint::None);
-            if can_start {
-                // The fix's late focus-lost note clears the slot, so where the
-                // focus is shows by Shift+Tab: from Calibrate All, the card above.
-                press(window, Key::Backtab);
-            }
+            assert!(in_sheet().is_none(), "{appearance:?}: fixed, the hint goes");
+            press(window, " ");
+            app.poll();
+            draw_frames();
             assert_eq!(
-                app.main_focus.borrow().control,
-                Some(MainControl::Equalizer),
-                "can start: {can_start}"
+                app.snapshot().calibrate_all.phase,
+                AllPhase::Idle,
+                "{appearance:?} {can_start}: the focus went to Close, which ends the failed run"
+            );
+            assert!(app.main.get_calibrate_all_outcome().is_empty());
+            assert!(
+                ElementHandle::find_by_element_id(&app.main, "CalibrateAllSheet::close-button")
+                    .next()
+                    .is_none(),
+                "{appearance:?}: the sheet closed"
             );
         }
+    }
+
+    /// Open Microphone Settings is one of the sheet's buttons, as on the Mac
+    /// (CalibrateAllViews.swift:470-472); the left column has none (:6-54).
+    // covers: S197
+    #[test]
+    fn open_microphone_settings_shows_in_the_calibrate_all_sheet_only() {
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows headless");
+        let label = app.strings().get_open_microphone_settings();
+        let count = || {
+            i_slint_backend_testing::ElementHandle::find_by_accessible_label(&app.main, &label)
+                .count()
+        };
+        app.main.set_calibrate_all_privacy(true);
+        draw_frames();
+        assert_eq!(count(), 0, "none in the left column");
+        app.main
+            .set_calibrate_all_outcome("Microphone access is off.".into());
+        draw_frames();
+        assert_eq!(count(), 1, "the sheet's");
     }
 
     // covers: S353, S354
@@ -20054,9 +20237,9 @@ pub(crate) mod tests {
         let app = main_window_with_listed_cable();
         let window = app.main.window();
         // Switch, Several apps, source, Mute, master volume, Save as Preset…,
-        // Equalizer, Calibrate All, the reference's volume fix, then the
-        // rows: This PC's, then the connected speakers' by name.
-        tab(window, 20);
+        // Equalizer, Calibrate All, then the rows: This PC's, then the
+        // connected speakers' by name.
+        tab(window, 19);
         press(window, " ");
         assert!(enabled(&app, "local:cable"), "the cable row has the focus");
         press(window, " ");
@@ -20087,7 +20270,7 @@ pub(crate) mod tests {
         draw_frames();
         // The cable row's toggle, delay and options, then the desk row's
         // toggle, delay, options, two steps and its field.
-        tab(window, 28);
+        tab(window, 27);
         press(window, "5");
         let draft = || {
             let shown = app.snapshot().speaker("local:desk").unwrap().delay_ms;
@@ -20494,7 +20677,7 @@ pub(crate) mod tests {
     fn a_focused_speaker_row_keeps_the_focus_when_its_list_is_rebuilt() {
         let app = main_window_with_listed_cable();
         let window = app.main.window();
-        tab(window, 18);
+        tab(window, 17);
         let bedroom = enabled(&app, "airplay:bedroom");
         press(window, " ");
         assert_ne!(
@@ -21638,7 +21821,7 @@ pub(crate) mod tests {
         let window = app.main.window();
         // As in the example's order without Bedroom's row:
         // the cable row's toggle.
-        tab(window, 18);
+        tab(window, 17);
         press(window, " ");
         assert!(enabled(&app, "local:cable"), "the cable row has the focus");
         press(window, " ");
