@@ -13646,6 +13646,24 @@ pub(crate) mod tests {
         assert_eq!(left.absolute_position().y - header, 14.0);
     }
 
+    /// A row's code note is its own text element named by the note, as the
+    /// Mac's AvailabilityNote (MenuBar.swift:2322-2323).
+    #[test]
+    fn a_rows_code_note_is_named_as_on_the_mac() {
+        let app = narrow_app(MockBackend::new());
+        draw_frames_at(776, 680);
+        let note = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+            &app.main,
+            "Asks for a code",
+        )
+        .next()
+        .expect("the code note");
+        assert_eq!(
+            note.accessible_role(),
+            Some(i_slint_backend_testing::AccessibleRole::Text)
+        );
+    }
+
     /// The master volume row is the Mac's 18 high (MasterMuteButton and
     /// MasterSlider, MenuBar.swift:2958 and :2976), so the rows under it sit
     /// where the Mac's do; the mute button keeps its 24 px target over it.
