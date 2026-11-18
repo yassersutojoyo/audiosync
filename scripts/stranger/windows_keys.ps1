@@ -65,7 +65,7 @@ public static class Keys {
 '@
 $A = [System.Windows.Automation.AutomationElement]
 $Scope = [System.Windows.Automation.TreeScope]
-$CTRL = [uint16]0x11
+$VkControl = [uint16]0x11
 $VK = @{ 'w' = 0x57; 'q' = 0x51; 'n' = 0x4E; 'e' = 0x45; 'r' = 0x52; ',' = 0xBC; '0' = 0x30; '1' = 0x31; '2' = 0x32
   'Escape' = 0x1B; 'F1' = 0x70; 'F5' = 0x74 }
 $script:results = New-Object System.Collections.Generic.List[string]
@@ -142,7 +142,7 @@ function Focus-Window($Element) {
 }
 
 function Press([string] $Key, [switch] $Ctrl) {
-  $mods = if ($Ctrl) { [uint16[]]@($CTRL) } else { [uint16[]]@() }
+  $mods = if ($Ctrl) { [uint16[]]@($VkControl) } else { [uint16[]]@() }
   $sent = [Keys]::Press($mods, [uint16]$VK[$Key])
   if ($sent -eq 0) { Write-Host "SendInput sent nothing for $Key" }
   Start-Sleep -Milliseconds 600
