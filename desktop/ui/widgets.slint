@@ -3114,9 +3114,11 @@ export component AirPlayDelayControls inherits VerticalLayout {
                         range-hint: root.range-hint;
                     }
 
-                    // Its width set, so the pane's height counts every wrapped line.
+                    // Its width and height set, so the pane's height counts every
+                    // wrapped line: measured by the pane alone, it came one line short.
                     hint := SecondaryText {
                         width: root.width-given - root.padding-left - root.padding-right - (Fluent.name-inset - Fluent.row-padding-x);
+                        height: self.preferred-height;
                         text: Strings.airplay-delay-hint;
                     }
                 }
