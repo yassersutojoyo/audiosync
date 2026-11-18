@@ -457,7 +457,8 @@ fn the_panels_mute_button_is_drawn_in_the_secondary_text() {
     let flyout = include_str!("../../ui/flyout.slint").replace("\r\n", "\n");
     let row = &flyout[flyout.find("MasterVolume {").expect("the flyout's master volume")..];
     assert!(
-        row[..row.find("mute-toggled").unwrap()].contains("icon-color: Tokens.secondary-text;"),
+        row[..row.find("mute-toggled").unwrap()]
+            .contains("icon-color: Tokens.secondary-text;"),
         "{row}"
     );
 }
