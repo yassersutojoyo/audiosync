@@ -991,7 +991,8 @@ pub struct Controller<D: Driver> {
     default_switch: DefaultSwitch,
     /// Whether the default output gets no copy of the whole system (S473).
     holds_out_default_sink: bool,
-    /// A test copy's: no default, app or level moves (S511).
+    /// Set in a test copy (S511): it never moves the default output or an
+    /// app's output and never writes an output's own level.
     leaves_system_outputs: bool,
     /// Where one captured app's own output is moved to the silent endpoint,
     /// and where its restore record is kept (S471); `None` where it isn't.
