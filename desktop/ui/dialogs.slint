@@ -108,7 +108,9 @@ export component ZoneNameDialog inherits Dialog {
         }
     }
 
+    // A message has OK only, as the Mac's informational alert.
     DialogButton {
+        shown: root.show-field;
         text: Strings.cancel;
         dialog-button-role: reject;
         clicked => {

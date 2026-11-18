@@ -24064,10 +24064,9 @@ pub(crate) mod tests {
         );
     }
 
-    /// A rename field takes the name's whole width, up to the icons at the
-    /// row's end, as the Mac's does, so a long name shows whole: a
-    /// speaker's reaches its delay button, a zone's its volume and a
-    /// preset's its … button.
+    /// A rename field takes the name's width up to the Mac's 220
+    /// (MainWindow.swift:2248) for a speaker and a zone; a preset's
+    /// reaches its … button.
     // covers: S228
     #[test]
     fn a_rename_field_is_as_wide_as_the_name_room() {
@@ -24099,19 +24098,19 @@ pub(crate) mod tests {
         app.start_rename(&speaker.id, RenamePlace::Row);
         draw_frames();
         let device = row_of(&app, &speaker.id).device_name;
+        let field = strings.invoke_speaker_name_field(device);
         assert!(
-            right(&strings.invoke_speaker_name_field(device))
-                > left(&strings.invoke_speaker_options(speaker.name.into())) - 100.0,
-            "the speaker's field reaches the delay button beside its … button"
+            right(&field) - left(&field) <= 220.5,
+            "the speaker's field stops at 220"
         );
         app.end_rename(false);
 
         app.start_rename("zone:den", RenamePlace::Zone);
         draw_frames();
+        let field = strings.invoke_speaker_name_field("Den".into());
         assert!(
-            right(&strings.invoke_speaker_name_field("Den".into()))
-                > left(&strings.invoke_zone_volume("Den".into())) - 20.0,
-            "the zone's field reaches its volume"
+            right(&field) - left(&field) <= 220.5,
+            "the zone's field stops at 220"
         );
         app.end_rename(false);
 

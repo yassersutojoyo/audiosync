@@ -36,7 +36,10 @@ fn the_device_volume_hint_explains_itself_in_a_tooltip() {
     let hint = between(&row, "hint-line := HorizontalLayout {", "fix-button :=");
     // DeviceVolumeViews.swift:26 .help(shown.help)
     assert!(hint.contains("Tooltip {"), "{hint}");
-    assert!(hint.contains("text: Strings.device-volume-help;"), "{hint}");
+    assert!(
+        hint.contains("text: Strings.device-volume-help();"),
+        "{hint}"
+    );
     let strings = include_str!("../../ui/strings.slint");
     assert!(strings.contains(
         "\"Windows has its own volume for each output, and it limits AudioSync's slider.\""
@@ -139,9 +142,14 @@ fn a_message_in_the_name_dialog_has_ok_only() {
     let dialogs = include_str!("../../ui/dialogs.slint").replace("\r\n", "\n");
     let dialog = component(&dialogs, "ZoneNameDialog");
     // AppDelegate+Zones.swift:290 showAlert(.informational): OK, no Cancel.
-    let cancel = between(&dialog, "DialogButton {\n        text: root.confirm-label;", "text: Strings.cancel;");
+    let cancel = between(
+        &dialog,
+        "DialogButton {\n        text: root.confirm-label;",
+        "text: Strings.cancel;",
+    );
+    // A Dialog takes no `if` on its buttons, so the flag leaves it out.
     assert!(
-        cancel.trim_end().ends_with("if root.show-field: DialogButton {"),
+        cancel.trim_end().ends_with("shown: root.show-field;"),
         "{cancel}"
     );
 }

@@ -1784,9 +1784,12 @@ export global Strings {
     }
 
     // The hint's tooltip: why the output's own volume matters.
-    out property <string> device-volume-help: Platform.os == OperatingSystemType.linux
-        ? @tr("PipeWire has its own volume for each output, and it limits AudioSync's slider.")
-        : @tr("Windows has its own volume for each output, and it limits AudioSync's slider.");
+    public pure function device-volume-help() -> string {
+        if Platform.os == OperatingSystemType.linux {
+            return @tr("PipeWire has its own volume for each output, and it limits AudioSync's slider.");
+        }
+        return @tr("Windows has its own volume for each output, and it limits AudioSync's slider.");
+    }
 
     // The button after the hint that fixes it.
     public pure function device-volume-fix(hint: DeviceVolumeHint) -> string {
