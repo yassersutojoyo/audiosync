@@ -54,7 +54,7 @@ jobs:
           echo "skip=$skip" >> "$GITHUB_OUTPUT"
 
   linux:
-    name: Linux stranger (${{ matrix.distro }})
+    name: Linux stranger (${{ matrix.distro }}, receiver latency ${{ matrix.latency }})
     needs: proven
     if: needs.proven.outputs.skip != 'true'
     strategy:
@@ -63,12 +63,19 @@ jobs:
         # ubuntu installs the .deb on the runner itself; fedora installs the
         # .rpm in a Fedora 43 container on the runner's network.
         distro: [ubuntu, fedora]
+        # The fake receiver adds the latency it reports, as the app's model
+        # has it; once on ubuntu it doesn't, and plays that much early.
+        latency: [added]
+        include:
+          - distro: ubuntu
+            latency: not-added
     # The release's build host (linux.yml): a newer image links a newer glibc.
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       WORK: ${{ github.workspace }}/stranger-work
       DISTRO: ${{ matrix.distro }}
+      RX_LATENCY: ${{ matrix.latency }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -122,7 +129,7 @@ jobs:
           fi
 
       - name: Keep the package and the stand-in watcher for the screen jobs
-        if: matrix.distro == 'ubuntu'
+        if: matrix.distro == 'ubuntu' && matrix.latency == 'added'
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: stranger-linux-package
@@ -133,7 +140,12 @@ jobs:
           retention-days: 1
 
       - name: Receiver (the fake AirPlay 1 receiver, recorded)
-        run: scripts/stranger/linux_receiver.sh start "$WORK" airplay/target/release/examples/stranger_rx
+        run: |
+          if [ "$RX_LATENCY" = added ]; then
+            scripts/stranger/linux_receiver.sh start "$WORK" airplay/target/release/examples/stranger_rx
+          else
+            scripts/stranger/linux_receiver.sh start "$WORK" airplay/target/release/examples/stranger_rx --latency-not-added
+          fi
 
       - name: Install, launch, stream, quit and uninstall
         run: |
@@ -157,14 +169,17 @@ jobs:
                 scripts/stranger/linux_session.sh "$WORK" "$STUB" dnf remove -y -q audiosync'
           fi
 
-      - name: Heard once on the receiver and the stand-in PC speaker, both on, within 15 ms
+      - name: Heard once on the receiver and the stand-in PC speaker, both on, within 15 ms (of -50 ms with the latency not added)
         if: ${{ !cancelled() }}
         run: |
           scripts/stranger/linux_receiver.sh stop "$WORK"
           echo "--- environment"
           cat "$WORK/env.txt" "$WORK/receiver-env.txt" "$WORK/env.pkg.txt" 2>/dev/null || true
           label="$(sed -n 's/^os: //p' "$WORK/env.txt"), PipeWire $(sed -n 's/^pipewire: //p' "$WORK/env.txt")"
-          python3 -I scripts/stranger/heard.py check --label "$label" --max-offset-ms 15 \
+          # The fake reports 2205 frames, 50 ms; one that doesn't add them plays 50 ms early.
+          expect=0
+          [ "$RX_LATENCY" = added ] || expect=-50
+          python3 -I scripts/stranger/heard.py check --label "$label" --max-offset-ms 15 --expect-offset-ms "$expect" \
             --receiver "$WORK/receiver.wav" "$WORK/receiver.stamps" \
             --sink "$WORK/sink.wav" "$WORK/sink.stamps"
 
@@ -172,7 +187,7 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
-          name: stranger-linux-${{ matrix.distro }}
+          name: stranger-linux-${{ matrix.distro }}-${{ matrix.latency }}
           path: |
             stranger-work/*.txt
             stranger-work/*.log
