@@ -203,9 +203,10 @@ def run(app, main):
             shot(main, "NOTICE-START")
     elif GROUP == "updates":
         # The .deb copy doesn't update itself; a manual check says how to update.
-        if use(app, "Options", "NOTICE-UPDATE-PACKAGE") and use(app, "Check for Updates…", "NOTICE-UPDATE-PACKAGE"):
+        if (use(app, "Options", "NOTICE-UPDATE-PACKAGE") and use(app, "Settings…", "NOTICE-UPDATE-PACKAGE")
+                and use(app, "Check for Updates…", "NOTICE-UPDATE-PACKAGE")):
             time.sleep(2)
-            shot(main, "NOTICE-UPDATE-PACKAGE")
+            shot(None, "NOTICE-UPDATE-PACKAGE")
             if not any("download the newer package" in (n.get_name() or "") for w in windows(app) for n, _ in walk(w)):
                 print(f"FAIL: no notice to download the newer package ({THEME})")
                 failed.append("update notice")
