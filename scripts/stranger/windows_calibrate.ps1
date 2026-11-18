@@ -21,6 +21,7 @@ $here = $PSScriptRoot
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
+using System.Threading;
 
 [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
 class MMDeviceEnumeratorClass {}
@@ -84,6 +85,50 @@ public static class Endpoints {
     }
   }
 }
+
+// enumerator isn't ROOT, so AudioSync classes its endpoint by form factor.
+public static class SoftwareDevice {
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  struct CreateInfo {
+    public uint cbSize;
+    public string pszInstanceId;
+    public string pszzHardwareIds;
+    public string pszzCompatibleIds;
+    public IntPtr pContainerId;
+    public uint CapabilityFlags;
+    public string pszDeviceDescription;
+    public string pszDeviceLocation;
+    public IntPtr pSecurityDescriptor;
+  }
+
+  delegate void Created(IntPtr device, int result, IntPtr context, [MarshalAs(UnmanagedType.LPWStr)] string instanceId);
+
+  [DllImport("cfgmgr32.dll", CharSet = CharSet.Unicode)]
+  static extern int SwDeviceCreate(string enumerator, string parent, ref CreateInfo info, uint propertyCount,
+    IntPtr properties, Created callback, IntPtr context, out IntPtr device);
+
+  static Created callback;
+  static IntPtr handle;
+  static int result = -1;
+  static string instance;
+
+  // Blocks until PnP has handled the device; "0x..: <instance>".
+  public static string Create(string enumerator, string hardwareId, string description) {
+    var done = new ManualResetEvent(false);
+    callback = (device, hr, context, id) => { result = hr; instance = id; done.Set(); };
+    var info = new CreateInfo {
+      cbSize = (uint)Marshal.SizeOf(typeof(CreateInfo)),
+      pszInstanceId = "0",
+      pszzHardwareIds = hardwareId + "\0",
+      CapabilityFlags = 0x2 | 0x8, // SilentInstall, DriverRequired
+      pszDeviceDescription = description,
+    };
+    int hr2 = SwDeviceCreate(enumerator, "HTREE\\ROOT\\0", ref info, 0, IntPtr.Zero, callback, IntPtr.Zero, out handle);
+    if (hr2 != 0) return string.Format("0x{0:X8}: SwDeviceCreate failed", hr2);
+    if (!done.WaitOne(120000)) return "timeout: no answer from PnP in 120 s";
+    return string.Format("0x{0:X8}: {1}", result, instance);
+  }
+}
 '@
 
 function Note([string] $Line) { $Line | Tee-Object -FilePath "$Work/result.txt" -Append }
@@ -129,7 +174,10 @@ $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\si
 & $signtool.FullName sign /fd SHA256 /sm /s My /sha1 $cert.Thumbprint (Join-Path $driver 'scream.cat')
 if ($LASTEXITCODE -ne 0) { throw "signtool could not sign the Scream catalog (exit $LASTEXITCODE)" }
 pnputil /add-driver (Join-Path $driver 'Scream.inf') /install | Out-File -Append "$Work/env.txt"
-& $devcon install (Join-Path $driver 'Scream.inf') '*Scream' | Out-File -Append "$Work/env.txt"
+# A device under SWD rather than ROOT, so AudioSync lists it as the PC's own speaker, the reference Calibrate All needs.
+$created = [SoftwareDevice]::Create('AudioSyncCI', '*Scream', 'Speakers')
+Note "software device: $created"
+if (-not $created.StartsWith('0x00000000')) { & $devcon install (Join-Path $driver 'Scream.inf') '*Scream' | Out-File -Append "$Work/env.txt" }
 
 # VB-CABLE 46 from the vendor; its publisher trusted first so devcon installs it without a prompt.
 $cable = Get-Checked 'https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack46.zip' 'VBCABLE_Driver_Pack46.zip' `

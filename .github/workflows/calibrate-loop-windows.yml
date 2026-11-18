@@ -34,7 +34,7 @@ jobs:
   windows:
     name: Windows calibrate loop
     needs: skia
-    runs-on: windows-latest
+    runs-on: windows-2022
     timeout-minutes: 60
     defaults:
       run:
