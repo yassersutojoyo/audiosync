@@ -3154,7 +3154,7 @@ export component MainWindow inherits Window {
     min-width: 696px;
     min-height: 440px;
     preferred-width: 696px;
-    preferred-height: 680px;
+    preferred-height: 632px;
     background: Fluent.main-window;
     default-font-family: Fluent.font;
     default-font-weight: Fluent.weight-regular;
@@ -3300,28 +3300,35 @@ export component MainWindow inherits Window {
 
             VerticalLayout {
                 alignment: center;
-                gear := GearButton {
-                    glyph-size: 16px;
-                    new-zone => {
-                        root.new-zone-requested();
-                    }
-                    refresh => {
-                        root.refresh-devices();
-                    }
-                    remote => {
-                        root.remote-requested();
-                    }
-                    settings => {
-                        root.settings-requested();
-                    }
-                    guide => {
-                        root.help-requested();
-                    }
-                    about => {
-                        root.about-requested();
-                    }
-                    exit => {
-                        root.exit-requested();
+                // The Mac's borderless gear is 18 pt wide (MainWindow.swift:397-408);
+                // the 32 px hit area reaches 7 px past that slot on each side.
+                Rectangle {
+                    width: 18px;
+                    height: 32px;
+                    gear := GearButton {
+                        x: -7px;
+                        glyph-size: 16px;
+                        new-zone => {
+                            root.new-zone-requested();
+                        }
+                        refresh => {
+                            root.refresh-devices();
+                        }
+                        remote => {
+                            root.remote-requested();
+                        }
+                        settings => {
+                            root.settings-requested();
+                        }
+                        guide => {
+                            root.help-requested();
+                        }
+                        about => {
+                            root.about-requested();
+                        }
+                        exit => {
+                            root.exit-requested();
+                        }
                     }
                 }
             }

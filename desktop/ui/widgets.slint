@@ -71,9 +71,8 @@ export global Fluent {
     out property <length> left-column-narrow: 210px;
     out property <length> left-column-wide: 280px;
     out property <length> speaker-list-full: 524px;
-    // How far inside its box the style's slider track starts (measured on
-    // screen: 10 px at 100 %).
-    out property <length> slider-inset: 10px;
+    // How far inside its box a LevelSlider's track starts: half its 16 px knob.
+    out property <length> slider-inset: 8px;
     // Subtle fills under the pointer, over any card or row.
     out property <brush> hover: Tokens.text.with-alpha(0.06);
     out property <brush> pressed: Tokens.text.with-alpha(0.035);
@@ -3877,8 +3876,10 @@ export component SpeakerRow inherits Rectangle {
                         spacing: 5px;
                         horizontal-stretch: 1;
 
+                        // The Mac's 6 px before the options, less the 3 px the
+                        // value's fill reaches past it (MainWindow.swift:2371, :2778).
                         name-line := HorizontalLayout {
-                            spacing: 8px;
+                            spacing: 3px;
 
                             // Name and kind
                             VerticalLayout {
@@ -4100,11 +4101,12 @@ export component SpeakerRow inherits Rectangle {
                             // Delay column: the same width on every row, empty where a
                             // speaker has no delay. A value's box hugs it by the Mac's
                             // 3 px, so the hover fill is no wider than the value.
+                            // 3 px wider on the left, so the name stops the Mac's 6 px
+                            // before the column (MainWindow.swift:2371).
                             VerticalLayout {
-                                width: Fluent.delay-column;
+                                width: Fluent.delay-column + 3px;
                                 alignment: center;
                                 cross-axis-alignment: end;
-                                padding-right: 3px;
 
                                 // The reference's Windows volume, where other rows show
                                 // their delay, as the Mac's built-in speakers: it opens
@@ -4467,17 +4469,22 @@ export component SpeakerRow inherits Rectangle {
                                     duration: Motion.on ? 350ms : 0ms;
                                     easing: ease-out;
                                 }
-                                height: self.progress * (hint-line.preferred-height + 2px);
+                                height: self.progress * (hint-line.preferred-height + 4px);
                                 clip: true;
 
+                                // The Mac's 5 pt line gap under its 16 pt slider
+                                // (MainWindow.swift:2352): 4 px under this 14 px one,
+                                // after the column's 2.
                                 hint-line := HorizontalLayout {
                                     visible: hint-box.progress > 0;
-                                    y: 2px;
+                                    y: 4px;
                                     width: parent.width;
                                     height: self.preferred-height;
                                     spacing: 4px;
 
+                                    // The Mac's small symbol is 9 pt wide (its frame on the Mac's window).
                                     Glyph {
+                                        width: 9px;
                                         glyph: Glyphs.device-volume(hint-box.hint);
                                         font-size: 12px;
                                         color: Tokens.secondary-text;
@@ -5942,17 +5949,25 @@ export component NoticeStack inherits VerticalLayout {
                     }
                 }
 
+                // The Mac's 16 pt dismiss button (MenuBar.swift:2822-2834); the
+                // 32 px hit area reaches 8 px past that slot on each side.
                 VerticalLayout {
                     alignment: start;
-                    dismiss := IconButton {
-                        glyph: Glyphs.dismiss;
-                        glyph-size: 12px;
-                        label: Strings.dismiss-notice(notice.title);
-                        clicked => {
-                            root.dismissed(notice.id);
-                        }
-                        focus-changed(focused) => {
-                            row.dismiss-focused = focused;
+                    Rectangle {
+                        width: 16px;
+                        height: 16px;
+                        dismiss := IconButton {
+                            x: -8px;
+                            y: -8px;
+                            glyph: Glyphs.dismiss;
+                            glyph-size: 12px;
+                            label: Strings.dismiss-notice(notice.title);
+                            clicked => {
+                                root.dismissed(notice.id);
+                            }
+                            focus-changed(focused) => {
+                                row.dismiss-focused = focused;
+                            }
                         }
                     }
                 }

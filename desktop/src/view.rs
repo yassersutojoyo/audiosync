@@ -11363,6 +11363,88 @@ pub(crate) mod tests {
         }
     }
 
+    /// A long name's line stops 6 px before the row's delay column, the Mac row's
+    /// spacing (MainWindow.swift:2371), however close the value sits to the
+    /// options after it.
+    #[test]
+    fn a_long_name_stops_six_px_before_the_delay_column() {
+        use i_slint_backend_testing::ElementHandle;
+        let long = "A speaker whose name is far too long for the row the window gives it";
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        let connected = app.main.get_connected();
+        let mut item = connected.row_data(0).expect("a connected speaker");
+        item.name = long.into();
+        connected.set_row_data(0, item);
+        draw_frames();
+        let name = ElementHandle::find_by_element_id(&app.main, "SpeakerRow::name-label")
+            .find(|n| n.accessible_label().is_some_and(|l| l == long))
+            .expect("the long name");
+        let options = ElementHandle::find_by_element_id(&app.main, "SpeakerRow::options")
+            .min_by(|a, b| {
+                let gap = |o: &ElementHandle| {
+                    (o.absolute_position().y - name.absolute_position().y).abs()
+                };
+                gap(a).total_cmp(&gap(b))
+            })
+            .expect("the row's options");
+        let column = options.absolute_position().x - 3.0 - 76.0;
+        let line = (name.absolute_position().y, name.size().height);
+        // Whatever the name line draws before the column: the name, its kind icon, its box.
+        let name_end = ElementHandle::find_by_element_type_name(&app.main, "SpeakerRow")
+            .find(|row| {
+                let (y, h) = (row.absolute_position().y, row.size().height);
+                y <= line.0 && line.0 + line.1 <= y + h
+            })
+            .expect("the long name's row")
+            .query_descendants()
+            .find_all()
+            .into_iter()
+            .filter(|e| (e.absolute_position().y - line.0).abs() < line.1)
+            .map(|e| e.absolute_position().x + e.size().width)
+            .filter(|end| *end < column + 0.5)
+            .fold(0.0_f32, f32::max);
+        assert_eq!(column - name_end, 6.0, "name line ends at {name_end}");
+    }
+
+    /// A row's delay and System values end 6 px before its options button,
+    /// the Mac row's spacing, with their 3 px hover fill reaching past them
+    /// (MainWindow.swift:2371, :2778, :2824).
+    #[test]
+    fn a_rows_values_end_six_px_before_its_options() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        let connected = app.main.get_connected();
+        let mut item = connected.row_data(0).expect("a connected speaker");
+        item.has_delay = true;
+        item.delay_ms = 10;
+        let (delay, system) = {
+            let strings = app.strings();
+            (
+                strings.invoke_show_delay_controls(strings.invoke_delay_of(item.name.clone())),
+                strings.get_system_volume_button(),
+            )
+        };
+        connected.set_row_data(0, item);
+        draw_frames();
+        for label in [delay.as_str(), system.as_str()] {
+            let (x, y, width, height) = slider_box(&app.main, label);
+            let options = ElementHandle::find_by_element_id(&app.main, "SpeakerRow::options")
+                .find(|o| {
+                    let middle = o.absolute_position().y + o.size().height / 2.0;
+                    y <= middle && middle <= y + height
+                })
+                .unwrap_or_else(|| panic!("{label}: the row's options"));
+            let value_end = x + width - 3.0;
+            assert!(
+                (options.absolute_position().x - value_end - 6.0).abs() < 0.5,
+                "{label}: value ends at {value_end}, options at {}",
+                options.absolute_position().x
+            );
+        }
+    }
+
     /// "System 13%" shows whole: its letters' tops are not cut off.
     #[test]
     fn the_system_value_shows_its_letters_whole() {
@@ -13267,6 +13349,21 @@ pub(crate) mod tests {
         );
     }
 
+    /// The main window opens 632 px high, the Mac's 600 pt content
+    /// (MainWindow.swift:22, :37) under the desktop's 32 px top row, so the
+    /// items held to the bottom of the sidebar sit where the Mac's do.
+    #[test]
+    fn the_main_window_opens_as_high_as_the_macs_content_and_top_row() {
+        let source = include_str!("../ui/main.slint");
+        let window = &source[source
+            .find("export component MainWindow inherits Window")
+            .expect("the main window")..];
+        assert!(
+            window.contains("    preferred-height: 632px;"),
+            "the main window's preferred height"
+        );
+    }
+
     /// The main window over `backend` at its narrowest, 776 px, where the
     /// speaker list takes 524 px. draw_frames sets 1000 px again.
     fn narrow_app(backend: MockBackend) -> Rc<App> {
@@ -13598,6 +13695,69 @@ pub(crate) mod tests {
         );
         let gap = fix.absolute_position().x - (hint.absolute_position().x + hint.size().width);
         assert_eq!(gap, 4.0, "the fix follows the hint");
+    }
+
+    /// The gear's glyph centres where the Mac's 18 pt borderless gear does,
+    /// 12 pt before the switch (MainWindow.swift:365, :397-408); its 32 px
+    /// hit area reaches past that slot on both sides.
+    #[test]
+    fn the_gear_centres_where_the_macs_does() {
+        let app = narrow_app(MockBackend::new());
+        draw_frames_at(776, 680);
+        let gear = element(&app, "MainWindow::gear").expect("the gear");
+        let power = element(&app, "MainWindow::power").expect("the switch");
+        let centre = gear.absolute_position().x + gear.size().width / 2.0;
+        assert_eq!(
+            power.absolute_position().x - centre,
+            12.0 + 9.0,
+            "gear centre to the switch"
+        );
+    }
+
+    /// The device volume hint reads where the Mac's does: its text 13 pt
+    /// right of the name (a 9 pt symbol, then 4, DeviceVolumeViews.swift:20)
+    /// and centred 27.5 pt under the slider's top (the Mac's 16 pt slider,
+    /// the row's 5 pt line gap, MainWindow.swift:2352, and a 13 pt line).
+    #[test]
+    fn the_device_volume_hint_sits_where_the_macs_does() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = narrow_app(MockBackend::new());
+        draw_frames_at(776, 680);
+        let strings = app.main.global::<crate::Strings>();
+        let hint =
+            strings.invoke_device_volume_hint_label("Speakers".into(), DeviceVolumeHint::Low, 13);
+        let hint = ElementHandle::find_by_accessible_label(&app.main, &hint)
+            .max_by(|a, b| a.absolute_position().x.total_cmp(&b.absolute_position().x))
+            .expect("the hint in the speaker list");
+        let (_, top, _, _) = slider_box(&app.main, &strings.invoke_volume_of("Speakers".into()));
+        let name = ElementHandle::find_by_element_id(&app.main, "SpeakerRow::name-label")
+            .filter(|n| n.absolute_position().y < top)
+            .max_by(|a, b| a.absolute_position().y.total_cmp(&b.absolute_position().y))
+            .expect("the row's name");
+        let (x, y) = (hint.absolute_position().x, hint.absolute_position().y);
+        let shift = x - name.absolute_position().x;
+        assert!(
+            (shift - 13.0).abs() < 0.5,
+            "hint text {shift} px right of the name"
+        );
+        let drop = y + hint.size().height / 2.0 - top;
+        assert!(
+            (drop - 27.5).abs() <= 1.0,
+            "hint centred {drop} px under the slider's top"
+        );
+        // The symbol is drawn whole in its narrower slot, as wide as the Mac's.
+        let left_of = name.absolute_position().x - 4.0;
+        let (left, _, right, _) = ink(
+            app.main.window(),
+            left_of,
+            y,
+            x - 2.0 - left_of,
+            hint.size().height,
+        );
+        assert!(
+            right - left >= 8.0 && left >= left_of + 1.0,
+            "symbol ink {left}..{right}"
+        );
     }
 
     /// A row's options button is the Mac's borderless ellipsis.circle menu
@@ -14673,6 +14833,40 @@ pub(crate) mod tests {
         }
     }
 
+    /// A main-window notice's x centres where the Mac's 16 pt dismiss button
+    /// does, in the card's top right corner inside its 10 pt padding
+    /// (MenuBar.swift:2788, :2822-2834); its 32 px hit area reaches past.
+    #[test]
+    fn a_notices_dismiss_centres_where_the_macs_does() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = main_window_over(MockBackend::new());
+        let notice = NoticeItem {
+            id: 1,
+            message: "A notice".into(),
+            title: "test".into(),
+            ..NoticeItem::default()
+        };
+        app.main
+            .set_notices(ModelRc::from(Rc::new(VecModel::from(vec![notice]))));
+        draw_frames();
+        let one = |id: &str| {
+            ElementHandle::find_by_element_id(&app.main, id)
+                .next()
+                .unwrap_or_else(|| panic!("{id}"))
+        };
+        let (card, dismiss) = (one("NoticeStack::row"), one("NoticeStack::dismiss"));
+        let (at, size) = (dismiss.absolute_position(), dismiss.size());
+        let right = card.absolute_position().x + card.size().width;
+        assert_eq!(
+            (
+                right - (at.x + size.width / 2.0),
+                at.y + size.height / 2.0 - card.absolute_position().y
+            ),
+            (18.0, 18.0),
+            "x centre from the card's right and top"
+        );
+    }
+
     // covers: S308
     /// Tab reaches each button of the updater's notice, Space or Enter
     /// presses it, and the notice reports its focus.
@@ -15584,6 +15778,32 @@ pub(crate) mod tests {
         assert_eq!(name.absolute_position().x, title.absolute_position().x);
     }
 
+    /// The source, the title and the artist keep the Mac panel's line
+    /// boxes, 16, 19 and 16 pt, 2 and 1 pt apart (MenuBar.swift:2382-2393),
+    /// so the hero is as tall as the Mac's and the rows under it don't sink.
+    #[test]
+    fn the_flyout_song_lines_keep_the_macs_line_boxes() {
+        let app = app_over(MockBackend::new());
+        app.flyout.set_now_playing_shown(true);
+        app.flyout.set_now_playing_title("A track title".into());
+        app.flyout.set_now_playing_subtitle("Artist".into());
+        app.flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        let source = flyout_element(&app, "SourceMenu::label");
+        let title = flyout_element(&app, "TrayFlyout::song-title");
+        let artist = flyout_element(&app, "TrayFlyout::song-artist");
+        let top = |e: &i_slint_backend_testing::ElementHandle| e.absolute_position().y;
+        assert_eq!(
+            (
+                top(&title) - top(&source),
+                top(&artist) - top(&title),
+                artist.size().height
+            ),
+            (18.0, 20.0, 16.0),
+            "title under the source, artist under the title, artist line"
+        );
+    }
+
     /// The source, the title and the artist stack beside the cover with
     /// none cut short, and the wave sits below the artist, as in the Mac
     /// panel.
@@ -15667,7 +15887,8 @@ pub(crate) mod tests {
     }
 
     /// A speaker's circle starts 14 px from the panel's edge and its name
-    /// 10 px past it, its end 17 px from the other edge, as in the Mac panel.
+    /// 10 px past it, its end 14 px from the other edge, as in the Mac panel
+    /// (rows 6 px past its 14 px padding, inset 6, MenuBar.swift:1873, :2058).
     #[test]
     fn the_flyout_rows_use_the_mac_panel_margins() {
         let app = measured_flyout();
@@ -15678,7 +15899,7 @@ pub(crate) mod tests {
         assert_eq!(name.absolute_position().x, 50.0);
         let end = row.absolute_position().x + row.size().width - 6.0;
         // The panel is 300 px wide; the headless window around it is wider.
-        assert_eq!(300.0 - end, 17.0);
+        assert_eq!(300.0 - end, 14.0);
         // The hover and focus ring reach 6 px past the circle, as on the Mac.
         let rows = flyout_element(&app, "FlyoutRow::touch");
         assert_eq!(rows.absolute_position().x, 8.0);
@@ -15750,6 +15971,31 @@ pub(crate) mod tests {
         app.flyout.show().expect("the flyout shows headless");
         draw_frames();
         app
+    }
+
+    /// The tray panel's speaker rows reach 6 px past its 14 px padding on
+    /// both sides, as the Mac panel's (MenuBar.swift:1778, :1871, :1873).
+    #[test]
+    fn the_flyout_rows_reach_eight_px_from_both_edges() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = measured_flyout();
+        let height = app.fit_flyout(300.0);
+        app.flyout
+            .window()
+            .set_size(slint::LogicalSize::new(300.0, height));
+        draw_frames();
+        let rows: Vec<_> =
+            ElementHandle::find_by_element_type_name(&app.flyout, "FlyoutRow").collect();
+        assert!(!rows.is_empty(), "the speaker rows show");
+        for row in rows {
+            let (x, width) = (row.absolute_position().x, row.size().width);
+            assert_eq!(
+                (x, 300.0 - x - width),
+                (8.0, 8.0),
+                "{:?}",
+                row.accessible_label()
+            );
+        }
     }
 
     fn flyout_element(app: &App, id: &str) -> i_slint_backend_testing::ElementHandle {
@@ -18464,6 +18710,30 @@ pub(crate) mod tests {
                 }
             }
         }
+    }
+
+    /// A row's volume track starts where its name does, as the Mac's slider
+    /// under the name (MainWindow.swift:2433); the track starts half the
+    /// 16 px knob inside the slider.
+    #[test]
+    fn a_rows_volume_track_starts_under_its_name() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = narrow_app(MockBackend::new());
+        let label = app
+            .main
+            .global::<crate::Strings>()
+            .invoke_volume_of("Headphones".into());
+        let (x, y, _, _) = slider_box(&app.main, &label);
+        let name = ElementHandle::find_by_element_id(&app.main, "SpeakerRow::name-label")
+            .filter(|n| n.absolute_position().y < y)
+            .max_by(|a, b| a.absolute_position().y.total_cmp(&b.absolute_position().y))
+            .expect("the row's name");
+        let track = x + 16.0 / 2.0;
+        assert!(
+            (track - name.absolute_position().x).abs() < 0.5,
+            "track at {track}, name at {}",
+            name.absolute_position().x
+        );
     }
 
     /// A row's volume number sits centred on its slider's track, as on the
