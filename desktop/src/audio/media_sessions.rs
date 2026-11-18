@@ -1144,6 +1144,32 @@ mod tests {
         );
     }
 
+    /// The cover a new song is checked against is the one shown last, also
+    /// when that song's cover was made before.
+    #[test]
+    fn a_song_shown_from_the_cache_is_the_one_whose_cover_a_new_song_cant_keep() {
+        let (fake, _) = fake(Thumbnail::Other);
+        let mut reader = Reader::new(fake);
+        let last = poll(&mut reader).1.and_then(|card| card.artwork);
+        let song = |title: &str, album: &str| MediaSession {
+            title: title.to_owned(),
+            album: album.to_owned(),
+            ..playing()
+        };
+        reader.sessions.sessions[0] = song("Before", "Before album");
+        reader.sessions.thumbnail = Thumbnail::Image;
+        let _ = poll(&mut reader);
+        reader.sessions.sessions[0] = playing();
+        reader.sessions.thumbnail = Thumbnail::Other;
+        let card = poll(&mut reader).1.expect("the card shows");
+        assert_eq!(card.artwork, last, "the song is shown from the cache");
+        reader.sessions.sessions[0] = song("Next", "Next album");
+        let (track, card) = poll(&mut reader);
+        let card = card.expect("the card shows");
+        assert!(card.artwork.is_none(), "the last song's cover is not this one's");
+        assert!(track.is_some_and(|track| track.artwork.is_none()));
+    }
+
     #[test]
     fn a_good_cover_after_a_decode_failure_clears_it() {
         let (fake, _) = fake(Thumbnail::Undecodable);
