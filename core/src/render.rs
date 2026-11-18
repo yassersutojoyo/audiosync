@@ -1007,6 +1007,9 @@ pub struct Renderer {
     /// first callback came. Not before, so a renderer whose hold-back the
     /// host hasn't set yet never moves the session lead (S208).
     start_lead_fixed: bool,
+    /// The callback the start lead was published for, to publish it again
+    /// with a new heard-after (S478).
+    lead_callback: usize,
     /// A delay went to the reader; closed until the read that applies it.
     awaiting_resync: bool,
     /// A stall was found, by a stale stamp or a gap in the output times, and
@@ -1182,6 +1185,7 @@ impl Renderer {
             starve_count: 0,
             anchor_late_ns: 0,
             start_lead_fixed: false,
+            lead_callback: 0,
             awaiting_resync: false,
             stalled: false,
             late_held: 0,
@@ -2261,6 +2265,9 @@ impl Renderer {
             self.hold_back = self.shared.delay.load(Ordering::Relaxed);
             // The host's delay already counts any move it knew of.
             self.move_due = None;
+            if self.start_lead_fixed {
+                self.publish_start_lead(self.lead_callback);
+            }
             self.ask_reader_delay();
         }
     }
@@ -2299,8 +2306,10 @@ impl Renderer {
     /// Publishes the start lead for a steady callback of `callback` device
     /// frames (S208): the most that callback can ask the reader for, plus
     /// the cap on the capture's block and the converter's latency. A Bluetooth output adds a capture
-    /// block (S230).
-    fn publish_start_lead(&self, callback: usize) {
+    /// block (S230). The heard-after the reader's delay leaves out is added
+    /// back (S478), so that cut never clamps one output's delay at 0.
+    fn publish_start_lead(&mut self, callback: usize) {
+        self.lead_callback = callback;
         let Some(slot) = self.shared.slot else {
             return;
         };
@@ -2308,22 +2317,30 @@ impl Renderer {
             .saturating_add(self.block_cap)
             .saturating_add(self.latency as usize)
             .saturating_add(self.shared.extra_lead_frames());
-        self.shared
-            .leads()
-            .set_lead(slot, i64::try_from(lead).unwrap_or(i64::MAX));
+        self.shared.leads().set_lead(
+            slot,
+            i64::try_from(lead)
+                .unwrap_or(i64::MAX)
+                .saturating_add(self.heard_after_frames()),
+        );
+    }
+
+    /// The heard-after of S478, in capture frames.
+    fn heard_after_frames(&self) -> i64 {
+        let frames = u128::from(self.shared.heard_after_ns.load(Ordering::Relaxed))
+            * u128::from(self.capture_rate)
+            / 1_000_000_000;
+        i64::try_from(frames).unwrap_or(i64::MAX)
     }
 
     /// The delay the reader is to have (S208): the hold-back plus the
     /// session lead, less the converter's latency.
     fn wanted_reader_delay(&self) -> i64 {
         let lead = self.shared.leads().session_lead();
-        let heard_after = u128::from(self.shared.heard_after_ns.load(Ordering::Relaxed))
-            * u128::from(self.capture_rate)
-            / 1_000_000_000;
         self.hold_back
             .saturating_add(lead)
             .saturating_sub(self.latency)
-            .saturating_sub(i64::try_from(heard_after).unwrap_or(i64::MAX))
+            .saturating_sub(self.heard_after_frames())
             .max(0)
     }
 
@@ -2783,6 +2800,28 @@ mod tests {
             s.renderer.reader_delay,
             4800 + lead - s.renderer.latency - 1024
         );
+    }
+
+    // covers: S478
+    #[test]
+    fn outputs_heard_long_after_the_read_stay_their_delays_apart_at_delay_zero() {
+        let ring = Ring::for_rate(48_000).unwrap();
+        let mut writer = ring.writer().unwrap();
+        let mut outputs = [0, 4800].map(|delay| BuiltInAndBluetooth::output(&ring, false, delay));
+        let block = vec![0.5; 480 * 2];
+        let mut out = vec![0.0; 441 * 2];
+        for now in (1..200).map(|step| step * 10_000_000) {
+            writer.write_at(&block, 480, now);
+            for (renderer, control) in &mut outputs {
+                renderer.render_at(&mut out, now + 1_000_000);
+                // Reported after the first callback: two quanta, more than
+                // the delay-0 output's lead less its converter's latency.
+                if now == 10_000_000 {
+                    control.set_heard_after_ns(42_666_667);
+                }
+            }
+        }
+        assert_eq!(outputs[1].0.reader_delay - outputs[0].0.reader_delay, 4800);
     }
 
     // covers: S187
