@@ -15144,6 +15144,54 @@ pub(crate) mod tests {
         }
     }
 
+    /// The launch check reads a newer version from an appcast served on
+    /// 127.0.0.1 and the main window's notice offers it with its buttons.
+    #[cfg(windows)]
+    #[test]
+    fn a_newer_version_on_a_loopback_feed_is_offered_in_the_main_window() {
+        if std::env::var_os("CI").is_none() {
+            eprintln!("skipped: serves on 127.0.0.1, which runs in CI only");
+            return;
+        }
+        use i_slint_backend_testing::ElementHandle;
+        let app = main_window_over(MockBackend::new());
+        *app.updater.borrow_mut() = Some(crate::updater::tests::loopback_updater("offer-window"));
+        app.ui.borrow_mut().check_updates_automatically = true;
+        app.ui.borrow_mut().last_update_check = None;
+        app.launch_update_check();
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while app.updater_notice().is_none() {
+            assert!(std::time::Instant::now() < deadline, "no offer within 20 s");
+            std::thread::sleep(Duration::from_millis(50));
+            app.poll_updater();
+        }
+        // The notice slides in on the held clock before it is in the tree.
+        advance_clock(Duration::from_millis(400));
+        draw_frames();
+        let text = app
+            .strings()
+            .invoke_notice_update_available("0.9.0".into(), "0.8.0".into());
+        assert!(
+            ElementHandle::find_by_accessible_label(&app.main, &text)
+                .next()
+                .is_some(),
+            "{text:?} is in the main window"
+        );
+        println!("offer in the main window: {text}");
+        let notice = app.updater_notice().expect("the offer is a notice");
+        assert_eq!(
+            notice_item(&app.strings(), &notice)
+                .update_buttons
+                .iter()
+                .collect::<Vec<_>>(),
+            [
+                UpdateButton::NotNow,
+                UpdateButton::SkipThisVersion,
+                UpdateButton::Download
+            ]
+        );
+    }
+
     /// The volume keys' pop-up reads as the Mac's (LevelPopup.swift:90-119,
     /// Localization.swift:53-54): its label, the level with a percent sign,
     /// the master's speaker with its waves or crossed out at 0, and the

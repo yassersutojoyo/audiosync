@@ -267,6 +267,13 @@ jobs:
         shell: pwsh
         run: ./scripts/stranger/windows_run.ps1 -Setup desktop/target/installer-x64/AudioSync-Setup.exe -Work stranger-work
 
+      # A10.03: the real launch check and notice, the feed served on 127.0.0.1.
+      # Not --release: release builds leave out the Slint debug info that
+      # finding the notice by its label needs (desktop/build.rs).
+      - name: The update offer from a newer version on a loopback feed
+        working-directory: desktop
+        run: cargo test --locked --target x86_64-pc-windows-msvc a_newer_version_on_a_loopback_feed -- --nocapture
+
       - name: Upload the screenshot and logs (workflow artifact)
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5

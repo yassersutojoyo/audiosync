@@ -9,6 +9,9 @@
 #   volume keys: a volume set on the default as the taskbar does it stays
 #     while streaming, and the stream goes on (S192);
 #   muted output: the System slider on a muted default unmutes it (S197);
+#   real volume keys move AudioSync's master, not the default (S429);
+#   a muted, then a quiet, default shows the hint, its fix and its tooltip;
+#   a source app killed while streaming leaves a notice (S227);
 #   restore: with a second endpoint added, the default the app moved and every
 #     output's volume and mute are as found after a kill and an uninstall (S474).
 # Without an endpoint after the install it prints why and exits 0 with
@@ -203,6 +206,27 @@ public static class SoftwareDevice {
     return string.Format("0x{0:X8}: {1}", result, instance);
   }
 }
+
+// Real input, through the stream a keyboard and a mouse feed.
+public static class Input {
+  [DllImport("user32.dll")]
+  static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+  [DllImport("user32.dll")]
+  static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")]
+  static extern void mouse_event(uint flags, int dx, int dy, uint data, UIntPtr extra);
+
+  // An extended key, down then up.
+  public static void Press(byte vk) {
+    keybd_event(vk, 0, 1, UIntPtr.Zero);
+    keybd_event(vk, 0, 3, UIntPtr.Zero);
+  }
+
+  public static void Hover(int x, int y) {
+    SetCursorPos(x - 1, y);
+    mouse_event(1, 1, 0, 0, UIntPtr.Zero);
+  }
+}
 '@
 
 function Get-Defaults { "console=$([Endpoints]::Default(0)) multimedia=$([Endpoints]::Default(1))" }
@@ -282,7 +306,7 @@ $dir = Join-Path $env:ProgramFiles 'AudioSync'
 $exe = Join-Path $dir 'audiosync.exe'
 if ($install.ExitCode -ne 0 -or -not (Test-Path $exe)) { throw "install failed (exit $($install.ExitCode))" }
 
-Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.Forms
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.Forms, System.Drawing
 $A = [System.Windows.Automation.AutomationElement]
 $Scope = [System.Windows.Automation.TreeScope]
 $TogglePattern = [System.Windows.Automation.TogglePattern]::Pattern
@@ -388,6 +412,64 @@ if (-not $script:builtIn) {
   }
 }
 
+function Save-Shot([string] $Name) {
+  $r = $script:main.Current.BoundingRectangle
+  $shot = New-Object System.Drawing.Bitmap ([int]$r.Width), ([int]$r.Height)
+  [System.Drawing.Graphics]::FromImage($shot).CopyFromScreen([int]$r.X, [int]$r.Y, 0, 0, $shot.Size)
+  $shot.Save((Join-Path $Work "$Name.png"), [System.Drawing.Imaging.ImageFormat]::Png)
+  "shot: $Name.png" | Tee-Object -FilePath "$Work/result.txt" -Append
+}
+
+# The value of the last "master volume: N" line after the first $Seen, once the move rests.
+function Wait-Master([int] $Seen) {
+  for ($i = 0; $i -lt 30; $i++) {
+    $lines = Get-LogLines 'master volume: '
+    if ($lines.Count -gt $Seen) { Start-Sleep -Seconds 2; return [double]((Get-LogLines 'master volume: ')[-1].Line -replace '.*master volume: ', '') }
+    Start-Sleep -Milliseconds 500
+  }
+  $null
+}
+
+# A10.11: real volume keys move AudioSync's master while it streams, and the
+# default output's own volume stays (S429).
+[Endpoints]::SetMute($false)
+[Endpoints]::SetLevel(0.5)
+Start-Sleep -Seconds 2
+$hook = Get-LogLines 'volume keys: the keyboard hook takes the volume keys'
+Check 'A10.11' ($hook.Count -ge 1) "the keyboard hook took the volume keys ($(($hook | Select-Object -First 1).Line))"
+$before = [Endpoints]::Level()
+$seen = (Get-LogLines 'master volume: ').Count
+[Input]::Press(0xAE); Start-Sleep -Milliseconds 300; [Input]::Press(0xAE)
+$down = Wait-Master $seen
+$seen = (Get-LogLines 'master volume: ').Count
+[Input]::Press(0xAF)
+$up = Wait-Master $seen
+$after = [Endpoints]::Level()
+Check 'A10.11' (($null -ne $down) -and ($null -ne $up) -and [math]::Abs($up - $down - 3) -lt 0.01) "two Volume Down presses then one Volume Up: master $down, then $up"
+Check 'A10.11' ([math]::Abs($after - $before) -lt 0.005) "the default output stayed at $([math]::Round($after * 100, 1))% (was $([math]::Round($before * 100, 1))%)"
+
+# A10.10: a muted, then a quiet, default shows the hint line, its fix and,
+# on hover, its tooltip.
+foreach ($pass in 'muted', 'low') {
+  if ($pass -eq 'muted') { [Endpoints]::SetMute($true) } else { [Endpoints]::SetMute($false); [Endpoints]::SetLevel(0.05) }
+  Start-Sleep -Seconds 3
+  $all = Find-All ([System.Windows.Automation.Condition]::TrueCondition)
+  $hint = $all | Where-Object { $_.Current.Name -match 'muted in Windows|Windows volume is \d' } | Select-Object -First 1
+  $fix = $all | Where-Object { $_.Current.Name -match '^(Unmute|Set to \d+%)' } | Select-Object -First 1
+  Check 'A10.10' ([bool]$hint) "$pass hint: '$(if ($hint) { $hint.Current.Name })'"
+  Check 'A10.10' ([bool]$fix) "$pass fix: '$(if ($fix) { $fix.Current.Name })'"
+  if ($hint) {
+    $r = $hint.Current.BoundingRectangle
+    [Input]::Hover([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2))
+    Start-Sleep -Seconds 2
+    $tip = Find-All ([System.Windows.Automation.Condition]::TrueCondition) |
+      Where-Object { $_.Current.Name -like 'Windows has its own volume for each output*' } | Select-Object -First 1
+    "$(if ($tip) { 'SEEN' } else { 'NOT SEEN (see the photo)' }) A10.10: $pass tooltip on hover: '$(if ($tip) { $tip.Current.Name })'"
+  }
+  Save-Shot "A10.10-$pass"
+}
+[Endpoints]::SetLevel(0.5)
+
 if (Test-On $streaming) { $streaming.GetCurrentPattern($TogglePattern).Toggle() }
 Start-Sleep -Seconds 3
 Check 'A1.11' ((Get-Defaults) -eq $default) 'the default output is as found after streaming stops'
@@ -419,6 +501,42 @@ function Start-MovedStream([string] $Before) {
   }
   $false
 }
+
+# A10.14: a throwaway app plays a tone to the default, AudioSync streams that
+# app, the app is killed, and the source goes to All System Audio with a notice
+# (S227).
+$wav = Join-Path $fixture 'tone.wav'
+$samples = 44100
+$stream = [IO.File]::Create($wav)
+$w = New-Object IO.BinaryWriter $stream
+$w.Write([Text.Encoding]::ASCII.GetBytes('RIFF')); $w.Write([int](36 + 2 * $samples)); $w.Write([Text.Encoding]::ASCII.GetBytes('WAVEfmt '))
+$w.Write([int]16); $w.Write([int16]1); $w.Write([int16]1); $w.Write([int]44100); $w.Write([int](2 * 44100)); $w.Write([int16]2); $w.Write([int16]16)
+$w.Write([Text.Encoding]::ASCII.GetBytes('data')); $w.Write([int](2 * $samples))
+for ($i = 0; $i -lt $samples; $i++) { $w.Write([int16](8000 * [math]::Sin(2 * [math]::PI * 440 * $i / 44100))) }
+$w.Close()
+"powershell.exe processes before the tone: $(@(Get-Process powershell -ErrorAction SilentlyContinue).Count)" | Tee-Object -FilePath "$Work/result.txt" -Append
+$player = Start-Process -FilePath powershell.exe -WindowStyle Hidden -PassThru `
+  -ArgumentList '-NoProfile', '-Command', "(New-Object Media.SoundPlayer '$wav').PlayLooping(); Start-Sleep -Seconds 600"
+Start-Sleep -Seconds 3
+'{"version":3,"show_virtual_devices":true,"source":{"kind":"app","executable":"powershell.exe","name":"Windows PowerShell"}}' |
+  Set-Content -Encoding ascii (Join-Path $data 'settings.json')
+Start-App
+Set-Toggle '' 0 $true
+Set-Toggle 'Streaming' 0 $true
+Start-Sleep -Seconds 6
+$sourceSeen = (Get-LogLines 'source').Count
+Stop-Process -Id $player.Id -Force
+Start-Sleep -Seconds 8
+$notice = Find-All ([System.Windows.Automation.Condition]::TrueCondition) |
+  Where-Object { $_.Current.Name -match ' quit, ' } | Select-Object -First 1
+Check 'A10.14' ([bool]$notice) "the notice after the source app was killed: '$(if ($notice) { $notice.Current.Name })'"
+Save-Shot 'A10.14-source-quit'
+@(Get-LogLines 'source') | Select-Object -Skip ([math]::Max(0, $sourceSeen - 3)) | ForEach-Object { "log: $($_.Line)" } |
+  Tee-Object -FilePath "$Work/result.txt" -Append
+if (Test-Alive) { Stop-Process -Id $script:app.Id -Force }
+Start-Sleep -Seconds 2
+if (Test-Path $log) { Copy-Item $log (Join-Path $Work 'audiosync-debug-a1014.log') }
+'{"version":3,"show_virtual_devices":true}' | Set-Content -Encoding ascii (Join-Path $data 'settings.json')
 
 & $devcon install (Join-Path $driver 'Scream.inf') '*Scream' | Tee-Object -FilePath "$Work/env.txt" -Append
 $count = 0
