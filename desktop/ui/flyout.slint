@@ -1157,7 +1157,9 @@ export component TrayFlyout inherits Window {
                                             // the button across the card with its chevron at the edge, as the Mac's.
                                             HorizontalLayout {
                                                 padding-left: -2px;
+                                                // The Mac's 13 pt body line (MenuBar.swift:2382); Segoe UI's is 2 px taller.
                                                 SourceMenu {
+                                                    height: 16px;
                                                     horizontal-stretch: 1;
                                                     sources: root.sources;
                                                     looks: root.source-looks;
@@ -1176,10 +1178,11 @@ export component TrayFlyout inherits Window {
                                                 accessible-role: groupbox;
                                                 accessible-label: Strings.now-playing;
 
-                                                // Never squeezed under the cover's height, so the artist
-                                                // keeps its own line above the wave.
+                                                // The Mac's 19 and 16 pt lines, never squeezed under the cover's
+                                                // height, so the artist keeps its own line above the wave
+                                                // (MenuBar.swift:2385-2393).
                                                 song-title := SlidLine {
-                                                    min-height: self.preferred-height;
+                                                    height: 19px;
                                                     text: root.now-playing-title;
                                                     old-text: root.now-playing-outgoing.title;
                                                     sliding: root.now-playing-look.sliding;
@@ -1192,7 +1195,7 @@ export component TrayFlyout inherits Window {
                                                 }
 
                                                 if root.now-playing-subtitle != "" || (root.now-playing-look.sliding && root.now-playing-outgoing.subtitle != ""): song-artist := SlidLine {
-                                                    min-height: self.preferred-height;
+                                                    height: 16px;
                                                     text: root.now-playing-subtitle;
                                                     old-text: root.now-playing-outgoing.subtitle;
                                                     sliding: root.now-playing-look.sliding;
@@ -1279,7 +1282,7 @@ export component TrayFlyout inherits Window {
                                 // Four rows, then it scrolls, so a PC with many outputs
                                 // still fits a small screen.
                                 // Rows reach 6 px left of their circles, 14 px from the panel's
-                                // edge, and 8 px from the other, as on the Mac (MenuBar.swift:1871, :1873).
+                                // edge, and 8 px from the other, as on the Mac (MenuBar.swift:1778, :1871, :1873).
                                 HorizontalLayout {
                                     padding-left: -6px;
                                     padding-right: -6px;
