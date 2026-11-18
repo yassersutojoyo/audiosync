@@ -16250,6 +16250,24 @@ pub(crate) mod tests {
         }
     }
 
+    /// The tray panel's speaker rows are 36 px tall at the height it fits,
+    /// as the Mac panel's (MenuBar.swift:1692).
+    #[test]
+    fn the_flyout_rows_are_36_px_at_the_fitted_height() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = measured_flyout();
+        let height = app.fit_flyout(1000.0);
+        app.flyout
+            .window()
+            .set_size(slint::LogicalSize::new(300.0, height));
+        draw_frames();
+        let heights: Vec<f32> = ElementHandle::find_by_element_type_name(&app.flyout, "FlyoutRow")
+            .map(|row| row.size().height)
+            .collect();
+        assert!(!heights.is_empty(), "the speaker rows show");
+        assert!(heights.iter().all(|h| *h == 36.0), "{heights:?}");
+    }
+
     fn flyout_element(app: &App, id: &str) -> i_slint_backend_testing::ElementHandle {
         i_slint_backend_testing::ElementHandle::find_by_element_id(&app.flyout, id)
             .next()
