@@ -1170,7 +1170,12 @@ fn b05() -> Vec<Row> {
             s.edit(|state| state.airplay_delay_ms = None);
             s.main()
         }),
-        row("B05", "MAIN-AIRPLAY-DELAY-OPEN", |s| s.main()),
+        row("B05", "MAIN-AIRPLAY-DELAY-OPEN", |s| {
+            s.app.toggle_sync(super::AIRPLAY_DELAY_FIELD);
+            let at = center(&find(&s.app.main, "Kitchen")?);
+            scroll(s.app.main.window(), at, -1200.0);
+            s.main()
+        }),
         row("B05", "MAIN-SYSVOL-FOLDED", |s| s.main()),
         row("B05", "MAIN-SYSVOL-OPEN", |s| {
             s.app.toggle_sync(SPEAKERS);
