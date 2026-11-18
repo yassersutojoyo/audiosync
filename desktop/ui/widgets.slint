@@ -3876,8 +3876,10 @@ export component SpeakerRow inherits Rectangle {
                         spacing: 5px;
                         horizontal-stretch: 1;
 
+                        // The Mac's 6 px before the options, less the 3 px the
+                        // value's fill reaches past it (MainWindow.swift:2371, :2778).
                         name-line := HorizontalLayout {
-                            spacing: 8px;
+                            spacing: 3px;
 
                             // Name and kind
                             VerticalLayout {
@@ -4103,7 +4105,6 @@ export component SpeakerRow inherits Rectangle {
                                 width: Fluent.delay-column;
                                 alignment: center;
                                 cross-axis-alignment: end;
-                                padding-right: 3px;
 
                                 // The reference's Windows volume, where other rows show
                                 // their delay, as the Mac's built-in speakers: it opens
