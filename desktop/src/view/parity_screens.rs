@@ -455,10 +455,11 @@ fn the_panels_mute_button_is_drawn_in_the_secondary_text() {
     assert!(volume.contains("color: root.icon-color;"), "{volume}");
     // The panel's mute glyph is Brand.secondaryText, the window's .primary (MenuBar.swift:2978).
     let flyout = include_str!("../../ui/flyout.slint").replace("\r\n", "\n");
-    let row = &flyout[flyout.find("MasterVolume {").expect("the flyout's master volume")..];
+    let row = &flyout[flyout
+        .find("MasterVolume {")
+        .expect("the flyout's master volume")..];
     assert!(
-        row[..row.find("mute-toggled").unwrap()]
-            .contains("icon-color: Tokens.secondary-text;"),
+        row[..row.find("mute-toggled").unwrap()].contains("icon-color: Tokens.secondary-text;"),
         "{row}"
     );
 }
