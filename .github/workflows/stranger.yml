@@ -404,3 +404,35 @@ jobs:
           path: default-device
           if-no-files-found: warn
           retention-days: 7
+
+  memory-windows:
+    # Two virtual outputs, a tone streamed to both for five minutes from the
+    # installed copy: private bytes sampled every 10 s, then the uninstall
+    # while it runs, with the default output, volumes and mutes as found.
+    name: Windows memory while streaming (5 min), uninstall as found
+    needs: [proven, windows]
+    if: ${{ !cancelled() && needs.proven.outputs.skip != 'true' }}
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: stranger-windows-setup
+          path: pkg
+
+      - name: Install, stream five minutes, sample private bytes, uninstall
+        shell: pwsh
+        run: ./scripts/stranger/windows_memory.ps1 -Setup pkg/AudioSync-Setup.exe -Work memory
+
+      - name: Upload the samples and the debug log (workflow artifact)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: stranger-windows-memory
+          path: memory
+          if-no-files-found: warn
+          retention-days: 7
