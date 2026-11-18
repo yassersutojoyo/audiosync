@@ -1448,6 +1448,8 @@ export component TrayFlyout inherits Window {
                                 MasterVolume {
                                     volume: root.master-volume;
                                     waves: root.master-volume-waves;
+                                    // Brand.secondaryText in the panel (MenuBar.swift:2978).
+                                    icon-color: Tokens.secondary-text;
                                     // As far from the track as the speaker: half the 32 px
                                     // button around its 16 px glyph, the spacing and half the knob.
                                     number-gap: 20px;
