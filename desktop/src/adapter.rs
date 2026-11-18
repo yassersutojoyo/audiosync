@@ -15308,6 +15308,37 @@ mod tests {
         }
     }
 
+    // A run that stopped midway keeps its rows but ends the sheet, so no
+    // row offers Measure Again (CalibrateAllFlow.swift:174, read with the
+    // run's end in AppDelegate+CalibrateAll.swift:248-254).
+    #[test]
+    fn a_run_that_fails_midway_offers_no_measure_again() {
+        let mut adapter = AudioAdapter::new(
+            reference_audio(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+        );
+        for id in ["builtin", "bluetooth"] {
+            turn_on(&mut adapter, id);
+        }
+        let (sheet, members, rate) = crate::audio::calibrate_all::tests::local_sheet(&[
+            ("builtin", 0.0, 2010.0),
+            ("bluetooth", 0.0, 2190.0),
+        ]);
+        adapter.finish_calibrate_all(
+            Finished {
+                sheet: Some(sheet),
+                failure: Some(Failure::MicrophoneSkipped),
+            },
+            None,
+            members,
+            rate,
+            None,
+        );
+        let shown = adapter.snapshot().calibrate_all.sheet.expect("the rows stay");
+        assert!(shown.rows.iter().all(|row| !row.can_measure_again));
+    }
+
     // covers: S238
     #[test]
     fn undo_puts_back_a_cast_speaker_without_a_stored_offset_as_none() {
