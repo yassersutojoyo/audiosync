@@ -10065,6 +10065,12 @@ pub(crate) mod tests {
             .unwrap()
             .kind = ui_model::SpeakerKind::Headphones;
         assert_eq!(lines(&state), [phones, phones]);
+
+        state.calibrate_all.phase = AllPhase::AgainFailed("Desk".into(), Failure::NoReference);
+        assert!(
+            calibrate_all_card(&strings, &state).status.contains(phones),
+            "Measure Again refused"
+        );
     }
 
     // covers: S362
