@@ -683,7 +683,8 @@ pub enum NoticeMessage {
     SourceQuit { source: SourceName },
     /// The app being captured quit, so streaming went on with the whole
     /// system (spec S227).
-    SourceSwitched { source: SourceName },
+    /// `started` false when streaming couldn't start with it.
+    SourceSwitched { source: SourceName, started: bool },
     /// A source or channel pair picked while streaming couldn't start, so
     /// the one before it plays on, to the same speakers (spec S141).
     SwitchFailed { new: SwitchName, old: SwitchName },
@@ -833,7 +834,7 @@ impl NoticeMessage {
     pub fn reports_a_change(&self) -> bool {
         matches!(
             self,
-            Self::SourceSwitched { .. }
+            Self::SourceSwitched { started: true, .. }
                 | Self::WaitingForAudio { .. }
                 | Self::GroupsBecameZones
                 | Self::Update(
@@ -3604,7 +3605,8 @@ mod tests {
         assert!(NoticeMessage::GroupsBecameZones.reports_a_change());
         assert!(
             NoticeMessage::SourceSwitched {
-                source: SourceName::Named("Spotify".into())
+                source: SourceName::Named("Spotify".into()),
+                started: true,
             }
             .reports_a_change()
         );

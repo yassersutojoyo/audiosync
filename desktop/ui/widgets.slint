@@ -4541,6 +4541,15 @@ export component SpeakerRow inherits Rectangle {
                                         vertical-alignment: center;
                                         accessible-role: text;
                                         accessible-label: hint-box.open ? Strings.device-volume-hint-label(root.item.name, hint-box.hint, hint-box.percent) : "";
+
+                                        TouchArea {
+                                            Tooltip {
+                                                LabelTip {
+                                                    text: Strings.device-volume-help;
+                                                    max-tip-width: root.width;
+                                                }
+                                            }
+                                        }
                                     }
 
                                     HorizontalLayout {
@@ -6026,17 +6035,27 @@ export component NoticeStack inherits VerticalLayout {
     if root.notices.length > 1: all-slot := Rectangle {
         property <bool> closing: root.eased && root.staying < 2;
         property <float> open: (root.eased && root.notices[0].fresh) || self.closing ? 0 : 1;
+        property <float> shown: self.open;
         init => {
             if !self.closing {
                 self.open = 1;
+                self.shown = 1;
             }
         }
         changed closing => {
             self.open = self.closing ? 0 : 1;
+            self.shown = self.open;
         }
+        // The notices' own motion, as the Mac's slot (MenuBar.swift:2760).
         animate open {
             duration: Motion.on ? 240ms : 0ms;
-            easing: cubic-bezier(0.2, 0.8, 0.2, 1);
+            delay: Motion.on && self.closing ? 80ms : 0ms;
+            easing: cubic-bezier(0.25, 0, 0.75, 1);
+        }
+        animate shown {
+            duration: Motion.on ? (self.closing ? 160ms : 180ms) : 150ms;
+            delay: Motion.on && !self.closing ? 60ms : 0ms;
+            easing: cubic-bezier(0.25, 0, 0.75, 1);
         }
 
         height: (Motion.on ? self.open : 1) * (6px + all-row.preferred-height);
@@ -6046,7 +6065,7 @@ export component NoticeStack inherits VerticalLayout {
             y: 6px;
             height: self.preferred-height;
             alignment: end;
-            opacity: all-slot.open;
+            opacity: all-slot.shown;
             LinkButton {
                 text: Strings.dismiss-all-notices;
                 label: Strings.dismiss-all-notices;

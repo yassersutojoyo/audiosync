@@ -4408,6 +4408,17 @@ impl<A: AudioBackend> AudioAdapter<A> {
                         }
                     }
                     StopReason::CaptureFailed(_) => NoticeMessage::CaptureLost,
+                    // The whole system is the source even so (S227).
+                    StopReason::SystemSwitchFailed(_) => {
+                        let source = self.quit_notice_name();
+                        self.heard_twice_dismissed.remove(&self.chosen.key());
+                        self.keep_mix();
+                        self.chosen = Chosen::WholeSystem;
+                        NoticeMessage::SourceSwitched {
+                            source,
+                            started: false,
+                        }
+                    }
                 };
                 self.post(NoticeSubject::Source, message);
                 self.refresh_sources();
@@ -4422,7 +4433,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.notices.clear(&[NoticeSubject::Capture]);
                 self.post(
                     NoticeSubject::Source,
-                    NoticeMessage::SourceSwitched { source },
+                    NoticeMessage::SourceSwitched {
+                        source,
+                        started: true,
+                    },
                 );
                 self.refresh_sources();
             }
@@ -7994,7 +8008,10 @@ mod tests {
             matches!(notices[..], [NoticeMessage::SourceSwitched { .. }]),
             "{notices:?}"
         );
-        assert!(!notices[0].reports_a_change(), "a warning, as nothing plays");
+        assert!(
+            !notices[0].reports_a_change(),
+            "a warning, as nothing plays"
+        );
     }
 
     // covers: S164, S227
@@ -8021,6 +8038,7 @@ mod tests {
         assert_eq!(playing(&adapter), [HEADPHONES, SPEAKERS]);
         let switched = NoticeMessage::SourceSwitched {
             source: SourceName::Named("Player".into()),
+            started: true,
         };
         assert_eq!(messages(&adapter), [switched]);
         assert_eq!(state.source_id, "system");
@@ -13550,7 +13568,8 @@ mod tests {
         assert_eq!(
             messages(&adapter),
             [NoticeMessage::SourceSwitched {
-                source: SourceName::Named("Player".into())
+                source: SourceName::Named("Player".into()),
+                started: true,
             }]
         );
 

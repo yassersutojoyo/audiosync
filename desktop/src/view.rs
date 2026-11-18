@@ -7322,10 +7322,13 @@ pub fn notice_item(strings: &Strings<'_>, notice: &ui_model::Notice) -> NoticeIt
         id: i32::try_from(notice.id).unwrap_or(i32::MAX),
         message: notice_text(strings, &notice.message),
         title: notice_title(strings, &notice.message),
-        heading: if matches!(notice.message, NoticeMessage::AirPlayRetrying { .. }) {
-            notice_title(strings, &notice.message)
-        } else {
-            SharedString::new()
+        heading: match notice.message {
+            NoticeMessage::AirPlayRetrying { .. } => notice_title(strings, &notice.message),
+            NoticeMessage::PresetLeftOff {
+                nothing_changed: false,
+                ..
+            } => strings.get_preset_left_off_heading(),
+            _ => SharedString::new(),
         },
         time: notice.time.as_str().into(),
         has_guide: guide::guide(&notice.message).is_some(),
@@ -7460,9 +7463,14 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         NoticeMessage::SourceQuit { source } => {
             strings.invoke_notice_source_quit(source_name(strings, source))
         }
-        NoticeMessage::SourceSwitched { source } => {
-            strings.invoke_notice_source_switched(source_name(strings, source))
-        }
+        NoticeMessage::SourceSwitched {
+            source,
+            started: true,
+        } => strings.invoke_notice_source_switched(source_name(strings, source)),
+        NoticeMessage::SourceSwitched {
+            source,
+            started: false,
+        } => strings.invoke_notice_source_switched_not_started(source_name(strings, source)),
         NoticeMessage::SwitchFailed { new, old } => strings
             .invoke_notice_switch_failed(switch_name(strings, new), switch_name(strings, old)),
         NoticeMessage::SourceNotRunning {
@@ -7659,7 +7667,7 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
             return strings
                 .invoke_notice_title(NoticeKind::SourceQuit, source_name(strings, source));
         }
-        NoticeMessage::SourceSwitched { source } => {
+        NoticeMessage::SourceSwitched { source, .. } => {
             return strings
                 .invoke_notice_title(NoticeKind::SourceSwitched, source_name(strings, source));
         }

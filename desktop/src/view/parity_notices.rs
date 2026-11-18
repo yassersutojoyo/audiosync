@@ -1,6 +1,7 @@
-//! The device-volume hint, the notices and the source switch after a quit
-//! against the Mac's (DeviceVolumeViews.swift, NoticeMotion.swift,
-//! MenuBar.swift NoticeStack, Localization.swift).
+//! The device-volume hint, the notices, the source switch after a quit and
+//! the rename field against the Mac's (DeviceVolumeViews.swift,
+//! NoticeMotion.swift, MenuBar.swift NoticeStack, Localization.swift,
+//! MainWindow.swift).
 
 use super::notice_item;
 use super::tests::app_over;
@@ -106,6 +107,10 @@ fn the_tray_notices_footer_sits_under_the_notice_text() {
     assert!(!part.contains("IntroPart"), "{part}");
     assert!(part.contains("padding-left: 26px;"), "{part}");
     assert!(part.contains("padding-right: 24px;"), "{part}");
-    let column = between(&flyout, "if root.notices.length > 0: IntroPart {", "NoticeStack {");
+    let column = between(
+        &flyout,
+        "if root.notices.length > 0: IntroPart {",
+        "NoticeStack {",
+    );
     assert!(column.contains("spacing: 6px;"), "{column}");
 }
