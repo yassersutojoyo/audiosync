@@ -137,16 +137,16 @@ def offset_ms(rx, sink):
     """Median of each receiver click's time after the same click on the sink.
 
     rx and sink are (times, phase) pairs; a click's identity is its cycle
-    position, so a match lies under one whole cycle later."""
+    position, so a match lies within half a cycle either way."""
     period = sum(CYCLE)
     (rx_times, rx_start), (sink_times, sink_start) = rx, sink
     diffs = []
     for i, t in enumerate(rx_times):
         identity = (rx_start + i) % len(CYCLE)
-        later = [t - s for j, s in enumerate(sink_times)
-                 if (sink_start + j) % len(CYCLE) == identity and 0 <= t - s < period]
-        if later:
-            diffs.append(min(later))
+        near = [t - s for j, s in enumerate(sink_times)
+                if (sink_start + j) % len(CYCLE) == identity and abs(t - s) < period / 2]
+        if near:
+            diffs.append(min(near, key=abs))
     return statistics.median(diffs) * 1000 if diffs else None
 
 
