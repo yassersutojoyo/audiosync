@@ -71,6 +71,8 @@ mod parity_calibrate;
 #[cfg(test)]
 mod parity_main;
 #[cfg(test)]
+mod parity_presets;
+#[cfg(test)]
 mod parity_rest;
 #[cfg(test)]
 mod parity_screens;
@@ -17906,7 +17908,7 @@ pub(crate) mod tests {
 
     /// Waits for the address check Add by Address… started, if any, and
     /// takes its answer.
-    fn settle_cast_check(app: &App) {
+    pub(super) fn settle_cast_check(app: &App) {
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         while app.cast_check.borrow().is_some() && std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(1));
@@ -20490,7 +20492,7 @@ pub(crate) mod tests {
     }
 
     /// The App over `backend`, with its main window shown and drawn once.
-    fn main_window_over(backend: MockBackend) -> Rc<App> {
+    pub(super) fn main_window_over(backend: MockBackend) -> Rc<App> {
         let app = app_over(backend);
         app.main.show().expect("the main window shows headless");
         draw_frames();
