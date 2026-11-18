@@ -71,9 +71,8 @@ export global Fluent {
     out property <length> left-column-narrow: 210px;
     out property <length> left-column-wide: 280px;
     out property <length> speaker-list-full: 524px;
-    // How far inside its box the style's slider track starts (measured on
-    // screen: 10 px at 100 %).
-    out property <length> slider-inset: 10px;
+    // How far inside its box a LevelSlider's track starts: half its 16 px knob.
+    out property <length> slider-inset: 8px;
     // Subtle fills under the pointer, over any card or row.
     out property <brush> hover: Tokens.text.with-alpha(0.06);
     out property <brush> pressed: Tokens.text.with-alpha(0.035);
