@@ -421,6 +421,31 @@ mod tests {
         assert_eq!(window.window().size().width, 380);
     }
 
+    /// Every window built on open takes the width its .slint file declares.
+    #[test]
+    fn each_window_built_on_open_opens_at_its_declared_width() {
+        slint::platform::set_platform(Box::new(WinitLikePlatform)).expect("a fresh test thread");
+        let app = app_over(MockBackend::new());
+        macro_rules! opens_at {
+            ($name:ident, $width:expr) => {
+                let window = app.$name();
+                window.show().expect("the window shows");
+                WinitLike::make_native_windows();
+                assert_eq!(window.window().size().width, $width, stringify!($name));
+            };
+        }
+        opens_at!(equalizer, 520);
+        opens_at!(zone_dialog, 380);
+        opens_at!(pin_dialog, 380);
+        opens_at!(password_dialog, 380);
+        opens_at!(about, 360);
+        opens_at!(guide, 460);
+        opens_at!(help, 640);
+        opens_at!(remote_window, 460);
+        opens_at!(setup, 480);
+        opens_at!(settings, 460);
+    }
+
     #[test]
     fn web_remote_keeps_its_phone_choice_over_a_rebuild() {
         let app = app_over(MockBackend::new());

@@ -143,7 +143,9 @@ export component PinDialog inherits Dialog {
     default-font-family: Fluent.font;
     default-font-weight: Fluent.weight-regular;
     default-font-size: Tokens.font-size-body;
-    preferred-width: 380px;
+    // A fixed width: fitted to its height before the native window exists,
+    // it kept the layout's narrowest, 141 px.
+    width: 380px;
 
     // Bumped each time the dialog opens or wants a new code, so the field
     // takes the cursor with its text selected.
