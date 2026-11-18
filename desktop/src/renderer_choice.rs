@@ -1,8 +1,8 @@
-//! The Slint renderer a Windows start uses: Skia, whose DirectWrite text is
-//! sharper than FemtoVG's, unless three starts with Skia in a row ended
-//! within a second of showing the main window, or failed to show it; from
-//! then on the software renderer, so the window still opens on a GPU or
-//! driver that Skia fails on.
+//! The Slint renderer a Windows start uses: Skia on the CPU, whose
+//! DirectWrite text is sharper than FemtoVG's, unless three starts with Skia
+//! in a row ended within a second of showing the main window, or failed to
+//! show it; from then on Slint's software renderer, so a crash in Skia's first
+//! frame does not stop every later start.
 
 /// The file in the data folder that records the renderer of the last start.
 pub const RECORD_NAME: &str = "renderer.txt";
@@ -90,7 +90,7 @@ pub fn arm(record: &Path) -> io::Result<()> {
 pub fn select(log: &crate::debug_log::DebugLog) -> Option<PathBuf> {
     let (renderer, record) = choose(crate::data_folder::folder().as_deref());
     log.log(|| match renderer {
-        Renderer::Skia => "renderer: Skia".to_owned(),
+        Renderer::Skia => "renderer: Skia (CPU)".to_owned(),
         Renderer::Software => {
             "renderer: software (three starts with Skia in a row failed in their first second)"
                 .to_owned()
