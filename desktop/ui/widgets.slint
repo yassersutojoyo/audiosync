@@ -399,6 +399,7 @@ export global Glyphs {
     out property <string> check: "\u{E73E}";
     out property <string> microphone: "\u{E720}";
     out property <string> gear: "\u{E713}";
+    out property <string> lock: "\u{E72E}";
 
     // A switched-on output's own volume in Windows: the muted speaker while
     // muted, the speaker with one wave while low (spec S198).
@@ -432,7 +433,7 @@ export global Glyphs {
     // outlines where the Mac's are filled, so these are drawn on Windows too;
     // its Presets, Equalizer, microphone and timer are filled where the Mac's are outlines.
     public pure function drawn-everywhere(glyph: string) -> bool {
-        return glyph == root.shuffle || glyph == root.repeat-all || glyph == root.repeat-one || glyph == root.more || glyph == root.previous || glyph == root.next || glyph == root.play || glyph == root.pause || glyph == root.volume-low || glyph == root.volume-mid || glyph == root.volume-high || glyph == root.volume-muted || glyph == root.presets || glyph == root.equalizer || glyph == root.microphone || glyph == root.timer;
+        return glyph == root.shuffle || glyph == root.repeat-all || glyph == root.repeat-one || glyph == root.more || glyph == root.previous || glyph == root.next || glyph == root.play || glyph == root.pause || glyph == root.volume-low || glyph == root.volume-mid || glyph == root.volume-high || glyph == root.volume-muted || glyph == root.presets || glyph == root.equalizer || glyph == root.microphone || glyph == root.timer || glyph == root.lock;
     }
 
     // Shuffle and Repeat are drawn on a 20-unit box with 2-unit strokes and
@@ -455,6 +456,9 @@ export global Glyphs {
     }
 
     public pure function outline(glyph: string) -> string {
+        if glyph == root.lock {
+            return "M5 7 V5 A3 3 0 0 1 11 5 V7";
+        }
         if glyph == root.more {
             return "M8 1.5 A6.5 6.5 0 0 1 8 14.5 A6.5 6.5 0 0 1 8 1.5 Z";
         }
@@ -551,6 +555,10 @@ export global Glyphs {
     }
 
     public pure function solid(glyph: string) -> string {
+        // The Mac's lock.fill, filled where the icon font's Lock is an outline.
+        if glyph == root.lock {
+            return "M4 7 H12 A1 1 0 0 1 13 8 V14 A1 1 0 0 1 12 15 H4 A1 1 0 0 1 3 14 V8 A1 1 0 0 1 4 7 Z";
+        }
         if glyph == root.shuffle {
             return "M15 2.6 L19 6 L15 9.4 Z M15 10.6 L19 14 L15 17.4 Z";
         }
@@ -4005,14 +4013,26 @@ export component SpeakerRow inherits Rectangle {
                                     // An AirPlay speaker's note can be long; it ends in "…"
                                     // rather than run into the delay column (Narrator reads
                                     // the whole note from the toggle).
-                                    if root.note != "": Rectangle {
+                                    if root.note != "": note-box := Rectangle {
+                                        // The Mac's AvailabilityNote leads with its lock or warning, 3 pt before the text (MenuBar.swift:2311-2318).
+                                        property <length> lead: root.availability-note != "" && root.note == Strings.speaker-caption(Strings.row-note(root.item.state, root.item.name), root.availability-note) ? Tokens.font-size-caption + 3px : 0px;
                                         horizontal-stretch: 1;
                                         min-width: 0px;
-                                        preferred-width: note-label.preferred-width;
-                                        max-width: note-label.preferred-width;
+                                        preferred-width: note-label.preferred-width + self.lead;
+                                        max-width: note-label.preferred-width + self.lead;
+
+                                        if note-box.lead > 0: note-icon := Glyph {
+                                            x: 0;
+                                            width: Tokens.font-size-caption;
+                                            height: 100%;
+                                            glyph: root.item.availability == Availability.needs-code || (root.item.code-every-time && root.item.availability == Availability.open) ? Glyphs.lock : Glyphs.warning;
+                                            font-size: Tokens.font-size-caption;
+                                            color: Tokens.secondary-text;
+                                        }
 
                                         note-label := Text {
-                                            width: 100%;
+                                            x: note-box.lead;
+                                            width: parent.width - note-box.lead;
                                             height: 100%;
                                             text: root.note;
                                             font-size: Tokens.font-size-caption;
