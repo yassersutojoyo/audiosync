@@ -13686,6 +13686,51 @@ pub(crate) mod tests {
             })
             .expect("the master mute button");
         assert_eq!(mute.size().height, 24.0);
+        let middle = |e: &i_slint_backend_testing::ElementHandle| {
+            e.absolute_position().y + e.size().height / 2.0
+        };
+        assert_eq!(middle(&mute), middle(&row), "centred on the row");
+
+        // The 3 px it overhangs above and below the row reach the button, not a neighbour.
+        let x = mute.absolute_position().x + mute.size().width / 2.0;
+        let top = row.absolute_position().y;
+        let bottom = top + row.size().height;
+        let before = app.snapshot().master_volume;
+        click(app.main.window(), x, top - 2.0);
+        assert_ne!(
+            app.snapshot().master_volume,
+            before,
+            "the strip above mutes"
+        );
+        click(app.main.window(), x, bottom + 2.0);
+        assert_eq!(
+            app.snapshot().master_volume,
+            before,
+            "the strip below unmutes"
+        );
+
+        // Its focus ring, the button's own size, stays inside the left column's view.
+        let ring = i_slint_backend_testing::ElementHandle::find_by_element_type_name(
+            &app.main,
+            "FocusRing",
+        )
+        .find(|e| e.absolute_position() == mute.absolute_position())
+        .expect("the mute button's focus ring");
+        let column = i_slint_backend_testing::ElementHandle::find_by_element_type_name(
+            &app.main,
+            "FadeScrollView",
+        )
+        .min_by(|a, b| a.absolute_position().x.total_cmp(&b.absolute_position().x))
+        .expect("the left column");
+        let (ring_top, column_top) = (ring.absolute_position().y, column.absolute_position().y);
+        assert!(
+            ring_top >= column_top,
+            "ring top {ring_top}, column top {column_top}"
+        );
+        assert!(
+            ring_top + ring.size().height <= column_top + column.size().height,
+            "the ring's bottom is in view"
+        );
     }
 
     /// A zone's speakers are set apart by a 1 px rule down their leading
