@@ -7970,6 +7970,33 @@ mod tests {
         assert_eq!(captures(&adapter).len(), 1, "nothing started");
     }
 
+    /// AppDelegate+Engine.swift:393-396: the source is the whole system
+    /// even when its capture can't start, and the notice says so.
+    // covers: S227
+    #[test]
+    fn a_whole_system_that_cant_start_after_a_quit_is_still_the_source() {
+        let mut adapter = adapter();
+        adapter.set_when_source_quits(WhenSourceQuits::SwitchToSystem);
+        adapter.select_source(&player());
+        turn_on(&mut adapter, SPEAKERS);
+        adapter
+            .audio_mut()
+            .refuse_next_capture(BackendError::DeviceGone);
+
+        adapter.audio_mut().quit_app(PLAYER_PID);
+        adapter.poll();
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert!(!state.running);
+        assert_eq!(state.source_id, "system");
+        let notices = messages(&adapter);
+        assert!(
+            matches!(notices[..], [NoticeMessage::SourceSwitched { .. }]),
+            "{notices:?}"
+        );
+        assert!(!notices[0].reports_a_change(), "a warning, as nothing plays");
+    }
+
     // covers: S164, S227
     #[test]
     fn an_app_that_quits_gives_way_to_the_whole_system_when_the_setting_says_so() {

@@ -75,6 +75,8 @@ mod parity_eq_guide;
 #[cfg(test)]
 mod parity_main;
 #[cfg(test)]
+mod parity_notices;
+#[cfg(test)]
 mod parity_presets;
 #[cfg(test)]
 mod parity_rest;
@@ -21546,7 +21548,7 @@ pub(crate) mod tests {
             .collect()
     }
 
-    fn preset_ids(app: &App) -> Vec<String> {
+    pub(super) fn preset_ids(app: &App) -> Vec<String> {
         app.snapshot().presets.into_iter().map(|p| p.id).collect()
     }
 
