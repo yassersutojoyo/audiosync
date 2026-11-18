@@ -157,9 +157,12 @@ def drive(work, pid, log_path, port):
         skip(state_name, f"no element named '{name}' with an action")
         return False
 
+    # The main window's row is a panel of the same name; the sheet holds Before you start or Results.
     def sheet(app):
         for node in named(app, "Calibrate All Speakers"):
-            if node.get_role() in (Atspi.Role.PANEL, Atspi.Role.GROUPING):
+            if node.get_role() in (Atspi.Role.PANEL, Atspi.Role.GROUPING) and any(
+                n.get_name() in ("Before you start", "Results", "Cancel") for n in walk(node)
+            ):
                 return node
         return None
 
@@ -184,10 +187,6 @@ def drive(work, pid, log_path, port):
         skip("CAL-READY", "no window on the accessibility bus")
         shot("CAL-SCREEN")
         return
-    streaming = actionable(named(app, "Streaming"))
-    if streaming is not None and not streaming.get_state_set().contains(Atspi.StateType.CHECKED):
-        streaming.get_action_iface().do_action(0)
-        time.sleep(3)
     shot("CAL-READY")
     tree(app, "atspi-ready.txt")
 
