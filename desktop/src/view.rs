@@ -8623,9 +8623,10 @@ pub(crate) mod tests {
     }
 
     /// At the default 696 x 680 with a song and its Shuffle and Repeat, the
-    /// left column fits with no scrolling, its cards 12 px clear of the
-    /// bottom fade, as on the Mac: no menu row above the header, which sits
-    /// 4 under the top row, and Several Apps in the source menu.
+    /// left column fits with no scrolling, as on the Mac: no menu row above
+    /// the header, which sits 4 under the top row, and Several Apps in the
+    /// source menu. The open Presets list pushes the rows below it down and
+    /// the hero above them scrolls.
     // covers: S450
     #[test]
     fn the_left_column_fits_the_default_window_with_a_song() {
@@ -8658,6 +8659,17 @@ pub(crate) mod tests {
         assert!(content > 400.0, "the card shows: {content}");
         assert!(content <= room, "{content} of {room}");
         assert_eq!(app.main.get_presets().row_count(), 0);
+        let presets = || {
+            i_slint_backend_testing::ElementHandle::find_by_element_id(
+                &app.main,
+                "MainWindow::presets-card",
+            )
+            .next()
+            .expect("Presets")
+            .size()
+            .height
+        };
+        let closed = presets();
         app.main.set_presets_open(true);
         for _ in 0..30 {
             std::thread::sleep(std::time::Duration::from_millis(20));
@@ -8668,13 +8680,21 @@ pub(crate) mod tests {
             .window()
             .set_size(slint::LogicalSize::new(696.0, 680.0));
         slint::platform::update_timers_and_animations();
-        let content = app.main.get_left_content_height();
+        let (content, room) = (
+            app.main.get_left_content_height(),
+            app.main.get_left_visible_height(),
+        );
         // As on the Mac, the open list says there is none yet over Save as
-        // Preset…, about 100 px (120 in Segoe UI's larger text), and the
-        // column scrolls the rows below it.
+        // Preset…, about 100 px (120 in Segoe UI's larger text), which the
+        // hero above the rows gives up and scrolls in.
         assert!(
             content > room && content <= room + 125.0,
-            "open with no presets: {content} of {room}"
+            "open: {content} of {room}"
+        );
+        let opened = presets() - closed;
+        assert!(
+            opened > 0.0 && opened <= 125.0,
+            "open with no presets: {opened} px"
         );
         let main = include_str!("../ui/main.slint").replace("\r\n", "\n");
         assert!(main.contains("padding-top: title-row.height - 1px;"));
@@ -14729,9 +14749,9 @@ pub(crate) mod tests {
         let has_line = |wanted: String| main.lines().any(|line| line.trim_end() == wanted);
         assert!(has_line(format!("    min-width: {min_width}px;")));
         assert!(has_line(format!("    min-height: {min_height}px;")));
-        // The left column scrolls when it is taller than the window, so
-        // its cards never push the window past that height.
-        assert!(main.contains("left-column := FadeScrollView {"));
+        // The left column's top scrolls when the column is taller than the
+        // window, so its hero never pushes the window past that height.
+        assert!(main.contains("left-scroll := FadeScrollView {"));
     }
 
     #[test]

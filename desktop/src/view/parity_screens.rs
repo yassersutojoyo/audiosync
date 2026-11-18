@@ -288,17 +288,19 @@ fn the_left_column_takes_the_macs_spacing() {
     assert!(card.contains("glyph-size: 22px;"), "Play and Pause at 22");
     let window = component(&main, "MainWindow");
     assert_eq!(window.matches("- 28px;").count(), 2, "both covers");
-    assert!(window.contains("padding-top: 16px;\n                        // The number ends"));
+    assert!(window.contains("padding-top: 16px;\n                            // The number ends"));
     assert!(window.contains(
-        "padding-right: 1px;\n                            // 8 px clear of the knob at 100.\n                            number-gap: 16px;"
+        "padding-right: 1px;\n                                // 8 px clear of the knob at 100.\n                                number-gap: 16px;"
     ));
     assert!(window.contains(
-        "padding-top: 11px;\n                        padding-bottom: 5px;\n\n                        Divider { }"
+        "padding-top: 8px;\n                    padding-bottom: 5px;\n\n                    Divider { }"
     ));
     assert!(window.contains(
-        "VerticalLayout {\n                        spacing: 6px;\n                        padding-left: -8px;\n                        padding-right: -8px;\n\n                        presets-card := PresetsCard {"
+        "VerticalLayout {\n                    spacing: 6px;\n                    padding-left: -8px;\n                    padding-right: -8px;\n\n                    presets-card := PresetsCard {"
     ));
-    assert!(window.contains("left-column := FadeScrollView {"));
+    // The scroll's 3 px under the mute button and the divider's 8 make the 11 over it.
+    assert!(window.contains("left-scroll := FadeScrollView {"));
+    assert!(window.contains("end-padding: 3px;"));
     assert!(window.contains("scroll := FadeScrollView {"));
     assert!(window.contains("property <length> scroll-gutter: 0px;"));
 }

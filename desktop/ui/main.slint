@@ -3298,8 +3298,8 @@ export component MainWindow inherits Window {
     property <float> status-progress: 1;
     property <float> status-eased: Motion.on ? root.status-progress * root.status-progress * (3 - 2 * root.status-progress) : root.status-progress;
     // For the layout tests (src/view.rs): the left column's content and its room.
-    out property <length> left-content-height: left-column.content-height;
-    out property <length> left-visible-height: left-column.visible-height;
+    out property <length> left-content-height: left-scroll.content-height;
+    out property <length> left-visible-height: left-scroll.visible-height;
     // Ctrl+S, wherever the focus is: apply every typed delay and keep the
     // sync controls open.
     callback delay-apply-requested();
@@ -3791,250 +3791,257 @@ export component MainWindow inherits Window {
             // Past the speaker list's widest, the extra width stays empty on the right.
             alignment: start;
 
-            // Left column: what plays and how loud, each in its own card. It
-            // scrolls when the window is shorter than its cards (a small
-            // screen, or notices showing), as the speaker list does.
-            left-column := FadeScrollView {
-                blank-clicked => {
-                    root.blank-clicked();
-                }
+            // Left column: what plays and how loud, then the Presets, Equalizer
+            // and Calibrate rows. As on the Mac, only the part above the rows
+            // scrolls, in a window shorter than the column (MainWindow.swift:254-282).
+            left-column := VerticalLayout {
                 width: MainColumns.left(root.columns-width);
-                fade-color: root.background;
-                // The Presets and Equalizer rows reach 8 px past the column.
-                bleed: 8px;
-                // Slint scrolls the focused control into view on every resize; the
-                // Mac's scroll view keeps its place, so a resize puts it back.
-                property <length> kept-y;
-                property <length> kept-height;
-                changed content-y => {
-                    if self.visible-height == self.kept-height {
-                        self.kept-y = self.content-y;
+                alignment: start;
+
+                left-scroll := FadeScrollView {
+                    blank-clicked => {
+                        root.blank-clicked();
                     }
-                }
-                changed visible-height => {
-                    self.kept-height = self.visible-height;
-                    self.content-y = max(min(0px, self.visible-height - self.content-height), min(0px, self.kept-y));
+                    fade-color: root.background;
+                    // Uncut 8 px past the column, as the rows below.
+                    bleed: 8px;
+                    // As tall as they are, so the rows sit right under them; the mute
+                    // button's 3 px past its row stay in view to show its ring and take clicks.
+                    preferred-height: left-top.preferred-height + self.end-padding;
+                    max-height: self.preferred-height;
+                    end-padding: 3px;
+                    // Slint scrolls the focused control into view on every resize; the
+                    // Mac's scroll view keeps its place, so a resize puts it back.
+                    property <length> kept-y;
+                    property <length> kept-height;
+                    changed content-y => {
+                        if self.visible-height == self.kept-height {
+                            self.kept-y = self.content-y;
+                        }
+                    }
+                    changed visible-height => {
+                        self.kept-height = self.visible-height;
+                        self.content-y = max(min(0px, self.visible-height - self.content-height), min(0px, self.kept-y));
+                    }
+
+                    left-top := VerticalLayout {
+                        // One block on a faint fill holds the source and what plays.
+                        Rectangle {
+                            // Its own height, which the touch area under it doesn't pass on.
+                            height: hero-content.preferred-height;
+                            background: Fluent.hero;
+                            border-radius: Tokens.radius-card;
+
+                            hero-touch := TouchArea {
+                                hero-content := VerticalLayout {
+                                    padding: 14px;
+                                    spacing: 8px;
+
+                                    source := SourceMenu {
+                                        sources: root.sources;
+                                        looks: root.source-looks;
+                                        index: root.source-index;
+                                        is-input: root.source-is-input;
+                                        changed has-focus => {
+                                            root.control-focus-changed(MainControl.source, self.has-focus);
+                                        }
+                                        chosen(i) => {
+                                            root.source-selected(i);
+                                        }
+                                        mix-apps: root.mix-apps;
+                                        mix-all-except: root.mix-all-except;
+                                        mix-mode-selected(all-except) => {
+                                            root.mix-mode-selected(all-except);
+                                        }
+                                        mix-app-toggled(i) => {
+                                            root.mix-app-toggled(i);
+                                        }
+                                    }
+
+                                    if root.input-pairs.length > 0: VerticalLayout {
+                                        spacing: 4px;
+
+                                        SecondaryText {
+                                            text: Strings.input-channels-label;
+                                        }
+
+                                        PairPicker {
+                                            model: root.input-pairs;
+                                            chosen: root.input-pair-index;
+                                            changed has-focus => {
+                                                root.control-focus-changed(MainControl.input-pair, self.has-focus);
+                                            }
+                                            picked(index) => {
+                                                root.input-pair-selected(index);
+                                            }
+                                        }
+                                    }
+
+                                    // Always laid out, so nothing below moves when it shows.
+                                    LevelMeter {
+                                        visible: root.input-meter-shown;
+                                        level: root.input-level;
+                                        spoken-percent: root.input-level-spoken;
+                                        label: Strings.input-level;
+                                    }
+
+                                    if root.live-input-hint != "": SecondaryText {
+                                        text: root.live-input-hint;
+                                    }
+
+                                    if root.now-playing-shown: NowPlayingCard {
+                                        cover-size: MainColumns.left(root.columns-width) - 28px;
+                                        revealed: hero-touch.has-hover;
+                                        title: root.now-playing-title;
+                                        subtitle: root.now-playing-subtitle;
+                                        playing: root.now-playing-playing;
+                                        has-artwork: root.now-playing-has-artwork;
+                                        artwork: root.now-playing-artwork;
+                                        ambient: root.now-playing-ambient;
+                                        slide: root.now-playing-look;
+                                        outgoing: root.now-playing-outgoing;
+                                        shuffle: root.now-playing-shuffle;
+                                        repeat: root.now-playing-repeat;
+                                        focused-button <=> root.now-playing-focused-button;
+                                        changed focused-button => {
+                                            root.control-focus-changed(MainControl.transport, self.focused-button >= 0);
+                                        }
+                                        init => {
+                                            root.now-playing-tile-x = self.tile-x;
+                                            root.now-playing-tile-y = self.tile-y;
+                                        }
+                                        changed tile-x => {
+                                            root.now-playing-tile-x = self.tile-x;
+                                        }
+                                        changed tile-y => {
+                                            root.now-playing-tile-y = self.tile-y;
+                                        }
+                                        transport(button) => {
+                                            root.now-playing-transport(button);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Master Volume on the window, then a hairline over the rows.
+                        VerticalLayout {
+                            padding-top: 16px;
+                            // The number ends on the rows' chevron edge.
+                            padding-right: 2px;
+                            spacing: 4px;
+
+                            // The slider's own label names it for Narrator.
+                            HorizontalLayout {
+                                Text {
+                                    text: Strings.master-volume-title;
+                                    font-size: Tokens.font-size-subheadline;
+                                    color: Tokens.secondary-text;
+                                    // The Mac's line; Segoe UI's is 2 px taller, all of it
+                                    // leading, which the default window has no room for.
+                                    height: 14px;
+                                    accessible-role: none;
+                                }
+                            }
+
+                            MasterVolume {
+                                // Past the last digit's bearing, as on the Mac.
+                                padding-right: 1px;
+                                // 8 px clear of the knob at 100.
+                                number-gap: 16px;
+                                button-size: 24px;
+                                // The Mac's 18 (MasterMuteButton and MasterSlider, MenuBar.swift:2958, :2976).
+                                row-height: 18px;
+                                // Its speaker centred over the rows' icons and the track
+                                // starting on their labels' column.
+                                padding-left: -2px;
+                                spacing: -2px;
+                                volume: root.master-volume;
+                                waves: root.master-volume-waves;
+                                mute-toggled => {
+                                    root.master-mute-toggled();
+                                }
+                                changed slider-focused => {
+                                    root.control-focus-changed(MainControl.master-volume, self.slider-focused);
+                                }
+                                changed(value) => {
+                                    root.master-volume-changed(value);
+                                }
+                            }
+                        }
+                    }
                 }
 
                 VerticalLayout {
-                    alignment: start;
+                    padding-top: 8px;
+                    padding-bottom: 5px;
 
-                    // One block on a faint fill holds the source and what plays.
-                    Rectangle {
-                        // Its own height, which the touch area under it doesn't pass on.
-                        height: hero-content.preferred-height;
-                        background: Fluent.hero;
-                        border-radius: Tokens.radius-card;
+                    Divider { }
+                }
 
-                        hero-touch := TouchArea {
-                            hero-content := VerticalLayout {
-                                padding: 14px;
-                                spacing: 8px;
+                // The rows reach 8 px past the column, as the Mac's do, so their
+                // icons and labels line up with the master volume above.
+                VerticalLayout {
+                    spacing: 6px;
+                    padding-left: -8px;
+                    padding-right: -8px;
 
-                                source := SourceMenu {
-                                    sources: root.sources;
-                                    looks: root.source-looks;
-                                    index: root.source-index;
-                                    is-input: root.source-is-input;
-                                    changed has-focus => {
-                                        root.control-focus-changed(MainControl.source, self.has-focus);
-                                    }
-                                    chosen(i) => {
-                                        root.source-selected(i);
-                                    }
-                                    mix-apps: root.mix-apps;
-                                    mix-all-except: root.mix-all-except;
-                                    mix-mode-selected(all-except) => {
-                                        root.mix-mode-selected(all-except);
-                                    }
-                                    mix-app-toggled(i) => {
-                                        root.mix-app-toggled(i);
-                                    }
-                                }
-
-                                if root.input-pairs.length > 0: VerticalLayout {
-                                    spacing: 4px;
-
-                                    SecondaryText {
-                                        text: Strings.input-channels-label;
-                                    }
-
-                                    PairPicker {
-                                        model: root.input-pairs;
-                                        chosen: root.input-pair-index;
-                                        changed has-focus => {
-                                            root.control-focus-changed(MainControl.input-pair, self.has-focus);
-                                        }
-                                        picked(index) => {
-                                            root.input-pair-selected(index);
-                                        }
-                                    }
-                                }
-
-                                // Always laid out, so nothing below moves when it shows.
-                                LevelMeter {
-                                    visible: root.input-meter-shown;
-                                    level: root.input-level;
-                                    spoken-percent: root.input-level-spoken;
-                                    label: Strings.input-level;
-                                }
-
-                                if root.live-input-hint != "": SecondaryText {
-                                    text: root.live-input-hint;
-                                }
-
-                                if root.now-playing-shown: NowPlayingCard {
-                                    cover-size: MainColumns.left(root.columns-width) - 28px;
-                                    revealed: hero-touch.has-hover;
-                                    title: root.now-playing-title;
-                                    subtitle: root.now-playing-subtitle;
-                                    playing: root.now-playing-playing;
-                                    has-artwork: root.now-playing-has-artwork;
-                                    artwork: root.now-playing-artwork;
-                                    ambient: root.now-playing-ambient;
-                                    slide: root.now-playing-look;
-                                    outgoing: root.now-playing-outgoing;
-                                    shuffle: root.now-playing-shuffle;
-                                    repeat: root.now-playing-repeat;
-                                    focused-button <=> root.now-playing-focused-button;
-                                    changed focused-button => {
-                                        root.control-focus-changed(MainControl.transport, self.focused-button >= 0);
-                                    }
-                                    init => {
-                                        root.now-playing-tile-x = self.tile-x;
-                                        root.now-playing-tile-y = self.tile-y;
-                                    }
-                                    changed tile-x => {
-                                        root.now-playing-tile-x = self.tile-x;
-                                    }
-                                    changed tile-y => {
-                                        root.now-playing-tile-y = self.tile-y;
-                                    }
-                                    transport(button) => {
-                                        root.now-playing-transport(button);
-                                    }
-                                }
-                            }
+                    presets-card := PresetsCard {
+                        width-given: MainColumns.left(root.columns-width) + 2 * 8px;
+                        presets: root.presets;
+                        current: root.current-preset;
+                        can-save: root.can-save-preset;
+                        focus-wanted <=> root.focus-presets;
+                        open <=> root.presets-open;
+                        recall(id) => {
+                            root.preset-recall-requested(id);
+                        }
+                        rename(id) => {
+                            root.preset-rename-requested(id);
+                        }
+                        update(id) => {
+                            root.preset-update-requested(id);
+                        }
+                        delete(id) => {
+                            root.preset-delete-requested(id);
+                        }
+                        save => {
+                            root.save-preset-requested();
+                        }
+                        saving <=> root.preset-saving;
+                        renaming-id <=> root.preset-renaming;
+                        save-why <=> root.preset-save-note;
+                        save-named(text) => {
+                            root.preset-save-named(text);
+                        }
+                        blank(text) => {
+                            return root.preset-name-blank(text);
+                        }
+                        rename-named(id, text) => {
+                            root.preset-rename-named(id, text);
                         }
                     }
 
-                    // Master Volume on the window, then a hairline over the rows.
-                    VerticalLayout {
-                        padding-top: 16px;
-                        // The number ends on the rows' chevron edge.
-                        padding-right: 2px;
-                        spacing: 4px;
-
-                        // The slider's own label names it for Narrator.
-                        HorizontalLayout {
-                            Text {
-                                text: Strings.master-volume-title;
-                                font-size: Tokens.font-size-subheadline;
-                                color: Tokens.secondary-text;
-                                // The Mac's line; Segoe UI's is 2 px taller, all of it
-                                // leading, which the default window has no room for.
-                                height: 14px;
-                                accessible-role: none;
-                            }
+                    equalizer-card := EqualizerCard {
+                        on: root.equalizer-on;
+                        curve: root.equalizer-curve;
+                        clicked => {
+                            root.equalizer-requested();
                         }
-
-                        MasterVolume {
-                            // Past the last digit's bearing, as on the Mac.
-                            padding-right: 1px;
-                            // 8 px clear of the knob at 100.
-                            number-gap: 16px;
-                            button-size: 24px;
-                            // The Mac's 18 (MasterMuteButton and MasterSlider, MenuBar.swift:2958, :2976).
-                            row-height: 18px;
-                            // Its speaker centred over the rows' icons and the track
-                            // starting on their labels' column.
-                            padding-left: -2px;
-                            spacing: -2px;
-                            volume: root.master-volume;
-                            waves: root.master-volume-waves;
-                            mute-toggled => {
-                                root.master-mute-toggled();
-                            }
-                            changed slider-focused => {
-                                root.control-focus-changed(MainControl.master-volume, self.slider-focused);
-                            }
-                            changed(value) => {
-                                root.master-volume-changed(value);
-                            }
+                        focus-changed(has) => {
+                            root.control-focus-changed(MainControl.equalizer, has);
                         }
                     }
 
-                    VerticalLayout {
-                        padding-top: 11px;
-                        padding-bottom: 5px;
-
-                        Divider { }
-                    }
-
-                    // The rows reach 8 px past the column, as the Mac's do, so their
-                    // icons and labels line up with the master volume above.
-                    VerticalLayout {
-                        spacing: 6px;
-                        padding-left: -8px;
-                        padding-right: -8px;
-
-                        presets-card := PresetsCard {
-                            width-given: MainColumns.left(root.columns-width) + 2 * 8px;
-                            presets: root.presets;
-                            current: root.current-preset;
-                            can-save: root.can-save-preset;
-                            focus-wanted <=> root.focus-presets;
-                            open <=> root.presets-open;
-                            recall(id) => {
-                                root.preset-recall-requested(id);
-                            }
-                            rename(id) => {
-                                root.preset-rename-requested(id);
-                            }
-                            update(id) => {
-                                root.preset-update-requested(id);
-                            }
-                            delete(id) => {
-                                root.preset-delete-requested(id);
-                            }
-                            save => {
-                                root.save-preset-requested();
-                            }
-                            saving <=> root.preset-saving;
-                            renaming-id <=> root.preset-renaming;
-                            save-why <=> root.preset-save-note;
-                            save-named(text) => {
-                                root.preset-save-named(text);
-                            }
-                            blank(text) => {
-                                return root.preset-name-blank(text);
-                            }
-                            rename-named(id, text) => {
-                                root.preset-rename-named(id, text);
-                            }
+                    calibration-card := CalibrationCard {
+                        can-start: root.calibrate-all-can-start;
+                        status: root.calibrate-all-status;
+                        status-is-hint: root.calibrate-all-status-is-hint;
+                        start => {
+                            root.calibrate-all-requested();
                         }
-
-                        equalizer-card := EqualizerCard {
-                            on: root.equalizer-on;
-                            curve: root.equalizer-curve;
-                            clicked => {
-                                root.equalizer-requested();
-                            }
-                            focus-changed(has) => {
-                                root.control-focus-changed(MainControl.equalizer, has);
-                            }
-                        }
-
-                        calibration-card := CalibrationCard {
-                            can-start: root.calibrate-all-can-start;
-                            status: root.calibrate-all-status;
-                            status-is-hint: root.calibrate-all-status-is-hint;
-                            start => {
-                                root.calibrate-all-requested();
-                            }
-                            focus-changed(has) => {
-                                root.control-focus-changed(MainControl.calibration, has);
-                            }
+                        focus-changed(has) => {
+                            root.control-focus-changed(MainControl.calibration, has);
                         }
                     }
                 }
