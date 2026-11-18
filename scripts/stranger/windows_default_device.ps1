@@ -239,6 +239,21 @@ public static class Input {
     IntPtr hwnd = FindWindowW("AudioSyncLevelPopup", null);
     return hwnd != IntPtr.Zero && IsWindowVisible(hwnd);
   }
+
+  [DllImport("user32.dll")]
+  static extern IntPtr GetDC(IntPtr hwnd);
+  [DllImport("user32.dll")]
+  static extern int ReleaseDC(IntPtr hwnd, IntPtr dc);
+  [DllImport("gdi32.dll")]
+  static extern bool BitBlt(IntPtr dst, int x, int y, int w, int h, IntPtr src, int sx, int sy, uint rop);
+
+  // The screen with layered windows in it: SRCCOPY | CAPTUREBLT, which
+  // Graphics.CopyFromScreen refuses as a CopyPixelOperation.
+  public static void CopyScreen(IntPtr dst, int x, int y, int w, int h) {
+    IntPtr screen = GetDC(IntPtr.Zero);
+    BitBlt(dst, 0, 0, w, h, screen, x, y, 0x00CC0020 | 0x40000000);
+    ReleaseDC(IntPtr.Zero, screen);
+  }
 }
 '@
 
@@ -458,11 +473,12 @@ $seen = (Get-LogLines 'master volume: ').Count
 [Input]::Press(0xAF)
 Start-Sleep -Milliseconds 400
 $popup = [Input]::PopupShown()
-# The pop-up is layered, so the screen copy needs CaptureBlt to include it.
 $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 $shot = New-Object System.Drawing.Bitmap $b.Width, $b.Height
-[System.Drawing.Graphics]::FromImage($shot).CopyFromScreen($b.X, $b.Y, 0, 0, $shot.Size,
-  [System.Drawing.CopyPixelOperation]::SourceCopy -bor [System.Drawing.CopyPixelOperation]::CaptureBlt)
+$g = [System.Drawing.Graphics]::FromImage($shot)
+$hdc = $g.GetHdc()
+[Input]::CopyScreen($hdc, $b.X, $b.Y, $b.Width, $b.Height)
+$g.ReleaseHdc($hdc)
 $shot.Save((Join-Path $Work 'A10.10-level-popup.png'), [System.Drawing.Imaging.ImageFormat]::Png)
 Check 'A10.10' $popup 'the level pop-up is on screen 0.4 s after a real Volume Up press (shot: A10.10-level-popup.png)'
 $up = Wait-Master $seen
