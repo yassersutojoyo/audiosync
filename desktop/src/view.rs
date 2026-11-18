@@ -3307,6 +3307,11 @@ impl App {
         let main = &self.main;
         main.set_calibrate_all_running(card.running);
         main.set_calibrate_all_can_start(card.can_start);
+        main.set_calibrate_all_can_run(card.can_run);
+        main.set_calibrate_all_shown(card.shown);
+        main.set_calibrate_all_ended(card.ended);
+        main.set_calibrate_all_choosing(card.choosing);
+        main.set_calibrate_all_blocker(card.blocker);
         main.set_calibrate_all_status(card.status);
         main.set_calibrate_all_status_is_hint(card.status_is_hint);
         main.set_calibrate_all_privacy(card.privacy);
@@ -6776,7 +6781,22 @@ fn calibration_ended(
 /// What the Calibrate All card shows.
 struct CalibrateAllCard {
     running: bool,
+    /// The left column's row opens the sheet: only another calibration or
+    /// a reason no Include Anyway fixes turns it off
+    /// (CalibrateAllFlow.swift:468-471).
     can_start: bool,
+    /// The sheet's Calibrate All Speakers (CalibrateAllViews.swift:510).
+    can_run: bool,
+    /// The sheet is open before any run (CalibrateAllStatus.shown).
+    shown: bool,
+    /// The results ended early, so the sheet offers a new run, not Apply
+    /// (CalibrateAllViews.swift:507).
+    ended: bool,
+    /// Include Anyway and Leave Out can be chosen for the next run
+    /// (CalibrateAllViews.swift:480-484).
+    choosing: bool,
+    /// Why the sheet's button is off, before a run (CalibrateAllViews.swift:144-148).
+    blocker: SharedString,
     status: SharedString,
     /// The status only says what a run does, or that streaming is off (the
     /// dimmed row says that, as on the Mac), so it is the row's tooltip.
@@ -6853,6 +6873,9 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
             | AllPhase::AgainFailed(..)
     );
     let sheet = all.sheet.as_ref();
+    let choosing = !matches!(all.phase, AllPhase::Running(_))
+        && !busy
+        && sheet.is_none_or(|sheet| sheet.ended.is_some() || sheet.failure.is_some());
     // Over the results the refusal is the sheet's line, as on the Mac
     // (CalibrateAllViews.swift:146).
     let outcome = match sheet {
@@ -6872,21 +6895,38 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
         status_is_hint: all.phase == AllPhase::Idle
             && !all.other_running
             && match all.blocked {
-                None => true,
+                None | Some(Failure::OnlyLeftOut) => true,
                 Some(Failure::NotPlaying(missing)) => missing.streaming,
                 Some(_) => false,
             },
         running: matches!(all.phase, AllPhase::Running(_)),
-        can_start: !busy && all.blocked.is_none(),
+        can_start: !busy
+            && !all.other_running
+            && matches!(all.blocked, None | Some(Failure::OnlyLeftOut)),
+        can_run: !busy && !all.other_running && all.blocked.is_none(),
+        shown: all.shown,
+        ended: sheet.is_some_and(|sheet| sheet.ended.is_some() || sheet.failure.is_some()),
+        choosing,
+        blocker: if sheet.is_none()
+            && all.phase == AllPhase::Idle
+            && (all.blocked.is_some() || all.other_running)
+        {
+            status.clone()
+        } else {
+            SharedString::default()
+        },
         privacy: offers_privacy(
             all.phase == AllPhase::Failed(Failure::MicrophoneDenied)
                 || sheet.is_some_and(|sheet| sheet.failure == Some(Failure::MicrophoneDenied)),
             crate::platform::can_open_settings,
         ),
         results_shown: sheet.is_some(),
+        // While no new run can start, only what still sits out
+        // (CalibrateAllViews.swift:476-478).
         left_out: all
             .left_out
             .iter()
+            .filter(|row| choosing || !row.included)
             .map(|row| LeftOutItem {
                 id: row.id.as_str().into(),
                 name: row.name.as_str().into(),
@@ -10111,7 +10151,10 @@ pub(crate) mod tests {
             },
         ];
         let card = calibrate_all_card(&strings, &state);
-        assert!(!card.can_start);
+        // The row opens the sheet, where Include Anyway is; its own button
+        // waits for one (CalibrateAllFlow.swift:470, CalibrateAllViews.swift:510).
+        assert!(card.can_start);
+        assert!(!card.can_run);
         assert!(card.status.contains("Include Anyway"), "{}", card.status);
         assert!(
             !card.status.contains("Only"),
@@ -19881,7 +19924,7 @@ pub(crate) mod tests {
             }
 
             let window = app.main.window();
-            tab(window, 1);
+            tab(window, if can_start { 2 } else { 1 });
             press(window, " ");
             app.poll();
             draw_frames();
@@ -19892,7 +19935,12 @@ pub(crate) mod tests {
                 }],
                 "{appearance:?} {can_start}: Tab from Close reaches the fix"
             );
-            assert!(in_sheet().is_none(), "{appearance:?}: fixed, the hint goes");
+            // The warning row goes; "Before you start" stays, as on the Mac (CalibrateAllViews.swift:205).
+            assert_eq!(
+                app.main.get_calibrate_all_volume(),
+                DeviceVolumeHint::None,
+                "{appearance:?}: fixed, the hint goes"
+            );
             press(window, " ");
             app.poll();
             draw_frames();

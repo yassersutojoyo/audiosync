@@ -162,6 +162,9 @@ struct CalibrateAll {
     /// The zone Calibrate Zone measures, until the results close or a
     /// whole run starts (spec S255).
     zone: Option<MeasuredZone>,
+    /// The sheet is open, from the first click until Close
+    /// (CalibrateAllStatus.shown).
+    shown: bool,
 }
 
 /// The zone of a Calibrate Zone run as it was at the start.
@@ -1708,6 +1711,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             blocked: calibrate_all::blocked(&lineup, &all.included),
             left_out,
             other_running: self.calibration_run.is_some(),
+            shown: all.shown,
             sheet: all.sheet.as_ref().map(|kept| self.sheet_state(kept, busy)),
             endings: all.endings,
             // A deleted zone's results read as Calibrate All's, as its button then runs.
@@ -1839,7 +1843,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     fn sheet_state(&self, kept: &KeptSheet, busy: bool) -> SheetState {
         let sheet = &kept.sheet;
-        let open = sheet.ended().is_none() && !sheet.applied();
+        // A failure ends the sheet too, as the Mac reads it (CalibrateAllFlow.swift:174).
+        let open = sheet.ended().is_none() && kept.failure.is_none() && !sheet.applied();
         SheetState {
             rows: sheet
                 .rows()
@@ -6061,6 +6066,14 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         let measured = self.calibrate_all.zone.as_ref().map(|zone| zone.id.clone());
         if let Some(id) = measured.filter(|id| self.zones.get(id).is_some()) {
             return self.start_calibrate_zone(&id);
+        }
+        // The first click lists the outputs that sit out, so one can be
+        // included anyway first (AppDelegate+CalibrateAll.swift:37-45).
+        if !self.calibrate_all.shown {
+            self.calibrate_all.shown = true;
+            if !self.calibrate_all_state().left_out.is_empty() {
+                return;
+            }
         }
         let started = AllRun::start(
             &mut self.audio,
@@ -15335,7 +15348,11 @@ mod tests {
             rate,
             None,
         );
-        let shown = adapter.snapshot().calibrate_all.sheet.expect("the rows stay");
+        let shown = adapter
+            .snapshot()
+            .calibrate_all
+            .sheet
+            .expect("the rows stay");
         assert!(shown.rows.iter().all(|row| !row.can_measure_again));
     }
 

@@ -1136,6 +1136,8 @@ pub struct CalibrateAllState {
     pub blocked: Option<Failure>,
     /// A one-speaker calibration holds the outputs.
     pub other_running: bool,
+    /// The sheet is open, before a run too.
+    pub shown: bool,
     /// The results, while they still describe the stored delays.
     pub sheet: Option<SheetState>,
     /// Counts each ending, Apply and Undo, so Narrator hears each once.
@@ -2681,6 +2683,8 @@ impl Backend for MockBackend {
             .any(|speaker| speaker.kind == SpeakerKind::Cast && speaker.enabled);
         show_presets(&mut state, &self.presets, &Default::default());
         state.calibrate_all.left_out = self.left_out.borrow().clone();
+        // The list shows only in the sheet, so a listed output opens it.
+        state.calibrate_all.shown = !state.calibrate_all.left_out.is_empty();
         if let Some(phase) = self.calibrate_all_phase.borrow().clone() {
             state.calibrate_all.phase = phase;
         }

@@ -684,6 +684,7 @@ fn left_out(s: &Scene, included: bool, only: bool) -> Result<Win, String> {
             kind: MicKind::Headphones,
             included,
         }];
+        state.calibrate_all.shown = true;
     });
     s.main()
 }
@@ -888,6 +889,7 @@ fn b02() -> Vec<Row> {
                     kind: MicKind::Headphones,
                     included: false,
                 }];
+                state.calibrate_all.shown = true;
             });
             s.main()
         }),
@@ -1099,7 +1101,7 @@ fn b05() -> Vec<Row> {
 fn b06() -> Vec<Row> {
     vec![
         row("B06", "CAL-SHEET", |s| {
-            calibrate_all(s, |_| {})?;
+            calibrate_all(s, |state| state.calibrate_all.shown = true)?;
             s.main()
         }),
         row("B06", "CAL-SHEET-RUNNING", |s| {
@@ -1124,6 +1126,9 @@ fn b06() -> Vec<Row> {
                 let mut sheet = results(SHEET_NAMES);
                 for row in sheet.rows.iter_mut().skip(1) {
                     row.state = SheetRowState::NotMeasured;
+                }
+                for row in &mut sheet.rows {
+                    row.can_measure_again = false;
                 }
                 sheet.airplay = None;
                 sheet.failure = Some(Failure::SourceSilent);

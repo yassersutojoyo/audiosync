@@ -152,9 +152,8 @@ fn calibrate_all_opens_its_sheet_with_the_left_out_before_any_run() {
     let include = strings.invoke_include_anyway_label("Earbuds".into());
     let count = |label: &str| ElementHandle::find_by_accessible_label(&app.main, label).count();
     let sheet = || ElementHandle::find_by_element_id(&app.main, "CalibrateAllSheet::sheet").next();
-    let start = || {
-        ElementHandle::find_by_element_id(&app.main, "CalibrateAllSheet::start-button").next()
-    };
+    let start =
+        || ElementHandle::find_by_element_id(&app.main, "CalibrateAllSheet::start-button").next();
     assert_eq!(count(&left_out), 0, "no left-out list in the left column");
     assert_eq!(count(&include), 0, "no Include Anyway in the left column");
 
