@@ -18966,7 +18966,7 @@ pub(crate) mod tests {
                     .dispatch_event(WindowEvent::ScaleFactorChanged {
                         scale_factor: scale,
                     });
-                let (mut first, mut last) = (0, 0);
+                let (mut first, mut last, mut knob_top) = (0, 0, 0.0);
                 for scheme in [ColorScheme::Dark, ColorScheme::Light] {
                     app.main.global::<Palette>().set_color_scheme(scheme);
                     for hovered in [false, true] {
@@ -18996,11 +18996,17 @@ pub(crate) mod tests {
                                 .filter(|&x| at(x, probe) > row.saturating_add(8))
                                 .collect();
                             (first, last) = (inked[0], inked[inked.len() - 1]);
+                            // The renderer puts the knob on whole pixels, so its top
+                            // row is read from the shot, not from the layout.
+                            let column = (first + last + 1) / 2;
+                            knob_top = (((top - 2.0) * scale) as i32..)
+                                .find(|&y| at(column, y) > row.saturating_add(8))
+                                .expect("the knob's top")
+                                as f32;
                         }
                         let centre = (first + last + 1) as f32 / 2.0;
                         let columns = (centre - 8.0 * scale).floor() as i32
                             ..(centre + 8.0 * scale).ceil() as i32;
-                        let knob_top = (top - 1.0) * scale;
                         let clip_end = (knob_top + 6.0 * scale).floor() as i32;
                         let case = format!("{name} {scale}x {scheme:?} hovered {hovered}");
                         let fill = at(centre as i32, (middle * scale) as i32 - 1);
