@@ -53,8 +53,17 @@ const fn rgb(hex: u32) -> COLORREF {
     COLORREF(((hex & 0xff) << 16) | (hex & 0xff00) | ((hex >> 16) & 0xff))
 }
 
+/// The card's corner, as the Mac's (LevelPopup.swift:119).
+const CORNER: f64 = 14.0;
+/// The number's slot, as the Mac's minWidth (LevelPopup.swift:111).
+const NUMBER_WIDTH: f64 = 40.0;
+/// The master's speaker by its waves, 0 to 3: the `Glyphs.volume-*` of
+/// `ui/widgets.slint`, crossed out at 0.
+const SPEAKERS: [u16; 4] = [0xE74F, 0xE993, 0xE994, 0xE995];
+
+// The light fill is the Mac's (LevelPopup.swift:90).
 const LIGHT: Colors = Colors {
-    background: rgb(0xFFFFFF),
+    background: rgb(0xF6F6F6),
     border: rgb(0xE6E6E6),
     text: rgb(0x1A1A1A),
     secondary: rgb(0x525C5A),
@@ -73,8 +82,10 @@ const DARK: Colors = Colors {
 
 struct Shown {
     level: f64,
+    waves: usize,
     dark: bool,
     name: Vec<u16>,
+    percent: Vec<u16>,
     started: Instant,
     rises: bool,
     scale: f64,
@@ -87,13 +98,14 @@ thread_local! {
     static POPUP: RefCell<Option<Shown>> = const { RefCell::new(None) };
 }
 
-/// Shows `level` (0 to 100) under `name`, or moves the one showing to it and
-/// keeps it up for another 2 s; Narrator reads `announcement`.
-pub fn show(level: f64, dark: bool, name: &str, announcement: &str, animations: bool) {
+/// Shows `level` (0 to 100) under `name`, with `waves` (0 to 3) on the
+/// speaker and `percent` beside the bar, or moves the one showing to it and
+/// keeps it up for another 2 s; Narrator reads `percent`.
+pub fn show(level: f64, waves: i32, dark: bool, name: &str, percent: &str, animations: bool) {
     let Some(hwnd) = window() else {
         return;
     };
-    announce(hwnd, announcement);
+    announce(hwnd, percent);
     let (left, top, scale) = place();
     let size = (
         (WIDTH * scale).round() as i32,
@@ -113,8 +125,10 @@ pub fn show(level: f64, dark: bool, name: &str, announcement: &str, animations: 
         };
         *slot = Some(Shown {
             level,
+            waves: waves.clamp(0, 3) as usize,
             dark,
             name: name.encode_utf16().collect(),
+            percent: percent.encode_utf16().collect(),
             started,
             rises: animations,
             scale,
@@ -125,7 +139,7 @@ pub fn show(level: f64, dark: bool, name: &str, announcement: &str, animations: 
     // SAFETY: `hwnd` is this thread's live pop-up window; the region becomes
     // the window's, which frees it.
     unsafe {
-        let corner = (16.0 * scale).round() as i32;
+        let corner = (CORNER * scale).round() as i32;
         let region = CreateRoundRectRgn(0, 0, size.0 + 1, size.1 + 1, corner, corner);
         SetWindowRgn(hwnd, Some(region), false);
         let _ = SetWindowPos(
@@ -332,7 +346,7 @@ unsafe fn draw(dc: HDC, shown: &Shown) {
         let border = CreatePen(PS_SOLID, px(1.0).max(1), colors.border);
         let old_brush = SelectObject(dc, HGDIOBJ(background.0));
         let old_pen = SelectObject(dc, HGDIOBJ(border.0));
-        let _ = RoundRect(dc, 0, 0, width, height, px(16.0), px(16.0));
+        let _ = RoundRect(dc, 0, 0, width, height, px(CORNER), px(CORNER));
         SelectObject(dc, old_pen);
         SelectObject(dc, old_brush);
         let _ = DeleteObject(HGDIOBJ(border.0));
@@ -358,7 +372,7 @@ unsafe fn draw(dc: HDC, shown: &Shown) {
         let icon = font(px(16.0), w!("Segoe MDL2 Assets"));
         let old_font = SelectObject(dc, HGDIOBJ(icon.0));
         SetTextColor(dc, colors.text);
-        let mut speaker = [0xE767_u16];
+        let mut speaker = [SPEAKERS[shown.waves]];
         let mut icon_box = RECT {
             left: px(14.0),
             top: row_top,
@@ -375,7 +389,7 @@ unsafe fn draw(dc: HDC, shown: &Shown) {
         let _ = DeleteObject(HGDIOBJ(icon.0));
 
         let bar_left = px(42.0);
-        let bar_right = width - px(14.0 + 32.0 + 10.0);
+        let bar_right = width - px(14.0 + NUMBER_WIDTH + 10.0);
         let middle = (row_top + row_bottom) / 2;
         let track = RECT {
             left: bar_left,
@@ -402,11 +416,9 @@ unsafe fn draw(dc: HDC, shown: &Shown) {
         let number = font(px(14.0), w!("Segoe UI Variable Text"));
         let old_font = SelectObject(dc, HGDIOBJ(number.0));
         SetTextColor(dc, colors.text);
-        let mut digits: Vec<u16> = format!("{}", shown.level.round() as i32)
-            .encode_utf16()
-            .collect();
+        let mut digits = shown.percent.clone();
         let mut number_box = RECT {
-            left: width - px(14.0 + 32.0),
+            left: width - px(14.0 + NUMBER_WIDTH),
             top: row_top,
             right: width - px(14.0),
             bottom: row_bottom,

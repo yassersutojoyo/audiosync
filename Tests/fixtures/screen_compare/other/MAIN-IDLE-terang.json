@@ -1,5 +1,6 @@
 {"window": [696, 600], "elements": [
  {"key": "Volume", "frame": [300.5, 101, 120, 20], "font": null, "fg": "#0e88ff", "bg": "#ffffff"},
+ {"key": "Streaming to 2 speakers", "frame": [20, 60, 160, 16], "font": null, "fg": null, "bg": null},
  {"key": "Kitchen", "frame": [20, 102, 200, 22], "font": null, "fg": "#1d1d1f", "bg": "#ffffff"},
  {"key": "Kitchen", "frame": [20, 140, 200, 22], "font": null, "fg": "#3a3a3c", "bg": "#ffffff"},
  {"key": "Streaming to", "frame": [20, 40, 90, 16], "font": {"name": "Segoe UI", "size": 13}, "fg": "#1d1d1f", "bg": "#ffffff"},

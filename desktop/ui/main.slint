@@ -309,7 +309,7 @@ component GearButton inherits IconButton {
     callback settings();
     callback guide();
     callback about();
-    callback check-updates();
+    callback check-for-updates();
     callback exit();
 
     property <int> menu-serial;
@@ -600,7 +600,7 @@ component GearButton inherits IconButton {
                 pulse: panel.pulse;
                 done <=> panel.done;
                 activated => {
-                    root.check-updates();
+                    root.check-for-updates();
                 }
             }
 
@@ -3723,7 +3723,7 @@ export component MainWindow inherits Window {
                         about => {
                             root.about-requested();
                         }
-                        check-updates => {
+                        check-for-updates => {
                             root.check-for-updates-requested();
                         }
                         exit => {

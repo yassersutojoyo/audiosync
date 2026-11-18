@@ -1225,10 +1225,24 @@ do {
 
     let kinds: [SpeakerTag] = [.airplay, .systemAirPlay, .builtIn, .bluetooth, .usb, .hdmi, .displayPort,
                                .thunderbolt, .firewire, .pci, .avb, .virtual, .aggregate, .other]
-    let missing = kinds.filter { NSImage(systemSymbolName: $0.typeSymbol, accessibilityDescription: nil) == nil }
-    check(missing.isEmpty, "layout: every type icon is an existing SF Symbol", "\(missing)")
-    check(!kinds.contains { $0.typeSymbol.hasPrefix("bolt") },
-          "layout: no type icon is a bolt (that marks auto-connect)")
+    func fits(_ path: CGPath, _ size: CGFloat) -> Bool {
+        let bounds = path.boundingBoxOfPath
+        return !bounds.isEmpty && bounds.minX >= 0 && bounds.minY >= 0 && max(bounds.maxX, bounds.maxY) <= size + 0.001
+    }
+    let unfit = DeviceBadge.allCases.filter { !fits($0.path, DeviceBadge.size) }.map(\.rawValue)
+        + DeviceIcon.sizes.flatMap { size in
+            DeviceIcon.allCases.filter { !fits($0.path(size: size), size) }.map { "\($0.rawValue) \(size)" }
+        }
+    check(unfit.isEmpty, "layout: every device badge and glyph draws inside its own grid", "\(unfit)")
+    func box(_ icon: DeviceIcon, _ size: CGFloat) -> [Double] {
+        let b = icon.path(size: size).boundingBoxOfPath
+        return [b.minX, b.minY, b.maxX, b.maxY].map { (Double($0) * 1000).rounded() / 1000 }
+    }
+    check(box(.laptop, 18) == [1, 3, 17, 15] && box(.speaker, 18) == [4, 1, 14, 17]
+            && box(.laptop, 14) == [1, 2, 13, 12] && box(.speaker, 14) == [3, 1, 11, 13],
+          "layout: the glyphs are drawn 1:1 in points, straight edges on whole points")
+    check(DeviceIcon.size(circle: 32) == 18 && DeviceIcon.size(circle: 26) == 14 && DeviceIcon.size(circle: 24) == 14,
+          "layout: a circle takes the glyph grid nearest 18 in 32, so the panel's smaller circles get 14 pt glyphs")
     check(kinds.allSatisfy { $0.typeTint(.off) == .muted && $0.typeTint(.willPlay) == .muted },
           "layout: type icons are grey unless the speaker plays")
     check(SpeakerTag.airplay.typeTint(.playing) == .active && SpeakerTag.bluetooth.typeTint(.playing) == .active
@@ -1237,22 +1251,19 @@ do {
           "layout: a playing speaker's type icon takes its own color")
 
     // The badge icon follows the calibration rule: over Bluetooth only a headphone name means headphones.
-    check(SpeakerTag.bluetooth.symbol(name: "soundcore Select 4 Go") == "hifispeaker.fill"
-          && SpeakerTag.bluetooth.symbol(name: "JBL Flip 6") == "hifispeaker.fill"
-          && SpeakerTag.bluetooth.symbol(name: "AirPods Pro") == "headphones"
-          && SpeakerTag.bluetooth.symbol(name: "WH-1000XM5 Headphones") == "headphones"
-          && SpeakerTag.bluetooth.symbol(name: "Galaxy Buds2") == "headphones",
+    check(SpeakerTag.bluetooth.symbol(name: "soundcore Select 4 Go") == .speaker
+          && SpeakerTag.bluetooth.symbol(name: "JBL Flip 6") == .speaker
+          && SpeakerTag.bluetooth.symbol(name: "AirPods Pro") == .headphones
+          && SpeakerTag.bluetooth.symbol(name: "WH-1000XM5 Headphones") == .headphones
+          && SpeakerTag.bluetooth.symbol(name: "Galaxy Buds2") == .headphones,
           "layout: a Bluetooth speaker gets the speaker badge, Bluetooth headphones keep the headphones badge")
-    check(SpeakerTag.builtIn.symbol(name: "AirPods Pro") == "laptopcomputer"
-          && SpeakerTag.usb.symbol(name: "Desk Headphones") == "cable.connector"
-          && SpeakerTag.hdmi.symbol(name: "LG TV") == "display"
-          && SpeakerTag.airplay.symbol(name: "Kitchen") == "homepod.fill"
-          && SpeakerTag.cast.symbol(name: "Nest Audio") == "hifispeaker.fill"
-          && SpeakerTag.virtual.symbol(name: "Headset") == "hifispeaker.fill",
+    check(SpeakerTag.builtIn.symbol(name: "AirPods Pro") == .laptop
+          && SpeakerTag.usb.symbol(name: "Desk Headphones") == .usb
+          && SpeakerTag.hdmi.symbol(name: "LG TV") == .monitor
+          && SpeakerTag.airplay.symbol(name: "Kitchen") == .smartSpeaker
+          && SpeakerTag.cast.symbol(name: "Nest Audio") == .speaker
+          && SpeakerTag.virtual.symbol(name: "Headset") == .device,
           "layout: outside Bluetooth the badge depends on the transport only")
-    let badges = kinds.flatMap { [$0.symbol(name: "Speaker"), $0.symbol(name: "AirPods")] }
-        .filter { NSImage(systemSymbolName: $0, accessibilityDescription: nil) == nil }
-    check(badges.isEmpty, "layout: every badge icon is an existing SF Symbol", "\(badges)")
     check(SpeakerTag.isHeadphoneName("Living Room AirPods Pro") && SpeakerTag.isHeadphoneName("EARBUDS")
           && !SpeakerTag.isHeadphoneName("soundcore Select 4 Go") && !SpeakerTag.isHeadphoneName(""),
           "layout: a headphone word anywhere in the name, in any case, marks headphones")
@@ -6364,37 +6375,28 @@ do {
               "EC2 Bluetooth fresh link: the first stream after a refused start, 3 s later, still restarts once",
               "\(decision)")
     }
-    // covers: S325 (a link that left the list and came back mid-session gets one more restart once it is calm)
+    // covers: S325 (a link back mid-session restarts once, 2 s after its start, and nothing restarts it at 305 s)
     do {
-        let links = FreshLinkWatch()
-        links.noteListing(["bt", "usb"], now: 0, session: 1)
-        links.noteListing(["usb"], now: 10, session: 1)
-        let armed = links.noteListing(["bt", "usb"], now: 20, session: 1)
-        let quick = links.decide(uid: "bt", bluetooth: true, now: 20.5, session: 1)
-        let quickTicket = links.pendingTicket(uid: "bt") ?? -1
-        let quickRan = links.begin(uid: "bt", ticket: quickTicket, session: 1)
-        links.release(uid: "bt")
-        let calmTicket = armed["bt"] ?? -1
-        check(FreshLinkWatch.calmRestartAfterS == 305 && armed.keys.sorted() == ["bt"] && quick == .restart(linkAgeS: 0.5)
-                && quickRan && calmTicket != quickTicket,
-              "EC2 Bluetooth fresh link: one that came back mid-session arms a second restart after the 2 s one",
-              "\(armed) \(quick)")
-        // covers: S325
-        check(links.begin(uid: "bt", ticket: calmTicket, session: 1) && links.held == ["bt"],
-              "EC2 Bluetooth fresh link: the second restart runs once its time after the return has come")
-        links.release(uid: "bt")
-        // covers: S325
-        check(!links.begin(uid: "bt", ticket: calmTicket, session: 1) && links.held.isEmpty,
-              "EC2 Bluetooth fresh link: the second restart runs only once")
+        let onceLinks = FreshLinkWatch()
+        onceLinks.noteListing(["bt", "usb"], now: 0, session: 1)
+        onceLinks.noteListing(["usb"], now: 10, session: 1)
+        onceLinks.noteListing(["bt", "usb"], now: 20, session: 1)
+        let onceQuick = onceLinks.decide(uid: "bt", bluetooth: true, now: 20.5, session: 1)
+        let onceRan = onceLinks.begin(uid: "bt", ticket: onceLinks.pendingTicket(uid: "bt") ?? -1, session: 1)
+        onceLinks.release(uid: "bt")
+        let laterRestarts = (0...20).filter { onceLinks.begin(uid: "bt", ticket: $0, session: 1) }
+        check(onceQuick == .restart(linkAgeS: 0.5) && onceRan && laterRestarts.isEmpty && onceLinks.held.isEmpty,
+              "EC2 Bluetooth fresh link: one that came back mid-session restarts once, 2 s after its start, and not again",
+              "\(onceQuick) \(onceRan) \(laterRestarts)")
     }
-    // covers: S325 (a link back mid-session re-seats the other outputs at its first start and its calm restart only)
+    // covers: S325 (a link back mid-session re-seats the other outputs at its first start only)
     do {
         let reseatLinks = FreshLinkWatch()
         reseatLinks.noteListing(["bt", "builtin", "usb"], now: 0, session: 1)
         _ = reseatLinks.decide(uid: "bt", bluetooth: true, now: 0.5, session: 1)
         let atSessionStart = reseatLinks.takeReseat(uid: "bt", session: 1, now: 0.5)
         reseatLinks.noteListing(["builtin", "usb"], now: 10, session: 1)
-        let reseatArmed = reseatLinks.noteListing(["bt", "builtin", "usb"], now: 20, session: 1)
+        reseatLinks.noteListing(["bt", "builtin", "usb"], now: 20, session: 1)
         _ = reseatLinks.decide(uid: "bt", bluetooth: true, now: 20.5, session: 1)
         let atReturn = reseatLinks.takeReseat(uid: "bt", session: 1, now: 20.5)
         let atReturnAgain = reseatLinks.takeReseat(uid: "bt", session: 1, now: 20.5)
@@ -6402,22 +6404,19 @@ do {
         reseatLinks.release(uid: "bt")
         _ = reseatLinks.decide(uid: "bt", bluetooth: true, now: 23.5, session: 1)
         let atQuickRestart = reseatLinks.takeReseat(uid: "bt", session: 1, now: 23.5)
-        _ = reseatLinks.begin(uid: "bt", ticket: reseatArmed["bt"] ?? -1, session: 1)
-        reseatLinks.release(uid: "bt")
         _ = reseatLinks.decide(uid: "bt", bluetooth: true, now: 326.5, session: 1)
-        let atCalmRestart = reseatLinks.takeReseat(uid: "bt", session: 1, now: 326.5)
-        let atCalmAgain = reseatLinks.takeReseat(uid: "bt", session: 1, now: 326.5)
+        let atLaterStart = reseatLinks.takeReseat(uid: "bt", session: 1, now: 326.5)
         reseatLinks.noteListing(["builtin", "usb"], now: 400, session: 1)
         reseatLinks.noteListing(["bt", "builtin", "usb"], now: 410, session: 1)
         let reseatNextSession = reseatLinks.takeReseat(uid: "bt", session: 2, now: 700)
         let reseatCalls = FreshLinkWatch.reseats(of: "bt", running: ["bt", "builtin", "usb"],
                                                  holdBacks: ["bt": 0, "builtin": 211, "usb": 361],
                                                  before: ["bt": 0, "builtin": 211, "usb": 361])
-        check(!atSessionStart && atReturn && !atReturnAgain && !atQuickRestart && atCalmRestart && !atCalmAgain
+        check(!atSessionStart && atReturn && !atReturnAgain && !atQuickRestart && !atLaterStart
                 && !reseatNextSession && reseatCalls == ["builtin": 211, "usb": 361],
               "EC2 Bluetooth fresh link: a link back mid-session gives every other output one call at its current "
-                + "hold-back at its first start and at its calm restart, none at an ordinary start",
-              "\(atSessionStart) \(atReturn) \(atReturnAgain) \(atQuickRestart) \(atCalmRestart) \(atCalmAgain) "
+                + "hold-back at its first start, none at an ordinary start",
+              "\(atSessionStart) \(atReturn) \(atReturnAgain) \(atQuickRestart) \(atLaterStart) "
                 + "\(reseatNextSession) \(reseatCalls)")
     }
     // covers: S325 (a re-seat comes at most once per 5 minutes per speaker, skips an output this sync re-timed, ends with a sleep)
@@ -6428,11 +6427,12 @@ do {
         flapLinks.noteListing(["bt", "builtin"], now: 10, session: 1)
         let flapFirst = flapLinks.takeReseat(uid: "bt", session: 1, now: 10.5)
         flapLinks.noteListing(["builtin"], now: 60, session: 1)
-        let flapArmed = flapLinks.noteListing(["bt", "builtin"], now: 70, session: 1)
+        flapLinks.noteListing(["bt", "builtin"], now: 70, session: 1)
         let flapSecond = flapLinks.takeReseat(uid: "bt", session: 1, now: 70.5)
-        _ = flapLinks.begin(uid: "bt", ticket: flapArmed["bt"] ?? -1, session: 1)
-        flapLinks.release(uid: "bt")
-        let flapCalm = flapLinks.takeReseat(uid: "bt", session: 1, now: 375.5)
+        let flapLaterStart = flapLinks.takeReseat(uid: "bt", session: 1, now: 375.5)
+        flapLinks.noteListing(["builtin"], now: 380, session: 1)
+        flapLinks.noteListing(["bt", "builtin"], now: 390, session: 1)
+        let flapThird = flapLinks.takeReseat(uid: "bt", session: 1, now: 390.5)
         let nappedLinks = FreshLinkWatch()
         nappedLinks.noteListing(["bt"], now: 0, session: 1)
         nappedLinks.noteListing([], now: 5, session: 1)
@@ -6442,10 +6442,12 @@ do {
         let reseatSkipped = FreshLinkWatch.reseats(of: "bt", running: ["bt", "builtin", "usb"],
                                                    holdBacks: ["bt": 0, "builtin": 211, "usb": 361],
                                                    before: ["bt": 0, "builtin": 0, "usb": 361])
-        check(flapFirst && !flapSecond && flapCalm && !nappedReseat && reseatSkipped == ["usb": 361],
-              "EC2 Bluetooth fresh link: a return 60 s after a re-seat re-seats nothing, its calm restart 305 s on does; "
+        check(flapFirst && !flapSecond && !flapLaterStart && flapThird && !nappedReseat
+                && reseatSkipped == ["usb": 361],
+              "EC2 Bluetooth fresh link: a return 60 s after a re-seat re-seats nothing, nor does a start 305 s on, "
+                + "a return 380 s after it does; "
                 + "a sleep drops a re-seat due, and an output this sync re-timed is not re-seated again",
-              "\(flapFirst) \(flapSecond) \(flapCalm) \(nappedReseat) \(reseatSkipped)")
+              "\(flapFirst) \(flapSecond) \(flapLaterStart) \(flapThird) \(nappedReseat) \(reseatSkipped)")
     }
     do {
         var defaultLog = DefaultDeviceLog()
@@ -6462,29 +6464,8 @@ do {
               "\(String(describing: launchLine)) \(String(describing: sameLine)) \(String(describing: headsetLine)) "
                 + "\(String(describing: handsFreeInLine)) \(String(describing: goneLine))")
     }
-    // covers: S325 (what cancels the second restart, and a new return starting its clock over)
+    // covers: S325 (a sleep cancels the 2 s restart)
     do {
-        func cameBack(_ links: FreshLinkWatch, at now: Double) -> Int {
-            links.noteListing(["bt"], now: now - 5, session: 1)
-            links.noteListing([], now: now - 1, session: 1)
-            return links.noteListing(["bt"], now: now, session: 1)["bt"] ?? -1
-        }
-        let toggled = FreshLinkWatch()
-        let toggledTicket = cameBack(toggled, at: 10)
-        toggled.cancel(uid: "bt")
-        check(!toggled.begin(uid: "bt", ticket: toggledTicket, session: 1),
-              "EC2 Bluetooth fresh link: switching the speaker off and on before the second restart cancels it")
-        let ended = FreshLinkWatch()
-        let endedTicket = cameBack(ended, at: 10)
-        // covers: S325
-        check(!ended.begin(uid: "bt", ticket: endedTicket, session: 2) && ended.held.isEmpty,
-              "EC2 Bluetooth fresh link: the end of the session cancels the second restart")
-        let slept = FreshLinkWatch()
-        let sleptTicket = cameBack(slept, at: 10)
-        slept.sleeping()
-        // covers: S325
-        check(!slept.begin(uid: "bt", ticket: sleptTicket, session: 1),
-              "EC2 Bluetooth fresh link: a sleep cancels the second restart")
         let dozed = FreshLinkWatch()
         dozed.noteListing([], now: 0)
         dozed.noteListing(["bt"], now: 1)
@@ -6494,21 +6475,6 @@ do {
         check(quickTicket != nil && dozed.pendingTicket(uid: "bt") == nil
                 && !dozed.begin(uid: "bt", ticket: quickTicket ?? -1, session: 1),
               "EC2 Bluetooth fresh link: a sleep before the 2 s restart is due cancels it")
-        let flapping = FreshLinkWatch()
-        let firstTicket = cameBack(flapping, at: 10)
-        flapping.noteListing([], now: 100, session: 1)
-        // covers: S325
-        check(!flapping.begin(uid: "bt", ticket: firstTicket, session: 1),
-              "EC2 Bluetooth fresh link: leaving the list again cancels the second restart")
-        let secondTicket = flapping.noteListing(["bt"], now: 200, session: 1)["bt"]
-        check(secondTicket != nil && flapping.begin(uid: "bt", ticket: secondTicket ?? -1, session: 1),
-              "EC2 Bluetooth fresh link: a new return starts the second restart's clock over")
-        let stopped = FreshLinkWatch()
-        stopped.noteListing(["bt"], now: 0, session: nil)
-        stopped.noteListing([], now: 1, session: nil)
-        // covers: S325
-        check(stopped.noteListing(["bt"], now: 2, session: nil).isEmpty,
-              "EC2 Bluetooth fresh link: a return while nothing plays arms no second restart")
     }
 
     // EC4 / EC9: the capture rate changes under a running session.
@@ -10978,6 +10944,42 @@ do {
     check(line.hasSuffix("; output 1: 0 frames, starved 0 (0 frames), drift skips 0, drift silences 0, "
                          + "rejected copies 0, late callbacks 0, IO overloads 0, device anchor min +0.0 max +150.0 last +150.0 ms"),
           "status line: an output with timed callbacks carries its device anchor", line)
+}
+
+// MARK: Bluetooth probes: property changes, anchor steps and IO pacing as debug lines (BluetoothWatch)
+do {
+    let btLine = BluetoothWatch.changeLine(name: "Soundcore", property: "device latency", old: 6144, new: 8192, frames: true)
+    check(btLine == "[AudioSync] \"Soundcore\" device latency 6144 -> 8192 frames",
+          "Bluetooth probe: a changed latency reads old -> new in frames", String(describing: btLine))
+    check(BluetoothWatch.changeLine(name: "Soundcore", property: "safety offset", old: 32, new: 32, frames: true) == nil,
+          "Bluetooth probe: an unchanged value writes no line")
+    check(BluetoothWatch.changeLine(name: "Soundcore", property: "data source", old: nil, new: 1, frames: false)
+              == "[AudioSync] \"Soundcore\" data source n/a -> 1",
+          "Bluetooth probe: an unreadable value reads n/a and a count carries no unit")
+    check(BluetoothWatch.anchorStep(previousNs: 5_000_000_000, currentNs: 5_000_500_000) == nil
+              && BluetoothWatch.anchorStep(previousNs: 5_000_000_000, currentNs: 5_150_000_000) == 150_000_000
+              && BluetoothWatch.anchorStep(previousNs: 5_000_000_000, currentNs: 4_997_000_000) == -3_000_000,
+          "Bluetooth probe: an anchor move within 2 ms is drift, beyond it a step either way")
+    check(BluetoothWatch.stepLine(name: "Soundcore", stepNs: 150_000_000) == "[AudioSync] \"Soundcore\" device anchor stepped +150.0 ms",
+          "Bluetooth probe: the step line in ms")
+    // Samples 100 ppm slow move the anchor up by 500 µs over 5 s.
+    let btRate = BluetoothWatch.measuredRate(nominal: 44_100, anchorDeltaNs: 500_000, hostDeltaNs: 5_000_000_000)
+    check(btRate.map { abs($0 - 44_095.59) < 0.01 } == true, "Bluetooth probe: rate from the anchor's move", String(describing: btRate))
+    check(BluetoothWatch.measuredRate(nominal: 44_100, anchorDeltaNs: 0, hostDeltaNs: 0) == nil
+              && BluetoothWatch.measuredRate(nominal: 0, anchorDeltaNs: 0, hostDeltaNs: 5_000_000_000) == nil,
+          "Bluetooth probe: no rate without a span or a nominal rate")
+    let btPacing = BluetoothWatch.pacingLine(name: "Soundcore", nominal: 44_100, measured: btRate, maxIntervalNs: 23_400_000,
+                                             callbacks: 431)
+    check(btPacing == "[AudioSync] \"Soundcore\" IO pacing over 5 s: sample rate vs host clock 44095.59 Hz (-100.0 ppm), "
+              + "longest callback interval 23.4 ms, 431 callbacks",
+          "Bluetooth probe: the pacing line", btPacing)
+    check(BluetoothWatch.pacingLine(name: "Soundcore", nominal: 44_100, measured: nil, maxIntervalNs: 0, callbacks: 1)
+              == "[AudioSync] \"Soundcore\" IO pacing over 5 s: sample rate vs host clock n/a, longest callback interval n/a, 1 callbacks",
+          "Bluetooth probe: the first pacing line has no rate yet")
+    // A stalled output's anchor stands still, which alone would read as +0.0 ppm.
+    check(BluetoothWatch.pacingLine(name: "Soundcore", nominal: 44_100, measured: 44_100, maxIntervalNs: 0, callbacks: 0)
+              == "[AudioSync] \"Soundcore\" IO pacing over 5 s: no callbacks",
+          "Bluetooth probe: a span without callbacks says so instead of a rate")
 }
 
 // MARK: Output stall: a render callback that stops while its device stays alive (OutputStall.swift, S334)
@@ -20306,6 +20308,50 @@ do {
           "capture start off main: a stop of a start still waiting for a stop's fades leaves the old capture running until those fades are done")
     check(tapOpenPart(tapOpenAppEngine, "func stopEngine(").contains("running: engine.isRunning || engine.isStarting"),
           "capture start off main: a stop of a pending start logs its reason")
+}
+
+// MARK: Speaker rows draw AudioSync's own device icons, not SF Symbols
+do {
+    func read(_ path: String) -> String { (try? String(contentsOfFile: path, encoding: .utf8)) ?? "" }
+    func part(_ text: String, from start: String, to end: String) -> String {
+        guard let head = text.range(of: start) else { return "" }
+        let rest = text[head.lowerBound...]
+        return String(rest[..<(rest.range(of: end)?.lowerBound ?? rest.endIndex)])
+    }
+    let layout = read("Sources/AudioSync/SpeakerLayout.swift")
+    let menuBar = read("Sources/AudioSync/MenuBar.swift")
+    let window = read("Sources/AudioSync/MainWindow.swift")
+    let icons = read("Sources/AudioSync/DeviceIcons.swift")
+    check(icons.hasPrefix("// Generated by scripts/brand/device_icons_swift.py from brand/icons. Do not edit."),
+          "device icons: the Swift drawings are generated from brand/icons")
+    let kinds = part(layout, from: "var typeSymbol", to: "static func isHeadphoneName")
+    let sfNames = ["airplay.audio", "dot.radiowaves", "wave.3.right", "cable.connector", "\"display\"", "\"network\"",
+                   "laptopcomputer", "hifispeaker", "homepod", "\"headphones\""]
+    check(!kinds.isEmpty && !sfNames.contains { kinds.contains($0) },
+          "device icons: no speaker kind maps to an SF Symbol", "\(sfNames.filter { kinds.contains($0) })")
+    let badge = part(menuBar, from: "struct SpeakerBadge: View {", to: "private var iconColor")
+    let typeIcon = part(menuBar, from: "struct SpeakerTypeIcon: View {", to: "private var color: Color")
+    check(!badge.isEmpty && !typeIcon.isEmpty
+            && !badge.contains("Image(systemName:") && !typeIcon.contains("Image(systemName:"),
+          "device icons: the round speaker icon and the type icon after the name draw no SF Symbol")
+    check(!menuBar.contains("static let zoneSymbol = \"square.stack.3d.up.fill\"")
+            && !window.contains("Image(systemName: MenuBarView.zoneSymbol)"),
+          "device icons: a zone's circle and its tag on a zoned speaker use the zone icon")
+    let small = read("brand/icons/14/laptop.svg")
+    check(small.contains("viewBox=\"0 0 14 14\"") && icons.contains("static let sizes: [CGFloat] = [14, 16, 18]")
+            && badge.contains("DeviceIcon.size(circle: size)"),
+          "device icons: a smaller circle takes a glyph drawn on its own smaller grid, as 18 in 32 on the sheet")
+    // From the Mac: Monitor Kantor, not found, showed the generic device glyph instead of its display.
+    let monitorKey = SpeakerKey.make(id: "monitor-uid", kind: .local)
+    let storedZone = "[{\"id\":\"z\",\"name\":\"Kantor\",\"members\":[\"\(monitorKey)\"],\"volume\":100,"
+        + "\"memberIcons\":{\"\(monitorKey)\":\"monitor\"}}]"
+    let readBack = (try? JSONDecoder().decode([SpeakerZone].self, from: Data(storedZone.utf8)))
+        .flatMap { try? JSONEncoder().encode($0) }.map { String(decoding: $0, as: UTF8.self) } ?? ""
+    check(readBack.contains("\"memberIcons\"") && readBack.contains(":\"monitor\""),
+          "device icons: a zone keeps the glyph each member was last listed with, across a relaunch", readBack)
+    let zonesApp = read("Sources/AudioSync/AppDelegate+Zones.swift")
+    check(!zonesApp.contains("guard let device = localDevices[member.appID] else { return SpeakerTag.other.symbol(name: name) }"),
+          "device icons: a member that isn't listed keeps its remembered glyph rather than the generic device")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

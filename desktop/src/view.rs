@@ -82,6 +82,8 @@ mod parity_rest;
 mod parity_screens;
 #[cfg(test)]
 mod parity_tray;
+#[cfg(test)]
+mod parity_zones;
 mod remote_window;
 mod settings_window;
 mod setup_window;
@@ -4756,6 +4758,7 @@ impl App {
         #[cfg(all(windows, not(test)))]
         crate::volume_keys::show_level(
             level,
+            volume_waves(level),
             self.shows_dark(),
             &self.main.global::<Strings>().get_volume_popup_name(),
             &self
@@ -14171,7 +14174,8 @@ pub(crate) mod tests {
         tv.enabled = true;
         tv.waiting = Some(ui_model::Waiting::ForPin);
         backend.add_speaker(tv);
-        let name = "The long living room zone by the window and the bookshelf";
+        // Longer than the header, so the tip, in a smaller font than the name, wraps.
+        let name = "The long living room zone by the window and the bookshelf, past the reading lamp and the old upright piano";
         backend.add_zone("zone:long", name, &["airplay:tv"]);
         let app = narrow_app(backend);
         shows_in_full(&app, "ZoneHeader::name-text", "ZoneHeader::name-tip");
@@ -14218,12 +14222,12 @@ pub(crate) mod tests {
         shows_in_full(&app, "ZoneMemberRow::name-label", "ZoneMemberRow::tip-text");
     }
 
-    /// A zone count line that fits shows no tooltip: only one cut to "…"
-    /// does. A zone name keeps its tip for the rename hint, and an In zones
-    /// name keeps its tip, the only place with its device name.
+    /// A zone count line or zone name that fits shows no tooltip: only one
+    /// cut to "…" does (MainWindow.swift:792-793). An In zones name keeps
+    /// its tip, the only place with its device name.
     // covers: S420
     #[test]
-    fn a_zone_count_that_fits_shows_no_tooltip_but_a_zone_name_has_its_rename_hint() {
+    fn a_zone_count_or_name_that_fits_shows_no_tooltip() {
         let mut backend = MockBackend::new();
         let mut den = long_named_speaker(&backend, "airplay:den");
         den.name = "Den".into();
@@ -14233,7 +14237,7 @@ pub(crate) mod tests {
         let (_, count_tip) = rest_on(&app, "ZoneHeader::count-text", "ZoneHeader::count-tip");
         assert!(count_tip.is_none(), "the count line");
         let (_, name_tip) = rest_on(&app, "ZoneHeader::name-text", "ZoneHeader::name-tip");
-        assert!(name_tip.is_some(), "the zone name");
+        assert!(name_tip.is_none(), "the zone name");
         scroll_to_end(&app);
         let (_, tip) = rest_on(&app, "ZoneMemberRow::name-label", "ZoneMemberRow::tip-text");
         assert!(tip.is_some(), "the In zones name");
@@ -15023,7 +15027,16 @@ pub(crate) mod tests {
         .map(|button| strings.invoke_update_button(button).to_string())
         .collect();
         assert_eq!(labels.len(), 7);
-        assert!(labels.contains("Download and Install") && labels.contains("Restart Now"));
+        // The Mac's Sparkle words for the offer; Restart Now stays, since the
+        // files are already swapped when it shows.
+        for label in [
+            "Remind Me Later",
+            "Skip This Version",
+            "Install Update",
+            "Restart Now",
+        ] {
+            assert!(labels.contains(label), "{label}");
+        }
         assert_eq!(
             strings.get_check_updates_automatically().as_str(),
             "Check for Updates Automatically"
@@ -15046,8 +15059,9 @@ pub(crate) mod tests {
         let strings = app.strings();
         let updates = strings.get_help_more_updates().to_string();
         for named in [
-            format!("{} in Settings", strings.get_menu_check_for_updates()),
+            format!("{} in the gear menu", strings.get_menu_check_for_updates()),
             format!("{}, in Settings", strings.get_check_updates_automatically()),
+            "a notice offers Install Update, Remind Me Later and Skip This Version".to_owned(),
             strings
                 .invoke_update_button(UpdateButton::Download)
                 .to_string(),
@@ -15062,6 +15076,35 @@ pub(crate) mod tests {
             app.refresh();
             assert!(app.help().get_updater_available());
         }
+    }
+
+    /// The volume keys' pop-up reads as the Mac's (LevelPopup.swift:90-119,
+    /// Localization.swift:53-54): its label, the level with a percent sign,
+    /// the master's speaker with its waves or crossed out at 0, and the
+    /// card's light fill #F6F6F6 at a 14 px corner.
+    #[test]
+    fn the_volume_key_popup_reads_as_the_macs() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        assert_eq!(
+            strings.get_volume_popup_name().as_str(),
+            "AudioSync master volume"
+        );
+        assert_eq!(strings.invoke_volume_popup_announcement(64).as_str(), "64%");
+        let popup = include_str!("volume_keys/popup.rs");
+        assert!(
+            !popup.contains("format!(\"{}\", shown.level"),
+            "the number is the percent text, not the bare level"
+        );
+        assert!(popup.contains("background: rgb(0xF6F6F6),"));
+        assert!(!popup.contains("16.0 * scale") && !popup.contains("px(16.0), px(16.0)"));
+        assert!(popup.contains("0xE74F, 0xE993, 0xE994, 0xE995"));
+        assert!(!popup.contains("0xE767"), "the speaker follows the level");
+        let view = include_str!("view.rs").replace("\r\n", "\n");
+        let call = &view[view
+            .find("crate::volume_keys::show_level(")
+            .expect("the call")..];
+        assert!(call[..300].contains("volume_waves(level),"));
     }
 
     /// A main-window notice's x centres where the Mac's 16 pt dismiss button
@@ -15261,7 +15304,7 @@ pub(crate) mod tests {
             "Enter"
         );
         tab(window, 1);
-        assert!(focused.get(), "Download and Install is the last stop");
+        assert!(focused.get(), "Install Update is the last stop");
         press(window, " ");
         assert_eq!(pressed.borrow().last(), Some(&UpdateButton::Download));
     }
@@ -16551,8 +16594,8 @@ pub(crate) mod tests {
         assert!(height <= 300.3);
     }
 
-    /// The update notice's three buttons stack in the 340 px flyout, Not Now
-    /// on top and Download and Install at the bottom, on one left edge and
+    /// The update notice's three buttons stack in the 340 px flyout, Remind Me
+    /// Later on top and Install Update at the bottom, on one left edge and
     /// within the notice's text column, measured on a one-button notice
     /// whose text fills that column; at 200% scaling too.
     // covers: S308
@@ -16601,7 +16644,7 @@ pub(crate) mod tests {
                 restart.1 < column.1,
                 "a lone button keeps its label's width: {restart:?}, column {column:?}"
             );
-            let stack = ["Not Now", "Skip This Version", "Download and Install"]
+            let stack = ["Remind Me Later", "Skip This Version", "Install Update"]
                 .map(|label| (label, edges(available(), label)));
             for (label, (left, right, _)) in stack {
                 assert!(
@@ -16615,11 +16658,11 @@ pub(crate) mod tests {
                 stack.windows(2).all(|pair| pair[0].1.2 < pair[1].1.2),
                 "top to bottom: {stack:?}"
             );
-            // The flyout grows to show Download and Install, the last button.
+            // The flyout grows to show Install Update, the last button.
             let tall = app.fit_flyout(1000.0);
-            let last = ElementHandle::find_by_accessible_label(&app.flyout, "Download and Install")
+            let last = ElementHandle::find_by_accessible_label(&app.flyout, "Install Update")
                 .next()
-                .expect("Download and Install is in the flyout");
+                .expect("Install Update is in the flyout");
             let bottom = last.absolute_position().y + last.size().height;
             assert!(bottom <= tall, "{bottom} below {tall}");
             edges(installed(), &text);
@@ -23456,7 +23499,7 @@ pub(crate) mod tests {
             ("settings", "settings-requested()"),
             ("guide", "help-requested()"),
             ("about", "about-requested()"),
-            ("check-updates", "check-for-updates-requested()"),
+            ("check-for-updates", "check-for-updates-requested()"),
             ("exit", "exit-requested()"),
         ] {
             assert!(

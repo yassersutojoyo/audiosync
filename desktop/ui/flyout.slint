@@ -692,10 +692,19 @@ component FlyoutZoneHeader inherits Rectangle {
                         }
                     }
 
-                    Glyph {
-                        glyph: root.item.expanded ? Glyphs.chevron-down : Glyphs.chevron-right;
-                        font-size: 12px;
-                        color: Tokens.secondary-text;
+                    // Turns a quarter with the fold, as the main window's (PanelZoneHeader.swift:31).
+                    Rectangle {
+                        transform-rotation: root.item.expanded ? 90deg : 0deg;
+                        animate transform-rotation {
+                            duration: Motion.on ? 250ms : 0ms;
+                            easing: ease-in-out;
+                        }
+
+                        Glyph {
+                            glyph: Glyphs.chevron-right;
+                            font-size: 12px;
+                            color: Tokens.secondary-text;
+                        }
                     }
                 }
             }
@@ -749,7 +758,8 @@ component FlyoutZoneHeader inherits Rectangle {
                     text: root.item.name;
                     font-size: PanelText.row;
                     color: Tokens.text;
-                    font-weight: root.item.state == RowState.playing ? Fluent.weight-semibold : Fluent.weight-regular;
+                    font-weight: Fluent.weight-regular;
+                    opacity: root.live ? 1 : Tokens.disabled-opacity;
                     vertical-alignment: center;
                     wrap: no-wrap;
                     overflow: elide;

@@ -7,6 +7,9 @@ enum Brand {
     /// The brand teal, #1C9F91. Also the app's accent color.
     static let teal = color(BrandTokens.Light.teal)
 
+    /// A playing speaker's round icon, #147167 in both appearances: its white glyph reaches 5.85:1.
+    static let playingDisc = color(BrandTokens.Light.playingDisc)
+
     /// Teal on light appearances, the brand mint (#63DAC2) on dark ones, as in the logo artwork.
     static let logo = dynamic("AudioSyncLogo", light: BrandTokens.Light.logo, dark: BrandTokens.Dark.logo)
 

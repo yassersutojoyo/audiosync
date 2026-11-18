@@ -275,16 +275,8 @@ extension AppDelegate {
     /// 10 s more (S328).
     func noteLocalDeviceList(_ devices: [AudioDevices.Device]) {
         localListed = devices.map(\.uid).filter { !$0.isEmpty }
-        let calmRestarts = freshLinks.noteListing(localListed, now: ProcessInfo.processInfo.systemUptime,
-                                                  session: engine.isRunning ? session : nil)
-        for (uid, ticket) in calmRestarts
-        where devices.contains(where: { $0.uid == uid && BluetoothIOBuffer.isBluetooth(transport: $0.transport) }) {
-            DebugTrace.log("[AudioSync] fresh link: Bluetooth output \(uid) came back mid-session; "
-                + "one more quiet restart in \(Int(FreshLinkWatch.calmRestartAfterS)) s")
-            DispatchQueue.main.asyncAfter(deadline: .now() + FreshLinkWatch.calmRestartAfterS) { [weak self] in
-                self?.restartOnSettledLink(uid, ticket: ticket)
-            }
-        }
+        freshLinks.noteListing(localListed, now: ProcessInfo.processInfo.systemUptime,
+                               session: engine.isRunning ? session : nil)
         localReference = LocalDelay.reference(in: devices)
         let heldBefore = briefLoss.held
         briefLoss.noteListing(localListed, enabled: enabledLocal, reference: localReference,

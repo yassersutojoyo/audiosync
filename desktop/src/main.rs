@@ -716,6 +716,16 @@ mod tests {
         );
     }
 
+    /// As the Mac's standard About panel (AboutPanel.swift:36): the app icon
+    /// tile above the name in plain bold text.
+    #[test]
+    fn the_about_dialog_shows_the_app_icon_above_the_name_in_bold() {
+        let about = lf(include_str!("../ui/about.slint"));
+        assert!(about.contains("source: @image-url(\"../res/audiosync-tile-256.png\");"));
+        assert!(about.contains("text: Strings.app-name;\n                font-weight: 700;"));
+        assert!(!about.contains("BrandMark {") && !about.contains("Wordmark {"));
+    }
+
     /// The Mac's menu shortcuts and what each is on Windows: the `Strings`
     /// title of the gear's menu item (empty for a shortcut with no item, as
     /// on the Mac's speaker panels and Equalizer row), its `@keys`, and how
