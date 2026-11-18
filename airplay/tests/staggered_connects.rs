@@ -322,6 +322,23 @@ fn six_starts_once() -> Result<(), String> {
             "unscheduled {starved:?} of the {span:?} burst; largest gap excused by it {excused:?}"
         );
     }
+    // A thread held past L restarts the timeline and flushes every speaker
+    // (P143), after the burst too; a connect that held it fails the rerun.
+    events.drain(&sender);
+    if events.seen.iter().any(|(_, event)| {
+        matches!(
+            event,
+            SenderEvent::Timeline {
+                restarted: true,
+                ..
+            }
+        )
+    }) {
+        return Err(format!(
+            "the timeline restarted; the playing receiver saw {:?}",
+            playing.log().keys()
+        ));
+    }
     assert_eq!(session_requests(&playing), requests_before);
     let deadline = Instant::now() + LONG;
     let (error, common) = loop {
