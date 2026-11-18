@@ -75,6 +75,14 @@ thread_local! {
     /// The icon the flyout last opened next to: a refresh while it is open
     /// can change its height, and it is placed again.
     static FLYOUT_ICON: Cell<Option<Bounds>> = const { Cell::new(None) };
+    static FLYOUT_FOCUSED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether a focus change hides the flyout, noting it in `had`.
+#[cfg(any(windows, target_os = "linux"))]
+fn focus_hides_flyout(focused: bool, had: &Cell<bool>) -> bool {
+    had.set(focused);
+    !focused
 }
 
 pub struct Tray {
@@ -208,7 +216,9 @@ impl Tray {
                 app.note_focus_input(input);
             }
             match event {
-                WindowEvent::Focused(false) => {
+                WindowEvent::Focused(focused)
+                    if FLYOUT_FOCUSED.with(|had| focus_hides_flyout(*focused, had)) =>
+                {
                     FLYOUT_CLOSED_AT.with(|at| at.set(Some(Instant::now())));
                     let _ = window.hide();
                 }
@@ -611,5 +621,19 @@ mod tests {
         });
         assert_eq!(shown.as_deref(), Some("Streaming"));
         assert_eq!(pending, None);
+    }
+
+    /// Without a window manager, or with one that keeps the focus where it
+    /// was, winit reports a focus loss to the flyout it just mapped.
+    #[cfg(any(windows, target_os = "linux"))]
+    #[test]
+    fn the_flyout_hides_only_when_it_loses_a_focus_it_had() {
+        use super::focus_hides_flyout;
+        use std::cell::Cell;
+        let had = Cell::new(false);
+        assert!(!focus_hides_flyout(false, &had), "a loss it never had");
+        assert!(!focus_hides_flyout(true, &had));
+        assert!(focus_hides_flyout(false, &had), "the focus it had goes");
+        assert!(!focus_hides_flyout(false, &had), "a second loss");
     }
 }
