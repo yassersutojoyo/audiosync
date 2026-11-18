@@ -15748,7 +15748,8 @@ pub(crate) mod tests {
     }
 
     /// A speaker's circle starts 14 px from the panel's edge and its name
-    /// 10 px past it, its end 17 px from the other edge, as in the Mac panel.
+    /// 10 px past it, its end 14 px from the other edge, as in the Mac panel
+    /// (rows 6 px past its 14 px padding, inset 6, MenuBar.swift:1873, :2058).
     #[test]
     fn the_flyout_rows_use_the_mac_panel_margins() {
         let app = measured_flyout();
@@ -15759,7 +15760,7 @@ pub(crate) mod tests {
         assert_eq!(name.absolute_position().x, 50.0);
         let end = row.absolute_position().x + row.size().width - 6.0;
         // The panel is 300 px wide; the headless window around it is wider.
-        assert_eq!(300.0 - end, 17.0);
+        assert_eq!(300.0 - end, 14.0);
         // The hover and focus ring reach 6 px past the circle, as on the Mac.
         let rows = flyout_element(&app, "FlyoutRow::touch");
         assert_eq!(rows.absolute_position().x, 8.0);
@@ -15844,12 +15845,17 @@ pub(crate) mod tests {
             .window()
             .set_size(slint::LogicalSize::new(300.0, height));
         draw_frames();
-        let rows: Vec<_> = ElementHandle::find_by_element_type_name(&app.flyout, "FlyoutRow")
-            .collect();
+        let rows: Vec<_> =
+            ElementHandle::find_by_element_type_name(&app.flyout, "FlyoutRow").collect();
         assert!(!rows.is_empty(), "the speaker rows show");
         for row in rows {
             let (x, width) = (row.absolute_position().x, row.size().width);
-            assert_eq!((x, 300.0 - x - width), (8.0, 8.0), "{:?}", row.accessible_label());
+            assert_eq!(
+                (x, 300.0 - x - width),
+                (8.0, 8.0),
+                "{:?}",
+                row.accessible_label()
+            );
         }
     }
 

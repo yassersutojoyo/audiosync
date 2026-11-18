@@ -1006,7 +1006,7 @@ export component TrayFlyout inherits Window {
             // their circles without the scroll view cutting it.
             HorizontalLayout {
                 padding-left: -6px;
-                padding-right: -3px;
+                padding-right: -6px;
 
                 body-view := OverlayScrollView {
                     property <length> natural: body-end.y - body.spacing;
@@ -1020,7 +1020,7 @@ export component TrayFlyout inherits Window {
                         height: self.preferred-height;
                         alignment: start;
                         padding-left: 6px;
-                        padding-right: 3px;
+                        padding-right: 6px;
                         spacing: 10px;
 
                         if root.notices.length > 0: IntroPart {
@@ -1279,10 +1279,10 @@ export component TrayFlyout inherits Window {
                                 // Four rows, then it scrolls, so a PC with many outputs
                                 // still fits a small screen.
                                 // Rows reach 6 px left of their circles, 14 px from the panel's
-                                // edge, and their text ends 17 px from the other, as on the Mac.
+                                // edge, and 8 px from the other, as on the Mac (MenuBar.swift:1871, :1873).
                                 HorizontalLayout {
                                     padding-left: -6px;
-                                    padding-right: -3px;
+                                    padding-right: -6px;
 
                                     this-pc-view := OverlayScrollView {
                                         height: min(this-pc-list.preferred-height, 144px);
@@ -1382,7 +1382,7 @@ export component TrayFlyout inherits Window {
 
                             HorizontalLayout {
                                 padding-left: -6px;
-                                padding-right: -3px;
+                                padding-right: -6px;
 
                                 list-view := OverlayScrollView {
                                     // Every row; on a screen too short for them it scrolls, six
