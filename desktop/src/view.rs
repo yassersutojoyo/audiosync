@@ -7929,7 +7929,7 @@ pub(crate) mod tests {
     }
 
     /// Clicks `window` at `x`, `y` (logical pixels), then draws a frame.
-    fn click(window: &slint::Window, x: f32, y: f32) {
+    pub(super) fn click(window: &slint::Window, x: f32, y: f32) {
         let position = slint::LogicalPosition::new(x, y);
         let button = PointerEventButton::Left;
         window.dispatch_event(WindowEvent::PointerMoved { position });

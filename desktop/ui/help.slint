@@ -13,9 +13,13 @@ import { FocusRing, Fluent, OverlayScrollView, SectionTitle } from "widgets.slin
 // Guide text, which can be selected so a step can be copied, as on the Mac.
 // Without `min-height`, a wrapping text gets the height of one line and the
 // sections overlap.
+// A click puts the focus here for Ctrl+C; Slint still adds it to the Tab
+// chain, which the window's Tab handling skips. No caret, as in a
+// read-only Mac text view.
 component HelpText inherits TextInput {
     read-only: true;
     single-line: false;
+    text-cursor-width: 0px;
     wrap: word-wrap;
     min-height: self.preferred-height;
     color: Tokens.text;
@@ -30,9 +34,11 @@ component HelpList inherits VerticalLayout {
     spacing: 6px;
 
     for item[i] in root.items: HorizontalLayout {
-        HelpText {
+        Text {
             horizontal-stretch: 0;
             text: root.numbered ? (i + 1) + ". " : "- ";
+            color: Tokens.text;
+            accessible-role: none;
         }
 
         HelpText {
@@ -154,6 +160,54 @@ export component HelpWindow inherits Window {
     }
 
     keys := FocusScope {
+        // Ahead of a clicked text, which would move its selection instead:
+        // the scroll keys still scroll, and Tab goes only between the text
+        // and Show How rather than through every paragraph.
+        capture-key-pressed(event) => {
+            if event.modifiers.control || event.modifiers.alt || event.modifiers.meta {
+                return reject;
+            }
+            if event.text == Key.Tab || event.text == Key.Backtab {
+                if root.show-how-shown && !show-how.has-focus {
+                    show-how.focus();
+                } else {
+                    keys.focus();
+                }
+                return accept;
+            }
+            if event.modifiers.shift {
+                return reject;
+            }
+            if event.text == Key.DownArrow {
+                root.scroll-by(root.line-step);
+                return accept;
+            }
+            if event.text == Key.UpArrow {
+                root.scroll-by(-root.line-step);
+                return accept;
+            }
+            if event.text == Key.PageDown {
+                root.scroll-by(max(root.line-step, scroll.visible-height - root.line-step));
+                return accept;
+            }
+            if event.text == Key.PageUp {
+                root.scroll-by(-max(root.line-step, scroll.visible-height - root.line-step));
+                return accept;
+            }
+            if event.text == Key.Home {
+                scroll.content-y = 0px;
+                return accept;
+            }
+            if event.text == Key.End {
+                scroll.content-y = root.lowest;
+                return accept;
+            }
+            if event.text == Key.Escape {
+                root.close-requested();
+                return accept;
+            }
+            return reject;
+        }
         key-pressed(event) => {
             if event.text == Key.Escape || (event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text.to-lowercase() == "w") {
                 root.close-requested();
@@ -191,30 +245,10 @@ export component HelpWindow inherits Window {
                 root.preset-shortcut(event.text.to-float());
                 return accept;
             }
-            if event.text == Key.DownArrow {
-                root.scroll-by(root.line-step);
-                return accept;
-            }
-            if event.text == Key.UpArrow {
-                root.scroll-by(-root.line-step);
-                return accept;
-            }
             // A focused button takes Space itself, so Space scrolls only
             // from the text.
-            if event.text == Key.PageDown || event.text == Key.Space {
+            if event.text == Key.Space {
                 root.scroll-by(max(root.line-step, scroll.visible-height - root.line-step));
-                return accept;
-            }
-            if event.text == Key.PageUp {
-                root.scroll-by(-max(root.line-step, scroll.visible-height - root.line-step));
-                return accept;
-            }
-            if event.text == Key.Home {
-                scroll.content-y = 0px;
-                return accept;
-            }
-            if event.text == Key.End {
-                scroll.content-y = root.lowest;
                 return accept;
             }
             return reject;
@@ -333,10 +367,13 @@ export component HelpWindow inherits Window {
                             title: Strings.help-double-title;
                             body: Platform.os == OperatingSystemType.linux ? Strings.help-double-linux : Strings.help-double;
 
-                            if root.show-how-shown: HorizontalLayout {
+                            // Kept out of an `if` so Tab can reach it by name.
+                            HorizontalLayout {
                                 alignment: start;
+                                max-height: root.show-how-shown ? 1000px : 0px;
 
-                                Button {
+                                show-how := Button {
+                                    visible: root.show-how-shown;
                                     text: Strings.notice-show-how;
                                     accessible-label: Strings.notice-show-how-label;
                                     clicked => {

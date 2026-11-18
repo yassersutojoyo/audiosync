@@ -4,7 +4,7 @@
 use slint::ComponentHandle;
 use slint::platform::Key;
 
-use super::tests::{app_over, draw_frames, press};
+use super::tests::{app_over, click, draw_frames, press};
 use crate::ui_model::{Backend, MockBackend};
 
 const EQUALIZER: &str = include_str!("../../ui/equalizer.slint");
@@ -121,12 +121,13 @@ fn the_guide_says_what_happens_when_the_source_app_quits() {
 // Close button).
 #[test]
 fn the_guide_text_is_selectable_and_has_no_close_button() {
-    assert!(
-        !HELP
-            .lines()
-            .any(|line| line.trim_end().ends_with(" Text {") || line.trim() == "Text {"),
-        "every text can be selected"
-    );
+    // Only the list markers, which Narrator skips, are plain text.
+    let plain = HELP
+        .lines()
+        .filter(|line| line.trim_end().ends_with(" Text {") || line.trim() == "Text {")
+        .count();
+    assert_eq!(plain, 1, "every other text can be selected");
+    assert!(HELP.contains("text-cursor-width: 0px;"), "no caret");
     assert!(HELP.contains("read-only: true;"));
     assert!(!HELP.contains("Strings.guide-close"));
 }
@@ -174,4 +175,29 @@ fn the_guide_keeps_its_size_across_launches() {
     let help = again.help.window();
     let size = help.size().to_logical(help.scale_factor());
     assert_eq!((size.width, size.height), (700.0, 500.0));
+}
+
+// A click in the text, which takes the focus for Ctrl+C, leaves the arrow
+// keys scrolling, and Tab skips the paragraphs.
+#[test]
+fn the_guide_scrolls_by_keyboard_after_a_click_and_tab_skips_its_text() {
+    let app = app_over(MockBackend::new());
+    let window = app.help.window();
+    app.main.invoke_help_requested();
+    draw_frames();
+    click(window, 200.0, 120.0);
+    draw_frames();
+    press(window, Key::DownArrow);
+    let after_click = app.help.get_scrolled();
+    assert!(after_click > 0.0, "Down scrolls after a click in the text");
+    for _ in 0..3 {
+        press(window, Key::Tab);
+    }
+    press(window, Key::DownArrow);
+    assert!(
+        app.help.get_scrolled() > after_click,
+        "Down scrolls after Tab"
+    );
+    press(window, Key::Escape);
+    assert!(!window.is_visible(), "Escape closes it after a click");
 }
