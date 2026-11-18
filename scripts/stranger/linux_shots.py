@@ -5,7 +5,9 @@ photographs each state, for scripts/stranger/linux_shots.sh.
 Each state becomes <STATE>-<theme>.png in the work folder, named as the
 Mac's LAYAR photos where a state matches; one the session can't reach gets
 a line in not-set-up.txt as screen_compare.py reads it, and
-atspi-<theme>.txt holds the tree as AT-SPI saw it.
+atspi-<theme>.txt holds the tree as AT-SPI saw it. The nowplaying group
+exits 1 when the Now Playing card lacks Shuffle or Repeat drawn on, or its
+cover reads as one colour.
 
     linux_shots.py <work> <group> <theme> <pid>
 """
@@ -22,6 +24,7 @@ from gi.repository import Atspi, GLib  # noqa: E402
 
 WORK, GROUP, THEME, PID = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
 missing = []
+failed = []
 
 
 def skip(state, why):
@@ -115,6 +118,15 @@ def shot(node, state):
     print(f"shot: {os.path.basename(path)}")
 
 
+def pixels(box, *measure):
+    """What ImageMagick's `measure` reads from the screen's `box` (w, h, x, y)."""
+    width, height, x, y = box
+    grab = os.path.join(os.environ.get("TMPDIR", "/tmp"), f"measure-{THEME}.png")
+    subprocess.run(["import", "-window", "root", "-crop", f"{width}x{height}+{x}+{y}", "+repage", grab],
+                   check=True)
+    return subprocess.run(["convert", grab, *measure], check=True, capture_output=True, text=True).stdout
+
+
 def save_tree(app):
     with open(os.path.join(WORK, f"atspi-{THEME}.txt"), "w", encoding="utf-8") as out:
         for node, depth in walk(app):
@@ -181,6 +193,39 @@ def run(app, main):
         if use(app, "Streaming", "NOTICE-START"):
             time.sleep(2)
             shot(main, "NOTICE-START")
+    elif GROUP == "nowplaying":
+        # mpris_player.py plays a patterned cover with Shuffle on and LoopStatus Playlist.
+        buttons = {name: find(app, name, seconds=20) for name in ("Shuffle", "Repeat", "Previous Track")}
+        card = find(app, "Now Playing")
+        for name, node in buttons.items():
+            if node is None:
+                print(f"FAIL: no {name} on the Now Playing card ({THEME})")
+                failed.append(name)
+        if card is None:
+            print(f"FAIL: no Now Playing card ({THEME})")
+            failed.append("card")
+            return
+        time.sleep(2)
+        shot(card, "NOW-PLAYING")
+        box = extents(card)
+        # The cover is the card's top square; 10 px in clears its rounded corners.
+        side = box.width - 20
+        colours = int(pixels((side, side, box.x + 10, box.y + 10), "-format", "%k", "info:"))
+        print(f"cover: {colours} colours ({THEME})")
+        if colours < 16:
+            print(f"FAIL: the cover reads as one colour ({THEME})")
+            failed.append("cover")
+        # An active button's glyph is teal; an idle one is grey, as Previous Track is.
+        for name, node in buttons.items():
+            if node is None:
+                continue
+            b = extents(node)
+            tint = float(pixels((b.width, b.height, b.x, b.y), "-colorspace", "HSL", "-channel", "G",
+                                "-separate", "-format", "%[fx:maxima]", "info:"))
+            print(f"{name}: strongest saturation {tint:.2f} ({THEME})")
+            if (tint >= 0.3) != (name != "Previous Track"):
+                print(f"FAIL: {name} is not drawn {'on' if name != 'Previous Track' else 'idle'} ({THEME})")
+                failed.append(name)
 
 
 def main():
@@ -195,7 +240,8 @@ def main():
         save_tree(app)
     with open(os.path.join(WORK, "not-set-up.txt"), "a", encoding="utf-8") as out:
         out.writelines(line + "\n" for line in missing)
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
