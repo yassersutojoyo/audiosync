@@ -4144,7 +4144,7 @@ impl<D: Driver> Controller<D> {
                 self.airplay_streaming(false);
                 self.release_busy();
                 self.pending.push(BackendEvent::Stopped {
-                    reason: StopReason::CaptureFailed(error),
+                    reason: StopReason::SystemSwitchFailed(error),
                 });
             }
         }
@@ -6438,6 +6438,9 @@ fn describe_stop(reason: &StopReason) -> String {
     match reason {
         StopReason::SourceQuit => "the captured app quit".to_owned(),
         StopReason::CaptureFailed(error) => format!("the capture failed: {error}"),
+        StopReason::SystemSwitchFailed(error) => {
+            format!("the captured app quit and the whole system's capture failed: {error}")
+        }
     }
 }
 

@@ -933,7 +933,7 @@ mod tests {
     fn the_flyout_offers_dismiss_all_beside_the_more_notices_button() {
         let flyout = include_str!("../ui/flyout.slint");
         let row = &flyout[flyout
-            .find("if root.notice-count > root.notices.length: IntroPart {")
+            .find("if root.notice-count > root.notices.length: HorizontalLayout {")
             .expect("the more-notices row is there")..];
         let row = &row[..row.find("Divider { }").expect("the row ends")];
         assert!(row.contains("text: Strings.dismiss-all-notices;"), "{row}");

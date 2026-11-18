@@ -356,6 +356,8 @@ component FlyoutRow inherits Rectangle {
     in property <bool> plays;
     in property <bool> enabled: true;
     in property <DeviceVolumeHint> device-volume;
+    // The hint's text, the glyph's tooltip (DeviceVolumeViews.swift:57).
+    in property <string> device-volume-tip;
     // A zone's count, before the note; and what Narrator reads as the
     // row's value instead of its state.
     in property <string> caption;
@@ -516,6 +518,21 @@ component FlyoutRow inherits Rectangle {
             glyph: Glyphs.device-volume(root.device-volume);
             font-size: 12px;
             color: Tokens.secondary-text;
+
+            // Narrator reads the hint from the row's description.
+            TouchArea {
+                enabled: root.enabled;
+                clicked => {
+                    root.toggled();
+                }
+
+                Tooltip {
+                    LabelTip {
+                        text: root.device-volume-tip;
+                        max-tip-width: root.width;
+                    }
+                }
+            }
         }
     }
 
@@ -1217,61 +1234,66 @@ export component TrayFlyout inherits Window {
                             index: 1;
                             revealed: root.revealed;
 
-                            NoticeStack {
-                                notices: root.notices;
-                                compact: true;
-                                capped: root.notice-count > 1;
-                                dismissed(id) => {
-                                    root.notice-dismissed(id);
-                                }
-                                dismissed-all => {
-                                    root.notices-dismissed-all();
-                                }
-                                guide-requested(id) => {
-                                    root.notice-guide-requested(id);
-                                }
-                                retry-requested(id) => {
-                                    root.notice-retry-requested(id);
-                                }
-                                privacy-requested(id) => {
-                                    root.notice-privacy-requested(id);
-                                }
-                                update-button-pressed(button) => {
-                                    root.notice-update-button-pressed(button);
-                                }
-                                button-focus-changed(focused) => {
-                                    root.notice-focused = focused;
-                                }
-                            }
-                        }
+                            VerticalLayout {
+                                // The Mac's 6 pt between the text and the footer.
+                                spacing: 6px;
 
-                        if root.notice-count > root.notices.length: IntroPart {
-                            index: 1;
-                            revealed: root.revealed;
-
-                            HorizontalLayout {
-                                alignment: space-between;
-                                more := LinkButton {
-                                    text: Strings.more-notices(root.notice-count - root.notices.length);
-                                    label: self.text;
-                                    text-color: Tokens.text;
-                                    clicked => {
-                                        root.open-app();
+                                NoticeStack {
+                                    notices: root.notices;
+                                    compact: true;
+                                    capped: root.notice-count > 1;
+                                    dismissed(id) => {
+                                        root.notice-dismissed(id);
                                     }
-                                    changed keyboard-focused => {
-                                        root.more-notices-focused = more.keyboard-focused || all.keyboard-focused;
-                                    }
-                                }
-
-                                all := LinkButton {
-                                    text: Strings.dismiss-all-notices;
-                                    label: Strings.dismiss-all-notices;
-                                    text-color: Tokens.text;
-                                    clicked => {
+                                    dismissed-all => {
                                         root.notices-dismissed-all();
                                     }
-                                    changed keyboard-focused => {
-                                        root.more-notices-focused = more.keyboard-focused || all.keyboard-focused;
+                                    guide-requested(id) => {
+                                        root.notice-guide-requested(id);
+                                    }
+                                    retry-requested(id) => {
+                                        root.notice-retry-requested(id);
+                                    }
+                                    privacy-requested(id) => {
+                                        root.notice-privacy-requested(id);
+                                    }
+                                    update-button-pressed(button) => {
+                                        root.notice-update-button-pressed(button);
+                                    }
+                                    button-focus-changed(focused) => {
+                                        root.notice-focused = focused;
+                                    }
+                                }
+
+                                if root.notice-count > root.notices.length: HorizontalLayout {
+                                    alignment: space-between;
+                                    // In the newest notice's text column, as the Mac's
+                                    // (MenuBar.swift:2804-2833): past its 18 px glyph and
+                                    // 8 px gap, short of its 16 px X and 8 px gap.
+                                    padding-left: 26px;
+                                    padding-right: 24px;
+                                    more := LinkButton {
+                                        text: Strings.more-notices(root.notice-count - root.notices.length);
+                                        label: self.text;
+                                        text-color: Tokens.text;
+                                        clicked => {
+                                            root.open-app();
+                                        }
+                                        changed keyboard-focused => {
+                                            root.more-notices-focused = more.keyboard-focused || all.keyboard-focused;
+                                        }
+                                    }
+
+                                    all := LinkButton {
+                                        text: Strings.dismiss-all-notices;
+                                        label: Strings.dismiss-all-notices;
+                                        text-color: Tokens.text;
+                                        clicked => {
+                                            root.notices-dismissed-all();
+                                        }
+                                        changed keyboard-focused => {
+                                            root.more-notices-focused = more.keyboard-focused || all.keyboard-focused;
+                                        }
                                     }
                                 }
                             }
@@ -1499,6 +1521,7 @@ export component TrayFlyout inherits Window {
                                                     code-every-time: speaker.code-every-time;
                                                     live: root.shown;
                                                     device-volume: speaker.device-volume;
+                                                    device-volume-tip: Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent);
 
                                                     toggled => {
                                                         root.speaker-toggled(speaker.id);
@@ -1633,6 +1656,7 @@ export component TrayFlyout inherits Window {
                                                     live: root.shown;
                                                     enabled: !speaker.missing;
                                                     device-volume: speaker.device-volume;
+                                                    device-volume-tip: Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent);
                                                     toggled => {
                                                         root.speaker-toggled(speaker.id);
                                                     }
@@ -1664,6 +1688,7 @@ export component TrayFlyout inherits Window {
                                                 code-every-time: speaker.code-every-time;
                                                 live: root.shown;
                                                 device-volume: speaker.device-volume;
+                                                device-volume-tip: Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent);
 
                                                 toggled => {
                                                     root.speaker-toggled(speaker.id);

@@ -717,6 +717,11 @@ export global Strings {
         return @tr("{} quit, so AudioSync switched to All System Audio.", source);
     }
 
+    // The same when streaming couldn't start with the whole system.
+    public pure function notice-source-switched-not-started(source: string) -> string {
+        return @tr("{} quit, so the source is now All System Audio, but streaming couldn't start with it. Turn streaming on again to retry.", source);
+    }
+
     // A source or channel pair picked while streaming couldn't start, so the
     // one before it plays on: both as the source picker names them.
     public pure function notice-switch-failed(new: string, old: string) -> string {
@@ -1778,6 +1783,14 @@ export global Strings {
         return "";
     }
 
+    // The hint's tooltip: why the output's own volume matters.
+    public pure function device-volume-help() -> string {
+        if Platform.os == OperatingSystemType.linux {
+            return @tr("PipeWire has its own volume for each output, and it limits AudioSync's slider.");
+        }
+        return @tr("Windows has its own volume for each output, and it limits AudioSync's slider.");
+    }
+
     // The button after the hint that fixes it.
     public pure function device-volume-fix(hint: DeviceVolumeHint) -> string {
         if hint == DeviceVolumeHint.low {
@@ -2254,6 +2267,8 @@ export global Strings {
     public pure function preset-left-off(preset: string, list: string) -> string {
         return @tr("“{}” is on. Stayed off: {}.", preset, list);
     }
+
+    out property <string> preset-left-off-heading: @tr("Some speakers stayed off");
 
     public pure function preset-nothing-changed(preset: string, list: string) -> string {
         return @tr("Nothing changed: no speaker in “{}” can play now. {}.", preset, list);
