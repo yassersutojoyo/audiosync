@@ -155,10 +155,16 @@ fn an_airplay_stop_shows_in_red_under_the_list_with_retry() {
 #[test]
 fn a_speaker_leaving_the_flyout_fades_out_before_it_goes() {
     let ease = component("RowEase");
-    assert!(ease.contains("delay: Motion.on ? root.index * 35ms : 0ms;"), "{ease}");
+    assert!(
+        ease.contains("delay: Motion.on ? root.index * 35ms : 0ms;"),
+        "{ease}"
+    );
     assert!(ease.contains("y: (root.shown - 1) * 6px;"), "{ease}");
-    assert!(ease.contains("duration: Motion.on ? 350ms : 0ms;"), "{ease}");
-    assert_eq!(flyout().matches("]: RowEase {").count(), 2);
+    assert!(
+        ease.contains("duration: Motion.on ? 350ms : 0ms;"),
+        "{ease}"
+    );
+    assert_eq!(flyout().matches("for speaker[index] in root.").count(), 2);
 
     let app = app_over(MockBackend::new());
     app.rows_ease.set(true);
@@ -185,4 +191,14 @@ fn a_speaker_leaving_the_flyout_fades_out_before_it_goes() {
     let id = app.flyout.get_speakers().row_data(0).expect("a speaker").id;
     app.hide_speaker(&id);
     assert_eq!(listed(&app, &id), None, "hidden, it goes at once");
+}
+
+/// A hidden flyout runs no timer: a long name's marquee rests.
+#[test]
+fn a_long_names_timer_rests_while_the_flyout_is_hidden() {
+    assert!(
+        include_str!("../../ui/widgets.slint").contains("running: root.live && root.excess > 0;")
+    );
+    assert!(component("FlyoutRow").contains("live: root.live;"));
+    assert_eq!(flyout().matches("live: root.shown;").count(), 3);
 }

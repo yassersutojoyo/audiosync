@@ -177,6 +177,8 @@ export component MarqueeText inherits Rectangle {
     in property <color> text-color: Tokens.text;
     in property <length> font-size;
     in property <int> font-weight;
+    // False while its window is hidden: the timer rests, the line stays put.
+    in property <bool> live: true;
     property <duration> started;
     property <length> excess: Motion.on && label.preferred-width > self.width ? label.preferred-width - self.width : 0px;
     // Only a moving line reads the frame clock: a resting one draws nothing
@@ -206,7 +208,7 @@ export component MarqueeText inherits Rectangle {
     // doesn't shift the scroll.
     step := Timer {
         interval: root.wait;
-        running: root.excess > 0;
+        running: root.live && root.excess > 0;
         triggered => {
             let elapsed = animation-tick() - root.started;
             root.moving = !Marquee.resting(elapsed, root.excess);

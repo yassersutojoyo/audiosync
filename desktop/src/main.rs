@@ -1021,12 +1021,12 @@ mod tests {
                 "zone-focused",
             ),
             (
-                "for speaker in root.this-pc: FlyoutRow {",
+                "for speaker[index] in root.this-pc: RowEase {",
                 "focus-changed(focused)",
                 "speaker-focused",
             ),
             (
-                "for speaker in root.speakers: FlyoutRow {",
+                "for speaker[index] in root.speakers: RowEase {",
                 "focus-changed(focused)",
                 "speaker-focused",
             ),
@@ -1063,13 +1063,13 @@ mod tests {
         let flyout = include_str!("../ui/flyout.slint");
         let at = |part: &str| flyout.find(part).unwrap_or_else(|| panic!("{part}"));
         let volume = at("MasterVolume {");
-        let this_pc = at("for speaker in root.this-pc: FlyoutRow {");
+        let this_pc = at("for speaker[index] in root.this-pc: RowEase {");
         let divider = volume
             + flyout[volume..]
                 .find("rows-divider := Divider {")
                 .expect("a divider");
         let zones = at("for zone in root.zones: VerticalLayout {");
-        let connected = at("for speaker in root.speakers: FlyoutRow {");
+        let connected = at("for speaker[index] in root.speakers: RowEase {");
         assert!(
             volume < this_pc && this_pc < divider,
             "this PC sits with the volume"

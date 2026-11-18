@@ -3137,11 +3137,24 @@ impl App {
                 .collect(),
         );
         self.main.set_mix_all_except(state.mix_all_except);
-        sync_model(&m.flyout_this_pc, this_pc.clone());
-        sync_model(&m.flyout_connected, connected.clone());
+        let flyout_eased = self.rows_ease.get()
+            && self.flyout.global::<Motion>().get_on()
+            && self.flyout.window().is_visible();
+        sync_rows(
+            &m.flyout_this_pc,
+            this_pc.clone(),
+            flyout_eased,
+            ROW_STAGGER,
+        );
+        sync_rows(
+            &m.flyout_connected,
+            connected.clone(),
+            flyout_eased,
+            ROW_STAGGER,
+        );
         let eased = self.rows_eased();
-        sync_rows(&m.this_pc, this_pc, eased);
-        sync_rows(&m.connected, connected, eased);
+        sync_rows(&m.this_pc, this_pc, eased, Duration::ZERO);
+        sync_rows(&m.connected, connected, eased, Duration::ZERO);
         sync_model(&m.this_pc_zoned, this_pc_zoned);
         sync_model(&m.connected_zoned, connected_zoned);
         self.sync_zones(zones);
@@ -3149,6 +3162,17 @@ impl App {
             .set_notices_staying(count(main_notices.iter().filter(|n| !n.closing).count()));
         sync_model(&m.notices, main_notices);
         sync_model(&m.flyout_notices, flyout_notices);
+        self.flyout.set_airplay_problem(
+            if state
+                .notices
+                .iter()
+                .any(|n| n.message == NoticeMessage::AirPlayStopped)
+            {
+                strings.get_notice_airplay_stopped()
+            } else {
+                SharedString::new()
+            },
+        );
         self.flyout.set_notice_count(count(notices.len()));
         self.restore_flyout_focus(flyout_removed);
         if main_focus == Some(MainFocusTarget::StreamingSwitch) {
@@ -3385,7 +3409,7 @@ impl App {
                 })
                 .collect()
         };
-        sync_rows(&m.zones, items, self.rows_eased());
+        sync_rows(&m.zones, items, self.rows_eased(), Duration::ZERO);
         sync_model(&m.flyout_zones, flyout_items);
     }
 
@@ -5719,6 +5743,7 @@ impl App {
     #[cfg_attr(not(windows), allow(dead_code))]
     pub fn prepare_flyout_open(&self, animate: bool) {
         self.flyout.set_revealed(!animate);
+        self.flyout.set_shown(true);
         self.flyout.global::<Motion>().set_on(animate);
     }
 
@@ -5747,6 +5772,7 @@ impl App {
 
     pub fn hide_flyout(&self) {
         let _ = self.flyout.hide();
+        self.flyout.set_shown(false);
     }
 
     /// Sizes the flyout to show every part down to its buttons, at most
@@ -5937,10 +5963,13 @@ fn newest_notices<T: Clone>(notices: &[T], limit: usize) -> Vec<T> {
 /// How long a row that left stays while its room shuts: the Mac's row move
 /// (`MainMotion.rowMove`, WindowRules.swift:82).
 const ROW_MOVE: Duration = Duration::from_millis(350);
+/// The tray flyout's gap between rows that come or go together
+/// (WindowRules.swift:861).
+const ROW_STAGGER: Duration = Duration::from_millis(35);
 
 thread_local! {
-    /// How many times each row or zone has left a main-window list.
-    static ROW_LEAVES: RefCell<HashMap<SharedString, u64>> = RefCell::default();
+    /// How many times each row or zone has left a list, by list and ID.
+    static ROW_LEAVES: RefCell<HashMap<(usize, SharedString), u64>> = RefCell::default();
 }
 
 /// A speaker row or zone that eases into and out of a main-window list.
@@ -6037,9 +6066,10 @@ fn eased_rows<T: Eased>(old: &[T], items: Vec<T>) -> (Vec<T>, Vec<SharedString>)
     (rows, left)
 }
 
-/// Syncs a main-window list of speaker rows or zones; while `eased`, by ID
-/// with [`eased_rows`], dropping each one that left once its room has shut.
-fn sync_rows<T: Eased>(model: &Rc<VecModel<T>>, items: Vec<T>, eased: bool) {
+/// Syncs a list of speaker rows or zones; while `eased`, by ID with
+/// [`eased_rows`], dropping each one that left once its room has shut, a
+/// `stagger` later per row for rows that start one after another.
+fn sync_rows<T: Eased>(model: &Rc<VecModel<T>>, items: Vec<T>, eased: bool, stagger: Duration) {
     if !eased {
         sync_model(model, items);
         return;
@@ -6047,10 +6077,11 @@ fn sync_rows<T: Eased>(model: &Rc<VecModel<T>>, items: Vec<T>, eased: bool) {
     let old: Vec<T> = model.iter().collect();
     let (rows, left) = eased_rows(&old, items);
     let came = rows.iter().any(Eased::fresh);
+    let hold = ROW_MOVE + stagger * u32::try_from(rows.len()).unwrap_or(u32::MAX);
     sync_by_id(model, rows);
     if came {
         let model = Rc::clone(model);
-        Timer::single_shot(ROW_MOVE, move || {
+        Timer::single_shot(hold, move || {
             let rows = model
                 .iter()
                 .map(|mut row| {
@@ -6066,21 +6097,22 @@ fn sync_rows<T: Eased>(model: &Rc<VecModel<T>>, items: Vec<T>, eased: bool) {
         return;
     }
     // A row that came back and left again is dropped only by its last leave's timer.
+    let list = Rc::as_ptr(model) as usize;
     let left: Vec<(SharedString, u64)> = ROW_LEAVES.with(|leaves| {
         let mut leaves = leaves.borrow_mut();
         left.into_iter()
             .map(|id| {
-                let leave = leaves.entry(id.clone()).or_default();
+                let leave = leaves.entry((list, id.clone())).or_default();
                 *leave += 1;
                 (id, *leave)
             })
             .collect()
     });
     let model = Rc::clone(model);
-    Timer::single_shot(ROW_MOVE, move || {
+    Timer::single_shot(hold, move || {
         let last = |row: &T| {
             ROW_LEAVES.with(|leaves| {
-                let leave = leaves.borrow().get(row.id()).copied();
+                let leave = leaves.borrow().get(&(list, row.id().clone())).copied();
                 left.iter()
                     .any(|(id, at)| id == row.id() && Some(*at) == leave)
             })
