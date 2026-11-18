@@ -3066,6 +3066,7 @@ mod tests {
         let config = StreamConfig {
             latency_frames: 4_410,
             input_frames: 88_200,
+            ..StreamConfig::default()
         };
         let (mut stream, input) = Stream::new(config, clock, start);
         let slot = FeedSlot::new(input);

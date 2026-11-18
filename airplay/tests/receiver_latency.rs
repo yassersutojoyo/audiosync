@@ -13,11 +13,11 @@ use audiosync_airplay::latency::{
 };
 use audiosync_airplay::sdp::Codec;
 use audiosync_airplay::session::SessionEvent;
-use audiosync_airplay::stream::{SpeakerId, StreamEvent};
+use audiosync_airplay::stream::{SpeakerId, StreamConfig, StreamEvent};
 use common::ap2::{
     Ap2Rig, DATA_PORT, FakeAp2, RECEIVER_CONTROL_PORT, ap2_config, dict, int, plist,
 };
-use common::rig::{Rig, speaker};
+use common::rig::{Host, Rig, speaker};
 use common::{FakeReceiver, Link, config};
 use plist::Value;
 
@@ -482,4 +482,41 @@ fn receiver_latency_false_or_missing_is_zero_without_warning() {
         assert_eq!(latency.receiver_latency_sources.bits(), 0);
     }
     assert!(shortfalls(&rig).is_empty());
+}
+
+// covers: P201
+#[test]
+fn the_first_speaker_waits_for_the_hosts_latency_answer() {
+    // The host takes the first speaker's latency event before its first
+    // sound would have come, or well after: either way the Lf it answers
+    // applies before anything sounds and nothing is flushed.
+    let run = |answer_after: Duration| {
+        let mut rig = Rig::new(StreamConfig {
+            latency_frames: 4_410,
+            host_answers_latency: true,
+            ..StreamConfig::default()
+        });
+        rig.host = Some(Host::new(0.0));
+        rig.run_for(Duration::from_millis(200));
+        let id = rig.add(speaker(1, Codec::Alac));
+        rig.run_for(answer_after);
+        rig.stream.set_latency(6_615, rig.now);
+        rig.drain();
+        rig.run_for(Duration::from_secs(1));
+        let (packet, _, at) = *rig.first_sounds(id).last().expect("first sound");
+        let heard_ms = ((at - rig.c((packet * 352) as i64)) * 1000.0).round();
+        (
+            rig.stream.latency_frames(),
+            rig.stream.pending_latency_frames(),
+            flush_count(&rig, id),
+            heard_ms,
+        )
+    };
+    let early = run(Duration::ZERO);
+    assert_eq!(
+        run(Duration::from_millis(300)),
+        early,
+        "answered after first sound"
+    );
+    assert_eq!(early, (6_615, None, 0, 150.0), "answered before");
 }
