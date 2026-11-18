@@ -10935,6 +10935,42 @@ do {
           "status line: an output with timed callbacks carries its device anchor", line)
 }
 
+// MARK: Bluetooth probes: property changes, anchor steps and IO pacing as debug lines (BluetoothWatch)
+do {
+    let btLine = BluetoothWatch.changeLine(name: "Soundcore", property: "device latency", old: 6144, new: 8192, frames: true)
+    check(btLine == "[AudioSync] \"Soundcore\" device latency 6144 -> 8192 frames",
+          "Bluetooth probe: a changed latency reads old -> new in frames", String(describing: btLine))
+    check(BluetoothWatch.changeLine(name: "Soundcore", property: "safety offset", old: 32, new: 32, frames: true) == nil,
+          "Bluetooth probe: an unchanged value writes no line")
+    check(BluetoothWatch.changeLine(name: "Soundcore", property: "data source", old: nil, new: 1, frames: false)
+              == "[AudioSync] \"Soundcore\" data source n/a -> 1",
+          "Bluetooth probe: an unreadable value reads n/a and a count carries no unit")
+    check(BluetoothWatch.anchorStep(previousNs: 5_000_000_000, currentNs: 5_000_500_000) == nil
+              && BluetoothWatch.anchorStep(previousNs: 5_000_000_000, currentNs: 5_150_000_000) == 150_000_000
+              && BluetoothWatch.anchorStep(previousNs: 5_000_000_000, currentNs: 4_997_000_000) == -3_000_000,
+          "Bluetooth probe: an anchor move within 2 ms is drift, beyond it a step either way")
+    check(BluetoothWatch.stepLine(name: "Soundcore", stepNs: 150_000_000) == "[AudioSync] \"Soundcore\" device anchor stepped +150.0 ms",
+          "Bluetooth probe: the step line in ms")
+    // Samples 100 ppm slow move the anchor up by 500 µs over 5 s.
+    let btRate = BluetoothWatch.measuredRate(nominal: 44_100, anchorDeltaNs: 500_000, hostDeltaNs: 5_000_000_000)
+    check(btRate.map { abs($0 - 44_095.59) < 0.01 } == true, "Bluetooth probe: rate from the anchor's move", String(describing: btRate))
+    check(BluetoothWatch.measuredRate(nominal: 44_100, anchorDeltaNs: 0, hostDeltaNs: 0) == nil
+              && BluetoothWatch.measuredRate(nominal: 0, anchorDeltaNs: 0, hostDeltaNs: 5_000_000_000) == nil,
+          "Bluetooth probe: no rate without a span or a nominal rate")
+    let btPacing = BluetoothWatch.pacingLine(name: "Soundcore", nominal: 44_100, measured: btRate, maxIntervalNs: 23_400_000,
+                                             callbacks: 431)
+    check(btPacing == "[AudioSync] \"Soundcore\" IO pacing over 5 s: sample rate vs host clock 44095.59 Hz (-100.0 ppm), "
+              + "longest callback interval 23.4 ms, 431 callbacks",
+          "Bluetooth probe: the pacing line", btPacing)
+    check(BluetoothWatch.pacingLine(name: "Soundcore", nominal: 44_100, measured: nil, maxIntervalNs: 0, callbacks: 1)
+              == "[AudioSync] \"Soundcore\" IO pacing over 5 s: sample rate vs host clock n/a, longest callback interval n/a, 1 callbacks",
+          "Bluetooth probe: the first pacing line has no rate yet")
+    // A stalled output's anchor stands still, which alone would read as +0.0 ppm.
+    check(BluetoothWatch.pacingLine(name: "Soundcore", nominal: 44_100, measured: 44_100, maxIntervalNs: 0, callbacks: 0)
+              == "[AudioSync] \"Soundcore\" IO pacing over 5 s: no callbacks",
+          "Bluetooth probe: a span without callbacks says so instead of a rate")
+}
+
 // MARK: Output stall: a render callback that stops while its device stays alive (OutputStall.swift, S334)
 // covers: S334 (frames against the uptime clock, per output; the reopen, its retries and the debug line)
 do {
