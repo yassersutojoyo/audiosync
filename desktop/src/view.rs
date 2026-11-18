@@ -4752,6 +4752,7 @@ impl App {
         #[cfg(all(windows, not(test)))]
         crate::volume_keys::show_level(
             level,
+            volume_waves(level),
             self.shows_dark(),
             &self.main.global::<Strings>().get_volume_popup_name(),
             &self
@@ -15201,7 +15202,7 @@ pub(crate) mod tests {
             "Enter"
         );
         tab(window, 1);
-        assert!(focused.get(), "Download and Install is the last stop");
+        assert!(focused.get(), "Install Update is the last stop");
         press(window, " ");
         assert_eq!(pressed.borrow().last(), Some(&UpdateButton::Download));
     }
@@ -16473,8 +16474,8 @@ pub(crate) mod tests {
         assert!(height <= 300.3);
     }
 
-    /// The update notice's three buttons stack in the 340 px flyout, Not Now
-    /// on top and Download and Install at the bottom, on one left edge and
+    /// The update notice's three buttons stack in the 340 px flyout, Remind Me
+    /// Later on top and Install Update at the bottom, on one left edge and
     /// within the notice's text column, measured on a one-button notice
     /// whose text fills that column; at 200% scaling too.
     // covers: S308
@@ -16523,7 +16524,7 @@ pub(crate) mod tests {
                 restart.1 < column.1,
                 "a lone button keeps its label's width: {restart:?}, column {column:?}"
             );
-            let stack = ["Not Now", "Skip This Version", "Download and Install"]
+            let stack = ["Remind Me Later", "Skip This Version", "Install Update"]
                 .map(|label| (label, edges(available(), label)));
             for (label, (left, right, _)) in stack {
                 assert!(
@@ -16537,11 +16538,11 @@ pub(crate) mod tests {
                 stack.windows(2).all(|pair| pair[0].1.2 < pair[1].1.2),
                 "top to bottom: {stack:?}"
             );
-            // The flyout grows to show Download and Install, the last button.
+            // The flyout grows to show Install Update, the last button.
             let tall = app.fit_flyout(1000.0);
-            let last = ElementHandle::find_by_accessible_label(&app.flyout, "Download and Install")
+            let last = ElementHandle::find_by_accessible_label(&app.flyout, "Install Update")
                 .next()
-                .expect("Download and Install is in the flyout");
+                .expect("Install Update is in the flyout");
             let bottom = last.absolute_position().y + last.size().height;
             assert!(bottom <= tall, "{bottom} below {tall}");
             edges(installed(), &text);

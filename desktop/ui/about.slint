@@ -7,7 +7,7 @@
 import { AboutSlint, VerticalBox } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { BrandMark, DialogButton, Fluent, Wordmark } from "widgets.slint";
+import { DialogButton, Fluent } from "widgets.slint";
 
 export component AboutDialog inherits Dialog {
     in property <string> version;
@@ -52,20 +52,21 @@ export component AboutDialog inherits Dialog {
                 alignment: center;
                 padding-top: 8px;
 
-                BrandMark {
-                    running: true;
+                // As the Mac's standard About panel: the app icon, then the name.
+                Image {
+                    source: @image-url("../res/audiosync-tile-256.png");
                     width: 48px;
                     height: 48px;
+                    accessible-role: none;
                 }
             }
 
-            // Narrator reads the wordmark as "AudioSync".
-            HorizontalLayout {
-                alignment: center;
-
-                Wordmark {
-                    size: 24px;
-                }
+            Text {
+                text: Strings.app-name;
+                font-weight: 700;
+                font-size: 24px;
+                color: Tokens.text;
+                horizontal-alignment: center;
             }
 
             Text {

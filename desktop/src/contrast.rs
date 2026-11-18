@@ -1960,8 +1960,8 @@ fn the_updater_notice_uses_strings_and_tokens() {
     }
     let strings = include_str!("../ui/strings.slint");
     for label in [
-        "Download and Install",
-        "Not Now",
+        "Install Update",
+        "Remind Me Later",
         "Skip This Version",
         "Cancel",
         "Try Again",

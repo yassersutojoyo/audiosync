@@ -2122,7 +2122,7 @@ pub mod tests {
         }
     }
 
-    /// Download and Install over `files`, then a quit during step 4's
+    /// Install Update over `files`, then a quit during step 4's
     /// first retry wait; the updater and what the quit returned.
     fn quit_during_swap(name: &str, files: ScannedNew) -> (Updater, bool) {
         let (entered_sender, entered) = mpsc::channel();
