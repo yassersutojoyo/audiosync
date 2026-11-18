@@ -5949,17 +5949,25 @@ export component NoticeStack inherits VerticalLayout {
                     }
                 }
 
+                // The Mac's 16 pt dismiss button (MenuBar.swift:2822-2834); the
+                // 32 px hit area reaches 8 px past that slot on each side.
                 VerticalLayout {
                     alignment: start;
-                    dismiss := IconButton {
-                        glyph: Glyphs.dismiss;
-                        glyph-size: 12px;
-                        label: Strings.dismiss-notice(notice.title);
-                        clicked => {
-                            root.dismissed(notice.id);
-                        }
-                        focus-changed(focused) => {
-                            row.dismiss-focused = focused;
+                    Rectangle {
+                        width: 16px;
+                        height: 16px;
+                        dismiss := IconButton {
+                            x: -8px;
+                            y: -8px;
+                            glyph: Glyphs.dismiss;
+                            glyph-size: 12px;
+                            label: Strings.dismiss-notice(notice.title);
+                            clicked => {
+                                root.dismissed(notice.id);
+                            }
+                            focus-changed(focused) => {
+                                row.dismiss-focused = focused;
+                            }
                         }
                     }
                 }
