@@ -8,7 +8,10 @@
 #     log says it gets no copy (S470);
 #   volume keys: a volume set on the default as the taskbar does it stays
 #     while streaming, and the stream goes on (S192);
-#   muted output: the System slider on a muted default unmutes it (S197);
+#   Volume Mixer: with two endpoints, the source app's and AudioSync's mixer
+#     sliders each change what AudioSync's output plays;
+#   muted output: the System slider on a muted default unmutes it (S197), on
+#     a ROOT device only after its stored enumerator name is set to HDAUDIO;
 #   restore: with a second endpoint added, the default the app moved and every
 #     output's volume and mute are as found after a kill and an uninstall (S474).
 # Without an endpoint after the install it prints why and exits 0 with
@@ -66,6 +69,47 @@ interface IAudioEndpointVolume {
   [PreserveSig] int GetChannelVolumeLevelScalar(uint channel, out float level);
   [PreserveSig] int SetMute([MarshalAs(UnmanagedType.Bool)] bool mute, ref Guid context);
   [PreserveSig] int GetMute([MarshalAs(UnmanagedType.Bool)] out bool mute);
+}
+
+[ComImport, Guid("C02216F6-8C67-4B5B-9D00-D008E73E0064"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IAudioMeterInformation {
+  [PreserveSig] int GetPeakValue(out float peak);
+}
+
+// audiopolicy.h's order; slots never called take IntPtr.
+[ComImport, Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IAudioSessionManager2 {
+  [PreserveSig] int GetAudioSessionControl(IntPtr group, uint flags, out IntPtr control);
+  [PreserveSig] int GetSimpleAudioVolume(IntPtr group, uint flags, out IntPtr volume);
+  [PreserveSig] int GetSessionEnumerator(out IAudioSessionEnumerator sessions);
+}
+
+[ComImport, Guid("E2F5BB11-0570-40CA-ACDD-3AA01277DEE8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IAudioSessionEnumerator {
+  [PreserveSig] int GetCount(out int count);
+  [PreserveSig] int GetSession(int index, [MarshalAs(UnmanagedType.IUnknown)] out object session);
+}
+
+[ComImport, Guid("bfb7ff88-7239-4fc9-8fa2-07c950be9c6d"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IAudioSessionControl2 {
+  [PreserveSig] int GetState(out int state);
+  [PreserveSig] int GetDisplayName(out IntPtr name);
+  [PreserveSig] int SetDisplayName(IntPtr name, IntPtr context);
+  [PreserveSig] int GetIconPath(out IntPtr path);
+  [PreserveSig] int SetIconPath(IntPtr path, IntPtr context);
+  [PreserveSig] int GetGroupingParam(out Guid group);
+  [PreserveSig] int SetGroupingParam(IntPtr group, IntPtr context);
+  [PreserveSig] int RegisterAudioSessionNotification(IntPtr notify);
+  [PreserveSig] int UnregisterAudioSessionNotification(IntPtr notify);
+  [PreserveSig] int GetSessionIdentifier(out IntPtr id);
+  [PreserveSig] int GetSessionInstanceIdentifier(out IntPtr id);
+  [PreserveSig] int GetProcessId(out uint pid);
+}
+
+[ComImport, Guid("87CE5498-68D6-44E5-9215-6F24A5E01EE9"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface ISimpleAudioVolume {
+  [PreserveSig] int SetMasterVolume(float level, ref Guid context);
+  [PreserveSig] int GetMasterVolume(out float level);
 }
 
 public static class Endpoints {
@@ -131,6 +175,76 @@ public static class Endpoints {
 
   public static void SetMute(bool mute) {
     Marshal.ThrowExceptionForHR(Volume().SetMute(mute, ref Writer));
+  }
+
+  static IMMDevice Device(string id) {
+    IMMDeviceCollection devices;
+    Marshal.ThrowExceptionForHR(Enumerator().EnumAudioEndpoints(Render, Active, out devices));
+    uint count;
+    Marshal.ThrowExceptionForHR(devices.GetCount(out count));
+    for (uint i = 0; i < count; i++) {
+      IMMDevice device;
+      string each;
+      Marshal.ThrowExceptionForHR(devices.Item(i, out device));
+      if (device.GetId(out each) == 0 && each == id) return device;
+    }
+    throw new ArgumentException("no active output " + id);
+  }
+
+  // The first active output that isn't the console default, or null.
+  public static string NonDefault() {
+    string found = Default(0);
+    IMMDeviceCollection devices;
+    Marshal.ThrowExceptionForHR(Enumerator().EnumAudioEndpoints(Render, Active, out devices));
+    uint count;
+    Marshal.ThrowExceptionForHR(devices.GetCount(out count));
+    for (uint i = 0; i < count; i++) {
+      IMMDevice device;
+      string id;
+      Marshal.ThrowExceptionForHR(devices.Item(i, out device));
+      if (device.GetId(out id) == 0 && id != found) return id;
+    }
+    return null;
+  }
+
+  // The highest peak output `id` plays over `ms`, as the Volume Mixer's meter shows it.
+  public static float Peak(string id, int ms) {
+    Guid iid = typeof(IAudioMeterInformation).GUID;
+    object face;
+    Marshal.ThrowExceptionForHR(Device(id).Activate(ref iid, 23, IntPtr.Zero, out face));
+    var meter = (IAudioMeterInformation)face;
+    float highest = 0;
+    for (int waited = 0; waited < ms; waited += 20) {
+      float peak;
+      if (meter.GetPeakValue(out peak) == 0 && peak > highest) highest = peak;
+      Thread.Sleep(20);
+    }
+    return highest;
+  }
+
+  // Sets, as the Volume Mixer's slider for an app does, the volume of every
+  // session of the processes `pids` on output `id` (level < 0 only reads);
+  // the last session's volume, -1 when there is none.
+  public static float SessionVolume(string id, int[] pids, float level) {
+    Guid iid = typeof(IAudioSessionManager2).GUID;
+    object face;
+    Marshal.ThrowExceptionForHR(Device(id).Activate(ref iid, 23, IntPtr.Zero, out face));
+    IAudioSessionEnumerator sessions;
+    Marshal.ThrowExceptionForHR(((IAudioSessionManager2)face).GetSessionEnumerator(out sessions));
+    int count;
+    Marshal.ThrowExceptionForHR(sessions.GetCount(out count));
+    float last = -1;
+    for (int i = 0; i < count; i++) {
+      object session;
+      Marshal.ThrowExceptionForHR(sessions.GetSession(i, out session));
+      uint pid;
+      ((IAudioSessionControl2)session).GetProcessId(out pid);
+      if (Array.IndexOf(pids, (int)pid) < 0) continue;
+      var volume = (ISimpleAudioVolume)session;
+      if (level >= 0) Marshal.ThrowExceptionForHR(volume.SetMasterVolume(level, ref Writer));
+      Marshal.ThrowExceptionForHR(volume.GetMasterVolume(out last));
+    }
+    return last;
   }
 
   // Every active output as "<id> <level>% muted|unmuted", one per line.
@@ -273,6 +387,36 @@ $default = Get-Defaults
 "default output: $default" | Tee-Object -FilePath "$Work/env.txt" -Append
 if ($count -ne 1) { Not-Tried "$count active output endpoints after installing the driver (one needed)" }
 
+# For A1.8 on a ROOT device: the endpoint's stored enumerator name
+# (PKEY_Device_EnumeratorName) set to HDAUDIO, as on a PC's own sound card,
+# so AudioSync lists it as built-in and This PC gets its System slider. The
+# key belongs to SYSTEM, so a SYSTEM task writes it.
+$script:patched = $false
+if (-not $script:builtIn) {
+  $guid = [Endpoints]::Default(0) -replace '^.*\.', ''
+  $key = "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render\$guid\Properties"
+  $name = '{a45c254e-df1c-4efd-8020-67d146a850e0},24'
+  $read = { (reg query $key /v $name 2>$null | Select-String 'REG_') -replace '\s+', ' ' }
+  "enumerator name before: $(& $read)" | Tee-Object -FilePath "$Work/env.txt" -Append
+  $cmd = Join-Path $fixture 'enumerator.cmd'
+  "reg add `"$key`" /v `"$name`" /t REG_SZ /d HDAUDIO /f > `"$fixture\enumerator.txt`" 2>&1" | Set-Content -Encoding ascii $cmd
+  $task = 'AudioSyncCI-enumerator'
+  Register-ScheduledTask -TaskName $task -Force -User 'SYSTEM' -RunLevel Highest `
+    -Action (New-ScheduledTaskAction -Execute 'cmd.exe' -Argument "/c `"$cmd`"") | Out-Null
+  Start-ScheduledTask -TaskName $task
+  for ($i = 0; $i -lt 30 -and (Get-ScheduledTask -TaskName $task).State -eq 'Running'; $i++) { Start-Sleep -Seconds 1 }
+  Start-Sleep -Seconds 1
+  "reg add as SYSTEM: $(Get-Content "$fixture\enumerator.txt" -ErrorAction SilentlyContinue)" | Tee-Object -FilePath "$Work/env.txt" -Append
+  Restart-Service -Name AudioEndpointBuilder -Force
+  Start-Service -Name Audiosrv
+  $count = 0
+  for ($i = 0; $i -lt 60 -and $count -eq 0; $i++) { Start-Sleep -Seconds 1; $count = [Endpoints]::ActiveCount() }
+  $after = & $read
+  "enumerator name after the audio services restart: $after; active output endpoints: $count" | Tee-Object -FilePath "$Work/env.txt" -Append
+  $script:patched = "$after" -match 'HDAUDIO'
+  if ($count -ne 1) { Not-Tried "$count active output endpoints after the audio services restart (one needed)" }
+}
+
 [Endpoints]::SetMute($false)
 [Endpoints]::SetLevel(0.5)
 
@@ -361,7 +505,9 @@ Check 'A1.2' ((Test-Alive) -and (Test-On $streaming)) 'the stream goes on after 
 (Get-LogLines 'device volume: 30%') | Select-Object -First 2 | ForEach-Object { "log: $($_.Line)" }
 
 # A1.8: the System slider on the muted default unmutes it.
-if (-not $script:builtIn) {
+Select-String -Path $log -Pattern 'outputs listed' -SimpleMatch -Context 0, 2 -ErrorAction SilentlyContinue |
+  Select-Object -First 1 | ForEach-Object { "log: $($_.Line) $($_.Context.PostContext -join ' ')" }
+if (-not ($script:builtIn -or $script:patched)) {
   "NOT TRIED A1.8: the endpoint is a ROOT device, listed as virtual, so This PC shows no System slider" |
     Tee-Object -FilePath "$Work/result.txt" -Append
 } else {
@@ -374,7 +520,12 @@ if (-not $script:builtIn) {
   }
   $sliderType = New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, [System.Windows.Automation.ControlType]::Slider)
   $slider = Find-All $sliderType | Where-Object { $_.Current.Name -like 'Windows volume of *' } | Select-Object -First 1
-  Check 'A1.8' ([bool]$slider) "the This PC row's System slider is there (opener found: $([bool]$opener))"
+  if (-not $slider -and -not $script:builtIn) {
+    "NOT TRIED A1.8: with the enumerator name set to HDAUDIO, This PC still shows no System slider (opener found: $([bool]$opener))" |
+      Tee-Object -FilePath "$Work/result.txt" -Append
+  } else {
+    Check 'A1.8' ([bool]$slider) "the This PC row's System slider is there (opener found: $([bool]$opener))"
+  }
   if ($slider) {
     $script:main.SetFocus()
     $slider.SetFocus()
@@ -420,6 +571,45 @@ function Start-MovedStream([string] $Before) {
   $false
 }
 
+# A1.2, the Volume Mixer: with the default moved to the silent endpoint, a
+# tone from another process plays there and AudioSync carries it to the other
+# endpoint; each app's mixer slider must change what that endpoint plays.
+function Test-Mixer {
+  $rate = 48000
+  $wav = Join-Path $fixture 'tone.wav'
+  $w = New-Object IO.BinaryWriter([IO.File]::Create($wav))
+  $ascii = [Text.Encoding]::ASCII
+  $w.Write($ascii.GetBytes('RIFF')); $w.Write([int](36 + 2 * $rate)); $w.Write($ascii.GetBytes('WAVEfmt '))
+  $w.Write([int]16); $w.Write([int16]1); $w.Write([int16]1); $w.Write([int]$rate); $w.Write([int](2 * $rate))
+  $w.Write([int16]2); $w.Write([int16]16); $w.Write($ascii.GetBytes('data')); $w.Write([int](2 * $rate))
+  for ($i = 0; $i -lt $rate; $i++) { $w.Write([int16](16384 * [math]::Sin(2 * [math]::PI * 440 * $i / $rate))) }
+  $w.Close()
+  $tone = Start-Process powershell.exe -PassThru -WindowStyle Hidden -ArgumentList '-NoProfile', '-Command',
+    "(New-Object Media.SoundPlayer '$wav').PlayLooping(); Start-Sleep -Seconds 120"
+  Start-Sleep -Seconds 6
+  $source = [Endpoints]::Default(0)
+  $out = [Endpoints]::NonDefault()
+  $apps = [int[]]@(Get-Process audiosync | ForEach-Object Id)
+  $full = [Endpoints]::Peak($out, 2000)
+  $toneLevel = [Endpoints]::SessionVolume($source, [int[]]@($tone.Id), 0.25)
+  Start-Sleep -Seconds 4
+  $toneLow = [Endpoints]::Peak($out, 2000)
+  [Endpoints]::SessionVolume($source, [int[]]@($tone.Id), 1) | Out-Null
+  $ownLevel = [Endpoints]::SessionVolume($out, $apps, 0.25)
+  Start-Sleep -Seconds 4
+  $ownLow = [Endpoints]::Peak($out, 2000)
+  $ownStays = [Endpoints]::SessionVolume($out, $apps, -1)
+  [Endpoints]::SessionVolume($out, $apps, 1) | Out-Null
+  Stop-Process -Id $tone.Id -Force
+  $r = { param($v) [math]::Round($v, 3) }
+  Check 'A1.2' ($full -gt 0.02) "the tone on the default reaches AudioSync's output $out (peak $(& $r $full))"
+  Check 'A1.2' ($toneLevel -ge 0 -and $toneLow -lt $full * 0.5) "the source's mixer slider at 25% lowers what AudioSync plays (session $(& $r $toneLevel), peak $(& $r $full) to $(& $r $toneLow))"
+  Check 'A1.2' ($ownLevel -ge 0 -and $ownLow -lt $full * 0.5) "AudioSync's own mixer slider at 25% lowers its output (session $(& $r $ownLevel), peak $(& $r $full) to $(& $r $ownLow))"
+  Check 'A1.2' ([math]::Abs($ownStays - 0.25) -lt 0.005) "AudioSync leaves its mixer slider where it was put (reads $(& $r $ownStays) after 4 s)"
+  $on = Get-Toggles | Where-Object { $_.Current.Name -eq 'Streaming' } | Select-Object -First 1
+  Check 'A1.2' ((Test-Alive) -and $on -and (Test-On $on)) 'the stream goes on after the mixer changes'
+}
+
 & $devcon install (Join-Path $driver 'Scream.inf') '*Scream' | Tee-Object -FilePath "$Work/env.txt" -Append
 $count = 0
 for ($i = 0; $i -lt 60 -and $count -ne 2; $i++) { Start-Sleep -Seconds 1; $count = [Endpoints]::ActiveCount() }
@@ -437,6 +627,9 @@ if ($count -ne 2) {
     $copies = @(Get-Process audiosync -ErrorAction SilentlyContinue).Count
     "A1.1 $leg, while streaming: $(Get-Defaults); moved: $moved; audiosync processes: $copies" | Tee-Object -FilePath "$Work/result.txt" -Append
     if ($leg -eq 'kill') {
+      if ($moved) {
+        try { Test-Mixer } catch { Check 'A1.2' $false "the mixer leg stopped: $($_.Exception.Message)" }
+      } else { "NOT TRIED A1.2 mixer: the app moved no default" | Tee-Object -FilePath "$Work/result.txt" -Append }
       Stop-Process -Id $script:app.Id -Force
     } else {
       Start-Process -FilePath (Join-Path $dir 'unins000.exe') -Wait -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
