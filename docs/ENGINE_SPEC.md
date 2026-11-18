@@ -5759,7 +5759,7 @@ Tests in `desktop/src/view.rs` unless named.
 | a_window_saved_before_the_slim_speaker_list_opens_at_the_default_width_once (`desktop/src/settings.rs`) | S420 |
 | a_long_zone_name_shows_in_full_in_its_tooltip (`desktop/src/view.rs`) | S420 |
 | a_long_in_zones_name_shows_in_full_in_its_tooltip (`desktop/src/view.rs`) | S420 |
-| a_zone_count_that_fits_shows_no_tooltip_but_a_zone_name_has_its_rename_hint (`desktop/src/view.rs`) | S420 |
+| a_zone_count_or_name_that_fits_shows_no_tooltip (`desktop/src/view.rs`) | S420 |
 | a_cut_pair_line_shows_in_full_in_its_tooltip (`desktop/src/view.rs`) | S420 |
 | a_pair_line_that_fits_shows_no_tooltip (`desktop/src/view.rs`) | S420 |
 | a_long_zone_name_leaves_the_in_zones_name_room (`desktop/src/view.rs`) | S420 |
