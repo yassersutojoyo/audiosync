@@ -320,7 +320,10 @@ $group = New-Object System.Windows.Automation.AndCondition(
   (New-Object System.Windows.Automation.PropertyCondition($A::NameProperty, $calibrate)),
   (New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, [System.Windows.Automation.ControlType]::Group)))
 $sheetShown = { $null -ne $script:main.FindFirst($Scope::Descendants, $group) }
-if ((Invoke-Named $calibrate) -and (Wait-Until $sheetShown)) {
+[void](Wait-Until { ($script:button = Find-Named $calibrate) -ne $null } 8)
+if ($script:button -and -not $script:button.Current.IsEnabled) {
+  $script:results.Add('NOT SET UP | Calibrate sheet | Escape | Calibrate All is greyed on virtual-only outputs; Escape closing the sheet is covered by desktop/src/view/parity_calibrate.rs:189-192')
+} elseif ((Invoke-Named $calibrate) -and (Wait-Until $sheetShown)) {
   Save-Shot $script:main 'calibrate-sheet'
   Focus-Window $script:main
   Press 'Escape'
