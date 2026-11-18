@@ -13635,6 +13635,39 @@ pub(crate) mod tests {
         assert_eq!(gap, 4.0, "the fix follows the hint");
     }
 
+    /// The device volume hint reads where the Mac's does: its text 13 pt
+    /// right of the name (a 9 pt symbol, then 4, DeviceVolumeViews.swift:20)
+    /// and centred 27.5 pt under the slider's top (the Mac's 16 pt slider,
+    /// the row's 5 pt line gap, MainWindow.swift:2352, and a 13 pt line).
+    #[test]
+    fn the_device_volume_hint_sits_where_the_macs_does() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = narrow_app(MockBackend::new());
+        draw_frames_at(776, 680);
+        let strings = app.main.global::<crate::Strings>();
+        let hint =
+            strings.invoke_device_volume_hint_label("Speakers".into(), DeviceVolumeHint::Low, 13);
+        let hint = ElementHandle::find_by_accessible_label(&app.main, &hint)
+            .max_by(|a, b| a.absolute_position().x.total_cmp(&b.absolute_position().x))
+            .expect("the hint in the speaker list");
+        let (_, top, _, _) = slider_box(&app.main, &strings.invoke_volume_of("Speakers".into()));
+        let name = ElementHandle::find_by_element_id(&app.main, "SpeakerRow::name-label")
+            .filter(|n| n.absolute_position().y < top)
+            .max_by(|a, b| a.absolute_position().y.total_cmp(&b.absolute_position().y))
+            .expect("the row's name");
+        let (x, y) = (hint.absolute_position().x, hint.absolute_position().y);
+        let shift = x - name.absolute_position().x;
+        assert!(
+            (shift - 13.0).abs() < 0.5,
+            "hint text {shift} px right of the name"
+        );
+        let drop = y + hint.size().height / 2.0 - top;
+        assert!(
+            (drop - 27.5).abs() <= 1.0,
+            "hint centred {drop} px under the slider's top"
+        );
+    }
+
     /// A row's options button is the Mac's borderless ellipsis.circle menu
     /// (optionsMenu, MainWindow.swift:2643-2653), 21 × 15 as measured on the
     /// Mac photo, so the delay chip before it sits where the Mac's does.
