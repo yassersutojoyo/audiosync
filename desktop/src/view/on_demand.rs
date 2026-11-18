@@ -312,6 +312,145 @@ mod tests {
         each_window!(freed);
     }
 
+    /// A window adapter that sizes a window as slint's winit backend 1.18
+    /// does: before the native window exists it holds the layout's minimum
+    /// size, and the native window, made later in the event loop, takes the
+    /// preferred size unless `set_size` was called.
+    struct WinitLike {
+        window: slint::Window,
+        renderer: slint::platform::software_renderer::SoftwareRenderer,
+        size: std::cell::Cell<slint::LogicalSize>,
+        preferred: std::cell::Cell<slint::LogicalSize>,
+        explicit: std::cell::Cell<bool>,
+        pending: std::cell::Cell<bool>,
+    }
+
+    thread_local! {
+        static WINIT_LIKE: std::cell::RefCell<Vec<std::rc::Weak<WinitLike>>> =
+            std::cell::RefCell::default();
+    }
+
+    impl WinitLike {
+        fn resize(&self, size: slint::LogicalSize) {
+            self.size.set(size);
+            self.window
+                .dispatch_event(slint::platform::WindowEvent::Resized { size });
+        }
+
+        /// The event loop's turn: makes the native windows shown since.
+        fn make_native_windows() {
+            let windows: Vec<_> = WINIT_LIKE.with(|all| {
+                all.borrow()
+                    .iter()
+                    .filter_map(std::rc::Weak::upgrade)
+                    .collect()
+            });
+            for adapter in windows {
+                if adapter.pending.replace(false) && !adapter.explicit.get() {
+                    adapter.resize(adapter.preferred.get());
+                }
+            }
+        }
+    }
+
+    impl slint::platform::WindowAdapter for WinitLike {
+        fn window(&self) -> &slint::Window {
+            &self.window
+        }
+
+        fn size(&self) -> PhysicalSize {
+            self.size.get().to_physical(1.0)
+        }
+
+        fn set_size(&self, size: slint::WindowSize) {
+            self.explicit.set(true);
+            self.resize(size.to_logical(1.0));
+        }
+
+        fn set_visible(&self, visible: bool) -> Result<(), slint::PlatformError> {
+            self.pending.set(visible);
+            Ok(())
+        }
+
+        fn renderer(&self) -> &dyn slint::platform::Renderer {
+            &self.renderer
+        }
+
+        fn update_window_properties(&self, properties: slint::platform::WindowProperties<'_>) {
+            let constraints = properties.layout_constraints();
+            self.preferred.set(constraints.preferred);
+            let mut size = self.size.get();
+            if let Some(min) = constraints.min {
+                size.width = size.width.max(min.width);
+                size.height = size.height.max(min.height);
+            }
+            if let Some(max) = constraints.max {
+                size.width = size.width.min(max.width);
+                size.height = size.height.min(max.height);
+            }
+            if size != self.size.get() {
+                self.resize(size);
+            }
+        }
+    }
+
+    struct WinitLikePlatform;
+
+    impl slint::platform::Platform for WinitLikePlatform {
+        fn create_window_adapter(
+            &self,
+        ) -> Result<std::rc::Rc<dyn slint::platform::WindowAdapter>, slint::PlatformError> {
+            let adapter = std::rc::Rc::new_cyclic(|me: &std::rc::Weak<WinitLike>| WinitLike {
+                window: slint::Window::new(me.clone()),
+                renderer: slint::platform::software_renderer::SoftwareRenderer::new(),
+                size: std::cell::Cell::default(),
+                preferred: std::cell::Cell::default(),
+                explicit: std::cell::Cell::new(false),
+                pending: std::cell::Cell::new(false),
+            });
+            WINIT_LIKE.with(|all| all.borrow_mut().push(std::rc::Rc::downgrade(&adapter)));
+            Ok(adapter)
+        }
+    }
+
+    /// The PIN dialog fitted its height before its native window existed,
+    /// at the layout's minimum width it held then: it opened 141 px wide,
+    /// its message on 6 lines.
+    #[test]
+    fn the_pin_dialog_opens_at_its_380_px_width() {
+        slint::platform::set_platform(Box::new(WinitLikePlatform)).expect("a fresh test thread");
+        let app = app_over(MockBackend::new());
+        app.preview_pin(false);
+        WinitLike::make_native_windows();
+        let window = app.pin_dialog();
+        assert_eq!(window.window().size().width, 380);
+    }
+
+    /// Every window built on open takes the width its .slint file declares.
+    #[test]
+    fn each_window_built_on_open_opens_at_its_declared_width() {
+        slint::platform::set_platform(Box::new(WinitLikePlatform)).expect("a fresh test thread");
+        let app = app_over(MockBackend::new());
+        macro_rules! opens_at {
+            ($name:ident, $width:expr) => {
+                let window = app.$name();
+                window.show().expect("the window shows");
+                WinitLike::make_native_windows();
+                assert_eq!(window.window().size().width, $width, stringify!($name));
+            };
+        }
+        opens_at!(equalizer, 520);
+        opens_at!(zone_dialog, 380);
+        opens_at!(pin_dialog, 380);
+        opens_at!(password_dialog, 380);
+        opens_at!(about, 360);
+        opens_at!(guide, 460);
+        opens_at!(help, 640);
+        opens_at!(remote_window, 460);
+        opens_at!(setup, 480);
+        opens_at!(settings, 460);
+    }
+
     #[test]
     fn web_remote_keeps_its_phone_choice_over_a_rebuild() {
         let app = app_over(MockBackend::new());
