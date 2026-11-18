@@ -83,6 +83,8 @@ mod parity_rest;
 #[cfg(test)]
 mod parity_screens;
 #[cfg(test)]
+mod parity_theme_text;
+#[cfg(test)]
 mod parity_tray;
 #[cfg(test)]
 mod parity_zones;
@@ -20522,7 +20524,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn source_notices_agree_with_several_apps_and_lowercase_all_apps_except_mid_sentence() {
+    fn source_notices_agree_with_several_apps_and_name_all_apps_except_as_the_mac() {
         let app = app_over(MockBackend::new());
         let strings = app.strings();
         let several = NoticeMessage::SourceNotRunning {
@@ -20544,11 +20546,11 @@ pub(crate) mod tests {
         };
         assert!(
             notice_text(&strings, &refused)
-                .starts_with("AudioSync can't capture all apps except Chrome without")
+                .starts_with("AudioSync can't capture All Apps Except Chrome without")
         );
         assert_eq!(
             notice_title(&strings, &refused),
-            "can't capture all apps except Chrome"
+            "can't capture All Apps Except Chrome"
         );
     }
 
