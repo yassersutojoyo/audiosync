@@ -389,3 +389,13 @@ fn the_device_volume_fix_reads_in_the_text_colour() {
     // The Mac's .primary (DeviceVolumeViews.swift:34), not the link teal.
     assert!(fix.contains("text-color: Tokens.text;"), "{fix}");
 }
+
+#[test]
+fn the_tray_panels_empty_note_is_set_at_the_macs_subheadline() {
+    let source = include_str!("../../ui/flyout.slint").replace("\r\n", "\n");
+    let note = &source[source.find("none-note := HorizontalLayout").expect("the note")..];
+    let text = &note[note.find("SecondaryText {").unwrap()..];
+    let text = &text[..text.find('}').unwrap()];
+    // The Mac panel's .subheadline (MenuBar.swift:1865), not the caption size.
+    assert!(text.contains("font-size: Tokens.font-size-subheadline;"), "{text}");
+}
