@@ -97,8 +97,8 @@ export global Fluent {
     // A 1 px edge that sets a card off a light background.
     out property <brush> stroke: Tokens.dark ? Tokens.separator : #0000001a;
     // The main window: white on light, the Mac's system window color on dark
-    // (#323232, Brand.swift:17-21).
-    out property <color> main-window: Tokens.dark ? #323232 : #ffffff;
+    // as its photos show it (#2b2b29, MainWindow.swift:32-36).
+    out property <color> main-window: Tokens.dark ? #2b2b2b : #ffffff;
     // The style's slider thumb and its edge, for a slider AudioSync draws itself.
     out property <color> thumb: Tokens.dark ? #454545 : #ffffff;
     out property <color> thumb-edge: Tokens.dark ? #ffffff17 : #00000029;
@@ -1936,6 +1936,18 @@ export component LevelSlider inherits Rectangle {
         drop-shadow-blur: root.small && !Tokens.dark ? 3px : 1.5px;
         drop-shadow-offset-y: root.small && !Tokens.dark ? 1px : 0.5px;
         drop-shadow-color: (root.small && !Tokens.dark ? #00000033 : #0000004d).transparentize(root.dim);
+
+        // The Mac's small knob on dark has a light top edge, 1 device px at 2x:
+        // #ad over its #95 fill, #54 over #46 idle (its dark photos, 18 Nov).
+        if root.small && Tokens.dark: Path {
+            width: 100%;
+            height: 100%;
+            viewbox-width: 16;
+            viewbox-height: 16;
+            commands: "M8 0 A8 8 0 1 1 8 16 A8 8 0 1 1 8 0 Z M8 1 A7.5 7.5 0 1 1 8 16 A7.5 7.5 0 1 1 8 1 Z";
+            fill-rule: evenodd;
+            fill: #ffffff3a.mix(#ffffff13, 1 - root.dim);
+        }
     }
 
     touch := TouchArea {
