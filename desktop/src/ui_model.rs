@@ -3392,6 +3392,24 @@ mod tests {
         assert_eq!(state.speaker_state(&kitchen), SpeakerState::Off);
     }
 
+    // covers: S223
+    #[test]
+    fn a_code_prompt_shows_on_the_row_with_streaming_off() {
+        let mut state = MockBackend::new().snapshot();
+        state.running = false;
+        let mut kitchen = state.speaker("airplay:kitchen").unwrap().clone();
+        for waiting in [Waiting::ForPassword, Waiting::ForPin] {
+            kitchen.waiting = Some(waiting);
+            assert_eq!(
+                state.speaker_state(&kitchen),
+                SpeakerState::Waiting(waiting),
+                "the Mac row note names the prompt whether or not it streams"
+            );
+        }
+        kitchen.waiting = Some(Waiting::Reconnecting);
+        assert_eq!(state.speaker_state(&kitchen), SpeakerState::WillPlay);
+    }
+
     // covers: S257
     #[test]
     fn a_row_click_turns_off_a_will_play_speaker_that_cant_be_switched_on() {
