@@ -2286,7 +2286,9 @@ impl App {
             Appearance::Light => crate::Appearance::Light,
             Appearance::Dark => crate::Appearance::Dark,
         });
-        self.settings().set_appearance(self.main.get_appearance());
+        if let Some(settings) = self.settings.built() {
+            settings.set_appearance(self.main.get_appearance());
+        }
         if appearance == Appearance::System && !self.themed_by_hand.get() {
             return;
         }

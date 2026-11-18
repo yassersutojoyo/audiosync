@@ -107,8 +107,10 @@ impl App {
 
     /// Shows Show How in the Guide only while it has a guide to open.
     pub(super) fn refresh_help(&self, state: &AppState) {
-        self.help()
-            .set_show_how_shown(guide::notice_with_guide(&state.notices).is_some());
+        let Some(help) = self.help.built() else {
+            return;
+        };
+        help.set_show_how_shown(guide::notice_with_guide(&state.notices).is_some());
     }
 }
 

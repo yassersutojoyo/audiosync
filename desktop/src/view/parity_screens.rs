@@ -255,9 +255,12 @@ fn closing_the_equalizer_drops_a_curve_name_being_typed() {
         assert!(!eq_window.get_naming_curve(), "the field is gone");
         assert!(app.snapshot().equalizer_curves.is_empty(), "nothing saved");
     }
-    eq_window.set_naming_curve(true);
+    app.equalizer().set_naming_curve(true);
     app.show_equalizer();
-    assert!(!eq_window.get_naming_curve(), "it reopens with the menu");
+    assert!(
+        !app.equalizer().get_naming_curve(),
+        "it reopens with the menu"
+    );
 }
 
 /// The main window's left column takes the Mac's spacing: the Now Playing

@@ -176,6 +176,7 @@ impl App {
         window.on_exit_requested(quit);
         menu_keys!(self, &window);
         self.connect_help();
+        self.refresh_help(&self.snapshot());
     }
 
     fn wire_remote(self: &Rc<Self>) {
