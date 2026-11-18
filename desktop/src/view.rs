@@ -69,6 +69,8 @@ mod layar_shots;
 #[cfg(test)]
 mod parity_calibrate;
 #[cfg(test)]
+mod parity_eq_guide;
+#[cfg(test)]
 mod parity_main;
 #[cfg(test)]
 mod parity_presets;
@@ -131,6 +133,9 @@ struct UiState {
     rename_place: RenamePlace,
     /// Where the Guide was when it last showed.
     guide_place: Option<WindowPlace>,
+    /// How far the Guide was scrolled down when it last closed, kept
+    /// for its next opening as the Mac keeps its window.
+    guide_scroll: f32,
     /// The open rename's field has had the focus; only then does the focus
     /// moving to another control apply the name.
     rename_focused: bool,
@@ -159,9 +164,6 @@ struct UiState {
     /// The equalizer curve last picked or saved, so the picker tells it from
     /// a curve with the same gains (spec S270).
     chosen_curve: Option<CurveMatch>,
-    /// The gains when Save Curve opened its dialog, which Save stores even
-    /// if the picker, bands or Reset change them meanwhile.
-    save_curve_gains: [f64; eq::BAND_COUNT],
 }
 
 /// The virtual outputs the speaker lists have shown this session. With Show
@@ -1257,6 +1259,7 @@ fn guide_place_to_show(
     Some(WindowPlace {
         x: fitted.x.round() as i32,
         y: fitted.y.round() as i32,
+        size: place.size,
     })
 }
 
@@ -4150,7 +4153,7 @@ impl App {
     }
 
     fn connect_equalizer(self: &Rc<Self>) {
-        self.follow_frame(|app| app.equalizer.window(), "equalizer");
+        self.follow_dialog_frame(|app| app.equalizer.window(), "equalizer");
         let eq_window = &self.equalizer;
         let weak = Rc::downgrade(self);
         eq_window
@@ -5392,7 +5395,6 @@ impl App {
             || strings.invoke_numbered_curve(count(state.equalizer_curves.len() + 1)),
             |curve| curve.name.as_str().into(),
         );
-        self.ui.borrow_mut().save_curve_gains = state.equalizer.gains_db;
         self.equalizer.set_curve_suggestion(name);
         self.equalizer.set_naming_curve(true);
     }
@@ -5422,7 +5424,7 @@ impl App {
         if eq::curve_name(name).is_none() {
             return;
         }
-        let gains_db = self.ui.borrow().save_curve_gains;
+        let gains_db = self.snapshot().equalizer.gains_db;
         if let Some(index) = eq::save_curve(&mut curves, name, &gains_db) {
             self.ui.borrow_mut().chosen_curve = Some(CurveMatch::User(index));
             self.update(|b| b.set_equalizer_curves(curves));
@@ -7972,7 +7974,7 @@ pub(crate) mod tests {
     }
 
     /// Clicks `window` at `x`, `y` (logical pixels), then draws a frame.
-    fn click(window: &slint::Window, x: f32, y: f32) {
+    pub(super) fn click(window: &slint::Window, x: f32, y: f32) {
         let position = slint::LogicalPosition::new(x, y);
         let button = PointerEventButton::Left;
         window.dispatch_event(WindowEvent::PointerMoved { position });
@@ -18635,7 +18637,7 @@ pub(crate) mod tests {
 
     // covers: S270
     #[test]
-    fn the_curve_saved_has_the_gains_shown_when_save_was_chosen() {
+    fn the_curve_saved_has_the_gains_shown_when_its_name_is_confirmed() {
         let app = app_over(MockBackend::new());
         let eq_window = &app.equalizer;
         let warm = [3.0, 2.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 3.0];
@@ -18653,7 +18655,7 @@ pub(crate) mod tests {
         eq_window.invoke_curve_named("Warm".into(), true);
         let state = app.snapshot();
         assert_eq!(state.equalizer_curves.len(), 1);
-        assert_eq!(state.equalizer_curves[0].gains_db, warm);
+        assert_eq!(state.equalizer_curves[0].gains_db, [0.0; eq::BAND_COUNT]);
         assert_eq!(state.equalizer.gains_db, [0.0; eq::BAND_COUNT]);
     }
 
@@ -19835,11 +19837,13 @@ pub(crate) mod tests {
         app.equalizer.show().expect("the equalizer shows headless");
         draw_frames();
         let window = app.equalizer.window();
-        let y = 250.0;
-        let x = (0..1000)
-            .step_by(8)
-            .map(|x| x as f32)
-            .find(|&x| {
+        // From the bottom up, so the first hit is just above the track's
+        // middle and no click reaches the switch or the picker above it.
+        let (x, y) = (40..400)
+            .rev()
+            .step_by(20)
+            .flat_map(|y| (0..1000).step_by(8).map(move |x| (x as f32, y as f32)))
+            .find(|&(x, y)| {
                 click(window, x, y);
                 advance_clock(Duration::from_secs(1));
                 draw_frames();
@@ -19881,11 +19885,13 @@ pub(crate) mod tests {
 
         advance_clock(Duration::from_secs(1));
         draw_frames();
-        let y = 250.0;
-        let x = (0..1000)
-            .step_by(8)
-            .map(|x| x as f32)
-            .find(|&x| {
+        // From the bottom up, so the first hit is just above the track's
+        // middle and no click reaches the switch or the picker above it.
+        let (x, y) = (40..400)
+            .rev()
+            .step_by(20)
+            .flat_map(|y| (0..1000).step_by(8).map(move |x| (x as f32, y as f32)))
+            .find(|&(x, y)| {
                 click(window, x, y);
                 advance_clock(Duration::from_secs(1));
                 draw_frames();

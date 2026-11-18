@@ -68,8 +68,7 @@ component Band inherits VerticalLayout {
                 property <length> thumb-y: 10px + (self.height - 20px) * (root.max-gain - slider.value) / (2 * root.max-gain);
                 property <length> zero-y: round(self.height / 2 / 1px) * 1px;
                 width: 32px;
-                min-height: 140px;
-                vertical-stretch: 1;
+                height: 140px;
 
                 // Only these fade with the equalizer off; the focus ring keeps its contrast.
                 Rectangle {
@@ -298,8 +297,6 @@ component CurveMenu inherits Rectangle {
             for i in root.preset-count: MenuRow {
                 index: i;
                 text: root.names[i];
-                checks: true;
-                checked: i == root.current;
                 current <=> panel.current;
                 keyboard <=> panel.keyboard;
                 pulse: panel.pulse;
@@ -314,8 +311,6 @@ component CurveMenu inherits Rectangle {
             for i in root.names.length - root.preset-count: MenuRow {
                 index: root.preset-count + i;
                 text: root.names[root.preset-count + i];
-                checks: true;
-                checked: root.preset-count + i == root.current;
                 current <=> panel.current;
                 keyboard <=> panel.keyboard;
                 pulse: panel.pulse;
@@ -432,7 +427,9 @@ export component EqualizerWindow inherits Window {
     background: Tokens.background;
     min-width: 520px;
     max-width: 520px;
-    min-height: 360px;
+    // Fixed in size, as on the Mac.
+    min-height: content.preferred-height;
+    max-height: content.preferred-height;
     default-font-family: Fluent.font;
     default-font-weight: Fluent.weight-regular;
     default-font-size: Tokens.font-size-body;
@@ -498,7 +495,7 @@ export component EqualizerWindow inherits Window {
             return reject;
         }
 
-        VerticalLayout {
+        content := VerticalLayout {
             padding: 18px;
             spacing: 14px;
 
