@@ -4101,8 +4101,10 @@ export component SpeakerRow inherits Rectangle {
                             // Delay column: the same width on every row, empty where a
                             // speaker has no delay. A value's box hugs it by the Mac's
                             // 3 px, so the hover fill is no wider than the value.
+                            // 3 px wider on the left, so the name stops the Mac's 6 px
+                            // before the column (MainWindow.swift:2371).
                             VerticalLayout {
-                                width: Fluent.delay-column;
+                                width: Fluent.delay-column + 3px;
                                 alignment: center;
                                 cross-axis-alignment: end;
 
