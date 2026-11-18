@@ -82,6 +82,8 @@ mod parity_rest;
 mod parity_screens;
 #[cfg(test)]
 mod parity_tray;
+#[cfg(test)]
+mod parity_zones;
 mod remote_window;
 mod settings_window;
 mod setup_window;
