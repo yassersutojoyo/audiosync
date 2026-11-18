@@ -661,7 +661,7 @@ mod tests {
         );
         assert!(
             main.contains("component GearButton")
-                && lf(main).contains("about => {\n                        root.about-requested();"),
+                && lf(main).contains("about => {\n                            root.about-requested();"),
             "the gear's menu opens the About dialog"
         );
     }
