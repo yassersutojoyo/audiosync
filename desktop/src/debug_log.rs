@@ -197,10 +197,22 @@ fn open_file(path: &Path, empty: bool) -> Option<File> {
     Some(file)
 }
 
-/// Where the log goes for the value of `AUDIOSYNC_DEBUG`: [`FILE_NAME`] in
+/// The log file name `base` for the user's copy, with `-<name>` before
+/// `.log` for a test copy (`crate::test_instance`), so it never empties the
+/// user's log.
+pub fn file_name_for(base: &str, instance: Option<&str>) -> String {
+    match (instance, base.strip_suffix(".log")) {
+        (Some(name), Some(stem)) => format!("{stem}-{name}.log"),
+        _ => base.to_owned(),
+    }
+}
+
+/// Where the log goes for the value of `AUDIOSYNC_DEBUG`: [`FILE_NAME`]
+/// ([`file_name_for`] in a test copy) in
 /// `dir` when the value is exactly `1`, nowhere for any other value or none.
 pub fn log_path(setting: Option<&OsStr>, dir: &Path) -> Option<PathBuf> {
-    (setting == Some(OsStr::new("1"))).then(|| dir.join(FILE_NAME))
+    (setting == Some(OsStr::new("1")))
+        .then(|| dir.join(file_name_for(FILE_NAME, crate::test_instance::current())))
 }
 
 /// The log's folder: the temporary folder, or in an MSIX install the
@@ -535,6 +547,17 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    // covers: S475
+    #[test]
+    fn a_test_copy_logs_to_a_file_of_its_own() {
+        assert_eq!(
+            file_name_for(FILE_NAME, Some("test")),
+            "audiosync-debug-test.log"
+        );
+        assert_eq!(file_name_for("debug.log", Some("a")), "debug-a.log");
+        assert_eq!(file_name_for(FILE_NAME, None), FILE_NAME);
+    }
 
     // covers: S170
     #[test]

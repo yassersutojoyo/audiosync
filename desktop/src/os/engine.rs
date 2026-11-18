@@ -26,6 +26,9 @@ pub fn backend<D: Driver + 'static>(
         settings::SettingsFile::in_memory,
         settings::SettingsFile::at,
     );
+    if crate::test_instance::current().is_some() {
+        audio.leave_system_outputs();
+    }
     // Before the settings are read, so a record restored now isn't read.
     #[cfg(windows)]
     restore_records(&mut audio, log, settings_file.path());
@@ -48,6 +51,7 @@ pub fn backend<D: Driver + 'static>(
         crate::auto_connect_skipped_by(
             debug_log::env_skips_auto_connect(),
             crate::preview_play_env(log).as_deref(),
+            crate::test_instance::current(),
         ),
     );
     adapter.set_cast_file(cast_file, cast_unread);

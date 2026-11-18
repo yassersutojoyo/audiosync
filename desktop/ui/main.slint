@@ -3086,7 +3086,9 @@ export component MainWindow inherits Window {
         source.open-menu();
     }
 
-    title: Strings.main-window-title;
+    // A test copy's name (`AUDIOSYNC_INSTANCE`), empty for the user's copy.
+    in property <string> instance-label;
+    title: Strings.main-window-title + root.instance-label;
     icon: @image-url("../res/audiosync-tile-256.png");
     no-frame: true;
 
