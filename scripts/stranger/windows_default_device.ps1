@@ -438,7 +438,8 @@ function Start-App {
   for ($i = 0; $i -lt 30 -and -not $script:main; $i++) { Start-Sleep -Seconds 1; $script:main = @(Get-AppWindows)[0] }
   if (-not $script:main) { throw 'no AudioSync window within 30 s' }
   Start-Sleep -Seconds 3
-  $script:main.SetFocus()
+  # Run 44380792459: the fresh window refused focus once; the checks drive it through UI Automation anyway.
+  try { $script:main.SetFocus() } catch { "step: the window refused focus ($($_.Exception.InnerException.Message))" | Tee-Object -FilePath "$Work/result.txt" -Append }
 }
 
 # Show Virtual Devices on, as a user with a virtual card would set it: the
