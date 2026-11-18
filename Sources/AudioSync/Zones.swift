@@ -12,6 +12,9 @@ struct SpeakerZone: Codable, Equatable {
     /// The name each member was last listed under (S286), by key; nil while
     /// none is kept, which leaves it out of the stored JSON.
     var memberNames: [String: String]? = nil
+    /// The device glyph (`DeviceIcon`) each member was last listed with, by
+    /// key, so a member that isn't found keeps its kind's glyph.
+    var memberIcons: [String: String]? = nil
 
     static let defaultVolume = 100.0
 
@@ -22,6 +25,8 @@ struct SpeakerZone: Codable, Equatable {
             members.contains(key) && !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
         copy.memberNames = kept?.isEmpty == false ? kept : nil
+        let icons = memberIcons?.filter { key, _ in members.contains(key) }
+        copy.memberIcons = icons?.isEmpty == false ? icons : nil
         return copy
     }
 
@@ -48,10 +53,15 @@ struct SpeakerZone: Codable, Equatable {
 
     /// `zones` keeping `listed`, the names members are listed under now, as
     /// each member's last name (S286); a blank name keeps the last one.
-    static func remembering(_ listed: [String: String], in zones: [SpeakerZone]) -> [SpeakerZone] {
+    static func remembering(_ listed: [String: String], icons: [String: String] = [:],
+                            in zones: [SpeakerZone]) -> [SpeakerZone] {
         zones.map { zone in
             var copy = zone
             for key in zone.members {
+                if let icon = icons[key] {
+                    if copy.memberIcons == nil { copy.memberIcons = [:] }
+                    copy.memberIcons?[key] = icon
+                }
                 guard let name = listed[key],
                       !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
                 if copy.memberNames == nil { copy.memberNames = [:] }
@@ -66,6 +76,7 @@ struct SpeakerZone: Codable, Equatable {
         a.count == b.count && zip(a, b).allSatisfy { first, second in
             var copy = first
             copy.memberNames = second.memberNames
+            copy.memberIcons = second.memberIcons
             return copy == second
         }
     }
@@ -143,6 +154,8 @@ extension SpeakerZone {
             memberNames = nil
             StoredTrace.log(decoder, container.codingPath + [CodingKeys.memberNames as CodingKey], "dropped")
         }
+        memberIcons = (try? container.decodeIfPresent([String: LossyDecoded<String>].self, forKey: .memberIcons))?
+            .flatMap { $0.compactMapValues(\.value) }
     }
 }
 

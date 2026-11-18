@@ -683,7 +683,8 @@ pub enum NoticeMessage {
     SourceQuit { source: SourceName },
     /// The app being captured quit, so streaming went on with the whole
     /// system (spec S227).
-    SourceSwitched { source: SourceName },
+    /// `started` false when streaming couldn't start with it.
+    SourceSwitched { source: SourceName, started: bool },
     /// A source or channel pair picked while streaming couldn't start, so
     /// the one before it plays on, to the same speakers (spec S141).
     SwitchFailed { new: SwitchName, old: SwitchName },
@@ -833,7 +834,7 @@ impl NoticeMessage {
     pub fn reports_a_change(&self) -> bool {
         matches!(
             self,
-            Self::SourceSwitched { .. }
+            Self::SourceSwitched { started: true, .. }
                 | Self::WaitingForAudio { .. }
                 | Self::GroupsBecameZones
                 | Self::Update(
@@ -1253,11 +1254,18 @@ impl AppState {
 
     /// A speaker that is on while streaming is on plays, unless it waits.
     pub fn speaker_state(&self, speaker: &Speaker) -> SpeakerState {
-        match SpeakerState::new(speaker.enabled, self.running) {
-            SpeakerState::Playing => speaker
-                .waiting
-                .map_or(SpeakerState::Playing, SpeakerState::Waiting),
-            state => state,
+        match (
+            SpeakerState::new(speaker.enabled, self.running),
+            speaker.waiting,
+        ) {
+            (SpeakerState::Playing, waiting) => {
+                waiting.map_or(SpeakerState::Playing, SpeakerState::Waiting)
+            }
+            // A prompt waits for the user whether or not it streams (S223).
+            (SpeakerState::WillPlay, Some(prompt @ (Waiting::ForPassword | Waiting::ForPin))) => {
+                SpeakerState::Waiting(prompt)
+            }
+            (state, _) => state,
         }
     }
 
@@ -1504,6 +1512,20 @@ impl AppState {
             Some(ms) => AirPlayWait::Tenths((ms.max(0.0) / 100.0).round() as u32),
             None => AirPlayWait::Unknown,
         })
+    }
+
+    /// The AirPlay delay in tenths of a second that the main window's state
+    /// line names while streaming to an AirPlay speaker.
+    pub fn status_airplay_tenths(&self) -> Option<u32> {
+        let airplay_on = self
+            .speakers
+            .iter()
+            .any(|s| s.enabled && matches!(s.kind, SpeakerKind::AirPlay | SpeakerKind::AirPlay2));
+        if !self.running || !airplay_on {
+            return None;
+        }
+        self.airplay_delay_ms
+            .map(|ms| (ms.max(0.0) / 100.0).round() as u32)
     }
 
     /// The speaker lists both windows show: the PC's own outputs in their
@@ -1938,6 +1960,10 @@ pub struct WindowFrame {
 pub struct WindowPlace {
     pub x: i32,
     pub y: i32,
+    /// The inner width and height in logical pixels; a file saved before
+    /// the size was kept has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<(f64, f64)>,
 }
 
 /// How the main window shows when its frame is remembered.
@@ -3388,6 +3414,24 @@ mod tests {
         assert_eq!(state.speaker_state(&kitchen), SpeakerState::Off);
     }
 
+    // covers: S223
+    #[test]
+    fn a_code_prompt_shows_on_the_row_with_streaming_off() {
+        let mut state = MockBackend::new().snapshot();
+        state.running = false;
+        let mut kitchen = state.speaker("airplay:kitchen").unwrap().clone();
+        for waiting in [Waiting::ForPassword, Waiting::ForPin] {
+            kitchen.waiting = Some(waiting);
+            assert_eq!(
+                state.speaker_state(&kitchen),
+                SpeakerState::Waiting(waiting),
+                "the Mac row note names the prompt whether or not it streams"
+            );
+        }
+        kitchen.waiting = Some(Waiting::Reconnecting);
+        assert_eq!(state.speaker_state(&kitchen), SpeakerState::WillPlay);
+    }
+
     // covers: S257
     #[test]
     fn a_row_click_turns_off_a_will_play_speaker_that_cant_be_switched_on() {
@@ -3600,7 +3644,8 @@ mod tests {
         assert!(NoticeMessage::GroupsBecameZones.reports_a_change());
         assert!(
             NoticeMessage::SourceSwitched {
-                source: SourceName::Named("Spotify".into())
+                source: SourceName::Named("Spotify".into()),
+                started: true,
             }
             .reports_a_change()
         );

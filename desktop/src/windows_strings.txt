@@ -5,9 +5,8 @@ Windows system sounds, such as notification chimes, aren't included.
 Windows didn't let AudioSync add itself to the startup apps, so Launch at Sign-In stays off. To start AudioSync at sign-in anyway, put a shortcut to it in your Startup folder (press Windows+R and enter shell:startup), then add a space and --background at the end of the shortcut's Target so AudioSync starts in the tray.
 Windows didn't let AudioSync remove itself from the startup apps. To stop it launching at sign-in, turn AudioSync off in Settings > Apps > Startup.
 Windows has no working sound output, so apps have nowhere to play and AudioSync has nothing to send to your speakers. Connect or turn on an output in Sound settings.
-Windows doesn't let AudioSync use port {}, so the web remote can't start. Enter another port and select Use Port.
+AudioSync couldn't open port {} on this PC, so the web remote can't start. Enter another port and select Use Port.
 AudioSync couldn't reach Windows audio, so it can't start. Restart your PC, then open AudioSync again.\n\nDetails: {}
-{} needs a kind of pairing AudioSync for Windows can't do yet, so it's off.
 {} couldn't reach the stream on this PC, so it's off. Allow AudioSync in Windows Firewall on Private networks, or on Public networks if this network is set to Public, then turn it on again.
 You may hear {0} twice: it also plays straight from {1}. Send it to an output you don't listen to (Volume mixer), or mute {1}.
 You may hear {0} twice: it also plays straight from {1}, where AudioSync plays too. Send it to an output you don't listen to (Volume mixer).
@@ -47,3 +46,4 @@ The default input is a Bluetooth headset's hands-free microphone, and recording 
 Another app has the microphone to itself. Close that app, or under Settings > System > Sound > More sound settings > Recording, open the microphone's Properties and turn off “Allow applications to take exclusive control of this device” on the Advanced tab, and try again.
 The delays are too long to measure in one recording at the microphone's sample rate. Lower the largest delay, or set the microphone's format to 48 kHz in Settings > System > Sound, and try again.
 When something needs your attention, such as a speaker that was disconnected or an app that quit, a notice appears at the top of the main window, and the newest one in the AudioSync tray panel. Use its close button to dismiss it, or Dismiss All when there is more than one. Many notices also clear themselves once the cause is gone.\n\nWhen the app you picked as the source quits, streaming stops and a notice says so. To keep playing instead, turn on Switch to All System Audio When the Source App Quits in Settings: AudioSync then moves to All System Audio, and stays there when the app opens again.
+Windows has its own volume for each output, and it limits AudioSync's slider.

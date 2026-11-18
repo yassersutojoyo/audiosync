@@ -26,7 +26,7 @@ use i_slint_backend_testing::{ElementHandle, ElementQuery};
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize};
 
-use super::tests::{app_over, hold_clock};
+use super::tests::{advance_clock, app_over, hold_clock, leaked};
 use super::{App, RenamePlace};
 use crate::audio::calibration::{Failure, Phase, Step, Which};
 use crate::now_playing_card::fake::FakeControls;
@@ -97,6 +97,7 @@ enum Shown {
     Settings,
     Guide,
     Remote,
+    About,
 }
 
 /// The window a row photographs, at the size it is taken.
@@ -193,6 +194,8 @@ impl Scene {
         app.apply_appearance(appearance);
         app.refresh();
         app.main.show().expect("the main window shows headless");
+        // The brand accent the app gives each window as its frame comes up.
+        app.use_brand_accent(app.main.window());
         let scene = Scene { app, state, media };
         scene.size(scene.app.main.window(), MAIN);
         scene
@@ -250,7 +253,7 @@ impl Scene {
     }
 
     fn equalizer(&self, size: Size) -> Result<Win, String> {
-        let equalizer = &self.app.equalizer;
+        let equalizer = &self.app.equalizer();
         equalizer.show().map_err(|error| error.to_string())?;
         equalizer.invoke_enabled_toggled(true);
         // As the Mac render's Mock.equalizer: on, preamp -2 dB, the Loudness curve.
@@ -269,25 +272,26 @@ impl Scene {
         self.app.show_settings();
         // The window's height is bound to its content's; the focus scope
         // filling it reads that before any size is set.
-        let height = ElementHandle::find_by_element_id(&self.app.settings, "SettingsWindow::keys")
-            .next()
-            .map(|keys| keys.size().height)
-            .filter(|height| *height > 0.0)
-            .unwrap_or(640.0);
+        let height =
+            ElementHandle::find_by_element_id(&self.app.settings(), "SettingsWindow::keys")
+                .next()
+                .map(|keys| keys.size().height)
+                .filter(|height| *height > 0.0)
+                .unwrap_or(640.0);
         let size = (460.0, height);
-        self.size(self.app.settings.window(), size);
+        self.size(leaked(self.app.settings()), size);
         Ok(Win(Shown::Settings, size))
     }
 
     fn guide(&self) -> Result<Win, String> {
         self.app.show_help();
-        self.size(self.app.help.window(), GUIDE);
+        self.size(leaked(self.app.help()), GUIDE);
         Ok(Win(Shown::Guide, GUIDE))
     }
 
     fn remote(&self) -> Result<Win, String> {
         self.app.show_remote();
-        self.size(self.app.remote_window.window(), REMOTE);
+        self.size(leaked(self.app.remote_window()), REMOTE);
         Ok(Win(Shown::Remote, REMOTE))
     }
 
@@ -295,10 +299,11 @@ impl Scene {
         match shown {
             Shown::Main => self.app.main.window(),
             Shown::Flyout => self.app.flyout.window(),
-            Shown::Equalizer => self.app.equalizer.window(),
-            Shown::Settings => self.app.settings.window(),
-            Shown::Guide => self.app.help.window(),
-            Shown::Remote => self.app.remote_window.window(),
+            Shown::Equalizer => leaked(self.app.equalizer()),
+            Shown::Settings => leaked(self.app.settings()),
+            Shown::Guide => leaked(self.app.help()),
+            Shown::Remote => leaked(self.app.remote_window()),
+            Shown::About => leaked(self.app.about()),
         }
     }
 
@@ -319,10 +324,11 @@ impl Scene {
         let elements = match shown {
             Shown::Main => ElementQuery::from_root(&self.app.main).find_all(),
             Shown::Flyout => ElementQuery::from_root(&self.app.flyout).find_all(),
-            Shown::Equalizer => ElementQuery::from_root(&self.app.equalizer).find_all(),
-            Shown::Settings => ElementQuery::from_root(&self.app.settings).find_all(),
-            Shown::Guide => ElementQuery::from_root(&self.app.help).find_all(),
-            Shown::Remote => ElementQuery::from_root(&self.app.remote_window).find_all(),
+            Shown::Equalizer => ElementQuery::from_root(&self.app.equalizer()).find_all(),
+            Shown::Settings => ElementQuery::from_root(&self.app.settings()).find_all(),
+            Shown::Guide => ElementQuery::from_root(&self.app.help()).find_all(),
+            Shown::Remote => ElementQuery::from_root(&self.app.remote_window()).find_all(),
+            Shown::About => ElementQuery::from_root(&self.app.about()).find_all(),
         };
         let listed = elements_json(&elements, &shot, window.scale_factor());
         Ok((png(shot.width(), shot.height(), shot.as_bytes()), listed))
@@ -400,10 +406,45 @@ fn a_horizontal_slider_is_listed_by_its_track() {
     assert_eq!(listed_frame(true, at, band), [290.0, 133.0, 32.0, 200.0]);
 }
 
+/// CAL-SHEET-RESULT: the AirPlay delay's summary under four results takes
+/// both lines it wraps to, inside the results list, as the Mac's does
+/// (CalibrateAllViews.swift:328-333).
+#[test]
+fn calibrate_alls_airplay_summary_shows_both_lines_in_the_results() {
+    let scene = Scene::new(ui_model::Appearance::Light);
+    calibrate_all(&scene, |state| {
+        state.calibrate_all.sheet = Some(results(SHEET_NAMES));
+    })
+    .expect("the example speakers");
+    settle(scene.app.main.window());
+    let list = ElementHandle::find_by_accessible_label(&scene.app.main, "Results")
+        .next()
+        .expect("the results list");
+    let summary = find(&scene.app.main, "AirPlay delay:").expect("the AirPlay summary");
+    let line = find(&scene.app.main, "Calibration finished")
+        .expect("the run's outcome, one line")
+        .size()
+        .height;
+    let (height, bottom) = (
+        summary.size().height,
+        summary.absolute_position().y + summary.size().height,
+    );
+    let end = list.absolute_position().y + list.size().height;
+    assert!(
+        height >= 1.8 * line,
+        "the summary is {height} high, one line {line}"
+    );
+    assert!(
+        bottom <= end,
+        "the summary ends at {bottom}, the list at {end}"
+    );
+}
+
 type Snapshot = slint::SharedPixelBuffer<slint::Rgba8Pixel>;
 
-/// The commonest pixel inside the frame as the background, and the commonest
-/// one whose channels differ from it by more than 96 in sum as the foreground.
+/// The commonest pixel inside the frame as the background, and the one farthest
+/// from it (channel sum, more than 96) as the foreground: the commonest far
+/// pixel was often an anti-aliased edge, not the ink.
 fn sampled_colours(
     shot: &Snapshot,
     scale: f32,
@@ -433,15 +474,48 @@ fn sampled_colours(
     let Some(bg) = commonest(&|_| true) else {
         return (None, None);
     };
-    let far = |rgb: &[u8; 3]| {
+    let distance = |rgb: &[u8; 3]| {
         rgb.iter()
             .zip(bg)
             .map(|(a, b)| u32::from(a.abs_diff(b)))
             .sum::<u32>()
-            > 96
     };
+    let farthest = counts
+        .iter()
+        .filter(|(rgb, _)| distance(rgb) > 96)
+        .max_by_key(|(rgb, count)| (distance(rgb), **count, **rgb))
+        .map(|(rgb, _)| *rgb);
     let hex = |[r, g, b]: [u8; 3]| format!("#{r:02x}{g:02x}{b:02x}");
-    (commonest(&far).map(hex), Some(hex(bg)))
+    (farthest.map(hex), Some(hex(bg)))
+}
+
+#[test]
+fn text_colour_is_the_pixel_farthest_from_the_background() {
+    // 10x1: six background pixels, three anti-aliased edge pixels, one ink pixel.
+    let mut shot = Snapshot::new(10, 1);
+    let row = [
+        [255, 255, 255],
+        [255, 255, 255],
+        [255, 255, 255],
+        [255, 255, 255],
+        [255, 255, 255],
+        [255, 255, 255],
+        [160, 160, 160],
+        [160, 160, 160],
+        [160, 160, 160],
+        [32, 32, 32],
+    ];
+    for (pixel, [r, g, b]) in shot.make_mut_slice().iter_mut().zip(row) {
+        *pixel = slint::Rgba8Pixel { r, g, b, a: 255 };
+    }
+    let (fg, bg) = sampled_colours(
+        &shot,
+        1.0,
+        LogicalPosition::new(0.0, 0.0),
+        LogicalSize::new(10.0, 1.0),
+    );
+    assert_eq!(fg.as_deref(), Some("#202020"));
+    assert_eq!(bg.as_deref(), Some("#ffffff"));
 }
 
 /// Draws a frame of `window`, which builds the list rows a change added.
@@ -449,7 +523,7 @@ fn render(window: &slint::Window) {
     let _ = window.take_snapshot();
 }
 
-/// Lets the timers and animations run for 600 ms of Slint's held clock.
+/// Lets the timers and animations run for about 900 ms of Slint's held clock.
 fn settle(window: &slint::Window) {
     for _ in 0..4 {
         std::thread::sleep(Duration::from_millis(150));
@@ -457,6 +531,13 @@ fn settle(window: &slint::Window) {
         slint::platform::update_timers_and_animations();
         render(window);
     }
+    // The header's state line fades one step per 16 ms frame; four frames
+    // left it at under half its opacity in the 18 Nov photos.
+    for _ in 0..20 {
+        advance_clock(Duration::from_millis(16));
+        slint::platform::update_timers_and_animations();
+    }
+    render(window);
 }
 
 /// The first element of `component` with a size whose accessible label is
@@ -629,7 +710,9 @@ fn calibrating(s: &Scene, phase: Phase) -> Result<Win, String> {
             phase,
             busy: running,
             own_run_holds: running,
-        }
+        };
+        // As the adapter reports a speaker's own run to Calibrate All.
+        state.calibrate_all.other_running = running;
     });
     s.app.toggle_sync(DESK);
     s.main()
@@ -833,6 +916,15 @@ fn b01() -> Vec<Row> {
             });
             s.main()
         }),
+        row("B01", "MAIN-NO-SPEAKER-ON", |s| {
+            s.edit(|state| {
+                for speaker in &mut state.speakers {
+                    speaker.enabled = false;
+                }
+            });
+            s.play(track(true, true));
+            s.main()
+        }),
     ]
 }
 
@@ -982,7 +1074,7 @@ fn b03() -> Vec<Row> {
         }),
         row("B03", "MAIN-ROW-CONNECTING", |s| {
             s.speaker(KITCHEN, |kitchen| {
-                kitchen.waiting = Some(Waiting::ForDevice)
+                kitchen.waiting = Some(Waiting::Reconnecting)
             })?;
             s.main()
         }),
@@ -1073,6 +1165,8 @@ fn b04() -> Vec<Row> {
             s.main()
         }),
         row("B04", "MAIN-GEAR-MENU", |s| {
+            // As the Mac's release build, whose app menu has Check for Updates….
+            s.app.main.set_updater_available(true);
             click(&s.app.main, "Options")?;
             s.main()
         }),
@@ -1128,6 +1222,10 @@ fn b05() -> Vec<Row> {
         row("B05", "MAIN-AIRPLAY-DELAY-OPEN", |s| s.main()),
         row("B05", "MAIN-SYSVOL-FOLDED", |s| s.main()),
         row("B05", "MAIN-SYSVOL-OPEN", |s| {
+            s.app.toggle_sync(SPEAKERS);
+            s.main()
+        }),
+        row("B05", "MAIN-SYSVOL-PANEL", |s| {
             s.app.toggle_sync(SPEAKERS);
             s.main()
         }),
@@ -1273,6 +1371,10 @@ fn b07() -> Vec<Row> {
 fn b08() -> Vec<Row> {
     vec![
         row("B08", "TRAY-IDLE", |s| {
+            s.edit(|state| state.running = false);
+            s.flyout()
+        }),
+        row("B08", "TRAY-HEADER-OFF", |s| {
             s.edit(|state| state.running = false);
             s.flyout()
         }),
@@ -1472,18 +1574,18 @@ fn b10() -> Vec<Row> {
         row("B10", "EQ-WINDOW", |s| {
             let win = s.equalizer(EQUALIZER)?;
             // As the Mac render's: just opened, with no band focused.
-            s.app.equalizer.invoke_take_focus();
+            s.app.equalizer().invoke_take_focus();
             Ok(win)
         }),
         row("B10", "EQ-CURVE-MENU", |s| {
             let win = s.equalizer(EQUALIZER)?;
-            click(&s.app.equalizer, "Curve")?;
+            click(&s.app.equalizer(), "Curve")?;
             Ok(win)
         }),
         row("B10", "EQ-SLIDER-DRAG", |s| {
             let win = s.equalizer(EQUALIZER)?;
-            let at = center(&find(&s.app.equalizer, "32 Hz")?);
-            let window = s.app.equalizer.window();
+            let at = center(&find(&s.app.equalizer(), "32 Hz")?);
+            let window = leaked(s.app.equalizer());
             let button = PointerEventButton::Left;
             window.dispatch_event(WindowEvent::PointerMoved { position: at });
             window.dispatch_event(WindowEvent::PointerPressed {
@@ -1501,7 +1603,7 @@ fn b10() -> Vec<Row> {
 
 fn running_remote(s: &Scene) -> Result<Win, String> {
     let win = s.remote()?;
-    let remote = &s.app.remote_window;
+    let remote = &s.app.remote_window();
     let local = "http://den.local:8770/";
     remote.set_remote_on(true);
     remote.set_listening(true);
@@ -1523,6 +1625,13 @@ fn running_remote(s: &Scene) -> Result<Win, String> {
 
 fn b11() -> Vec<Row> {
     vec![
+        row("B11", "ABOUT-PANEL", |s| {
+            let about = s.app.about();
+            about.set_version("0.9.3".into());
+            about.show().map_err(|error| error.to_string())?;
+            // A headless dialog has no size of its own.
+            Ok(Win(Shown::About, (360.0, 340.0)))
+        }),
         row("B11", "MAIN-SETTINGS", |s| s.settings()),
         row("B11", "SETTINGS-UPDATES", |s| {
             s.app.main.set_updater_available(true);
@@ -1544,19 +1653,19 @@ fn b11() -> Vec<Row> {
         row("B11", "GUIDE-SCROLLED", |s| {
             let win = s.guide()?;
             let at = LogicalPosition::new(GUIDE.0 / 2.0, GUIDE.1 / 2.0);
-            scroll(s.app.help.window(), at, -600.0);
+            scroll(leaked(s.app.help()), at, -600.0);
             Ok(win)
         }),
         row("B11", "WEBREMOTE-OFF", |s| s.remote()),
         row("B11", "WEBREMOTE-RUNNING", running_remote),
         row("B11", "WEBREMOTE-ANDROID", |s| {
             let win = running_remote(s)?;
-            s.app.remote_window.set_steps_for_iphone(false);
+            s.app.remote_window().set_steps_for_iphone(false);
             Ok(win)
         }),
         row("B11", "WEBREMOTE-FAILED", |s| {
             let win = s.remote()?;
-            let remote = &s.app.remote_window;
+            let remote = &s.app.remote_window();
             remote.set_remote_on(true);
             remote.set_listening(false);
             remote.set_problem(s.app.strings().get_remote_failed());
@@ -1765,4 +1874,46 @@ fn motion_frames_of_a_song_change_and_a_speaker_switched_off() {
     std::fs::write(dir.join("frames.txt"), lines.join("\n") + "\n")
         .expect("the frame list is written");
     println!("{}", lines.join("\n"));
+}
+
+/// NOTICE-SOURCE and MAIN-ROW-LOWVOL: a notice and a low-volume hint push
+/// the speaker list past the window's bottom, and the list scrolls to show
+/// Add by Address… whole, as the Mac's scroll view does.
+#[test]
+fn a_list_pushed_down_by_a_notice_scrolls_to_add_by_address() {
+    let scene = Scene::new(ui_model::Appearance::Light);
+    scene
+        .speaker(SPEAKERS, |speaker| {
+            speaker.enabled = true;
+            speaker.device_volume = Some(Hint::Low { percent: 13 });
+        })
+        .expect("the example speakers");
+    notice(
+        &scene,
+        NoticeMessage::SourceQuit {
+            source: music_player(),
+        },
+    )
+    .expect("the notice shows");
+    let window = scene.app.main.window();
+    settle(window);
+    let list = ElementHandle::find_by_element_id(&scene.app.main, "MainWindow::scroll")
+        .next()
+        .expect("the speaker list");
+    let (at, size) = (list.absolute_position(), list.size());
+    let position = LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0);
+    window.dispatch_event(WindowEvent::PointerMoved { position });
+    window.dispatch_event(WindowEvent::PointerScrolled {
+        position,
+        delta_x: 0.0,
+        delta_y: -3000.0,
+    });
+    settle(window);
+    let button = find(&scene.app.main, "Add by Address").expect("Add by Address…");
+    let bottom = button.absolute_position().y + button.size().height;
+    assert!(
+        bottom <= at.y + size.height,
+        "Add by Address… ends at {bottom}, the list at {}",
+        at.y + size.height
+    );
 }

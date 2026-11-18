@@ -18,13 +18,14 @@ gives for it (`ID: reason` or `ID theme: reason` per line). A field that is null
 
 Usage: python -I scripts/screen_compare.py <mac-dir> <other-dir>
        python -I scripts/screen_compare.py --self-test
-Exits 1 when it printed a row.
+Exits 1 when it printed a row other than a `#` offset comment.
 """
 
 import io
 import json
 import os
 import re
+import statistics
 import sys
 
 FRAME_SLACK = 1.0
@@ -48,6 +49,10 @@ PLATFORM_LABELS = [
     (re.compile(r"^(?:Windows|PipeWire) volume of (.+)$"), r"macOS volume of \1"),
     (re.compile(r"^Exit AudioSync$"), "Quit AudioSync"),
 ]
+
+# The header's status line, keyed by its role: its text differs by platform
+# (the Mac adds the AirPlay delay), so the text is compared apart.
+STATUS_LINE = re.compile(r"^Streaming to \d+ speakers?")
 
 
 def load(folder):
@@ -95,6 +100,9 @@ def as_mac(state):
 
 
 def keyed(elements):
+    elements = [
+        dict(e, key="Status line", text=e["key"]) if STATUS_LINE.match(e["key"]) else e for e in elements
+    ]
     ordered = sorted(elements, key=lambda e: (e["frame"][1], e["frame"][0]))
     seen = {}
     out = {}
@@ -128,6 +136,8 @@ def moved(a, b, shifts):
 
 def changes(a, b, frame_moved):
     found = []
+    if a.get("text", "") != b.get("text", ""):
+        found.append(f'text {a["text"]} vs {b["text"]}')
     if frame_moved:
         found.append(f'frame {fmt(a["frame"])} vs {fmt(b["frame"])}')
     fa, fb = a.get("font"), b.get("font")
@@ -155,9 +165,17 @@ def compare(left_dir, right_dir):
             rows.append(f"{state}\t-\t{missing(state, right_dir, left_dir)}")
             continue
         a, b = keyed(left[state]["elements"]), keyed(as_mac(right[state]))
+        # A renderer that puts the whole content lower (a taller title bar) shifts
+        # every element; the median shift of the paired elements is taken out first
+        # and printed as a `#` comment row, which readers of the rows skip.
+        common = set(a) & set(b)
+        offset = statistics.median(b[k]["frame"][1] - a[k]["frame"][1] for k in common) if common else 0
+        if offset:
+            rows.append(f"# {state}\toffset y {offset:+g}")
+        aligned = {k: dict(e, frame=[e["frame"][0], e["frame"][1] - offset, *e["frame"][2:]]) for k, e in b.items()}
         shifts = []
         frames = {
-            key: moved(a[key], b[key], shifts)
+            key: moved(a[key], aligned[key], shifts)
             for key in sorted(set(a) & set(b), key=lambda k: (a[k]["frame"][1], a[k]["frame"][0]))
         }
         for key in sorted(set(a) | set(b)):
@@ -182,6 +200,7 @@ def self_test():
         "MAIN-IDLE-terang\tKitchen\tframe [20,100,200,22] vs [20,102,200,22]",
         "MAIN-IDLE-terang\tKitchen#2\tfg #1d1d1f vs #3a3a3c",
         "MAIN-IDLE-terang\tSpeakers\tonly in mac",
+        "MAIN-IDLE-terang\tStatus line\ttext Streaming to 2 speakers · AirPlay delay 1.8 s vs Streaming to 2 speakers",
         "MAIN-IDLE-terang\tStreaming to\tfont SF Pro 13 vs Segoe UI 13",
         "MAIN-IDLE-terang\tWindows Laptop\tonly in other",
         "MAIN-IDLE-terang\t−170\tonly in mac",
@@ -189,6 +208,7 @@ def self_test():
         "MAIN-ROWS-terang\tDen\tframe [256,160,32,32] vs [256,156,32,32]",
         "MAIN-ROWS-terang\tGamma\tframe [450,220,32,32] vs [450,226,32,32]",
         "MAIN-ROWS-terang\tNotice\tframe [20,300,400,60] vs [20,300,400,80]",
+        "# MAIN-SHIFT-terang\toffset y +4",
         "TRAY-IDLE-gelap\t-\tnot set up in mac: the panel is not drawn here",
     ]
     if got != want:
@@ -231,7 +251,7 @@ def main(argv):
     sys.stdout.buffer.write("".join(row + "\n" for row in rows).encode("utf-8"))
     sys.stdout.flush()
     print(f"{len(rows)} differences", file=sys.stderr)
-    return 1 if rows else 0
+    return 1 if any(not row.startswith("#") for row in rows) else 0
 
 
 if __name__ == "__main__":

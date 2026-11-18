@@ -83,6 +83,7 @@ mod driver {
     use crate::audio::calibration::{Microphone, MicrophoneError};
     use crate::audio::capture::{CaptureTarget, Feeds};
     use crate::audio::controller::{Controller, Driver};
+    use crate::audio::default_output::DefaultEndpoints;
     use crate::audio::outputs::{Endpoint, EndpointReading, Listing};
     use crate::audio::process::ProcessTable;
     use crate::audio::routing::{EndpointAudio, EndpointVolume};
@@ -223,6 +224,10 @@ mod driver {
                 .map(|(rate, _)| rate);
             let microphone = microphone::open(node.name().to_owned(), rate, seconds)?;
             Ok(Box::new(microphone))
+        }
+
+        fn default_endpoints(&self) -> Option<Box<dyn DefaultEndpoints>> {
+            Some(Box::new(self.registry.sink_defaults()))
         }
     }
 

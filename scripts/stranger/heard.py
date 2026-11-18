@@ -8,10 +8,13 @@
   heard.py record <out.wav> <out.stamps> [--rate R]
       Raw s16le stereo from stdin into a WAV, with one stamp line per chunk:
       the frames read so far and CLOCK_MONOTONIC at that moment.
-  heard.py check --receiver <wav> <stamps> --sink <wav> <stamps> [--min-clicks N] [--label TEXT]
+  heard.py check --receiver <wav> <stamps> --sink <wav> <stamps> [--min-clicks N]
+                 [--max-offset-ms MS] [--expect-offset-ms E] [--label TEXT]
       Each recording must hold the click train once: at least N clicks, with
       every gap on the 3, 4, 5 s cycle. Prints the receiver's offset after
-      the sink (median over matched clicks). Exits 1 on a failed check.
+      the sink (median over matched clicks); with --max-offset-ms, an offset
+      further from E (default 0) than MS, or none, fails. Exits 1 on a
+      failed check.
   heard.py --self-test
 
 Standard library only.
@@ -135,20 +138,20 @@ def offset_ms(rx, sink):
     """Median of each receiver click's time after the same click on the sink.
 
     rx and sink are (times, phase) pairs; a click's identity is its cycle
-    position, so a match lies under one whole cycle later."""
+    position, so a match lies within half a cycle either way."""
     period = sum(CYCLE)
     (rx_times, rx_start), (sink_times, sink_start) = rx, sink
     diffs = []
     for i, t in enumerate(rx_times):
         identity = (rx_start + i) % len(CYCLE)
-        later = [t - s for j, s in enumerate(sink_times)
-                 if (sink_start + j) % len(CYCLE) == identity and 0 <= t - s < period]
-        if later:
-            diffs.append(min(later))
+        near = [t - s for j, s in enumerate(sink_times)
+                if (sink_start + j) % len(CYCLE) == identity and abs(t - s) < period / 2]
+        if near:
+            diffs.append(min(near, key=abs))
     return statistics.median(diffs) * 1000 if diffs else None
 
 
-def check(receiver, sink, min_clicks):
+def check(receiver, sink, min_clicks, max_offset_ms=None, expect_offset_ms=0.0):
     """Lines to print and whether both recordings passed. Each recording is
     (mono samples, rate, stamps)."""
     lines, ok, timed = [], True, {}
@@ -166,7 +169,15 @@ def check(receiver, sink, min_clicks):
         lines.append("offset: no click matched" if offset is None
                      else f"offset: receiver {offset:.0f} ms after the sink (median)")
     else:
+        offset = None
         lines.append("offset: not measured (a recording failed)")
+    if max_offset_ms is not None:
+        of = f" of {expect_offset_ms:.0f} ms" if expect_offset_ms else ""
+        if offset is None or abs(offset - expect_offset_ms) > max_offset_ms:
+            ok = False
+            lines.append(f"in sync: FAIL, the offset is not within {max_offset_ms:.0f} ms{of}")
+        else:
+            lines.append(f"in sync: PASS, within {max_offset_ms:.0f} ms{of}")
     return lines, ok
 
 
@@ -225,6 +236,20 @@ def self_test():
         if name == "heard once" and not any(line.startswith("offset: receiver 2000 ms") for line in lines):
             failed += 1
             print(f"self-test {name}: offset wrong: {lines}")
+    for limit, expected in ((30, False), (2030, True)):
+        _, ok = check((late, rate, stamps), (train, rate, stamps), 6, max_offset_ms=limit)
+        if ok != expected:
+            failed += 1
+            print(f"self-test offset limit {limit} ms: expected {'PASS' if expected else 'FAIL'}")
+    early_lines, ok = check((train, rate, stamps), (delayed(train, 0.02), rate, stamps), 6, max_offset_ms=30)
+    if not ok or not any(line.startswith("offset: receiver -20 ms") for line in early_lines):
+        failed += 1
+        print(f"self-test receiver 20 ms ahead of the sink: {early_lines}")
+    for expect, expected in ((-20, True), (-50, False)):
+        _, ok = check((train, rate, stamps), (delayed(train, 0.02), rate, stamps), 6, 15, expect)
+        if ok != expected:
+            failed += 1
+            print(f"self-test 20 ms ahead against {expect} ms: expected {'PASS' if expected else 'FAIL'}")
     print("heard.py self-test: " + (f"{failed} FAILED" if failed else f"{len(cases)} cases passed"))
     return 1 if failed else 0
 
@@ -249,7 +274,9 @@ def main(argv):
             return mono, rate, read_stamps(argv[at + 2])
         min_clicks = int(argv[argv.index("--min-clicks") + 1]) if "--min-clicks" in argv else 6
         label = argv[argv.index("--label") + 1] if "--label" in argv else ""
-        lines, ok = check(recording("--receiver"), recording("--sink"), min_clicks)
+        max_offset = float(argv[argv.index("--max-offset-ms") + 1]) if "--max-offset-ms" in argv else None
+        expect = float(argv[argv.index("--expect-offset-ms") + 1]) if "--expect-offset-ms" in argv else 0.0
+        lines, ok = check(recording("--receiver"), recording("--sink"), min_clicks, max_offset, expect)
         for line in lines:
             print(f"{label}{': ' if label else ''}{line}")
         return 0 if ok else 1

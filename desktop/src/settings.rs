@@ -61,7 +61,7 @@ use crate::audio::app_output::AppRecordStore;
 use crate::audio::backend::OutputKind;
 use crate::audio::cast_address;
 use crate::audio::default_output::Record as DefaultRecord;
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 use crate::audio::default_output::RecordStore;
 use crate::audio::local_volume::LocalVolumes;
 use crate::data_folder;
@@ -1346,6 +1346,9 @@ impl Settings {
             guide_window: self.guide_window.map(|place| WindowPlace {
                 x: place.x.clamp(-MAX_POSITION, MAX_POSITION),
                 y: place.y.clamp(-MAX_POSITION, MAX_POSITION),
+                size: place
+                    .size
+                    .filter(|(w, h)| w.is_finite() && h.is_finite() && *w > 0.0 && *h > 0.0),
             }),
             slim_window_applied: self.slim_window_applied,
             airplay_adjustment_ms: sanitize_airplay_adjustment_ms(self.airplay_adjustment_ms)
@@ -1889,10 +1892,10 @@ impl SettingsFile {
 /// reads the file and saves it back with the record, through the same
 /// atomic write. A file that doesn't read as settings is left alone, and
 /// without a file there is nowhere to keep the record, so nothing moves.
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 pub struct DefaultRecordFile(pub Option<PathBuf>);
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 impl RecordStore for DefaultRecordFile {
     fn load(&mut self) -> Result<Option<DefaultRecord>, String> {
         let Some(path) = &self.0 else {
@@ -2113,7 +2116,11 @@ mod tests {
             presets_list_open: true,
             appearance: sample.appearance,
             window: sample.window,
-            guide_window: Some(WindowPlace { x: -1500, y: 120 }),
+            guide_window: Some(WindowPlace {
+                x: -1500,
+                y: 120,
+                size: Some((700.0, 500.0)),
+            }),
             slim_window_applied: true,
             airplay_adjustment_ms: 120.0,
             when_source_quits: WhenSourceQuits::SwitchToSystem.stored().to_owned(),

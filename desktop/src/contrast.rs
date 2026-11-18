@@ -259,7 +259,7 @@ fn the_boxed_fields_edge_reaches_3_to_1() {
     }
     let field = component_body(include_str!("../ui/widgets.slint"), "TextField");
     assert!(field.contains(
-        "border-color: root.boxed ? (input.has-focus ? Tokens.focus : Tokens.secondary-text) : root.compact && input.has-focus ? Tokens.teal : Fluent.stroke;"
+        "border-color: root.boxed ? (input.has-focus ? Tokens.focus : Tokens.secondary-text) : root.compact && input.has-focus ? Tokens.teal : root.raised && !Tokens.dark ? #00000026 : Fluent.stroke;"
     ));
 }
 
@@ -633,25 +633,22 @@ fn custom_controls_are_accessible_and_show_focus() {
     }
 }
 
-/// The delay steps and the light Appearance track look like the Mac's AppKit
-/// controls: white with a soft shadow in light, a grey fill in
-/// dark that keeps the text at 4.5:1 on the window and on a card.
+/// The light Appearance track looks like the Mac's AppKit control: white
+/// with a soft shadow in light, a grey fill in dark that keeps the text at
+/// 4.5:1 on the window and on a card.
 #[test]
-fn delay_steps_and_the_appearance_track_look_like_the_macs_native_controls() {
-    let step = component_body(include_str!("../ui/widgets.slint"), "DelayStep");
+fn the_appearance_track_looks_like_the_macs_native_control() {
     let settings = include_str!("../ui/settings.slint");
     let track = settings
         .split("accessible-label: Strings.appearance;")
         .next()
         .and_then(|before| before.rsplit("Rectangle {").next())
         .expect("the Appearance track");
-    for (name, body) in [("delay step", step), ("Appearance track", track)] {
-        for needle in [
-            "Fluent.native-control",
-            "drop-shadow-color: Fluent.native-control-shadow",
-        ] {
-            assert!(body.contains(needle), "the {name} has {needle}");
-        }
+    for needle in [
+        "Fluent.native-control",
+        "drop-shadow-color: Fluent.native-control-shadow",
+    ] {
+        assert!(track.contains(needle), "the Appearance track has {needle}");
     }
     let prefix = "out property <brush> native-control: Tokens.dark ? Tokens.text.with-alpha(";
     let alpha: f64 = include_str!("../ui/widgets.slint")
@@ -672,20 +669,38 @@ fn delay_steps_and_the_appearance_track_look_like_the_macs_native_controls() {
     }
 }
 
-/// In light the delay steps and both delay fields are white with a soft shadow
-/// and no border, as the Mac's; a field shows its border again on focus.
+/// The delay steps are the Mac's small bordered buttons as its 2x render
+/// draws them (MainWindow.swift:3500-3515): a faint grey pill, the text color
+/// at 5% (#f4f4f4 on white, #282828 on #1e1e1e), with no border or shadow,
+/// so they show on a white card. Both delay fields have the Mac field's
+/// #d9d9d9 edge in light.
 #[test]
-fn delay_steps_and_fields_draw_no_border_in_light() {
+fn delay_steps_are_grey_pills_and_fields_have_an_edge_in_light() {
     let widgets = include_str!("../ui/widgets.slint");
+    let step = component_body(widgets, "DelayStep");
     assert!(
-        !component_body(widgets, "DelayStep").contains("border-width"),
-        "a delay step draws no border"
+        step.contains(
+            "background: Tokens.text.with-alpha(touch.pressed ? (Tokens.dark ? 0.3 : 0.1) : 0.05);"
+        ),
+        "a delay step is the text color at 5%"
     );
+    for needle in ["border-width", "drop-shadow"] {
+        assert!(!step.contains(needle), "a delay step draws no {needle}");
+    }
+    for appearance in [Appearance::Light, Appearance::Dark] {
+        let text = srgb("text", appearance);
+        let below = srgb("surface", appearance);
+        let fill = [0, 1, 2].map(|i| text[i] * 0.05 + below[i] * 0.95);
+        let value = contrast(text, fill);
+        assert!(
+            value >= MIN_TEXT_CONTRAST,
+            "a step's digits on its fill: {value:.2}:1"
+        );
+    }
     let field = component_body(widgets, "TextField");
     for needle in [
-        "root.raised && !Tokens.dark && !input.has-focus ? 0px",
-        "input.has-focus || (root.raised && !Tokens.dark) ? Tokens.surface",
-        "drop-shadow-color: root.raised ? Fluent.native-control-shadow",
+        "border-width: root.boxed && input.has-focus ? 2px : 1px;",
+        "root.raised && !Tokens.dark ? #00000026 : Fluent.stroke;",
     ] {
         assert!(field.contains(needle), "the text field has {needle}");
     }
@@ -967,7 +982,8 @@ fn keyboard_shortcuts_are_declared() {
 /// The calibration results' AirPlay lines, a zone run's line on whom the
 /// shared AirPlay delay moves included, show only when an AirPlay speaker
 /// took part, so the sender ran. The live input note shows only while an
-/// AirPlay speaker is on, and steers live sound away from AirPlay.
+/// AirPlay speaker is on, and steers live sound away from AirPlay; the main
+/// window's state line names the AirPlay delay only while one streams.
 /// An empty Connected Speakers list otherwise says just that it's empty, or
 /// that its virtual outputs are hidden. Seven strings of the AudioSync Guide
 /// name AirPlay too, with the receivers the sender plays, the ones it can't
@@ -999,6 +1015,7 @@ fn no_text_promises_airplay() {
                     "return @tr(\"AirPlay speakers can wait at most 20 s for a Google Cast speaker,"
                 )
                 || line.contains("return @tr(\"AirPlay adds a {} s delay to every speaker.")
+                || line.contains("return @tr(\"{0} · AirPlay delay {1} s\", status, seconds);")
                 || line.contains(
                     "live-input-airplay-unknown: @tr(\"AirPlay adds a delay to every speaker."
                 )
@@ -1168,7 +1185,8 @@ fn accessible_names_start_with_the_visible_text() {
         ("calibrate-with-microphone", "calibrate-label"),
     ] {
         for (file, source) in UI_FILES {
-            for block in blocks(source, "Button") {
+            let small = blocks(source, "SmallButton");
+            for block in blocks(source, "Button").into_iter().chain(small) {
                 let lines: Vec<&str> = block.lines().map(str::trim).collect();
                 if !lines
                     .iter()
@@ -1264,7 +1282,7 @@ fn the_double_audio_guide_is_wired_and_worded_in_strings() {
     assert!(guide.contains("root.page-requested(step.page);"));
     // A button that opened nothing says where Settings is, and the log says why.
     assert!(guide.contains("if root.settings-failed: Text {"));
-    assert!(include_str!("view.rs").contains("self.guide.set_settings_failed(!opened);"));
+    assert!(include_str!("view.rs").contains("self.guide().set_settings_failed(!opened);"));
     let wrapping =
         guide.matches("wrap: word-wrap;").count() + guide.matches("SecondaryText {").count();
     assert_eq!(
@@ -1533,10 +1551,10 @@ fn the_guide_has_the_ten_topics_the_spec_names() {
     let strings = include_str!("../ui/strings.slint");
     let topics = [
         ("start", "First Steps"),
-        ("sync", "Sync"),
+        ("cast", "Google Cast"),
         ("calibration", "Calibration"),
         ("volume", "Volume"),
-        ("bluetooth", "Bluetooth"),
+        ("tips", "Tips"),
         ("double", "Hearing Sound Twice"),
         ("more", "More Controls"),
         ("airplay", "AirPlay"),
@@ -1963,8 +1981,8 @@ fn the_updater_notice_uses_strings_and_tokens() {
     }
     let strings = include_str!("../ui/strings.slint");
     for label in [
-        "Download and Install",
-        "Not Now",
+        "Install Update",
+        "Remind Me Later",
         "Skip This Version",
         "Cancel",
         "Try Again",
@@ -2290,7 +2308,9 @@ fn an_off_speakers_slider_is_dimmed_as_the_macs() {
     let slider = component_body(&widgets, "LevelSlider");
     for look in [
         "root.idle ? (Tokens.dark ? #ffffff0e : #00000008)",
-        "background: root.idle ? transparent : root.small ? (Tokens.dark ? #ffffff42 : #000000f5) : Tokens.text;",
+        // An on speaker's fill is the ink the window tints its sliders
+        // (MainWindow.swift:350-351): near white on dark, as the Mac's.
+        "background: root.idle ? transparent : root.small ? (Tokens.dark ? Tokens.text : #000000f5) : Tokens.text;",
         "(Tokens.dark ? #ffffff22 : #ffffff90).mix(",
         "width: root.vertical ? root.thickness : max(0px, piece == 0 ? root.span * root.ratio - root.knob / 2 : root.span * (1 - root.ratio) - root.knob / 2);",
     ] {

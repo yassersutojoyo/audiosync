@@ -253,44 +253,49 @@ fn wake_on_event_loop() {
 }
 
 impl App {
-    pub(super) fn connect_remote(self: &Rc<Self>) {
+    /// What runs before the window is first built: the remote host's way back
+    /// to the app and the menu item that opens the window.
+    pub(super) fn connect_remote_opener(self: &Rc<Self>) {
         REMOTE_APP.with(|app| *app.borrow_mut() = Rc::downgrade(self));
-        self.follow_frame(|app| app.remote_window.window(), "Web Remote");
-        let weak = Rc::downgrade(self);
-        let w = weak.clone();
+        let w = Rc::downgrade(self);
         self.main
             .on_remote_requested(move || with_app(&w, App::show_remote));
+    }
+
+    pub(super) fn connect_remote(self: &Rc<Self>) {
+        self.follow_frame(&self.remote_window(), "Web Remote");
+        let weak = Rc::downgrade(self);
         let w = weak.clone();
-        self.remote_window
+        self.remote_window()
             .on_remote_toggled(move |on| with_app(&w, |app| app.set_remote_on(on)));
         let w = weak.clone();
-        self.remote_window
+        self.remote_window()
             .on_new_code_requested(move || with_app(&w, App::new_remote_code));
         let w = weak.clone();
-        self.remote_window
+        self.remote_window()
             .on_forget_all_requested(move || with_app(&w, App::forget_remote_devices));
-        self.remote_window
+        self.remote_window()
             .on_use_port_enabled(|text, port, failed| {
                 u16::try_from(port).is_ok_and(|port| remote::use_port_enabled(&text, port, failed))
             });
         let w = weak.clone();
-        self.remote_window.on_port_submitted(move |text| {
+        self.remote_window().on_port_submitted(move |text| {
             with_app(&w, |app| app.use_remote_port(&text));
         });
         let w = weak.clone();
-        self.remote_window.on_close_requested(move || {
+        self.remote_window().on_close_requested(move || {
             with_app(&w, |app| {
                 // A window that fails to hide stays open; the user can still close it.
-                let _ = app.remote_window.hide();
+                let _ = app.remote_window().hide();
             })
         });
-        self.remote_window.on_exit_requested(|| {
+        self.remote_window().on_exit_requested(|| {
             let _ = slint::quit_event_loop();
         });
         let w = weak;
-        self.remote_window.window().on_close_requested(move || {
+        self.remote_window().window().on_close_requested(move || {
             with_app(&w, |app| {
-                let _ = app.remote_window.hide();
+                let _ = app.remote_window().hide();
             });
             slint::CloseRequestResponse::HideWindow
         });
@@ -331,19 +336,19 @@ impl App {
     /// Opens the window, or brings it to the front; opening it makes a new
     /// pairing code and ends a lockout.
     pub fn show_remote(&self) {
-        let opening = !self.remote_window.window().is_visible();
+        let opening = !self.remote_window.is_visible();
         if opening {
             self.rotate_remote_code();
             self.remote.borrow_mut().devices_offline = None;
             self.log.log(|| "web remote: window opened".to_owned());
         }
         self.show_remote_state();
-        if let Err(error) = self.remote_window.show() {
+        if let Err(error) = self.remote_window().show() {
             self.show_window_error(&error);
             return;
         }
-        self.remote_window.invoke_take_focus();
-        crate::platform::bring_to_front(self.remote_window.window());
+        self.remote_window().invoke_take_focus();
+        crate::platform::bring_to_front(self.remote_window().window());
     }
 
     fn set_remote_on(&self, on: bool) {
@@ -487,11 +492,11 @@ impl App {
     /// Has Narrator say `text` in the web remote window while it shows, as
     /// [`App::announce`] does in the main window.
     fn announce_remote(&self, text: SharedString) {
-        if !self.remote_window.window().is_visible() {
+        if !self.remote_window.is_visible() {
             return;
         }
-        self.remote_window.set_announcement(text);
-        let window = self.remote_window.as_weak();
+        self.remote_window().set_announcement(text);
+        let window = self.remote_window().as_weak();
         self.remote.borrow().announcement_timer.start(
             slint::TimerMode::SingleShot,
             super::ANNOUNCEMENT_CLEARS_AFTER,
@@ -601,7 +606,7 @@ impl App {
             self.log_remote_events(server);
         }
         self.read_network_profiles();
-        if self.remote_window.window().is_visible() {
+        if self.remote_window.is_visible() {
             self.show_remote_state();
         }
     }
@@ -664,8 +669,11 @@ impl App {
 
     /// Fills the window from the setting and the server.
     pub(super) fn show_remote_state(&self) {
+        let Some(window) = self.remote_window.built() else {
+            return;
+        };
         let settings = self.ui.borrow().remote;
-        let window = &self.remote_window;
+        let window = &window;
         let mut host = self.remote.borrow_mut();
         window.set_remote_on(settings.on);
         window.set_port(i32::from(settings.port));
@@ -766,7 +774,7 @@ mod tests {
     use audiosync_airplay::error::ErrorKind;
     use audiosync_airplay::sender::SpeakerState as AirPlayState;
 
-    use super::super::tests::{app_over, draw_frames, hold_clock, let_notice_close, press};
+    use super::super::tests::{app_over, draw_frames, hold_clock, leaked, let_notice_close, press};
     use crate::adapter::AudioAdapter;
     use crate::audio::airplay::tests::{Call, FakeAirPlay, OPEN_TXT, airplay2_tv, device, id_of};
     use crate::audio::pairings::PairingStore;
@@ -853,7 +861,7 @@ mod tests {
     #[test]
     fn escape_closes_the_window_from_the_switch() {
         let app = over_loopback(MockBackend::new());
-        let window = app.remote_window.window();
+        let window = leaked(app.remote_window());
         app.main.invoke_remote_requested();
         draw_frames();
         assert!(window.is_visible());
@@ -867,17 +875,17 @@ mod tests {
     fn file_web_remote_opens_the_window_and_the_switch_is_kept() {
         let app = over_loopback(MockBackend::new());
         app.main.invoke_remote_requested();
-        assert!(app.remote_window.window().is_visible());
-        assert!(!app.remote_window.get_remote_on(), "off by default");
+        assert!(app.remote_window.is_visible());
+        assert!(!app.remote_window().get_remote_on(), "off by default");
         assert!(!app.remote_listening());
 
         let port = free_port();
         app.ui.borrow_mut().remote.port = port;
-        app.remote_window.invoke_remote_toggled(true);
+        app.remote_window().invoke_remote_toggled(true);
         assert!(app.remote_listening(), "on, it listens");
-        assert!(app.remote_window.get_listening());
-        assert_eq!(app.remote_window.get_code().len(), 6);
-        assert_eq!(app.remote_window.get_devices(), 0);
+        assert!(app.remote_window().get_listening());
+        assert_eq!(app.remote_window().get_code().len(), 6);
+        assert_eq!(app.remote_window().get_devices(), 0);
         assert_eq!(
             app.backend.borrow().view_settings().remote,
             RemoteSettings { on: true, port },
@@ -885,12 +893,12 @@ mod tests {
         );
         // Not paired, so the API turns the request down: the server answers.
         assert!(get_state(port).starts_with("HTTP/1.1 401"));
-        let cookie = pair(port, &app.remote_window.get_code());
+        let cookie = pair(port, &app.remote_window().get_code());
         assert!(state_as(port, &cookie).starts_with("HTTP/1.1 200"));
 
-        app.remote_window.invoke_remote_toggled(false);
+        app.remote_window().invoke_remote_toggled(false);
         assert!(!app.remote_listening());
-        assert!(!app.remote_window.get_listening());
+        assert!(!app.remote_window().get_listening());
         assert!(!app.backend.borrow().view_settings().remote.on);
         // Another process binds the port once it is free, as parallel test runs do.
         let _other = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).ok();
@@ -908,7 +916,7 @@ mod tests {
         let on_save = backend.on_save.clone();
         let app = over_loopback(backend);
         app.ui.borrow_mut().remote.port = free_port();
-        app.remote_window.invoke_remote_toggled(true);
+        app.remote_window().invoke_remote_toggled(true);
         assert!(app.remote_listening());
         let listening_at_save = std::rc::Rc::new(std::cell::Cell::new(None));
         let set = on_save.set(Box::new({
@@ -934,7 +942,7 @@ mod tests {
         let on_save = backend.on_save.clone();
         let app = over_loopback(backend);
         app.ui.borrow_mut().remote.port = free_port();
-        app.remote_window.invoke_remote_toggled(true);
+        app.remote_window().invoke_remote_toggled(true);
         assert!(app.remote_listening());
         let listening_at_save = std::rc::Rc::new(std::cell::Cell::new(None));
         let set = on_save.set(Box::new({
@@ -953,9 +961,9 @@ mod tests {
     fn web_remote_chosen_again_while_its_window_shows_keeps_the_code() {
         let app = over_loopback(MockBackend::new());
         app.ui.borrow_mut().remote.port = free_port();
-        app.remote_window.invoke_remote_toggled(true);
+        app.remote_window().invoke_remote_toggled(true);
         app.main.invoke_remote_requested();
-        assert!(app.remote_window.window().is_visible());
+        assert!(app.remote_window.is_visible());
         let code = current_code(&app);
         app.main.invoke_remote_requested();
         assert_eq!(current_code(&app), code);
@@ -987,15 +995,15 @@ mod tests {
         let app = over_loopback(backend);
         let port = free_port();
         app.ui.borrow_mut().remote.port = port;
-        app.remote_window.invoke_remote_toggled(true);
-        let code = app.remote_window.get_code();
+        app.remote_window().invoke_remote_toggled(true);
+        let code = app.remote_window().get_code();
         *late_view.borrow_mut() = Some(crate::ui_model::ViewSettings {
             remote: RemoteSettings { on: true, port },
             ..crate::ui_model::ViewSettings::default()
         });
         app.poll();
         assert!(app.remote_listening());
-        assert_eq!(app.remote_window.get_code(), code);
+        assert_eq!(app.remote_window().get_code(), code);
     }
 
     #[test]
@@ -1003,20 +1011,20 @@ mod tests {
         let app = over_loopback(MockBackend::new());
         app.ui.borrow_mut().remote.port = free_port();
         app.main.invoke_remote_requested();
-        app.remote_window.invoke_remote_toggled(true);
-        let first = app.remote_window.get_code();
-        app.remote_window.invoke_close_requested();
-        assert!(!app.remote_window.window().is_visible());
+        app.remote_window().invoke_remote_toggled(true);
+        let first = app.remote_window().get_code();
+        app.remote_window().invoke_close_requested();
+        assert!(!app.remote_window.is_visible());
         assert!(
             app.remote_listening(),
             "closing the window keeps the remote on"
         );
         app.main.invoke_remote_requested();
-        let second = app.remote_window.get_code();
+        let second = app.remote_window().get_code();
         assert_eq!(second.len(), 6);
         assert_ne!(first, second, "a new code (one in a million to fail)");
-        app.remote_window.invoke_new_code_requested();
-        assert_ne!(app.remote_window.get_code(), second);
+        app.remote_window().invoke_new_code_requested();
+        assert_ne!(app.remote_window().get_code(), second);
     }
 
     // covers: S368
@@ -1025,16 +1033,16 @@ mod tests {
         let app = over_loopback(MockBackend::new());
         app.ui.borrow_mut().remote.port = free_port();
         app.main.invoke_remote_requested();
-        let said = || app.remote_window.get_announcement().to_string();
+        let said = || app.remote_window().get_announcement().to_string();
         let spoken = || {
             format!(
                 "Pairing code {}",
                 crate::remote::spaced_digits(&current_code(&app))
             )
         };
-        app.remote_window.invoke_remote_toggled(true);
+        app.remote_window().invoke_remote_toggled(true);
         assert_eq!(said(), spoken(), "the remote turned on");
-        app.remote_window.invoke_new_code_requested();
+        app.remote_window().invoke_new_code_requested();
         assert_eq!(said(), spoken(), "New Code");
     }
 
@@ -1059,21 +1067,21 @@ mod tests {
         let app = over_loopback(MockBackend::new());
         app.ui.borrow_mut().remote.port = busy;
         app.main.invoke_remote_requested();
-        app.remote_window.invoke_remote_toggled(true);
-        assert!(app.remote_window.get_remote_on(), "the setting stays on");
-        assert!(app.remote_window.get_port_problem());
-        assert!(app.remote_window.get_port_in_use());
-        assert_eq!(app.remote_window.get_port(), i32::from(busy));
-        assert!(!app.remote_window.get_listening());
+        app.remote_window().invoke_remote_toggled(true);
+        assert!(app.remote_window().get_remote_on(), "the setting stays on");
+        assert!(app.remote_window().get_port_problem());
+        assert!(app.remote_window().get_port_in_use());
+        assert_eq!(app.remote_window().get_port(), i32::from(busy));
+        assert!(!app.remote_window().get_listening());
 
-        app.remote_window.invoke_port_submitted("80".into());
-        assert!(app.remote_window.get_port_invalid());
-        assert!(app.remote_window.get_port_in_use(), "nothing changed");
+        app.remote_window().invoke_port_submitted("80".into());
+        assert!(app.remote_window().get_port_invalid());
+        assert!(app.remote_window().get_port_in_use(), "nothing changed");
         let use_port = |text: &str| {
-            app.remote_window.invoke_use_port_enabled(
+            app.remote_window().invoke_use_port_enabled(
                 text.into(),
-                app.remote_window.get_port(),
-                app.remote_window.get_port_problem(),
+                app.remote_window().get_port(),
+                app.remote_window().get_port_problem(),
             )
         };
         assert!(!use_port("80"));
@@ -1081,11 +1089,11 @@ mod tests {
 
         let free = free_port();
         assert!(use_port(&free.to_string()));
-        app.remote_window
+        app.remote_window()
             .invoke_port_submitted(free.to_string().into());
-        assert!(!app.remote_window.get_port_in_use());
-        assert!(!app.remote_window.get_port_invalid());
-        assert!(app.remote_window.get_listening());
+        assert!(!app.remote_window().get_port_in_use());
+        assert!(!app.remote_window().get_port_invalid());
+        assert!(app.remote_window().get_listening());
         assert_eq!(app.backend.borrow().view_settings().remote.port, free);
     }
 
@@ -1115,18 +1123,18 @@ mod tests {
         // Not this machine's address: binding fails, and not because the port is taken.
         app.remote.borrow_mut().listen = vec![Ipv4Addr::new(192, 0, 2, 1).into()];
         app.main.invoke_remote_requested();
-        app.remote_window.invoke_remote_toggled(true);
-        assert!(app.remote_window.get_port_problem());
-        assert!(!app.remote_window.get_port_in_use());
-        assert_eq!(app.remote_window.get_problem(), "", "no raw OS error");
-        assert!(!app.remote_window.get_listening());
+        app.remote_window().invoke_remote_toggled(true);
+        assert!(app.remote_window().get_port_problem());
+        assert!(!app.remote_window().get_port_in_use());
+        assert_eq!(app.remote_window().get_problem(), "", "no raw OS error");
+        assert!(!app.remote_window().get_listening());
 
         app.remote.borrow_mut().listen = vec![Ipv4Addr::LOCALHOST.into()];
         let free = free_port();
-        app.remote_window
+        app.remote_window()
             .invoke_port_submitted(free.to_string().into());
-        assert!(!app.remote_window.get_port_problem());
-        assert!(app.remote_window.get_listening());
+        assert!(!app.remote_window().get_port_problem());
+        assert!(app.remote_window().get_listening());
     }
 
     #[test]
@@ -1141,11 +1149,11 @@ mod tests {
         let app = over_loopback(MockBackend::new());
         app.remote.borrow_mut().devices_path = Some(path.clone());
         app.main.invoke_remote_requested();
-        assert!(!app.remote_window.get_remote_on());
-        assert_eq!(app.remote_window.get_devices(), 1, "read from the file");
-        app.remote_window.invoke_forget_all_requested();
-        assert_eq!(app.remote_window.get_devices(), 0);
-        assert!(!app.remote_window.get_forget_failed());
+        assert!(!app.remote_window().get_remote_on());
+        assert_eq!(app.remote_window().get_devices(), 1, "read from the file");
+        app.remote_window().invoke_forget_all_requested();
+        assert_eq!(app.remote_window().get_devices(), 0);
+        assert!(!app.remote_window().get_forget_failed());
         let kept = std::fs::read_to_string(&path).expect("read");
         assert!(!kept.contains(&"ab".repeat(32)), "the file forgets it too");
 
@@ -1153,10 +1161,10 @@ mod tests {
         let blocker = dir.join("blocker");
         std::fs::write(&blocker, "").expect("written");
         app.remote.borrow_mut().devices_path = Some(blocker.join("remote-devices.json"));
-        app.remote_window.invoke_forget_all_requested();
-        assert!(app.remote_window.get_forget_failed());
+        app.remote_window().invoke_forget_all_requested();
+        assert!(app.remote_window().get_forget_failed());
         assert_eq!(
-            app.remote_window.get_announcement(),
+            app.remote_window().get_announcement(),
             app.strings().get_remote_forget_failed()
         );
     }
@@ -1217,12 +1225,12 @@ mod tests {
         let app = super::super::tests::app_logging(MockBackend::new(), log.clone());
         app.remote.borrow_mut().listen = vec![Ipv4Addr::LOCALHOST.into()];
         app.ui.borrow_mut().remote.port = free_port();
-        app.remote_window.invoke_remote_toggled(true);
+        app.remote_window().invoke_remote_toggled(true);
         let first = current_code(&app);
-        app.remote_window.invoke_new_code_requested();
+        app.remote_window().invoke_new_code_requested();
         let second = current_code(&app);
         app.poll_remote();
-        app.remote_window.invoke_remote_toggled(false);
+        app.remote_window().invoke_remote_toggled(false);
         assert!(log.flush(debug_log::TEST_FLUSH));
         let messages = debug_log::read_messages(&path);
         debug_log::assert_in_order(
@@ -1235,8 +1243,8 @@ mod tests {
 
         let quiet = over_loopback(MockBackend::new());
         quiet.ui.borrow_mut().remote.port = free_port();
-        quiet.remote_window.invoke_remote_toggled(true);
-        quiet.remote_window.invoke_new_code_requested();
+        quiet.remote_window().invoke_remote_toggled(true);
+        quiet.remote_window().invoke_new_code_requested();
         let host = quiet.remote.borrow();
         let server = host.server.as_ref().expect("listening");
         let events: Vec<String> = std::iter::from_fn(|| server.poll_event())
@@ -1252,7 +1260,7 @@ mod tests {
     fn a_command_from_the_page_works_like_the_windows_controls() {
         let app = over_loopback(MockBackend::new());
         app.ui.borrow_mut().remote.port = free_port();
-        app.remote_window.invoke_remote_toggled(true);
+        app.remote_window().invoke_remote_toggled(true);
         let state = app.snapshot();
         let speaker = state
             .speakers
@@ -1512,7 +1520,7 @@ mod tests {
             let state = app.snapshot();
             !state.speaker("airplay:living").expect("listed").enabled
                 && state.pin_prompt.is_none()
-                && !app.pin_dialog.window().is_visible()
+                && !app.pin_dialog.is_visible()
         };
         sender.send(zone).expect("sent");
         app.take_remote_commands();
@@ -1595,7 +1603,7 @@ mod tests {
         let app = app_over(MockBackend::new());
         app.update(|b| b.set_speaker_enabled("local:desk", true));
         app.save_preset("Flat");
-        let eq_window = &app.equalizer;
+        let eq_window = &app.equalizer();
         let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap() as i32;
         eq_window.invoke_preset_selected(rock);
         eq_window.invoke_save_curve();
@@ -1642,9 +1650,9 @@ mod tests {
         );
         let state = app.snapshot();
         assert_eq!(state.password_prompt, None);
-        assert!(!app.password_dialog.window().is_visible());
+        assert!(!app.password_dialog.is_visible());
         assert_eq!(state.pin_prompt, None);
-        assert!(!app.pin_dialog.window().is_visible());
+        assert!(!app.pin_dialog.is_visible());
         assert!(!state.speaker(id).expect("listed").enabled);
         assert!(
             state
@@ -1754,11 +1762,11 @@ mod tests {
         let port = free_port();
         app.ui.borrow_mut().remote.port = port;
         app.main.invoke_remote_requested();
-        app.remote_window.invoke_remote_toggled(true);
+        app.remote_window().invoke_remote_toggled(true);
         // The UI thread's own lookup would give 192.0.2.7 here, or the CI runner's address.
         let wanted = crate::remote::ip_url(Ipv4Addr::new(198, 51, 100, 9), port);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while app.remote_window.get_ip_address() != wanted.as_str() {
+        while app.remote_window().get_ip_address() != wanted.as_str() {
             assert!(std::time::Instant::now() < deadline, "no reading");
             std::thread::sleep(std::time::Duration::from_millis(5));
             app.poll_remote();
@@ -1778,7 +1786,7 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
             app.poll_remote();
-            if app.remote_window.get_public_network() == public {
+            if app.remote_window().get_public_network() == public {
                 return;
             }
             assert!(std::time::Instant::now() < deadline, "no reading");
@@ -1797,7 +1805,7 @@ mod tests {
         app.remote.borrow_mut().profiles = Some(fake.clone());
         app.ui.borrow_mut().remote.port = free_port();
         app.main.invoke_remote_requested();
-        app.remote_window.invoke_remote_toggled(true);
+        app.remote_window().invoke_remote_toggled(true);
         poll_until_public(&app, true);
         assert_eq!(public_notices(&app), 1);
 
@@ -1807,7 +1815,7 @@ mod tests {
         let_notice_close();
         assert_eq!(public_notices(&app), 0, "dismissed");
         assert!(
-            app.remote_window.get_public_network(),
+            app.remote_window().get_public_network(),
             "the window still says so"
         );
 
@@ -1817,9 +1825,9 @@ mod tests {
         poll_until_public(&app, true);
         assert_eq!(public_notices(&app), 1, "back on a Public network");
 
-        app.remote_window.invoke_remote_toggled(false);
+        app.remote_window().invoke_remote_toggled(false);
         assert_eq!(public_notices(&app), 0, "the remote is off");
-        assert!(!app.remote_window.get_public_network());
+        assert!(!app.remote_window().get_public_network());
     }
 
     #[test]
@@ -1832,7 +1840,7 @@ mod tests {
         app.ui.borrow_mut().remote.port = port;
         app.remote.borrow_mut().host = None;
         app.main.invoke_remote_requested();
-        let window = &app.remote_window;
+        let window = &app.remote_window();
         window.invoke_remote_toggled(true);
         while app.remote.borrow().problem == Some(super::Problem::Port { in_use: true }) {
             window.invoke_remote_toggled(false);
@@ -1868,7 +1876,7 @@ mod tests {
         app.ui.borrow_mut().remote.port = free_port();
         app.main.invoke_remote_requested();
         draw_frames();
-        let window = &app.remote_window;
+        let window = &app.remote_window();
         let has = |text: &str| {
             ElementHandle::find_by_accessible_label(window, text)
                 .next()

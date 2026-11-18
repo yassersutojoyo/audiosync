@@ -116,6 +116,8 @@ export struct PresetItem {
     name: string,
     // It plays exactly now (spec S264).
     current: bool,
+    // It was picked last, as the Presets row names it.
+    picked: bool,
     // How many speakers it holds and its master volume, 0 to 100 (S259).
     speakers: int,
     master: int,

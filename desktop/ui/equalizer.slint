@@ -6,7 +6,7 @@
 import { Palette } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { FocusRing, Fluent, Glyph, Glyphs, MenuDivider, MenuPanel, MenuRepaint, MenuRoom, MenuRow, MenuState, NameField, LevelSlider, QuietText, SecondaryText, SmallButton, TextField, ToggleSwitch } from "widgets.slint";
+import { FocusRing, Fluent, Glyph, Glyphs, MenuDivider, MenuPanel, MenuRepaint, MenuRoom, MenuRow, MenuState, NameField, LevelSlider, OverlayScrollView, QuietText, SecondaryText, SmallButton, TextField, ToggleSwitch } from "widgets.slint";
 
 // One vertical gain slider with its value above and its label below.
 component Band inherits VerticalLayout {
@@ -68,8 +68,7 @@ component Band inherits VerticalLayout {
                 property <length> thumb-y: 10px + (self.height - 20px) * (root.max-gain - slider.value) / (2 * root.max-gain);
                 property <length> zero-y: round(self.height / 2 / 1px) * 1px;
                 width: 32px;
-                min-height: 140px;
-                vertical-stretch: 1;
+                height: 140px;
 
                 // Only these fade with the equalizer off; the focus ring keeps its contrast.
                 Rectangle {
@@ -289,92 +288,112 @@ component CurveMenu inherits Rectangle {
         y: root.height + 4px - MenuRoom.margin;
         width: max(root.width + 2 * MenuRoom.margin, 240px + 2 * MenuRoom.margin, panel.preferred-width);
         close-policy: close-on-click-outside;
+        // The window cuts a popup at its edge, so a long list stops 8 px
+        // above the window's bottom and its rows scroll.
+        height: MenuRoom.height > 0px ? min(panel.preferred-height, MenuRoom.height - root.absolute-position.y - root.height - 12px + 2 * MenuRoom.margin) : panel.preferred-height;
 
         panel := MenuPanel {
             count: root.names.length + (root.saved-shown ? 3 : 1);
+            // A row the keys pick scrolls into view: 24 px rows, a 9 px divider before the saved curves and before Save Curve….
+            changed current => {
+                if self.current >= 0 {
+                    let top = self.current * 24px + (self.current >= root.preset-count && root.names.length > root.preset-count ? 9px : 0px) + (self.current >= root.names.length ? 9px : 0px);
+                    if top < -list.content-y {
+                        list.content-y = -top;
+                    } else if top + 24px > list.visible-height - list.content-y {
+                        list.content-y = list.visible-height - top - 24px;
+                    }
+                }
+            }
             close-requested => {
                 menu.close();
             }
 
-            for i in root.preset-count: MenuRow {
-                index: i;
-                text: root.names[i];
-                checks: true;
-                checked: i == root.current;
-                current <=> panel.current;
-                keyboard <=> panel.keyboard;
-                pulse: panel.pulse;
-                done <=> panel.done;
-                activated => {
-                    root.selected(i);
-                }
-            }
+            list := OverlayScrollView {
+                preferred-width: rows.preferred-width;
+                preferred-height: rows.preferred-height;
+                content-height: rows.preferred-height;
 
-            if root.names.length > root.preset-count: MenuDivider { }
+                rows := VerticalLayout {
+                    width: list.visible-width;
 
-            for i in root.names.length - root.preset-count: MenuRow {
-                index: root.preset-count + i;
-                text: root.names[root.preset-count + i];
-                checks: true;
-                checked: root.preset-count + i == root.current;
-                current <=> panel.current;
-                keyboard <=> panel.keyboard;
-                pulse: panel.pulse;
-                done <=> panel.done;
-                activated => {
-                    root.selected(root.preset-count + i);
-                }
-            }
+                    for i in root.preset-count: MenuRow {
+                        index: i;
+                        text: root.names[i];
+                        current <=> panel.current;
+                        keyboard <=> panel.keyboard;
+                        pulse: panel.pulse;
+                        done <=> panel.done;
+                        activated => {
+                            root.selected(i);
+                        }
+                    }
 
-            MenuDivider { }
+                    if root.names.length > root.preset-count: MenuDivider { }
 
-            MenuRow {
-                index: root.names.length;
-                text: Strings.equalizer-save-curve;
-                check-column: true;
-                enabled: !root.naming;
-                step: panel.step;
-                count: panel.count;
-                current <=> panel.current;
-                keyboard <=> panel.keyboard;
-                pulse: panel.pulse;
-                done <=> panel.done;
-                activated => {
-                    menu.close();
-                    root.save();
-                }
-            }
+                    for i in root.names.length - root.preset-count: MenuRow {
+                        index: root.preset-count + i;
+                        text: root.names[root.preset-count + i];
+                        current <=> panel.current;
+                        keyboard <=> panel.keyboard;
+                        pulse: panel.pulse;
+                        done <=> panel.done;
+                        activated => {
+                            root.selected(root.preset-count + i);
+                        }
+                    }
 
-            if root.saved-shown: MenuRow {
-                index: root.names.length + 1;
-                text: Strings.equalizer-rename-curve(root.saved-name);
-                check-column: true;
-                enabled: !root.naming;
-                step: panel.step;
-                count: panel.count;
-                current <=> panel.current;
-                keyboard <=> panel.keyboard;
-                pulse: panel.pulse;
-                done <=> panel.done;
-                activated => {
-                    root.rename();
-                    menu.close();
-                }
-            }
+                    MenuDivider { }
 
-            if root.saved-shown: MenuRow {
-                index: root.names.length + 2;
-                text: Strings.equalizer-delete-curve(root.saved-name);
-                check-column: true;
-                enabled: !root.naming;
-                step: panel.step;
-                count: panel.count;
-                current <=> panel.current;
-                keyboard <=> panel.keyboard;
-                pulse: panel.pulse;
-                done <=> panel.done;
-                activated => {
-                    root.delete();
+                    MenuRow {
+                        index: root.names.length;
+                        text: Strings.equalizer-save-curve;
+                        check-column: true;
+                        enabled: !root.naming;
+                        step: panel.step;
+                        count: panel.count;
+                        current <=> panel.current;
+                        keyboard <=> panel.keyboard;
+                        pulse: panel.pulse;
+                        done <=> panel.done;
+                        activated => {
+                            menu.close();
+                            root.save();
+                        }
+                    }
+
+                    if root.saved-shown: MenuRow {
+                        index: root.names.length + 1;
+                        text: Strings.equalizer-rename-curve(root.saved-name);
+                        check-column: true;
+                        enabled: !root.naming;
+                        step: panel.step;
+                        count: panel.count;
+                        current <=> panel.current;
+                        keyboard <=> panel.keyboard;
+                        pulse: panel.pulse;
+                        done <=> panel.done;
+                        activated => {
+                            root.rename();
+                            menu.close();
+                        }
+                    }
+
+                    if root.saved-shown: MenuRow {
+                        index: root.names.length + 2;
+                        text: Strings.equalizer-delete-curve(root.saved-name);
+                        check-column: true;
+                        enabled: !root.naming;
+                        step: panel.step;
+                        count: panel.count;
+                        current <=> panel.current;
+                        keyboard <=> panel.keyboard;
+                        pulse: panel.pulse;
+                        done <=> panel.done;
+                        activated => {
+                            root.delete();
+                        }
+                    }
                 }
             }
         }
@@ -433,12 +452,20 @@ export component EqualizerWindow inherits Window {
     background: Tokens.background;
     min-width: 520px;
     max-width: 520px;
-    min-height: 360px;
+    // Fixed in size, as on the Mac.
+    min-height: content.preferred-height;
+    max-height: content.preferred-height;
     default-font-family: Fluent.font;
     default-font-weight: Fluent.weight-regular;
     default-font-size: Tokens.font-size-body;
     // Key events go to the focused item, so Escape needs the scope focused.
     forward-focus: keys;
+    init => {
+        MenuRoom.height = self.height;
+    }
+    changed height => {
+        MenuRoom.height = self.height;
+    }
 
     // Called each time the window opens, so Escape works before anything
     // inside is clicked.
@@ -499,7 +526,7 @@ export component EqualizerWindow inherits Window {
             return reject;
         }
 
-        VerticalLayout {
+        content := VerticalLayout {
             padding: 18px;
             spacing: 14px;
 

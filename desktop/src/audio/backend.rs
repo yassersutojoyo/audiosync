@@ -761,6 +761,9 @@ pub enum StopReason {
     SourceQuit,
     /// Capture failed and could not go on.
     CaptureFailed(BackendError),
+    /// The app being captured quit and the whole system's capture, set to
+    /// take over, could not start.
+    SystemSwitchFailed(BackendError),
 }
 
 /// The HRESULT of a wait that timed out, `HRESULT_FROM_WIN32(ERROR_TIMEOUT)`:

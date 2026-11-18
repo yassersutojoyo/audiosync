@@ -5,10 +5,14 @@
 //! (16-bit little-endian stereo, 44.1 kHz) when the sender's sync packets
 //! say they are heard, mapped onto this machine's clock through the timing
 //! exchanges. A frame missing from the RTP sequence is written as silence.
+//! It adds the latency it reports in `Audio-Latency` on top of the stated
+//! time, as the app's own model of a receiver has it (engine spec S283;
+//! what real receivers do stays open, AirPlay spec P203);
+//! `--latency-not-added` plays at the stated time instead.
 //! Development only; examples never enter a release build.
 //!
 //! ```text
-//! cargo run -p audiosync-airplay --example stranger_rx -- <address> [<name>]
+//! cargo run -p audiosync-airplay --example stranger_rx -- <address> [<name>] [--latency-not-added]
 //! ```
 
 #[path = "../tests/common/mod.rs"]
@@ -21,6 +25,7 @@ use std::time::{Duration, Instant};
 
 use audiosync_airplay::audio::{FRAMES_PER_PACKET, read_pcm_payload};
 use audiosync_airplay::clock::{NtpTime, SenderClock};
+use common::FakeReceiver;
 use common::net::{Behavior, NetReceiver};
 use mdns_sd::{ServiceDaemon, ServiceInfo};
 
@@ -79,12 +84,21 @@ fn advertise(ip: IpAddr, port: u16, name: &str) -> Result<ServiceDaemon, mdns_sd
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let before = args.len();
+    args.retain(|arg| arg != "--latency-not-added");
+    let adds_latency = args.len() == before;
     let Some(ip) = args.first().and_then(|text| text.parse::<IpAddr>().ok()) else {
-        eprintln!("usage: stranger_rx <address> [<name>]");
+        eprintln!("usage: stranger_rx <address> [<name>] [--latency-not-added]");
         std::process::exit(2);
     };
     let name = args.get(1).map_or("Stranger Receiver", String::as_str);
+    let reported = FakeReceiver::new().audio_latency.unwrap_or(0);
+    let added = if adds_latency {
+        Duration::from_secs_f64(f64::from(reported) / RATE)
+    } else {
+        Duration::ZERO
+    };
     let receiver = NetReceiver::start_at(ip, Behavior::default()).unwrap_or_else(|error| {
         eprintln!("stranger_rx: can't listen on {ip}: {error}");
         std::process::exit(1);
@@ -93,7 +107,11 @@ fn main() {
         eprintln!("stranger_rx: mDNS: {error}");
         std::process::exit(1);
     });
-    eprintln!("stranger_rx: {name} on {}", receiver.address);
+    eprintln!(
+        "stranger_rx: {name} on {}, reports {reported} frames, adds {} ms",
+        receiver.address,
+        added.as_millis()
+    );
 
     let clock = SenderClock::new(Instant::now());
     let seconds = |time: NtpTime| clock.seconds_of(time);
@@ -122,7 +140,7 @@ fn main() {
         if let Some(mapping) = mapping {
             let now = Instant::now();
             while let Some((&rtp, _)) = pending.first_key_value() {
-                if mapping.play_at(rtp) > now {
+                if mapping.play_at(rtp) + added > now {
                     break;
                 }
                 let payload = pending

@@ -716,6 +716,16 @@ mod tests {
         );
     }
 
+    /// As the Mac's standard About panel (AboutPanel.swift:36): the app icon
+    /// tile above the name in plain bold text.
+    #[test]
+    fn the_about_dialog_shows_the_app_icon_above_the_name_in_bold() {
+        let about = lf(include_str!("../ui/about.slint"));
+        assert!(about.contains("source: @image-url(\"../res/audiosync-tile-256.png\");"));
+        assert!(about.contains("text: Strings.app-name;\n                font-weight: 700;"));
+        assert!(!about.contains("BrandMark {") && !about.contains("Wordmark {"));
+    }
+
     /// The Mac's menu shortcuts and what each is on Windows: the `Strings`
     /// title of the gear's menu item (empty for a shortcut with no item, as
     /// on the Mac's speaker panels and Equalizer row), its `@keys`, and how
@@ -726,7 +736,12 @@ mod tests {
     /// menu bar is in the main window itself. Its Edit menu is the text
     /// fields' own Ctrl keys.
     const MENU_SHORTCUTS: &[(&str, &str, &str, &str)] = &[
-        ("Apply Typed Delay, Command-S", "", "Control + S", "Ctrl+S"),
+        (
+            "Apply Typed Delay, Command-S",
+            "menu-apply-delay",
+            "Control + S",
+            "Ctrl+S",
+        ),
         ("Close Window, Command-W", "", "Control + W", "Ctrl+W"),
         (
             "Quit AudioSync, Command-Q",
@@ -741,7 +756,12 @@ mod tests {
             "Ctrl+N",
         ),
         ("Refresh Devices, Command-R", "refresh-devices", "F5", "F5"),
-        ("Equalizer, Option-Command-E", "", "Control + E", "Ctrl+E"),
+        (
+            "Equalizer, Option-Command-E",
+            "equalizer",
+            "Control + E",
+            "Ctrl+E",
+        ),
         ("AudioSync Guide, Command-?", "help-title", "F1", "F1"),
         (
             "Settings…, Command-,",
@@ -830,18 +850,29 @@ mod tests {
     /// windows without a menu bar too.
     #[test]
     fn ctrl_q_exits_from_the_windows_without_a_menu_bar() {
-        let view = include_str!("view.rs");
+        let view = [include_str!("view.rs"), include_str!("view/on_demand.rs")].concat();
         for (name, source) in windows_without_a_menu_bar() {
             let source = lf(source);
             let keys = &source[source.find("keys := FocusScope {").expect("its keys")..];
             assert!(keys.contains(CTRL_Q), "the {name} exits on Ctrl+Q");
         }
-        for window in ["equalizer", "help", "guide", "about"] {
+        for window in ["equalizer", "help", "guide"] {
+            let wire = &view[view
+                .find(&format!("fn wire_{window}("))
+                .expect("its wiring")..];
+            let wire = &wire[..wire
+                .find(
+                    "
+    }
+",
+                )
+                .expect("its end")];
             assert!(
-                view.contains(&format!("self.{window}.on_exit_requested(quit);")),
+                wire.contains("window.on_exit_requested(quit);"),
                 "the {window} window's Ctrl+Q quits"
             );
         }
+        assert!(view.contains("self.about().on_exit_requested(quit);"));
     }
 
     /// `platform::repaint_frame` sends muda's private `MENU_UPDATE_THEME`
@@ -912,7 +943,7 @@ mod tests {
     fn the_flyout_offers_dismiss_all_beside_the_more_notices_button() {
         let flyout = include_str!("../ui/flyout.slint");
         let row = &flyout[flyout
-            .find("if root.notice-count > root.notices.length: IntroPart {")
+            .find("if root.notice-count > root.notices.length: HorizontalLayout {")
             .expect("the more-notices row is there")..];
         let row = &row[..row.find("Divider { }").expect("the row ends")];
         assert!(row.contains("text: Strings.dismiss-all-notices;"), "{row}");
@@ -995,8 +1026,8 @@ mod tests {
             );
         }
         assert!(include_str!("tray.rs").contains("app.flyout.invoke_take_focus();"));
-        assert!(include_str!("view.rs").contains("self.equalizer.invoke_take_focus();"));
-        assert!(include_str!("view.rs").contains("self.guide.invoke_take_focus();"));
+        assert!(include_str!("view.rs").contains("self.equalizer().invoke_take_focus();"));
+        assert!(include_str!("view.rs").contains("self.guide().invoke_take_focus();"));
     }
 
     /// Slint leaves nothing focused when the focused control is removed, and

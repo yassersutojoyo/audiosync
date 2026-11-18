@@ -7,7 +7,7 @@
 import { AboutSlint, VerticalBox } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { BrandMark, DialogButton, Fluent, Wordmark } from "widgets.slint";
+import { DialogButton, Fluent } from "widgets.slint";
 
 export component AboutDialog inherits Dialog {
     in property <string> version;
@@ -25,6 +25,14 @@ export component AboutDialog inherits Dialog {
     callback closed();
     // Ctrl+Q, the gear's Exit, from this window.
     callback exit-requested();
+    // The app's menu keys from this window, as the Settings window takes them.
+    callback help-requested();
+    callback new-zone-requested();
+    callback refresh-devices();
+    callback settings-requested();
+    callback equalizer-requested();
+    callback main-window-requested();
+    callback preset-shortcut(int);
 
     // Called each time the dialog opens, so Escape works before anything
     // inside is clicked.
@@ -42,6 +50,34 @@ export component AboutDialog inherits Dialog {
                 root.exit-requested();
                 return accept;
             }
+            if event.text == Key.F1 && !event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta {
+                root.help-requested();
+                return accept;
+            }
+            if event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text.to-lowercase() == "n" {
+                root.new-zone-requested();
+                return accept;
+            }
+            if (event.text == Key.F5 && !event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta) || (event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text.to-lowercase() == "r") {
+                root.refresh-devices();
+                return accept;
+            }
+            if event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text == "," {
+                root.settings-requested();
+                return accept;
+            }
+            if event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text.to-lowercase() == "e" {
+                root.equalizer-requested();
+                return accept;
+            }
+            if event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text == "0" {
+                root.main-window-requested();
+                return accept;
+            }
+            if event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text.character-count == 1 && event.text.is-float() && event.text.to-float() >= 1 {
+                root.preset-shortcut(event.text.to-float());
+                return accept;
+            }
             return reject;
         }
 
@@ -52,20 +88,21 @@ export component AboutDialog inherits Dialog {
                 alignment: center;
                 padding-top: 8px;
 
-                BrandMark {
-                    running: true;
+                // As the Mac's standard About panel: the app icon, then the name.
+                Image {
+                    source: @image-url("../res/audiosync-tile-256.png");
                     width: 48px;
                     height: 48px;
+                    accessible-role: none;
                 }
             }
 
-            // Narrator reads the wordmark as "AudioSync".
-            HorizontalLayout {
-                alignment: center;
-
-                Wordmark {
-                    size: 24px;
-                }
+            Text {
+                text: Strings.app-name;
+                font-weight: 700;
+                font-size: 24px;
+                color: Tokens.text;
+                horizontal-alignment: center;
             }
 
             Text {

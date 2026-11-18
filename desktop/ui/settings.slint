@@ -412,34 +412,50 @@ export component SettingsWindow inherits Window {
                             }
                         }
 
-                        if root.hidden-speakers.length == 0: SettingsRow {
-                            Text {
-                                text: Strings.no-hidden-speakers;
-                                color: Tokens.secondary-text;
-                                vertical-alignment: center;
+                        // The box springs to its new height, as the Mac's
+                        // (SettingsWindow.swift:211-212).
+                        Rectangle {
+                            height: hidden-rows.preferred-height;
+                            clip: true;
+                            animate height {
+                                duration: Motion.on ? 620ms : 150ms;
+                                easing: Motion.on ? cubic-bezier(0.2, 0.9, 0.3, 1) : linear;
                             }
-                        }
 
-                        for hidden[index] in root.hidden-speakers: VerticalLayout {
-                            if index > 0: Divider { }
+                            hidden-rows := VerticalLayout {
+                                y: 0px;
+                                height: self.preferred-height;
 
-                            SettingsRow {
-                                Text {
-                                    text: Strings.hidden-speaker-entry(hidden.name, hidden.kind, hidden.present);
-                                    color: Tokens.text;
-                                    wrap: word-wrap;
-                                    horizontal-stretch: 1;
-                                    vertical-alignment: center;
+                                if root.hidden-speakers.length == 0: SettingsRow {
+                                    Text {
+                                        text: Strings.no-hidden-speakers;
+                                        color: Tokens.secondary-text;
+                                        vertical-alignment: center;
+                                    }
                                 }
 
-                                VerticalLayout {
-                                    alignment: center;
+                                for hidden[index] in root.hidden-speakers: VerticalLayout {
+                                    if index > 0: Divider { }
 
-                                    SmallButton {
-                                        text: Strings.unhide;
-                                        tip: Strings.unhide-label(Strings.hidden-speaker-entry(hidden.name, hidden.kind, hidden.present));
-                                        clicked => {
-                                            root.speaker-unhide-requested(hidden.id);
+                                    SettingsRow {
+                                        Text {
+                                            text: Strings.hidden-speaker-entry(hidden.name, hidden.kind, hidden.present);
+                                            color: Tokens.text;
+                                            wrap: word-wrap;
+                                            horizontal-stretch: 1;
+                                            vertical-alignment: center;
+                                        }
+
+                                        VerticalLayout {
+                                            alignment: center;
+
+                                            SmallButton {
+                                                text: Strings.unhide;
+                                                tip: Strings.unhide-label(Strings.hidden-speaker-entry(hidden.name, hidden.kind, hidden.present));
+                                                clicked => {
+                                                    root.speaker-unhide-requested(hidden.id);
+                                                }
+                                            }
                                         }
                                     }
                                 }

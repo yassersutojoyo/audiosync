@@ -11,12 +11,9 @@ use super::{App, FLYOUT_FIRST_FRAME, Motion, SETTINGS_OPENING, with_app};
 
 impl App {
     pub(super) fn connect_settings(self: &Rc<Self>) {
-        self.follow_frame(|app| app.settings.window(), "Settings");
+        self.follow_frame(&self.settings(), "Settings");
         let weak = Rc::downgrade(self);
-        let w = weak.clone();
-        self.main
-            .on_settings_requested(move || with_app(&w, App::show_settings));
-        let s = &self.settings;
+        let s = &self.settings();
         let main = self.main.as_weak();
         macro_rules! forward {
             ($($on:ident => $invoke:ident($($arg:ident),*)),+ $(,)?) => {$(
@@ -57,32 +54,32 @@ impl App {
         self.show_settings_state();
         let motion = self.main.global::<Motion>().get_on();
         // With animation effects off it shows at once, never blank first.
-        let fading = motion && !self.settings.window().is_visible();
-        self.settings.global::<Motion>().set_on(motion);
+        let fading = motion && !self.settings.is_visible();
+        self.settings().global::<Motion>().set_on(motion);
         if fading {
-            self.settings.set_revealed(false);
-            crate::platform::set_cloaked(self.settings.window(), true);
-        } else if !self.settings.window().is_visible() {
+            self.settings().set_revealed(false);
+            crate::platform::set_cloaked(self.settings().window(), true);
+        } else if !self.settings.is_visible() {
             // A fading opening's timer left from just before has nothing to do.
             SETTINGS_OPENING.with(|count| count.set(count.get() + 1));
-            crate::platform::set_cloaked(self.settings.window(), false);
-            self.settings.set_revealed(true);
+            crate::platform::set_cloaked(self.settings().window(), false);
+            self.settings().set_revealed(true);
         }
-        if let Err(error) = self.settings.show() {
+        if let Err(error) = self.settings().show() {
             self.show_window_error(&error);
             return;
         }
         if fading {
             // Cloaked again once shown: a first opening has no native window
             // to cloak before it, and would show a black frame.
-            crate::platform::set_cloaked(self.settings.window(), true);
+            crate::platform::set_cloaked(self.settings().window(), true);
             // The fade starts only from a drawn frame, as the flyout's does,
             // and only the latest opening's timer acts.
             let opening = SETTINGS_OPENING.with(|count| {
                 count.set(count.get() + 1);
                 count.get()
             });
-            let settings = self.settings.as_weak();
+            let settings = self.settings().as_weak();
             slint::Timer::single_shot(FLYOUT_FIRST_FRAME, move || {
                 if SETTINGS_OPENING.with(Cell::get) != opening {
                     return;
@@ -94,29 +91,32 @@ impl App {
             });
         }
         self.fit_settings_room();
-        self.settings.invoke_take_focus();
-        crate::platform::bring_to_front(self.settings.window());
+        self.settings().invoke_take_focus();
+        crate::platform::bring_to_front(self.settings().window());
     }
 
     /// Caps Settings at the work area of the monitor it is on, again each time
     /// it moves to another monitor or that monitor's scale changes.
     pub(super) fn fit_settings_room(&self) {
-        let at = self.settings.window().position();
+        let at = self.settings().window().position();
         if let Some((work_area, scale)) = crate::platform::monitor_at(at.x.into(), at.y.into()) {
             // The margin leaves room for the title bar and a gap above the taskbar.
-            self.settings
+            self.settings()
                 .set_room((work_area.height / scale - 80.0).max(200.0) as f32);
         }
     }
 
     fn hide_settings(&self) {
         // A window that fails to hide stays open; the user can still close it.
-        let _ = self.settings.hide();
+        let _ = self.settings().hide();
     }
 
     /// Copies the main window's settings, after each refresh.
     pub(super) fn show_settings_state(&self) {
-        let (m, s) = (&self.main, &self.settings);
+        let Some(s) = self.settings.built() else {
+            return;
+        };
+        let (m, s) = (&self.main, &s);
         s.set_appearance(m.get_appearance());
         s.set_launch_at_login(m.get_launch_at_login());
         s.set_resume_after_sleep(m.get_resume_after_sleep());

@@ -8,12 +8,13 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::SystemInformation::GetTickCount;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     VIRTUAL_KEY, VK_VOLUME_DOWN, VK_VOLUME_MUTE, VK_VOLUME_UP,
 };
+use windows::Win32::UI::Input::{RAWINPUTDEVICE, RIDEV_REMOVE, RegisterRawInputDevices};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetMessageW, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, MSG, PM_NOREMOVE, PeekMessageW,
     PostThreadMessageW, SetTimer, SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_APP,
@@ -86,6 +87,16 @@ impl Drop for KeyHook {
 }
 
 fn install(log: &DebugLog) -> Option<HHOOK> {
+    // winit registers the keyboard for raw input, and while one of this
+    // process's windows has the focus Windows then skips this hook.
+    let keyboard = RAWINPUTDEVICE {
+        usUsagePage: 0x01,
+        usUsage: 0x06,
+        dwFlags: RIDEV_REMOVE,
+        hwndTarget: HWND::default(),
+    };
+    // SAFETY: one valid RAWINPUTDEVICE, with its own size.
+    let _ = unsafe { RegisterRawInputDevices(&[keyboard], size_of::<RAWINPUTDEVICE>() as u32) };
     // SAFETY: `on_key` lives for the whole process, and a low-level hook is
     // called on this thread, which runs a message loop until it unhooks.
     match unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(on_key), None, 0) } {

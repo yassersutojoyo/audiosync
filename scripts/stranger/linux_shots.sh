@@ -6,8 +6,10 @@
 # stand-in watcher), the accessibility bus switched on, then per theme a
 # launch of the installed audiosync and linux_shots.py driving one screen
 # group over AT-SPI. Pictures and not-set-up.txt land in the work folder.
+# The nowplaying group adds a stand-in MPRIS player (mpris_player.py) and
+# fails when the Now Playing card lacks Shuffle or Repeat.
 #
-#   scripts/stranger/linux_shots.sh <work folder> <sni_watcher_stub> <main|delay|tray|calibrate|notices>
+#   scripts/stranger/linux_shots.sh <work folder> <sni_watcher_stub> <main|delay|tray|calibrate|notices|nowplaying|updates>
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -71,6 +73,15 @@ else
 fi
 sleep 1
 
+if [ "$group" = nowplaying ]; then
+  # A patterned test cover: a two-colour gradient over a checkerboard.
+  convert -size 300x300 gradient:'#2f6f8f-#f0c040' -size 300x300 pattern:checkerboard \
+    -compose multiply -composite "$work/cover.png"
+  python3 -I "$here/mpris_player.py" "$work/cover.png" > "$work/player.out" 2>&1 &
+  pids+=($!)
+  sleep 1
+fi
+
 dbus-send --session --print-reply --dest=org.a11y.Bus /org/a11y/bus org.freedesktop.DBus.Properties.Set \
   string:org.a11y.Status string:IsEnabled variant:boolean:true > /dev/null || echo "accessibility bus: not switched on"
 
@@ -91,6 +102,15 @@ for theme in terang gelap; do
   kill -KILL -- "-$app" 2>/dev/null || true
   log=$(find "$XDG_STATE_HOME" -name '*debug.log' -print -quit)
   [ -z "$log" ] || mv "$log" "$work/audiosync-debug-$theme.log"
+  # No settings portal here: motion stays on, so the cover's ambient art moves.
+  if [ "$group" = nowplaying ]; then
+    if grep -q 'ambient art: frames start' "$work/audiosync-debug-$theme.log"; then
+      echo "motion: on without a settings portal, ambient art frames start ($theme)"
+    else
+      echo "FAIL: motion is off without a settings portal ($theme)"
+      failed=1
+    fi
+  fi
 done
 
 shots=$(find "$work" -maxdepth 1 -name '*.png' | wc -l)
