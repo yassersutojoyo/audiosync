@@ -26,7 +26,7 @@ use i_slint_backend_testing::{ElementHandle, ElementQuery};
 use slint::platform::{Key, PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, SharedString};
 
-use super::tests::{app_over, hold_clock};
+use super::tests::{app_over, hold_clock, leaked};
 use super::{App, RenamePlace};
 use crate::audio::calibration::{Failure, Phase, Step, Which};
 use crate::now_playing_card::fake::FakeControls;
@@ -251,7 +251,7 @@ impl Scene {
     }
 
     fn equalizer(&self, size: Size) -> Result<Win, String> {
-        let equalizer = &self.app.equalizer;
+        let equalizer = &self.app.equalizer();
         equalizer.show().map_err(|error| error.to_string())?;
         equalizer.invoke_enabled_toggled(true);
         equalizer.invoke_gain_changed(1, 6.0);
@@ -264,25 +264,26 @@ impl Scene {
         self.app.show_settings();
         // The window's height is bound to its content's; the focus scope
         // filling it reads that before any size is set.
-        let height = ElementHandle::find_by_element_id(&self.app.settings, "SettingsWindow::keys")
-            .next()
-            .map(|keys| keys.size().height)
-            .filter(|height| *height > 0.0)
-            .unwrap_or(640.0);
+        let height =
+            ElementHandle::find_by_element_id(&self.app.settings(), "SettingsWindow::keys")
+                .next()
+                .map(|keys| keys.size().height)
+                .filter(|height| *height > 0.0)
+                .unwrap_or(640.0);
         let size = (460.0, height);
-        self.size(self.app.settings.window(), size);
+        self.size(leaked(self.app.settings()), size);
         Ok(Win(Shown::Settings, size))
     }
 
     fn guide(&self) -> Result<Win, String> {
         self.app.show_help();
-        self.size(self.app.help.window(), GUIDE);
+        self.size(leaked(self.app.help()), GUIDE);
         Ok(Win(Shown::Guide, GUIDE))
     }
 
     fn remote(&self) -> Result<Win, String> {
         self.app.show_remote();
-        self.size(self.app.remote_window.window(), REMOTE);
+        self.size(leaked(self.app.remote_window()), REMOTE);
         Ok(Win(Shown::Remote, REMOTE))
     }
 
@@ -290,11 +291,11 @@ impl Scene {
         match shown {
             Shown::Main => self.app.main.window(),
             Shown::Flyout => self.app.flyout.window(),
-            Shown::Equalizer => self.app.equalizer.window(),
-            Shown::Settings => self.app.settings.window(),
-            Shown::Guide => self.app.help.window(),
-            Shown::Remote => self.app.remote_window.window(),
-            Shown::About => self.app.about.window(),
+            Shown::Equalizer => leaked(self.app.equalizer()),
+            Shown::Settings => leaked(self.app.settings()),
+            Shown::Guide => leaked(self.app.help()),
+            Shown::Remote => leaked(self.app.remote_window()),
+            Shown::About => leaked(self.app.about()),
         }
     }
 
@@ -315,11 +316,11 @@ impl Scene {
         let elements = match shown {
             Shown::Main => ElementQuery::from_root(&self.app.main).find_all(),
             Shown::Flyout => ElementQuery::from_root(&self.app.flyout).find_all(),
-            Shown::Equalizer => ElementQuery::from_root(&self.app.equalizer).find_all(),
-            Shown::Settings => ElementQuery::from_root(&self.app.settings).find_all(),
-            Shown::Guide => ElementQuery::from_root(&self.app.help).find_all(),
-            Shown::Remote => ElementQuery::from_root(&self.app.remote_window).find_all(),
-            Shown::About => ElementQuery::from_root(&self.app.about).find_all(),
+            Shown::Equalizer => ElementQuery::from_root(&self.app.equalizer()).find_all(),
+            Shown::Settings => ElementQuery::from_root(&self.app.settings()).find_all(),
+            Shown::Guide => ElementQuery::from_root(&self.app.help()).find_all(),
+            Shown::Remote => ElementQuery::from_root(&self.app.remote_window()).find_all(),
+            Shown::About => ElementQuery::from_root(&self.app.about()).find_all(),
         };
         let listed = elements_json(&elements, &shot, window.scale_factor());
         Ok((png(shot.width(), shot.height(), shot.as_bytes()), listed))
@@ -1468,22 +1469,22 @@ fn b10() -> Vec<Row> {
     vec![
         row("B10", "EQ-WINDOW", |s| {
             let win = s.equalizer(EQUALIZER)?;
-            s.app.equalizer.invoke_take_focus();
+            s.app.equalizer().invoke_take_focus();
             s.app.note_focus_input(FocusInput::Tab);
             for _ in 0..4 {
-                key(s.app.equalizer.window(), Key::Tab);
+                key(leaked(s.app.equalizer()), Key::Tab);
             }
             Ok(win)
         }),
         row("B10", "EQ-CURVE-MENU", |s| {
             let win = s.equalizer(EQUALIZER)?;
-            click(&s.app.equalizer, "Curve")?;
+            click(&s.app.equalizer(), "Curve")?;
             Ok(win)
         }),
         row("B10", "EQ-SLIDER-DRAG", |s| {
             let win = s.equalizer(EQUALIZER)?;
-            let at = center(&find(&s.app.equalizer, "32 Hz")?);
-            let window = s.app.equalizer.window();
+            let at = center(&find(&s.app.equalizer(), "32 Hz")?);
+            let window = leaked(s.app.equalizer());
             let button = PointerEventButton::Left;
             window.dispatch_event(WindowEvent::PointerMoved { position: at });
             window.dispatch_event(WindowEvent::PointerPressed {
@@ -1501,7 +1502,7 @@ fn b10() -> Vec<Row> {
 
 fn running_remote(s: &Scene) -> Result<Win, String> {
     let win = s.remote()?;
-    let remote = &s.app.remote_window;
+    let remote = &s.app.remote_window();
     let local = "http://den.local:8770/";
     remote.set_remote_on(true);
     remote.set_listening(true);
@@ -1524,8 +1525,9 @@ fn running_remote(s: &Scene) -> Result<Win, String> {
 fn b11() -> Vec<Row> {
     vec![
         row("B11", "ABOUT-PANEL", |s| {
-            s.app.about.set_version("0.9.3".into());
-            s.app.about.show().map_err(|error| error.to_string())?;
+            let about = s.app.about();
+            about.set_version("0.9.3".into());
+            about.show().map_err(|error| error.to_string())?;
             // A headless dialog has no size of its own.
             Ok(Win(Shown::About, (360.0, 340.0)))
         }),
@@ -1550,19 +1552,19 @@ fn b11() -> Vec<Row> {
         row("B11", "GUIDE-SCROLLED", |s| {
             let win = s.guide()?;
             let at = LogicalPosition::new(GUIDE.0 / 2.0, GUIDE.1 / 2.0);
-            scroll(s.app.help.window(), at, -600.0);
+            scroll(leaked(s.app.help()), at, -600.0);
             Ok(win)
         }),
         row("B11", "WEBREMOTE-OFF", |s| s.remote()),
         row("B11", "WEBREMOTE-RUNNING", running_remote),
         row("B11", "WEBREMOTE-ANDROID", |s| {
             let win = running_remote(s)?;
-            s.app.remote_window.set_steps_for_iphone(false);
+            s.app.remote_window().set_steps_for_iphone(false);
             Ok(win)
         }),
         row("B11", "WEBREMOTE-FAILED", |s| {
             let win = s.remote()?;
-            let remote = &s.app.remote_window;
+            let remote = &s.app.remote_window();
             remote.set_remote_on(true);
             remote.set_listening(false);
             remote.set_problem(s.app.strings().get_remote_failed());

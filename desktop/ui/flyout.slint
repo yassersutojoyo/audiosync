@@ -551,12 +551,13 @@ component RowEase inherits Rectangle {
         delay: Motion.on ? root.index * 35ms : 0ms;
         easing: ease-out;
     }
-    height: content.preferred-height;
+    // The row's 36 px floor too: a plain Rectangle sizes it to its 32 px content.
+    height: max(content.min-height, content.preferred-height);
 
     content := Rectangle {
         y: (root.shown - 1) * 6px;
         width: parent.width;
-        height: self.preferred-height;
+        height: max(self.min-height, self.preferred-height);
         opacity: root.shown;
 
         @children
