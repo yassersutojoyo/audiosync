@@ -17,8 +17,16 @@ pub fn name_for(
     debug: Option<&OsStr>,
     debug_build: bool,
 ) -> Option<String> {
-    let _ = (debug, debug_build);
-    instance?.to_str().map(str::to_owned)
+    if !debug_build && debug != Some(OsStr::new("1")) {
+        return None;
+    }
+    let name = instance?.to_str()?;
+    let valid = !name.is_empty()
+        && name.len() <= 32
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    valid.then(|| name.to_owned())
 }
 
 /// This launch's test copy name, read once.
@@ -37,14 +45,17 @@ pub fn current() -> Option<&'static str> {
 /// `base` for the user's copy, `base-<name>` for a test copy: the
 /// single-instance names and the data folder.
 pub fn qualified(base: &str, instance: Option<&str>) -> String {
-    let _ = instance;
-    base.to_owned()
+    match instance {
+        Some(name) => format!("{base}-{name}"),
+        None => base.to_owned(),
+    }
 }
 
 /// The suffix the title and tooltip carry, empty for the user's copy.
 pub fn label(instance: Option<&str>) -> String {
-    let _ = instance;
-    String::new()
+    instance
+        .map(|name| format!(" [{name}]"))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

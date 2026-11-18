@@ -1406,6 +1406,9 @@ impl App {
             volume_key_hook: RefCell::default(),
         });
         *app.me.borrow_mut() = Rc::downgrade(&app);
+        app.main.set_instance_label(
+            crate::test_instance::label(crate::test_instance::current()).into(),
+        );
         #[cfg(all(windows, not(test)))]
         VOLUME_KEY_APP.with(|slot| *slot.borrow_mut() = Rc::downgrade(&app));
         #[cfg(all(windows, not(test)))]
@@ -6188,7 +6191,7 @@ pub fn tray_tooltip(strings: &Strings<'_>, state: &AppState, posted: &[u64]) -> 
         ),
         None => strings.invoke_tray_tooltip(state.running, speakers, notices),
     };
-    fit_tooltip(&text)
+    fit_tooltip(&(text.to_string() + &crate::test_instance::label(crate::test_instance::current())))
 }
 
 /// `text` cut to what a tray tooltip holds, ending in "…" when cut.

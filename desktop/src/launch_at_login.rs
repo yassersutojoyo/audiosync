@@ -349,9 +349,13 @@ fn settled(message: &NoticeMessage, status: Status) -> bool {
 
 /// The store the app uses: on Windows the package's startup task in an MSIX
 /// install (which virtualizes the Run key) and the registry otherwise, the
-/// autostart file on Linux, memory elsewhere and in tests, so no test reads
-/// or changes the user's startup list.
+/// autostart file on Linux, memory elsewhere, in a test copy and in tests,
+/// so no test reads or changes the user's startup list.
 pub fn system_store() -> Box<dyn StartupStore> {
+    // A test copy must not touch the user's startup entry.
+    if crate::test_instance::current().is_some() {
+        return Box::new(MemoryStore::default());
+    }
     #[cfg(all(windows, not(test)))]
     {
         let store: Box<dyn StartupStore> = if crate::package::current().is_some() {
@@ -373,11 +377,9 @@ pub fn system_store() -> Box<dyn StartupStore> {
 
 /// The startup entry kept in memory. Clones share it, so a test can look
 /// at what the app wrote.
-#[cfg(any(not(any(windows, target_os = "linux")), test))]
 #[derive(Clone, Default)]
 pub struct MemoryStore(std::rc::Rc<std::cell::RefCell<MemoryEntry>>);
 
-#[cfg(any(not(any(windows, target_os = "linux")), test))]
 #[derive(Default)]
 pub struct MemoryEntry {
     pub run: Option<String>,
@@ -388,7 +390,6 @@ pub struct MemoryEntry {
     pub listed_exe_gone: bool,
 }
 
-#[cfg(any(not(any(windows, target_os = "linux")), test))]
 impl MemoryStore {
     #[cfg(test)]
     pub fn entry(&self) -> std::cell::RefMut<'_, MemoryEntry> {
@@ -396,7 +397,6 @@ impl MemoryStore {
     }
 }
 
-#[cfg(any(not(any(windows, target_os = "linux")), test))]
 impl StartupStore for MemoryStore {
     fn run_value(&self) -> Option<String> {
         self.0.borrow().run.clone()
