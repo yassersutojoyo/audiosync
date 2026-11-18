@@ -703,7 +703,9 @@ fn calibrating(s: &Scene, phase: Phase) -> Result<Win, String> {
             phase,
             busy: running,
             own_run_holds: running,
-        }
+        };
+        // As the adapter reports a speaker's own run to Calibrate All.
+        state.calibrate_all.other_running = running;
     });
     s.app.toggle_sync(DESK);
     s.main()
