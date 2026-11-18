@@ -63,9 +63,10 @@ pub fn claim_instance() -> Option<Instance> {
 fn instance_dir() -> io::Result<PathBuf> {
     let user =
         super::user_id().ok_or_else(|| io::Error::other("this process's user is unknown"))?;
+    let name = crate::test_instance::qualified(super::FOLDER_NAME, crate::test_instance::current());
     let folder = match super::runtime_base(std::env::var_os("XDG_RUNTIME_DIR"), user) {
-        Some(runtime) => runtime.join(super::FOLDER_NAME),
-        None => std::env::temp_dir().join(format!("{}-{user}", super::FOLDER_NAME)),
+        Some(runtime) => runtime.join(name),
+        None => std::env::temp_dir().join(format!("{name}-{user}")),
     };
     super::owned_private_dir(&folder, user)?;
     Ok(folder)
