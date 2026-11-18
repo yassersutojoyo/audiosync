@@ -14703,7 +14703,11 @@ mod tests {
             presets_list_open: true,
             appearance: ui_model::Appearance::Light,
             window: None,
-            guide: Some(ui_model::WindowPlace { x: -1500, y: 120 }),
+            guide: Some(ui_model::WindowPlace {
+                x: -1500,
+                y: 120,
+                size: Some((700.0, 500.0)),
+            }),
             remote: crate::remote::RemoteSettings {
                 on: true,
                 port: 8123,
@@ -14755,7 +14759,11 @@ mod tests {
         );
         assert_eq!(
             adapter.view_settings().guide,
-            Some(ui_model::WindowPlace { x: -1500, y: 120 })
+            Some(ui_model::WindowPlace {
+                x: -1500,
+                y: 120,
+                size: Some((700.0, 500.0)),
+            })
         );
 
         // A new zone gets the next number, and streaming starts from the

@@ -165,7 +165,7 @@ fn the_guide_opens_where_it_was_kept_on_a_monitor() {
     };
     let size = (640.0, 600.0);
     let (width, height) = (size.0 + GUIDE_CHROME.0, size.1 + GUIDE_CHROME.1);
-    let place = |x, y| WindowPlace { x, y };
+    let place = |x, y| WindowPlace { x, y, size: None };
     assert_eq!(
         guide_place_to_show(place(100, 80), size, true, Some((work, 1.0))),
         Some(place(100, 80)),
