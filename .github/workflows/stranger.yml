@@ -156,14 +156,14 @@ jobs:
                 scripts/stranger/linux_session.sh "$WORK" "$STUB" dnf remove -y -q audiosync'
           fi
 
-      - name: Heard once on the receiver and the stand-in PC speaker, both on, within 30 ms
+      - name: Heard once on the receiver and the stand-in PC speaker, both on, within 15 ms
         if: ${{ !cancelled() }}
         run: |
           scripts/stranger/linux_receiver.sh stop "$WORK"
           echo "--- environment"
           cat "$WORK/env.txt" "$WORK/receiver-env.txt" "$WORK/env.pkg.txt" 2>/dev/null || true
           label="$(sed -n 's/^os: //p' "$WORK/env.txt"), PipeWire $(sed -n 's/^pipewire: //p' "$WORK/env.txt")"
-          python3 -I scripts/stranger/heard.py check --label "$label" --max-offset-ms 30 \
+          python3 -I scripts/stranger/heard.py check --label "$label" --max-offset-ms 15 \
             --receiver "$WORK/receiver.wav" "$WORK/receiver.stamps" \
             --sink "$WORK/sink.wav" "$WORK/sink.stamps"
 

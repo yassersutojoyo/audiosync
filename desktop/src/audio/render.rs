@@ -285,11 +285,12 @@ pub fn report_latency(
     heard_after_given: &mut bool,
     latency: u64,
 ) -> u64 {
+    let used = control.set_reported_latency(latency, None);
     if !*heard_after_given && latency > 0 {
-        control.set_heard_after_ns(latency);
+        control.set_heard_after_ns(used);
         *heard_after_given = true;
     }
-    control.set_reported_latency(latency, None)
+    used
 }
 
 #[cfg(test)]
