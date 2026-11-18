@@ -77,6 +77,8 @@ mod parity_screens;
 mod remote_window;
 mod settings_window;
 mod setup_window;
+#[cfg(all(test, windows))]
+mod window_memory;
 
 pub use engine::Engine;
 
