@@ -404,3 +404,34 @@ jobs:
           path: default-device
           if-no-files-found: warn
           retention-days: 7
+
+  keys-windows:
+    # Every Ctrl shortcut from each window, and Escape in the zone dialog, the
+    # PIN dialog and the Calibrate sheet, pressed with SendInput as a keyboard does.
+    name: Windows keys (Ctrl shortcuts per window, Escape in dialogs)
+    needs: [proven, windows]
+    if: ${{ !cancelled() && needs.proven.outputs.skip != 'true' }}
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: stranger-windows-setup
+          path: pkg
+
+      - name: Install, open each window and press its shortcuts
+        shell: pwsh
+        run: ./scripts/stranger/windows_keys.ps1 -Setup pkg/AudioSync-Setup.exe -Work keys
+
+      - name: Upload the results, pictures and debug logs (workflow artifact)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: stranger-windows-keys
+          path: keys
+          if-no-files-found: warn
+          retention-days: 7
