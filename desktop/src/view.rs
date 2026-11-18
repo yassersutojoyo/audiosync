@@ -20413,12 +20413,12 @@ pub(crate) mod tests {
         assert_eq!(row.accessible_checked(), Some(true), "{name} switched on");
     }
 
-    /// A speaker name too long for its flyout row ends in "…" inside the
-    /// row and stays put, as in the tray panel's drawing; the tooltip and
+    /// A speaker name too long for its flyout row scrolls to its end and
+    /// back inside the row, as the Mac's ScrollingTitle; the tooltip and
     /// Narrator still give the whole name (S439).
     // covers: S439
     #[test]
-    fn a_long_name_in_a_flyout_row_ends_in_an_ellipsis() {
+    fn a_long_name_in_a_flyout_row_scrolls_inside_it_as_the_macs() {
         use i_slint_backend_testing::ElementHandle;
         let name = "A speaker whose name is far too long for the row the tray panel gives it";
         let mut backend = MockBackend::new();
@@ -20440,27 +20440,35 @@ pub(crate) mod tests {
                 })
                 .expect("the long name's row")
         };
-        // Everything the row draws, as (left, right) edges.
-        let edges = || -> Vec<(f32, f32)> {
+        // The name's box and the text it moves, as the Mac's ScrollingTitle.
+        let marquee = || {
             row()
                 .query_descendants()
-                .find_all()
-                .into_iter()
-                .map(|part| {
-                    let x = part.absolute_position().x;
-                    (x, x + part.size().width)
-                })
-                .collect()
+                .match_type_name("MarqueeText")
+                .find_first()
+                .expect("the name")
+        };
+        let text_x = || {
+            let text = marquee()
+                .query_descendants()
+                .match_type_name("Text")
+                .find_first()
+                .expect("the text");
+            text.absolute_position().x
         };
         let right = row().absolute_position().x + row().size().width;
-        let start = edges();
+        let name_end = marquee().absolute_position().x + marquee().size().width;
         assert!(
-            start.iter().all(|&(_, end)| end <= right + 0.5),
-            "nothing runs past the row's end at {right}: {start:?}"
+            name_end <= right + 0.5,
+            "the name's box ends inside the row at {right}: {name_end}"
         );
+        let start = text_x();
         advance_clock(Duration::from_millis(3000));
         draw_frames();
-        assert_eq!(edges(), start, "the name stays put");
+        assert!(
+            text_x() < start,
+            "past its 2 s rest the name has moved toward its end"
+        );
     }
 
     /// The flyout's mark and name are a button and the first stop for Tab:

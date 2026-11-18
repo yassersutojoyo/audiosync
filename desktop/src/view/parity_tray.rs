@@ -35,7 +35,10 @@ fn a_connecting_speaker_turns_an_amber_arc_and_its_note_amber() {
         row.contains("color: root.connecting ? Tokens.warn : Tokens.secondary-text;"),
         "{row}"
     );
-    assert_eq!(flyout().matches("cast-state: speaker.cast-state;").count(), 3);
+    assert_eq!(
+        flyout().matches("cast-state: speaker.cast-state;").count(),
+        3
+    );
 }
 
 /// MenuBar.swift ScrollingTitle(text: name).font(.body): regular in every
@@ -53,8 +56,14 @@ fn a_row_name_is_regular_and_scrolls_when_too_long() {
 fn the_row_disc_has_no_hover_scale_and_grows_from_0_6_in_250_ms() {
     assert!(!component("FlyoutRow").contains("transform-scale"));
     let disc = component("RowDisc");
-    assert!(disc.contains("duration: Motion.on ? 250ms : 150ms;"), "{disc}");
-    assert!(disc.contains("easing: Motion.on ? ease-in-out : linear;"), "{disc}");
+    assert!(
+        disc.contains("duration: Motion.on ? 250ms : 150ms;"),
+        "{disc}"
+    );
+    assert!(
+        disc.contains("easing: Motion.on ? ease-in-out : linear;"),
+        "{disc}"
+    );
     assert!(disc.contains("(0.6 + 0.4 * root.fill)"), "{disc}");
 }
 
@@ -63,7 +72,7 @@ fn the_row_disc_has_no_hover_scale_and_grows_from_0_6_in_250_ms() {
 fn the_header_status_cross_fades() {
     let source = flyout();
     assert!(source.contains("changed status => {"));
-    assert!(source.contains("text: root.old-status;"));
+    assert!(source.contains("text: root.status-b;"));
 }
 
 /// MenuBar.swift AvailabilityNote: a small lock (needs a code, a code
@@ -72,8 +81,16 @@ fn the_header_status_cross_fades() {
 fn the_availability_note_leads_with_a_lock_or_a_triangle() {
     let row = component("FlyoutRow");
     assert!(row.contains("Glyphs.lock : Glyphs.warning"), "{row}");
-    assert_eq!(flyout().matches("availability: speaker.availability;").count(), 3);
-    assert!(include_str!("../../ui/widgets.slint").contains("out property <string> lock: \"\\u{E72E}\";"));
+    assert_eq!(
+        flyout()
+            .matches("availability: speaker.availability;")
+            .count(),
+        3
+    );
+    assert!(
+        include_str!("../../ui/widgets.slint")
+            .contains("out property <string> lock: \"\\u{E72E}\";")
+    );
 }
 
 /// PanelColors.swift audioSyncPanelBacking: the surface light, the window
