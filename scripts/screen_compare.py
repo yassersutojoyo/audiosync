@@ -183,7 +183,9 @@ def self_test():
         "MAIN-IDLE-terang\tStreaming to\tfont SF Pro 13 vs Segoe UI 13",
         "MAIN-IDLE-terang\tWindows Laptop\tonly in other",
         "MAIN-IDLE-terang\t−170\tonly in mac",
+        "MAIN-ROWS-terang\tAlpha\tframe [450,100,32,32] vs [450,106,32,32]",
         "MAIN-ROWS-terang\tDen\tframe [256,160,32,32] vs [256,156,32,32]",
+        "MAIN-ROWS-terang\tGamma\tframe [450,220,32,32] vs [450,226,32,32]",
         "MAIN-ROWS-terang\tNotice\tframe [20,300,400,60] vs [20,300,400,80]",
         "TRAY-IDLE-gelap\t-\tnot set up in mac: the panel is not drawn here",
     ]
