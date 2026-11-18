@@ -277,14 +277,47 @@ impl StallSlot {
     }
 }
 
+/// Hands `control` the stream's reported latency and returns the one in use
+/// (S231); the first nonzero one also becomes the reader's heard-after (S478).
+#[cfg(any(target_os = "linux", test))]
+pub fn report_latency(
+    control: &RendererControl,
+    heard_after_given: &mut bool,
+    latency: u64,
+) -> u64 {
+    if !*heard_after_given && latency > 0 {
+        control.set_heard_after_ns(latency);
+        *heard_after_given = true;
+    }
+    control.set_reported_latency(latency, None)
+}
+
 #[cfg(test)]
 mod tests {
     use std::f64::consts::PI;
 
-    use audiosync_core::render::RendererControl;
+    use audiosync_core::render::{BLUETOOTH_LATENCY_DEFAULT_NS, RendererControl};
     use audiosync_core::ring::{Ring, RingWriter};
 
     use super::*;
+
+    // covers: S478
+    #[test]
+    fn only_the_first_nonzero_latency_in_use_is_heard_after_and_bluetooth_is_windowed() {
+        let ring = Ring::for_rate(48_000).expect("a session ring");
+        let reader = Reader::new(Arc::clone(&ring), 48_000);
+        let control = RendererControl::new(&reader);
+        control.set_bluetooth(true);
+        let mut given = false;
+        report_latency(&control, &mut given, 0);
+        assert_eq!(control.heard_after_ns(), 0);
+        // A Bluetooth sink's absurd first report, 1 ms, gives way to the default.
+        let used = report_latency(&control, &mut given, 1_000_000);
+        assert_eq!(used, BLUETOOTH_LATENCY_DEFAULT_NS);
+        assert_eq!(control.heard_after_ns(), BLUETOOTH_LATENCY_DEFAULT_NS);
+        report_latency(&control, &mut given, 200_000_000);
+        assert_eq!(control.heard_after_ns(), BLUETOOTH_LATENCY_DEFAULT_NS);
+    }
 
     // covers: S229
     #[test]

@@ -810,6 +810,11 @@ impl RendererControl {
         self.shared.delay_flag.store(true, Ordering::Release);
     }
 
+    /// How long after a read its first frame is heard, in ns (S478).
+    pub fn heard_after_ns(&self) -> u64 {
+        self.shared.heard_after_ns.load(Ordering::Relaxed)
+    }
+
     /// The output latency in use, in ns (S231); 0 before one was reported.
     pub fn output_latency_ns(&self) -> u64 {
         self.shared.output_latency_ns.load(Ordering::Relaxed)

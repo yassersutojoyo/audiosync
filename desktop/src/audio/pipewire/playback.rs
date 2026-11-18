@@ -28,7 +28,7 @@ use super::timing;
 use crate::audio::backend::BackendError;
 use crate::audio::controller::RendererHandle;
 use crate::audio::outputs::{RenderFormat, StreamSetup, default_channel_mask};
-use crate::audio::render::RenderPipeline;
+use crate::audio::render::{RenderPipeline, report_latency};
 
 const START_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -304,11 +304,7 @@ impl Render {
                 .reported_at_ns
                 .is_none_or(|at| now_ns.saturating_sub(at) >= LATENCY_INTERVAL_NS)
         {
-            if !self.heard_after_given && latency > 0 {
-                self.control.set_heard_after_ns(latency);
-                self.heard_after_given = true;
-            }
-            let used = self.control.set_reported_latency(latency, None);
+            let used = report_latency(&self.control, &mut self.heard_after_given, latency);
             self.status.latency_ns.store(used, Ordering::Relaxed);
             self.reported_at_ns = Some(now_ns);
         }
