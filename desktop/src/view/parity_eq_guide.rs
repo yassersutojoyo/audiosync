@@ -1,6 +1,8 @@
 //! The equalizer and the Guide as the Mac's (EqualizerWindow.swift,
 //! Localization.swift's helpText, AppDelegate+Windows.swift's Guide window).
 
+use i_slint_backend_testing::{AccessibleRole, ElementHandle};
+use slint::ComponentHandle;
 use slint::platform::Key;
 
 use super::tests::{app_over, click, draw_frames, leaked, press};
@@ -16,6 +18,48 @@ const VIEW: &str = include_str!("../view.rs");
 fn the_curve_menu_ticks_no_curve() {
     assert!(!EQUALIZER.contains("checks: true;"));
     assert!(!EQUALIZER.contains("== root.current;"));
+}
+
+// Mac EqualizerWindow.swift:196 is a native menu, all of whose items stay
+// reachable. The window cuts a Slint popup at its edge and the full curve
+// menu runs past it, so the popup stops inside the window and its rows
+// scroll, the keys scrolling the picked row into view.
+#[test]
+fn every_curve_menu_item_is_reachable_inside_the_window() {
+    let app = app_over(MockBackend::new());
+    app.show_equalizer();
+    let eq = app.equalizer();
+    let button = ElementHandle::find_by_accessible_label(&eq, "Curve")
+        .find(|element| element.accessible_role() == Some(AccessibleRole::Combobox))
+        .expect("the curve menu");
+    let presets = eq.get_preset_count() as f32;
+    // MenuRoom.rows: 24 px rows, the divider before Save Curve…, 4 px padding at each end.
+    let full = (presets + 1.0) * 24.0 + 9.0 + 8.0;
+    let below = button.absolute_position().y + button.size().height + 4.0;
+    let height = eq
+        .window()
+        .size()
+        .to_logical(eq.window().scale_factor())
+        .height;
+    assert!(below + full > height, "the full menu runs past the window");
+
+    let source = EQUALIZER.replace("\r\n", "\n");
+    let menu = &source[source.find("component CurveMenu").unwrap()..];
+    let menu = &menu[menu.find("menu := PopupWindow").unwrap()..];
+    let menu = &menu[..menu.find("export component EqualizerWindow").unwrap()];
+    assert!(
+        menu.contains("height: MenuRoom.height > 0px ? min(panel.preferred-height,"),
+        "the popup's height stops at the window's"
+    );
+    assert!(menu.contains("OverlayScrollView {"), "its rows scroll");
+    assert!(
+        menu.contains("changed current =>"),
+        "a row the keys pick scrolls into view"
+    );
+    assert!(
+        source.contains("MenuRoom.height = self.height;"),
+        "the window gives its menus its height"
+    );
 }
 
 // Mac EqualizerWindow.swift:25 (fixed size, close only) and :179 (bands
