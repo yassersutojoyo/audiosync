@@ -99,8 +99,9 @@ def main(argv):
         print(f"set {name} = {value}", flush=True)
         return True
 
+    # PyGObject binds g_dbus_connection_register_object_with_closures as register_object.
     for interface in Gio.DBusNodeInfo.new_for_xml(INTERFACES).interfaces:
-        connection.register_object_with_closures(PATH, interface, call, get, set_)
+        connection.register_object(PATH, interface, call, get, set_)
     Gio.bus_own_name_on_connection(connection, BUS_NAME, Gio.BusNameOwnerFlags.NONE, None, None)
     print(f"playing on {BUS_NAME}, cover {cover}", flush=True)
     GLib.MainLoop().run()
