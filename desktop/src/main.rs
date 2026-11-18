@@ -726,7 +726,12 @@ mod tests {
     /// menu bar is in the main window itself. Its Edit menu is the text
     /// fields' own Ctrl keys.
     const MENU_SHORTCUTS: &[(&str, &str, &str, &str)] = &[
-        ("Apply Typed Delay, Command-S", "", "Control + S", "Ctrl+S"),
+        (
+            "Apply Typed Delay, Command-S",
+            "menu-apply-delay",
+            "Control + S",
+            "Ctrl+S",
+        ),
         ("Close Window, Command-W", "", "Control + W", "Ctrl+W"),
         (
             "Quit AudioSync, Command-Q",
@@ -741,7 +746,12 @@ mod tests {
             "Ctrl+N",
         ),
         ("Refresh Devices, Command-R", "refresh-devices", "F5", "F5"),
-        ("Equalizer, Option-Command-E", "", "Control + E", "Ctrl+E"),
+        (
+            "Equalizer, Option-Command-E",
+            "equalizer",
+            "Control + E",
+            "Ctrl+E",
+        ),
         ("AudioSync Guide, Command-?", "help-title", "F1", "F1"),
         (
             "Settings…, Command-,",

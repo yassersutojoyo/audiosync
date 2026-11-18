@@ -21751,7 +21751,7 @@ pub(crate) mod tests {
         let refreshes = backend.refreshes.clone();
         let app = app_over(backend);
         type Open = fn(&App) -> &slint::Window;
-        let windows: [(&str, Open); 5] = [
+        let windows: [(&str, Open); 6] = [
             ("equalizer", |app| {
                 app.show_equalizer();
                 leaked(app.equalizer())
@@ -21772,6 +21772,11 @@ pub(crate) mod tests {
             ("settings", |app| {
                 app.show_settings();
                 leaked(app.settings())
+            }),
+            ("about", |app| {
+                app.about().show().expect("About shows headless");
+                app.about().invoke_take_focus();
+                leaked(app.about())
             }),
         ];
         for (name, open) in windows {
@@ -23393,10 +23398,11 @@ pub(crate) mod tests {
         assert!(source.contains("glyph: root.is-input ? Glyphs.microphone"));
     }
 
-    /// The gear's menu, as the Mac's: Speakers (New Zone, Refresh Devices),
-    /// Windows (Web Remote, Settings, the Guide), then About and Exit, the
-    /// app menu items a Windows app has no other place for. Each item calls
-    /// the callback its File, Speakers, View or Help item called (S449).
+    /// The gear's menu, as the Mac's Speakers and Window menus
+    /// (MainMenu.swift:41-63): Speakers (Turn Streaming On or Off, Refresh
+    /// Devices, Add by Address…, New Zone, Hidden Speakers, Apply Typed
+    /// Delay), Window (Equalizer, Presets, Web Remote, Settings, the Guide),
+    /// then About, Check for Updates… (MainMenu.swift:14) and Exit (S449).
     // covers: S449
     #[test]
     fn the_gear_menu_holds_the_old_menus_items_in_the_macs_order() {
@@ -23406,14 +23412,26 @@ pub(crate) mod tests {
         let mut at = 0;
         for title in [
             "text: Strings.menu-speakers;",
-            "text: Strings.new-zone;\n                keys: \"Ctrl+N\";",
+            "text: root.running ? Strings.menu-turn-streaming-off : Strings.menu-turn-streaming-on;",
             "text: Strings.refresh-devices;\n                keys: \"F5\";",
-            "text: Strings.menu-group-windows;",
+            "text: Strings.cast-add-address;\n                enabled: root.can-add-address;",
+            "text: Strings.new-zone;\n                keys: \"Ctrl+N\";",
+            "text: Strings.hidden-speakers;\n                submenu: true;",
+            "text: Strings.no-hidden-speakers;",
+            "text: Strings.hidden-speaker-entry(",
+            "text: Strings.menu-apply-delay;\n                keys: \"Ctrl+S\";\n                enabled: root.delay-typing;",
+            "text: Strings.menu-window;",
+            "text: Strings.equalizer;\n                keys: \"Ctrl+E\";",
+            "text: Strings.presets;\n                submenu: true;",
+            "keys: index < 9 ? \"Ctrl+\" + (index + 1) : \"\";",
+            "text: Strings.no-presets;",
+            "text: Strings.save-preset;",
             "text: Strings.menu-remote;",
             "text: Strings.settings-menu;\n                keys: \"Ctrl+,\";",
             "text: Strings.help-title;\n                keys: \"F1\";",
             "MenuDivider { }",
             "text: Strings.menu-about;",
+            "if root.updater-available: MenuRow {",
             "text: Strings.menu-exit;\n                keys: \"Ctrl+Q\";",
         ] {
             at += gear[at..]
@@ -23425,38 +23443,65 @@ pub(crate) mod tests {
             .split_whitespace()
             .collect();
         for (item, callback) in [
-            ("new-zone", "new-zone-requested"),
-            ("refresh", "refresh-devices"),
-            ("remote", "remote-requested"),
-            ("settings", "settings-requested"),
-            ("guide", "help-requested"),
-            ("about", "about-requested"),
-            ("exit", "exit-requested"),
+            ("streaming", "power-toggled(!root.running)"),
+            ("refresh", "refresh-devices()"),
+            ("add-address", "cast-add-address-requested()"),
+            ("new-zone", "new-zone-requested()"),
+            ("unhide(id)", "speaker-unhide-requested(id)"),
+            ("apply-delay", "delay-apply-requested()"),
+            ("equalizer", "equalizer-requested()"),
+            ("preset(id)", "preset-recall-requested(id)"),
+            ("save-preset", "save-preset-requested()"),
+            ("remote", "remote-requested()"),
+            ("settings", "settings-requested()"),
+            ("guide", "help-requested()"),
+            ("about", "about-requested()"),
+            ("check-updates", "check-for-updates-requested()"),
+            ("exit", "exit-requested()"),
         ] {
             assert!(
-                header.contains(&format!("{item}=>{{root.{callback}();}}")),
+                header.contains(&format!("{item}=>{{root.{callback};}}")),
                 "{item} calls {callback}"
             );
         }
-        assert!(!source.contains("MenuName"), "no menu row");
-        at = 0;
-        for (index, callback) in [
-            "new-zone", "refresh", "remote", "settings", "guide", "about", "exit",
-        ]
-        .iter()
-        .enumerate()
-        {
-            at = gear[at..]
-                .find(&format!("index: {index};"))
-                .map(|i| at + i)
-                .unwrap_or_else(|| panic!("item {index}"));
-            assert!(
-                gear[at..].starts_with(&format!("index: {index};"))
-                    && gear[at..(at + 400).min(gear.len())]
-                        .contains(&format!("root.{callback}();")),
-                "item {index} calls {callback}"
-            );
+        for bound in [
+            "running:root.running;",
+            "can-add-address:root.cast-by-address;",
+            "delay-typing:root.delay-typing;",
+            "hidden:root.hidden-speakers;",
+            "presets:root.presets;",
+            "updater-available:root.updater-available;",
+        ] {
+            assert!(header.contains(bound), "the gear gets {bound}");
         }
+        assert!(!source.contains("MenuName"), "no menu row");
+        assert!(
+            gear.contains(
+                "count: 13 + root.hidden-rows + root.preset-rows + (root.updater-available ? 1 : 0);"
+            ),
+            "the keys reach every row"
+        );
+    }
+
+    /// As the Mac's (Localization.swift:798, :854, :1626-1639): no note while
+    /// a speaker still pairs or waits for the prompt, the code notice names
+    /// no place, and a pairing AudioSync can't do reads as the Mac's
+    /// can't-play notice.
+    // covers: S223
+    #[test]
+    fn pairing_notes_and_turn_off_texts_read_as_the_macs() {
+        let app = app_over(MockBackend::new());
+        let strings = app.main.global::<Strings>();
+        assert_eq!(strings.invoke_availability(Availability::Pairing), "");
+        assert_eq!(strings.invoke_availability(Availability::WaitingToPair), "");
+        assert_eq!(
+            strings.invoke_notice_airplay(AirPlayProblem::NeedsPin, "TV".into()),
+            "TV needs pairing with a code, so it's off. Turn it on again to pair."
+        );
+        assert_eq!(
+            strings.invoke_notice_airplay(AirPlayProblem::PairingNotYet, "TV".into()),
+            "AudioSync can't play to TV, so it's off."
+        );
     }
 
     /// The gear's and the source picker's menus are one popup drawn in the
