@@ -4,7 +4,8 @@
 //! `<ROW-ID>-gelap.png`, each with a `.json` list of its labelled elements
 //! for scripts/screen_compare.py.
 //!
-//! `cargo test --release layar_photos -- --ignored --nocapture`, with
+//! `cargo test layar_photos -- --ignored --nocapture` (not `--release`:
+//! build.rs leaves out the debug info the element lists are read from), with
 //! `AUDIOSYNC_LAYAR_BATCH=B03` (or `B01,B05`) for some batches only and
 //! `AUDIOSYNC_LAYAR_DIR` for another folder than the main checkout's ignored
 //! `.build/layar`. The rows it could not set up are printed and written to
