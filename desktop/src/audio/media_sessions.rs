@@ -436,9 +436,12 @@ struct Reader<L> {
     misses: HashMap<String, Instant>,
     /// The last track logged as having no thumbnail, so it is said once.
     uncovered: Option<String>,
-    /// The app, album and bytes of the last thumbnail kept.
-    last_cover: Option<(String, String, Vec<u8>)>,
+    /// The hash of each track's thumbnail as read.
+    covers: HashMap<String, u64>,
+    /// By app: the album and cover hash of the track shown last.
+    last_cover: HashMap<String, (String, u64)>,
     /// A track whose thumbnail is still another album's, and since when.
+    /// Its cover isn't kept, so it is read again until it changes.
     stale: Option<(String, Instant)>,
     /// The last listing failed, and said so.
     failing: bool,
@@ -466,7 +469,8 @@ impl<L: SessionList> Reader<L> {
             tiles: ArtworkCache::default(),
             misses: HashMap::new(),
             uncovered: None,
-            last_cover: None,
+            covers: HashMap::new(),
+            last_cover: HashMap::new(),
             stale: None,
             failing: false,
             last_track: None,
@@ -509,8 +513,9 @@ impl<L: SessionList> Reader<L> {
             Some(made) => made.clone(),
             None => self
                 .thumbnail(listing, index, &key, log)
-                .and_then(|image| self.jpeg(key, &session, &image, log)),
+                .and_then(|image| self.jpeg(key.clone(), &session, &image, log)),
         };
+        self.shown(&session, &key);
         Some(Track {
             session,
             artwork,
@@ -573,7 +578,10 @@ impl<L: SessionList> Reader<L> {
             Some(made) => made,
             None => self.thumbnail(listing, index, &key, log).and_then(|image| {
                 let made = self.sessions.card_artwork(&image);
-                let (tile, error) = self.tiles.keep(&key, made);
+                let (tile, error) = match made {
+                    Ok(tile) if self.held_back(&key) => (tile, None),
+                    made => self.tiles.keep(&key, made),
+                };
                 if let Some(error) = error {
                     log.log(|| {
                         format!(
@@ -588,15 +596,21 @@ impl<L: SessionList> Reader<L> {
                 tile
             }),
         };
+        self.shown(&session, &key);
         if artwork.is_none()
             && self.tiles.get(&key).is_none()
             && !self.tiles.failed(&key)
             && !self.misses.contains_key(&key)
             && self.uncovered.as_ref() != Some(&key)
         {
+            let why = if self.held_back(&key) {
+                "its thumbnail is still the last song's"
+            } else {
+                "the session gives no thumbnail"
+            };
             log.log(|| {
                 format!(
-                    "now playing card: \"{}\" has no cover yet: the session gives no thumbnail",
+                    "now playing card: \"{}\" has no cover yet: {why}",
                     session.title
                 )
             });
@@ -757,22 +771,43 @@ impl<L: SessionList> Reader<L> {
         image: Option<Vec<u8>>,
     ) -> Option<Vec<u8>> {
         let image = image?;
-        if let Some((app_id, album, last)) = &self.last_cover
-            && *app_id == session.app_id
+        let mut hasher = std::hash::DefaultHasher::new();
+        std::hash::Hash::hash(&image, &mut hasher);
+        let hash = std::hash::Hasher::finish(&hasher);
+        if let Some((album, last)) = self.last_cover.get(&session.app_id)
             && *album != session.album
-            && *last == image
+            && *last == hash
         {
             let since = match &self.stale {
                 Some((stale, since)) if stale == key => *since,
                 _ => Instant::now(),
             };
             self.stale = Some((key.to_owned(), since));
-            if since.elapsed() < ART_HOLD {
-                return None;
-            }
+            return (since.elapsed() >= ART_HOLD).then_some(image);
         }
-        self.last_cover = Some((session.app_id.clone(), session.album.clone(), image.clone()));
+        if self.held_back(key) {
+            self.stale = None;
+        }
+        if self.covers.len() >= ARTWORK_CACHE {
+            self.covers.clear();
+        }
+        self.covers.insert(key.to_owned(), hash);
         Some(image)
+    }
+
+    fn held_back(&self, key: &str) -> bool {
+        self.stale.as_ref().is_some_and(|(stale, _)| stale == key)
+    }
+
+    /// Notes the cover of `session`, shown now, as the one its app's next
+    /// song can't keep.
+    fn shown(&mut self, session: &MediaSession, key: &str) {
+        if let Some(hash) = self.covers.get(key)
+            && !self.held_back(key)
+        {
+            self.last_cover
+                .insert(session.app_id.clone(), (session.album.clone(), *hash));
+        }
     }
 
     /// Receiver artwork fitted from `image`, kept for the track.
@@ -804,6 +839,9 @@ impl<L: SessionList> Reader<L> {
                 None
             }
         };
+        if self.held_back(&key) {
+            return artwork;
+        }
         if self.jpegs.len() >= ARTWORK_CACHE {
             self.jpegs.clear();
         }
@@ -1166,8 +1204,37 @@ mod tests {
         reader.sessions.sessions[0] = song("Next", "Next album");
         let (track, card) = poll(&mut reader);
         let card = card.expect("the card shows");
-        assert!(card.artwork.is_none(), "the last song's cover is not this one's");
+        assert!(
+            card.artwork.is_none(),
+            "the last song's cover is not this one's"
+        );
         assert!(track.is_some_and(|track| track.artwork.is_none()));
+    }
+
+    #[test]
+    fn a_cover_taken_past_the_hold_is_read_again_until_it_changes() {
+        let (fake, counts) = fake(Thumbnail::Other);
+        let mut reader = Reader::new(fake);
+        let last = poll(&mut reader).1.and_then(|card| card.artwork);
+        reader.sessions.sessions[0] = MediaSession {
+            title: "Next".to_owned(),
+            album: "Next album".to_owned(),
+            ..playing()
+        };
+        let _ = poll(&mut reader);
+        let key = track_key(&reader.sessions.sessions[0]);
+        reader.stale = Instant::now()
+            .checked_sub(ART_HOLD)
+            .map(|since| (key, since));
+        let read = counts.thumbnails();
+        for _ in 0..2 {
+            let card = poll(&mut reader).1.expect("the card shows");
+            assert_eq!(card.artwork, last, "past the hold the cover is taken");
+        }
+        assert_eq!(counts.thumbnails(), read + 2, "and read again each poll");
+        reader.sessions.thumbnail = Thumbnail::Image;
+        let card = poll(&mut reader).1.expect("the card shows");
+        assert!(card.artwork.is_some() && card.artwork != last);
     }
 
     #[test]
