@@ -124,6 +124,13 @@ private let accent = Brand.teal
 /// Set by a click on a band or the master slider, which then takes keyboard focus as a text field does.
 final class SliderClick: ObservableObject {
     @Published var clicked = false
+
+    /// After `show()` or a blank click the window itself is AppKit's first responder, and a SwiftUI focus
+    /// request alone doesn't move it into the hosting view, so the arrow keys would never reach the slider.
+    @MainActor static func takeWindowFocus() {
+        guard let window = NSApp.keyWindow, window.firstResponder === window else { return }
+        window.makeFirstResponder(window.contentView)
+    }
 }
 
 struct EqualizerView: View {
@@ -340,7 +347,7 @@ struct VerticalSlider: View {
                 onChange((max(-range, min(range, v)) * 2).rounded() / 2)   // 0.5 dB steps
             }
             // The mouse-down drops the focus asked for in onChanged; a still click has no later event to ask again.
-            .onEnded { _ in click.clicked = true; focused = true })
+            .onEnded { _ in SliderClick.takeWindowFocus(); click.clicked = true; focused = true })
             .onTapGesture(count: 2) { onChange(0) }
         }
     }
