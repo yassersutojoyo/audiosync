@@ -112,3 +112,82 @@ fn a_speaker_volumes_number_is_primary_while_its_slider_is_held() {
         )
     );
 }
+
+/// As on the Mac, Calibrate All Speakers first opens its sheet while an
+/// output sits out: the left-out list with Include Anyway, then Close and
+/// the sheet's own Calibrate All Speakers, which starts the run
+/// (AppDelegate+CalibrateAll.swift:37-45; CalibrateAllViews.swift:117-131,
+/// 433-478, 503-512). The left column keeps only the row (:6-54).
+// covers: S362
+#[test]
+fn calibrate_all_opens_its_sheet_with_the_left_out_before_any_run() {
+    use crate::audio::backend::OutputKind;
+    use crate::audio::outputs::DeviceTraits;
+    use crate::ui_model::{AllPhase, Backend as _};
+    let mut audio = crate::audio::mock::MockBackend::empty();
+    audio.connect_output_as("speakers", "Speakers", OutputKind::BuiltIn);
+    audio.connect_output_as("usb", "USB Speakers", OutputKind::UsbSpeakers);
+    audio.connect_output_as("phones", "Earbuds", OutputKind::Bluetooth);
+    audio.set_output_traits(
+        "phones",
+        DeviceTraits {
+            form_factor: Some(3),
+            enumerator: Some("BTHENUM".to_owned()),
+        },
+    );
+    let mut adapter = crate::adapter::AudioAdapter::new(
+        audio,
+        || "09.41".to_owned(),
+        crate::debug_log::DebugLog::default(),
+    );
+    for id in ["lc:speakers", "lc:usb", "lc:phones"] {
+        adapter.set_speaker_enabled(id, true);
+    }
+    adapter.set_running(true);
+    let app = app_over(adapter);
+    app.main.show().expect("the main window shows headless");
+    draw_frames();
+    let strings = app.strings();
+    let left_out = strings.get_calibrate_all_left_out_title();
+    let include = strings.invoke_include_anyway_label("Earbuds".into());
+    let count = |label: &str| ElementHandle::find_by_accessible_label(&app.main, label).count();
+    let sheet = || ElementHandle::find_by_element_id(&app.main, "CalibrateAllSheet::sheet").next();
+    let start =
+        || ElementHandle::find_by_element_id(&app.main, "CalibrateAllSheet::start-button").next();
+    assert_eq!(count(&left_out), 0, "no left-out list in the left column");
+    assert_eq!(count(&include), 0, "no Include Anyway in the left column");
+
+    app.main.invoke_calibrate_all_requested();
+    app.poll();
+    draw_frames();
+    assert_eq!(
+        app.snapshot().calibrate_all.phase,
+        AllPhase::Idle,
+        "no run starts yet"
+    );
+    assert!(sheet().is_some(), "the sheet opens");
+    assert_eq!(count(&left_out), 1, "the sheet lists the left out");
+    assert_eq!(count(&include), 1, "with Include Anyway");
+    let button = start().expect("the sheet's own Calibrate All Speakers");
+    assert_eq!(
+        button.accessible_label().as_deref(),
+        Some(strings.get_calibrate_all().as_str())
+    );
+
+    // The mock has no microphone: the run stops at once and the sheet stays,
+    // its button ready for another try.
+    button.invoke_accessible_default_action();
+    app.poll();
+    draw_frames();
+    assert!(
+        matches!(app.snapshot().calibrate_all.phase, AllPhase::Failed(_)),
+        "the sheet's button starts the run"
+    );
+    assert!(sheet().is_some(), "the sheet stays with the run's line");
+    assert!(start().is_some(), "Calibrate All Speakers stays");
+
+    press(app.main.window(), Key::Escape);
+    app.poll();
+    draw_frames();
+    assert!(sheet().is_none(), "Escape closes the sheet");
+}

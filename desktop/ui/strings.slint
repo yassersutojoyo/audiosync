@@ -1946,6 +1946,16 @@ export global Strings {
     // of results to apply.
     out property <string> calibrate-all: @tr("Calibrate All Speakers");
     out property <string> calibrate-before-start: @tr("Before you start");
+    out property <string> calibrate-microphone-check: @tr("Microphone where you listen");
+    out property <string> calibrate-microphone-check-detail: @tr("Keep the room quiet. Nothing changes until you click Apply.");
+
+    // Under the reference's volume warning in "Before you start".
+    public pure function calibrate-volume-detail(hint: DeviceVolumeHint, reference: string) -> string {
+        if hint == DeviceVolumeHint.low {
+            return @tr("The microphone may barely hear the sweep on {}. Turn it up before you calibrate.", reference);
+        }
+        return @tr("Calibration plays a sweep on {}, and the microphone can't hear it while it's muted.", reference);
+    }
     out property <string> calibrate-all-results: @tr("Results");
     out property <string> calibrate-music-fades-back: @tr("The music fades back in when it's done.");
     out property <string> calibrate-all-apply: @tr("Apply");

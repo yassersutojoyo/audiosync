@@ -2297,25 +2297,33 @@ fn an_off_speakers_slider_is_dimmed_as_the_macs() {
     assert!(slider.contains("enabled: root.enabled;"));
 }
 
-/// Calibrate All's left-out list as the Mac's (CalibrateAllViews.swift:422-451):
-/// a small "Left out" heading, then each output's name in body text with
-/// its button on the name's line, and the reason under them.
+/// Calibrate All's left-out list as the Mac's, in the sheet
+/// (CalibrateAllViews.swift:430-478): a small "Left out" heading, then each
+/// output's name in body text over its reason, with its button after them.
 #[test]
 fn the_left_out_list_reads_as_the_macs() {
-    let main = include_str!("../ui/main.slint").replace("\r\n", "\n");
-    let card = component_body(&main, "CalibrationCard");
-    let list = &card[card
-        .find("if root.left-out.length > 0")
+    let main = include_str!("../ui/main.slint").replace(
+        "
+", "
+",
+    );
+    let sheet = component_body(&main, "CalibrateAllSheet");
+    let list = &sheet[sheet
+        .find("if root.left-out.length > 0: VerticalLayout")
         .expect("the left-out list")..];
     assert!(list.contains("text: Strings.calibrate-all-left-out-title;"));
     let name = list.find("text: item.name;").expect("the name");
-    let button = list.find("Button {").expect("the button");
     let reason = list.find("text: item.reason;").expect("the reason");
+    let button = list.find("Button {").expect("the button");
     assert!(
-        name < button && button < reason,
-        "name, button, then reason"
+        name < reason && reason < button,
+        "name over reason, then the button"
     );
-    assert!(!list[name..button].contains("weight-semibold"));
+    assert!(!list[name..reason].contains("weight-semibold"));
+    assert!(
+        !component_body(&main, "CalibrationCard").contains("left-out"),
+        "none in the left column"
+    );
 }
 
 /// A zone header works like a speaker row's box: only its badge switches the
