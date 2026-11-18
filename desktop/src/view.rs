@@ -15111,6 +15111,8 @@ pub(crate) mod tests {
             std::thread::sleep(Duration::from_millis(50));
             app.poll_updater();
         }
+        // The notice slides in on the held clock before it is in the tree.
+        advance_clock(Duration::from_millis(400));
         draw_frames();
         let text = app
             .strings()
