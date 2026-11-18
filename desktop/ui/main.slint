@@ -2206,7 +2206,8 @@ component CalibrateAllSheet inherits FocusScope {
                                 VerticalLayout {
                                     alignment: center;
 
-                                    volume-fix := Button {
+                                    // Tinted as the Mac's (CalibrateAllViews.swift:236-242, the sheet's teal tint).
+                                    volume-fix := SmallButton {
                                         text: Strings.device-volume-fix(root.volume);
                                         accessible-label: Strings.device-volume-fix-label(root.reference, root.volume);
                                         changed has-focus => {
@@ -2392,16 +2393,19 @@ component CalibrateAllSheet inherits FocusScope {
                         if row.can-measure-again: VerticalLayout {
                             alignment: center;
 
-                            Button {
+                            // The Mac's small tinted button (CalibrateAllViews.swift:396-398).
+                            SmallButton {
                                 changed has-focus => {
                                     root.focus-changed(self.has-focus);
                                 }
                                 text: Strings.calibrate-all-again;
-                                enabled: !root.running;
+                                dimmed: root.running;
                                 accessible-label: Strings.calibrate-all-again-label(row.name);
                                 accessible-description: row.detail;
                                 clicked => {
-                                    root.measure-again(index);
+                                    if !root.running {
+                                        root.measure-again(index);
+                                    }
                                 }
                             }
                         }

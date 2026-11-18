@@ -1249,6 +1249,7 @@ export component SmallButton inherits Rectangle {
     in property <length> font-size: Tokens.font-size-callout;
     // Can't be used now: grey, as the Mac's disabled push button.
     in property <bool> dimmed;
+    out property <bool> has-focus: focus.has-focus;
     callback clicked();
 
     min-width: label.preferred-width + 20px;

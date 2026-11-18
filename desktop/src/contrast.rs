@@ -1165,7 +1165,8 @@ fn accessible_names_start_with_the_visible_text() {
         ("calibrate-with-microphone", "calibrate-label"),
     ] {
         for (file, source) in UI_FILES {
-            for block in blocks(source, "Button") {
+            let small = blocks(source, "SmallButton");
+            for block in blocks(source, "Button").into_iter().chain(small) {
                 let lines: Vec<&str> = block.lines().map(str::trim).collect();
                 if !lines
                     .iter()
