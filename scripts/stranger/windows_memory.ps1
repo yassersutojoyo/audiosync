@@ -148,48 +148,100 @@ function Check([bool] $Ok, [string] $What) {
 }
 function Get-Found { "console=$([Endpoints]::Default(0)) multimedia=$([Endpoints]::Default(1))`n$([Endpoints]::Readings())" }
 
-$os = Get-CimInstance Win32_OperatingSystem
+# A UTC time and the seconds since the start on every phase and sample, so a
+# hang shows where it stopped.
+$script:clock = [Diagnostics.Stopwatch]::StartNew()
+function Say([string] $What) {
+  '{0:HH:mm:ss}Z +{1}s {2}' -f [DateTime]::UtcNow, [int]$script:clock.Elapsed.TotalSeconds, $What | Tee-Object -FilePath "$Work/progress.txt" -Append | Out-Host
+}
+
+# UI Automation and the audio service's COM calls have blocked forever on CI
+# runners: each runs on its own runspace and is abandoned past its limit.
+function Bounded([string] $What, [scriptblock] $Block, [hashtable] $With = @{}, [int] $Seconds = 60) {
+  $state = [initialsessionstate]::CreateDefault2()
+  foreach ($f in Get-Item function:Get-Found, function:Get-Toggles, function:Test-On -ErrorAction SilentlyContinue) {
+    $state.Commands.Add([Management.Automation.Runspaces.SessionStateFunctionEntry]::new($f.Name, $f.Definition))
+  }
+  $vars = @{ app = $script:app; A = $script:A; Scope = $script:Scope; TogglePattern = $script:TogglePattern } + $With
+  foreach ($k in $vars.Keys) { $state.Variables.Add([Management.Automation.Runspaces.SessionStateVariableEntry]::new($k, $vars[$k], '')) }
+  $ps = [powershell]::Create($state)
+  $null = $ps.AddScript("`$ErrorActionPreference = 'Stop'`n" + $Block.ToString())
+  $call = $ps.BeginInvoke()
+  if (-not $call.AsyncWaitHandle.WaitOne($Seconds * 1000)) {
+    $null = $ps.BeginStop($null, $null)
+    throw "$What did not return within $Seconds s"
+  }
+  try { $ps.EndInvoke($call) } finally { $ps.Dispose() }
+}
+
+# A process waited on by itself, not with its children, and killed past its limit.
+function Invoke-Exe([string] $What, [string] $File, [string[]] $Arguments, [int] $Seconds = 180) {
+  Say "start: $What"
+  $out = Join-Path $Work 'exe-output.txt'
+  $p = Start-Process -FilePath $File -ArgumentList $Arguments -PassThru -NoNewWindow -RedirectStandardOutput $out -RedirectStandardError "$out.err"
+  $null = $p.Handle
+  if (-not $p.WaitForExit($Seconds * 1000)) {
+    Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+    throw "$What did not finish within $Seconds s"
+  }
+  Get-Content $out, "$out.err" | Tee-Object -FilePath "$Work/env.txt" -Append | Out-Host
+  Say "done: $What (exit $($p.ExitCode))"
+  $p.ExitCode
+}
+
+# On a failure the player and the app stop, so neither outlives the step, and
+# the debug log is kept.
+trap {
+  Say "stopped: $_"
+  foreach ($p in $script:player, $script:app) { if ($p) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } }
+  if ($script:log -and (Test-Path $script:log)) { Copy-Item $script:log (Join-Path $Work 'audiosync-debug.log') }
+  [Environment]::Exit(1)
+}
+
+Say 'start the audio services'
+$os = Get-CimInstance Win32_OperatingSystem -OperationTimeoutSec 60
 "os: $($os.Caption) build $($os.BuildNumber)" | Tee-Object -FilePath "$Work/env.txt"
 foreach ($name in 'AudioEndpointBuilder', 'Audiosrv') {
-  Set-Service -Name $name -StartupType Automatic
-  Start-Service -Name $name
+  Bounded "start $name" { Set-Service -Name $name -StartupType Automatic; Start-Service -Name $name } @{ name = $name } 120
 }
 
 # Scream 4.0 as windows_default_device.ps1 installs it: the catalog signed again
 # with a certificate this machine trusts; two ROOT devices, two outputs.
+Say 'download Scream'
 $fixture = (New-Item -ItemType Directory -Force -Path (Join-Path ([IO.Path]::GetTempPath()) 'audiosync-ci-memory')).FullName
 $zip = Join-Path $fixture 'Scream4.0.zip'
-Invoke-WebRequest -Uri 'https://github.com/duncanthrax/scream/releases/download/4.0/Scream4.0.zip' -OutFile $zip
+Invoke-WebRequest -Uri 'https://github.com/duncanthrax/scream/releases/download/4.0/Scream4.0.zip' -OutFile $zip -TimeoutSec 120
 $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash
 if ($hash -ne 'FA33E25F9A46C61E4E0CD83362C51C3D2A45C6FE4091AAD7507E240E40F1A520') { throw "Scream4.0.zip hash $hash" }
 Expand-Archive -Force $zip (Join-Path $fixture 'scream')
 $driver = Join-Path $fixture 'scream/Install/driver/x64'
+$inf = "`"$(Join-Path $driver 'Scream.inf')`""
 $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=AudioSync CI test driver' -CertStoreLocation Cert:\LocalMachine\My
 $cer = Join-Path $fixture 'ci-driver.cer'
 Export-Certificate -Cert $cert -FilePath $cer | Out-Null
 foreach ($store in 'Root', 'TrustedPublisher') { Import-Certificate -FilePath $cer -CertStoreLocation "Cert:\LocalMachine\$store" | Out-Null }
 $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName | Select-Object -Last 1
-& $signtool.FullName sign /fd SHA256 /sm /s My /sha1 $cert.Thumbprint (Join-Path $driver 'scream.cat')
-if ($LASTEXITCODE -ne 0) { throw "signtool could not sign the catalog (exit $LASTEXITCODE)" }
-pnputil /add-driver (Join-Path $driver 'Scream.inf') /install | Tee-Object -FilePath "$Work/env.txt" -Append
+$code = Invoke-Exe 'sign the Scream catalog' $signtool.FullName @('sign', '/fd', 'SHA256', '/sm', '/s', 'My', '/sha1', $cert.Thumbprint, "`"$(Join-Path $driver 'scream.cat')`"")
+if ($code -ne 0) { throw "signtool could not sign the catalog (exit $code)" }
+$null = Invoke-Exe 'add the Scream driver' pnputil.exe @('/add-driver', $inf, '/install')
 $devcon = Join-Path $fixture 'scream/Install/helpers/devcon-x64.exe'
 $count = 0
 for ($n = 1; $n -le 2; $n++) {
-  & $devcon install (Join-Path $driver 'Scream.inf') '*Scream' | Tee-Object -FilePath "$Work/env.txt" -Append
-  for ($i = 0; $i -lt 60 -and $count -lt $n; $i++) { Start-Sleep -Seconds 1; $count = [Endpoints]::ActiveCount() }
+  $null = Invoke-Exe "add Scream output $n" $devcon @('install', $inf, '*Scream')
+  for ($i = 0; $i -lt 60 -and $count -lt $n; $i++) { Start-Sleep -Seconds 1; $count = Bounded 'count the active outputs' { [Endpoints]::ActiveCount() } }
 }
+Say "active output endpoints: $count"
 "active output endpoints: $count" | Tee-Object -FilePath "$Work/env.txt" -Append
 if ($count -ne 2) { throw "$count active output endpoints after adding two (two needed)" }
 
-[Endpoints]::SetAll(0.42)
-$found = Get-Found
+Bounded 'set every output to 42% and unmuted' { [Endpoints]::SetAll(0.42) }
+$found = Bounded 'read the outputs' { Get-Found }
 "before the install:`n$found" | Tee-Object -FilePath "$Work/result.txt" -Append
 
-$install = Start-Process -FilePath $Setup -Wait -PassThru `
-  -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/ALLUSERS', "/LOG=`"$Work\install.log`""
+$code = Invoke-Exe 'install AudioSync' $Setup @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/ALLUSERS', "/LOG=`"$Work\install.log`"")
 $dir = Join-Path $env:ProgramFiles 'AudioSync'
 $exe = Join-Path $dir 'audiosync.exe'
-if ($install.ExitCode -ne 0 -or -not (Test-Path $exe)) { throw "install failed (exit $($install.ExitCode))" }
+if ($code -ne 0 -or -not (Test-Path $exe)) { throw "install failed (exit $code)" }
 "installed: $exe $((Get-Item $exe).VersionInfo.ProductVersion)" | Tee-Object -FilePath "$Work/result.txt" -Append
 
 # A 440 Hz tone looping on the default, so the stream carries sound.
@@ -202,6 +254,7 @@ $w.Write([int]16); $w.Write([int16]1); $w.Write([int16]1); $w.Write([int]44100);
 $w.Write([Text.Encoding]::ASCII.GetBytes('data')); $w.Write([int](2 * $samples))
 for ($i = 0; $i -lt $samples; $i++) { $w.Write([int16](8000 * [math]::Sin(2 * [math]::PI * 440 * $i / 44100))) }
 $w.Close()
+Say 'play the tone and launch AudioSync'
 $player = Start-Process -FilePath powershell.exe -WindowStyle Hidden -PassThru `
   -ArgumentList '-NoProfile', '-Command', "(New-Object Media.SoundPlayer '$wav').PlayLooping(); Start-Sleep -Seconds 900"
 
@@ -224,20 +277,26 @@ function Get-Toggles {
   @(foreach ($w in $A::RootElement.FindAll($Scope::Children, $pid_)) { $w.FindAll($Scope::Descendants, $c) })
 }
 function Test-On($Element) { $Element.GetCurrentPattern($TogglePattern).Current.ToggleState -eq 'On' }
+# Every switch as "<on>|<name>".
+function Read-Toggles { @(Bounded 'read the switches' { foreach ($t in Get-Toggles) { "$(Test-On $t)|$($t.Current.Name)" } }) }
+function Test-Streaming { [bool](Bounded 'read the Streaming switch' { [bool]@(Get-Toggles | Where-Object { $_.Current.Name -eq 'Streaming' -and (Test-On $_) }).Count }) }
 
+Say 'wait for the Streaming switch'
 $toggles = @()
-for ($i = 0; $i -lt 30 -and -not ($toggles | Where-Object { $_.Current.Name -eq 'Streaming' }); $i++) { Start-Sleep -Seconds 1; $toggles = Get-Toggles }
+for ($i = 0; $i -lt 30 -and -not ($toggles -like '*|Streaming'); $i++) { Start-Sleep -Seconds 1; $toggles = Read-Toggles }
 Start-Sleep -Seconds 3
-$toggles = Get-Toggles
-"toggles: $(($toggles | ForEach-Object { "'$($_.Current.Name)'=$(Test-On $_)" }) -join ', ')" | Tee-Object -FilePath "$Work/result.txt" -Append
-$streaming = $toggles | Where-Object { $_.Current.Name -eq 'Streaming' } | Select-Object -First 1
-$rows = @($toggles | Where-Object { $_.Current.Name -match 'Speakers|Scream' })
-if (-not $streaming -or $rows.Count -lt 2) { throw 'no Streaming switch or fewer than two Scream rows (see toggles above)' }
-foreach ($row in $rows) { if (-not (Test-On $row)) { $row.GetCurrentPattern($TogglePattern).Toggle(); Start-Sleep -Seconds 2 } }
-if (-not (Test-On $streaming)) { $streaming.GetCurrentPattern($TogglePattern).Toggle() }
+$toggles = Read-Toggles
+"toggles: $(($toggles | ForEach-Object { $on, $name = $_ -split '\|', 2; "'$name'=$on" }) -join ', ')" | Tee-Object -FilePath "$Work/result.txt" -Append
+$rows = @($toggles | Where-Object { ($_ -split '\|', 2)[1] -match 'Speakers|Scream' })
+if (-not ($toggles -like '*|Streaming') -or $rows.Count -lt 2) { throw 'no Streaming switch or fewer than two Scream rows (see toggles above)' }
+Say 'switch the Scream rows and Streaming on'
+Bounded 'switch the Scream rows on' { foreach ($t in Get-Toggles) { if ($t.Current.Name -match 'Speakers|Scream' -and -not (Test-On $t)) { $t.GetCurrentPattern($TogglePattern).Toggle(); Start-Sleep -Seconds 2 } } }
+Bounded 'switch Streaming on' { foreach ($t in Get-Toggles) { if ($t.Current.Name -eq 'Streaming' -and -not (Test-On $t)) { $t.GetCurrentPattern($TogglePattern).Toggle() } } }
 Start-Sleep -Seconds 6
-Check ((-not $app.HasExited) -and (Test-On $streaming)) "streaming to both outputs (default while streaming: $([Endpoints]::Default(0)))"
+$default = Bounded 'read the default output' { [Endpoints]::Default(0) }
+Check ((-not $app.HasExited) -and (Test-Streaming)) "streaming to both outputs (default while streaming: $default)"
 
+Say "sample private bytes every 10 s for $Seconds s"
 $csv = Join-Path $Work 'memory.csv'
 'seconds,private_bytes' | Set-Content -Encoding ascii $csv
 $points = @()
@@ -245,9 +304,10 @@ for ($t = 0; $t -le $Seconds -and -not $app.HasExited; $t += 10) {
   $app.Refresh()
   $points += [pscustomobject]@{ T = $t; B = $app.PrivateMemorySize64 }
   "$t,$($app.PrivateMemorySize64)" | Add-Content -Encoding ascii $csv
+  Say ('sample {0} s: {1:F1} MB private' -f $t, ($app.PrivateMemorySize64 / 1MB))
   if ($t -lt $Seconds) { Start-Sleep -Seconds 10 }
 }
-Check ((-not $app.HasExited) -and (Test-On $streaming)) "the app runs and streams after $Seconds s"
+Check ((-not $app.HasExited) -and (Test-Streaming)) "the app runs and streams after $Seconds s"
 $settled = @($points | Where-Object { $_.T -ge 60 })
 $mx = ($settled | Measure-Object T -Average).Average
 $my = ($settled | Measure-Object B -Average).Average
@@ -262,15 +322,17 @@ Stop-Process -Id $player.Id -Force -ErrorAction SilentlyContinue
 if (Test-Path $log) { Copy-Item $log (Join-Path $Work 'audiosync-debug.log') }
 
 # The uninstaller closes the running app itself.
-Start-Process -FilePath (Join-Path $dir 'unins000.exe') -Wait -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
+$null = Invoke-Exe 'uninstall AudioSync' (Join-Path $dir 'unins000.exe') @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
 for ($i = 0; $i -lt 60 -and (Test-Path $exe); $i++) { Start-Sleep -Seconds 1 }
 Check (-not (Test-Path $exe) -and $app.HasExited) 'uninstalled, and the app no longer runs'
 if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force }
-for ($i = 0; $i -lt 15 -and (Get-Found) -ne $found; $i++) { Start-Sleep -Seconds 1 }
-$now = Get-Found
+Say 'compare the outputs with the ones found'
+for ($i = 0; $i -lt 15 -and (Bounded 'read the outputs' { Get-Found }) -ne $found; $i++) { Start-Sleep -Seconds 1 }
+$now = Bounded 'read the outputs' { Get-Found }
 "after the uninstall:`n$now" | Tee-Object -FilePath "$Work/result.txt" -Append
 Check ($now -eq $found) "after the uninstall the default output and every output's volume and mute are as found"
 
+Say 'done'
 if ($script:failed) { "$($script:failed.Count) checks failed"; exit 1 }
 'every memory and uninstall check passed'
 exit 0

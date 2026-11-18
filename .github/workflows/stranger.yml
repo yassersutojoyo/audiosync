@@ -426,10 +426,12 @@ jobs:
 
       - name: Install, stream five minutes, sample private bytes, uninstall
         shell: pwsh
+        # Under the job's 25 so the upload below still runs after a hang.
+        timeout-minutes: 20
         run: ./scripts/stranger/windows_memory.ps1 -Setup pkg/AudioSync-Setup.exe -Work memory
 
       - name: Upload the samples and the debug log (workflow artifact)
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: stranger-windows-memory
