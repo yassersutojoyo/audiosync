@@ -96,3 +96,13 @@ fn the_equalizer_has_the_macs_curve_chip_tick_and_knob() {
     assert!(EQUALIZER.contains("width: 16px;\n                        height: 16px;"));
     assert!(!EQUALIZER.contains("Fluent.thumb"));
 }
+
+// EqualizerWindow.swift:145-187: 18 pt padding, 14 pt spacing and a band row
+// only as tall as its gain, 140 pt slider and label; the Mac's photo
+// (EQ-WINDOW, 584 px at 2x) is 292 pt high.
+#[test]
+fn the_equalizer_window_is_the_macs_292_pt_high() {
+    let app = app_over(MockBackend::new());
+    app.show_equalizer();
+    assert_eq!(app.equalizer().get_fit_height(), 292.0);
+}
