@@ -7,7 +7,6 @@ Windows didn't let AudioSync remove itself from the startup apps. To stop it lau
 Windows has no working sound output, so apps have nowhere to play and AudioSync has nothing to send to your speakers. Connect or turn on an output in Sound settings.
 Windows doesn't let AudioSync use port {}, so the web remote can't start. Enter another port and select Use Port.
 AudioSync couldn't reach Windows audio, so it can't start. Restart your PC, then open AudioSync again.\n\nDetails: {}
-{} needs a kind of pairing AudioSync for Windows can't do yet, so it's off.
 {} couldn't reach the stream on this PC, so it's off. Allow AudioSync in Windows Firewall on Private networks, or on Public networks if this network is set to Public, then turn it on again.
 You may hear {0} twice: it also plays straight from {1}. Send it to an output you don't listen to (Volume mixer), or mute {1}.
 You may hear {0} twice: it also plays straight from {1}, where AudioSync plays too. Send it to an output you don't listen to (Volume mixer).

@@ -375,10 +375,12 @@ export global Strings {
     out property <string> appearance-dark: @tr("Dark");
 
     // The gear's menu in the main window's header, as the Mac's: its
-    // sections Speakers and Windows, then About and Exit (Windows' name for Quit).
+    // sections Speakers and Window, then About and Exit (Windows' name for Quit).
     out property <string> more-options: @tr("Options");
     out property <string> more-options-hint: @tr("Opens a menu of options");
-    out property <string> menu-group-windows: @tr("Windows");
+    out property <string> menu-window: @tr("Window");
+    out property <string> menu-apply-delay: @tr("Apply Typed Delay");
+    out property <string> no-presets: @tr("No Presets");
     out property <string> menu-exit: @tr("Exit");
     out property <string> menu-speakers: @tr("Speakers");
     out property <string> menu-turn-streaming-on: @tr("Turn Streaming On");
@@ -873,7 +875,7 @@ export global Strings {
             return @tr("{} asks for a password, so it's off. Turn it on again to enter it. To use it without a password, set Allow Speaker & TV Access on the speaker (or in the Home app) to “Anyone on the Same Network” and turn off Require Password.", speaker);
         }
         if problem == AirPlayProblem.needs-pin {
-            return @tr("{} needs pairing with a code, so it's off. Turn it on again on this PC to pair.", speaker);
+            return @tr("{} needs pairing with a code, so it's off. Turn it on again to pair.", speaker);
         }
         if problem == AirPlayProblem.still-needs-code {
             return @tr("{0} still asks for a code or password after pairing, so it's off. On the speaker (or in the Home app), check that Allow Speaker & TV Access is set to “Anyone on the Same Network”, then turn {0} on again in AudioSync.", speaker);
@@ -887,10 +889,7 @@ export global Strings {
             return @tr("Pairing with {} didn't finish, so it's off. To try again, turn it on and enter the code it shows.", speaker);
         }
         if problem == AirPlayProblem.pairing-not-yet {
-            if Platform.os == OperatingSystemType.linux {
-                return @tr("{} needs a kind of pairing AudioSync for Linux can't do yet, so it's off.", speaker);
-            }
-            return @tr("{} needs a kind of pairing AudioSync for Windows can't do yet, so it's off.", speaker);
+            return @tr("AudioSync can't play to {}, so it's off.", speaker);
         }
         if problem == AirPlayProblem.airplay2-not-yet {
             return @tr("{} needs AirPlay 2, which this launch of AudioSync runs without, so it's off.", speaker);
@@ -1408,8 +1407,7 @@ export global Strings {
     // for one or is off; any other note otherwise (`availability`).
     public pure function speaker-availability(a: Availability, every-time: bool, state: RowState) -> string {
         // The row's own note says what its prompt waits for.
-        if (state == RowState.waiting-for-password || state == RowState.waiting-for-pin)
-                && a != Availability.waiting-to-pair {
+        if state == RowState.waiting-for-password || state == RowState.waiting-for-pin {
             return "";
         }
         if every-time && (a == Availability.needs-code || (a == Availability.open && state == RowState.off)) {
@@ -1433,12 +1431,6 @@ export global Strings {
     public pure function availability(a: Availability) -> string {
         if a == Availability.needs-code {
             return @tr("Asks for a code");
-        }
-        if a == Availability.pairing {
-            return @tr("Pairing…");
-        }
-        if a == Availability.waiting-to-pair {
-            return @tr("Waiting to pair…");
         }
         if a == Availability.pairing-not-yet {
             return @tr("Pairing not supported yet");

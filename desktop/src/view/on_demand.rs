@@ -128,7 +128,7 @@ on_demand_windows! {
     zone_dialog: ZoneNameDialog => connect_zone_dialog;
     pin_dialog: PinDialog => connect_pin_dialog;
     password_dialog: PasswordDialog => connect_password_dialog;
-    about: AboutDialog => connect_about;
+    about: AboutDialog => wire_about;
     guide: GuideWindow => wire_guide;
     help: crate::HelpWindow => wire_help;
     remote_window: crate::RemoteWindow => wire_remote;
@@ -189,6 +189,11 @@ impl App {
         menu_keys!(self, &window);
         self.connect_remote();
         self.show_remote_state();
+    }
+
+    fn wire_about(self: &Rc<Self>) {
+        menu_keys!(self, &self.about());
+        self.connect_about();
     }
 
     fn wire_settings(self: &Rc<Self>) {

@@ -285,18 +285,38 @@ component SourceMenu inherits Rectangle {
     }
 }
 
-// The header's gear, as the Mac's: its Speakers and Windows sections, then
-// About and Exit, which a Windows app keeps in no app menu.
+// The header's gear, as the Mac's Speakers and Window menus
+// (MainMenu.swift:41-63), then About, Check for Updates… and Exit, which a
+// Windows app keeps in no app menu. Hidden Speakers and Presets unfold in
+// place, as the source picker's Several Apps does.
 component GearButton inherits IconButton {
-    callback new-zone();
+    in property <bool> running;
+    in property <bool> can-add-address;
+    in property <bool> delay-typing;
+    in property <[HiddenItem]> hidden;
+    in property <[PresetItem]> presets;
+    in property <bool> updater-available;
+    callback streaming();
     callback refresh();
+    callback add-address();
+    callback new-zone();
+    callback unhide(string);
+    callback apply-delay();
+    callback equalizer();
+    callback preset(string);
+    callback save-preset();
     callback remote();
     callback settings();
     callback guide();
     callback about();
+    callback check-updates();
     callback exit();
 
     property <int> menu-serial;
+    property <bool> hidden-open;
+    property <bool> presets-open;
+    property <int> hidden-rows: root.hidden-open ? max(root.hidden.length, 1) : 0;
+    property <int> preset-rows: root.presets-open ? max(root.presets.length, 1) + 1 : 0;
 
     public function open-menu() {
         if MenuState.open != 0 && MenuState.open == root.menu-serial {
@@ -307,6 +327,8 @@ component GearButton inherits IconButton {
         // A closing menu gives the focus back to what had it, which is also
         // how it tells it closed; with nothing focused it couldn't.
         root.focus();
+        root.hidden-open = false;
+        root.presets-open = false;
         root.menu-serial = MenuState.claim();
         menu.show();
     }
@@ -324,7 +346,7 @@ component GearButton inherits IconButton {
         width: max(270px + 2 * MenuRoom.margin, panel.preferred-width);
 
         panel := MenuPanel {
-            count: 7;
+            count: 13 + root.hidden-rows + root.preset-rows + (root.updater-available ? 1 : 0);
             close-requested(refocus) => {
                 menu.close();
                 if refocus {
@@ -338,14 +360,13 @@ component GearButton inherits IconButton {
 
             MenuRow {
                 index: 0;
-                text: Strings.new-zone;
-                keys: "Ctrl+N";
+                text: root.running ? Strings.menu-turn-streaming-off : Strings.menu-turn-streaming-on;
                 current <=> panel.current;
                 keyboard <=> panel.keyboard;
                 pulse: panel.pulse;
                 done <=> panel.done;
                 activated => {
-                    root.new-zone();
+                    root.streaming();
                 }
             }
 
@@ -362,12 +383,165 @@ component GearButton inherits IconButton {
                 }
             }
 
-            MenuNote {
-                text: Strings.menu-group-windows;
+            MenuRow {
+                index: 2;
+                text: Strings.cast-add-address;
+                enabled: root.can-add-address;
+                step: panel.step;
+                count: panel.count;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.add-address();
+                }
             }
 
             MenuRow {
-                index: 2;
+                index: 3;
+                text: Strings.new-zone;
+                keys: "Ctrl+N";
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.new-zone();
+                }
+            }
+
+            MenuRow {
+                index: 4;
+                text: Strings.hidden-speakers;
+                submenu: true;
+                expanded: root.hidden-open;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.hidden-open = !root.hidden-open;
+                }
+            }
+
+            if root.hidden-open && root.hidden.length == 0: MenuRow {
+                index: 5;
+                text: Strings.no-hidden-speakers;
+                nested: true;
+                enabled: false;
+                step: panel.step;
+                count: panel.count;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+            }
+
+            for entry[index] in root.hidden-open ? root.hidden : []: MenuRow {
+                index: 5 + index;
+                text: Strings.hidden-speaker-entry(entry.name, entry.kind, entry.present);
+                nested: true;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.unhide(entry.id);
+                }
+            }
+
+            MenuRow {
+                index: 5 + root.hidden-rows;
+                text: Strings.menu-apply-delay;
+                keys: "Ctrl+S";
+                enabled: root.delay-typing;
+                step: panel.step;
+                count: panel.count;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.apply-delay();
+                }
+            }
+
+            MenuNote {
+                text: Strings.menu-window;
+            }
+
+            MenuRow {
+                index: 6 + root.hidden-rows;
+                text: Strings.equalizer;
+                keys: "Ctrl+E";
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.equalizer();
+                }
+            }
+
+            MenuRow {
+                index: 7 + root.hidden-rows;
+                text: Strings.presets;
+                submenu: true;
+                expanded: root.presets-open;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.presets-open = !root.presets-open;
+                }
+            }
+
+            for preset[index] in root.presets-open ? root.presets : []: MenuRow {
+                index: 8 + root.hidden-rows + index;
+                text: preset.name;
+                keys: index < 9 ? "Ctrl+" + (index + 1) : "";
+                checks: true;
+                checked: preset.current;
+                nested: true;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.preset(preset.id);
+                }
+            }
+
+            if root.presets-open && root.presets.length == 0: MenuRow {
+                index: 8 + root.hidden-rows;
+                text: Strings.no-presets;
+                nested: true;
+                enabled: false;
+                step: panel.step;
+                count: panel.count;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+            }
+
+            if root.presets-open: MenuRow {
+                index: 7 + root.hidden-rows + root.preset-rows;
+                text: Strings.save-preset;
+                nested: true;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.save-preset();
+                }
+            }
+
+            MenuRow {
+                index: 8 + root.hidden-rows + root.preset-rows;
                 text: Strings.menu-remote;
                 current <=> panel.current;
                 keyboard <=> panel.keyboard;
@@ -379,7 +553,7 @@ component GearButton inherits IconButton {
             }
 
             MenuRow {
-                index: 3;
+                index: 9 + root.hidden-rows + root.preset-rows;
                 text: Strings.settings-menu;
                 keys: "Ctrl+,";
                 current <=> panel.current;
@@ -392,7 +566,7 @@ component GearButton inherits IconButton {
             }
 
             MenuRow {
-                index: 4;
+                index: 10 + root.hidden-rows + root.preset-rows;
                 text: Strings.help-title;
                 keys: "F1";
                 current <=> panel.current;
@@ -407,7 +581,7 @@ component GearButton inherits IconButton {
             MenuDivider { }
 
             MenuRow {
-                index: 5;
+                index: 11 + root.hidden-rows + root.preset-rows;
                 text: Strings.menu-about;
                 current <=> panel.current;
                 keyboard <=> panel.keyboard;
@@ -418,8 +592,20 @@ component GearButton inherits IconButton {
                 }
             }
 
+            if root.updater-available: MenuRow {
+                index: 12 + root.hidden-rows + root.preset-rows;
+                text: Strings.menu-check-for-updates;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.check-updates();
+                }
+            }
+
             MenuRow {
-                index: 6;
+                index: 12 + root.hidden-rows + root.preset-rows + (root.updater-available ? 1 : 0);
                 text: Strings.menu-exit;
                 keys: "Ctrl+Q";
                 current <=> panel.current;
@@ -3492,11 +3678,38 @@ export component MainWindow inherits Window {
                     gear := GearButton {
                         x: -7px;
                         glyph-size: 16px;
-                        new-zone => {
-                            root.new-zone-requested();
+                        running: root.running;
+                        can-add-address: root.cast-by-address;
+                        delay-typing: root.delay-typing;
+                        hidden: root.hidden-speakers;
+                        presets: root.presets;
+                        updater-available: root.updater-available;
+                        streaming => {
+                            root.power-toggled(!root.running);
                         }
                         refresh => {
                             root.refresh-devices();
+                        }
+                        add-address => {
+                            root.cast-add-address-requested();
+                        }
+                        new-zone => {
+                            root.new-zone-requested();
+                        }
+                        unhide(id) => {
+                            root.speaker-unhide-requested(id);
+                        }
+                        apply-delay => {
+                            root.delay-apply-requested();
+                        }
+                        equalizer => {
+                            root.equalizer-requested();
+                        }
+                        preset(id) => {
+                            root.preset-recall-requested(id);
+                        }
+                        save-preset => {
+                            root.save-preset-requested();
                         }
                         remote => {
                             root.remote-requested();
@@ -3509,6 +3722,9 @@ export component MainWindow inherits Window {
                         }
                         about => {
                             root.about-requested();
+                        }
+                        check-updates => {
+                            root.check-for-updates-requested();
                         }
                         exit => {
                             root.exit-requested();
