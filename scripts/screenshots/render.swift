@@ -555,7 +555,9 @@ func layarRowCalibration(_ phase: CalibrationPhase) -> AppModel {
 /// The Settings window as SettingsWindowController.makeWindow sets it up
 /// (SettingsWindow.swift:33-46), as tall as its content.
 func layarSettings(_ model: AppModel, look: Look) -> (NSWindow, NSView) {
-    let host = NSHostingController(rootView: SettingsView(model: model, updates: UpdateChecks(), setUpPermissions: {},
+    // The renderer runs on the main thread; UpdateChecks is @MainActor (SettingsWindow.swift:145).
+    let updates = MainActor.assumeIsolated { UpdateChecks() }
+    let host = NSHostingController(rootView: SettingsView(model: model, updates: updates, setUpPermissions: {},
                                                           onHeight: { _ in }).layarRecorded())
     host.sizingOptions = []
     let window = ShotWindow(contentViewController: host)
