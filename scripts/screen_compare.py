@@ -199,6 +199,7 @@ def self_test():
         "MAIN-ROWS-terang\tDen\tframe [256,160,32,32] vs [256,156,32,32]",
         "MAIN-ROWS-terang\tGamma\tframe [450,220,32,32] vs [450,226,32,32]",
         "MAIN-ROWS-terang\tNotice\tframe [20,300,400,60] vs [20,300,400,80]",
+        "# MAIN-SHIFT-terang\toffset y +4",
         "TRAY-IDLE-gelap\t-\tnot set up in mac: the panel is not drawn here",
     ]
     if got != want:

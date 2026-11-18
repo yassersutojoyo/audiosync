@@ -1,0 +1,6 @@
+{"window": [696, 628], "elements": [
+ {"key": "AudioSync", "frame": [64, 32, 107, 21], "font": null, "fg": null, "bg": null},
+ {"key": "Audio Source", "frame": [34, 98, 182, 32], "font": null, "fg": null, "bg": null},
+ {"key": "Speakers", "frame": [300, 111, 52, 18], "font": null, "fg": null, "bg": null},
+ {"key": "System volume", "frame": [578, 111.5, 64, 16], "font": null, "fg": null, "bg": null}
+]}
