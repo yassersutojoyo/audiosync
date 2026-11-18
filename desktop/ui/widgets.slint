@@ -48,7 +48,7 @@ export global Fluent {
     // The minimum height of a speaker or group row.
     out property <length> row-height: 48px;
     // Above and below a speaker row's or a zone header's content.
-    out property <length> row-padding-y: 6px;
+    out property <length> row-padding-y: 8px;
     // The main window's edge, and the gap between its header, notices,
     // columns and the speaker list's sections.
     out property <length> window-margin: 20px;
@@ -3861,8 +3861,8 @@ export component SpeakerRow inherits Rectangle {
                 padding-right: Fluent.row-padding-x;
                 // The Mac's 8 pt above; less below, where Segoe's taller name
                 // line already sits, so the rows keep the Mac's 54 px step.
-                padding-top: Fluent.row-padding-y + 2px;
-                padding-bottom: Fluent.row-padding-y - 1px;
+                padding-top: Fluent.row-padding-y;
+                padding-bottom: Fluent.row-padding-y - 3px;
 
                 HorizontalLayout {
                     spacing: 8px;

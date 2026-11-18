@@ -5,7 +5,7 @@ Windows system sounds, such as notification chimes, aren't included.
 Windows didn't let AudioSync add itself to the startup apps, so Launch at Sign-In stays off. To start AudioSync at sign-in anyway, put a shortcut to it in your Startup folder (press Windows+R and enter shell:startup), then add a space and --background at the end of the shortcut's Target so AudioSync starts in the tray.
 Windows didn't let AudioSync remove itself from the startup apps. To stop it launching at sign-in, turn AudioSync off in Settings > Apps > Startup.
 Windows has no working sound output, so apps have nowhere to play and AudioSync has nothing to send to your speakers. Connect or turn on an output in Sound settings.
-Windows doesn't let AudioSync use port {}, so the web remote can't start. Enter another port and select Use Port.
+AudioSync couldn't open port {} on this PC, so the web remote can't start. Enter another port and select Use Port.
 AudioSync couldn't reach Windows audio, so it can't start. Restart your PC, then open AudioSync again.\n\nDetails: {}
 {} needs a kind of pairing AudioSync for Windows can't do yet, so it's off.
 {} couldn't reach the stream on this PC, so it's off. Allow AudioSync in Windows Firewall on Private networks, or on Public networks if this network is set to Public, then turn it on again.

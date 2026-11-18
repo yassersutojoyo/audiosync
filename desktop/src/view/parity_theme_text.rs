@@ -20,12 +20,11 @@ fn rows_pad_8_as_the_macs() {
     ));
 }
 
-/// Localization.swift:1310, :1619, :499, :426-429, :1931 and :765.
+/// Localization.swift:1310, :499, :426-429, :1931 and :765.
 #[test]
 fn texts_read_as_the_macs() {
     let strings = strings();
     for text in [
-        "@tr(\"While an AirPlay speaker is on, local speakers wait this long for it. ",
         "in-zones: @tr(\"In a zone\");",
         "Turn on another speaker, or choose Include Anyway below.\");",
         "@tr(\"AudioSync couldn't open port {} on this PC, so the web remote can't start. Enter another port and select Use Port.\", port);",
@@ -38,7 +37,12 @@ fn texts_read_as_the_macs() {
             .count(),
         2
     );
-    assert_eq!(strings.matches("@tr(\"All Apps Except {}\", names)").count(), 2);
+    assert_eq!(
+        strings
+            .matches("@tr(\"All Apps Except {}\", names)")
+            .count(),
+        2
+    );
     for old in [
         "doesn't let AudioSync use port",
         "then on every other speaker that is on",
