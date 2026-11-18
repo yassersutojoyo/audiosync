@@ -438,6 +438,35 @@ fn sampled_colours(
     (commonest(&far).map(hex), Some(hex(bg)))
 }
 
+#[test]
+fn text_colour_is_the_pixel_farthest_from_the_background() {
+    // 10x1: six background pixels, three anti-aliased edge pixels, one ink pixel.
+    let mut shot = Snapshot::new(10, 1);
+    let row = [
+        [255, 255, 255],
+        [255, 255, 255],
+        [255, 255, 255],
+        [255, 255, 255],
+        [255, 255, 255],
+        [255, 255, 255],
+        [160, 160, 160],
+        [160, 160, 160],
+        [160, 160, 160],
+        [32, 32, 32],
+    ];
+    for (pixel, [r, g, b]) in shot.make_mut_slice().iter_mut().zip(row) {
+        *pixel = slint::Rgba8Pixel { r, g, b, a: 255 };
+    }
+    let (fg, bg) = sampled_colours(
+        &shot,
+        1.0,
+        LogicalPosition::new(0.0, 0.0),
+        LogicalSize::new(10.0, 1.0),
+    );
+    assert_eq!(fg.as_deref(), Some("#202020"));
+    assert_eq!(bg.as_deref(), Some("#ffffff"));
+}
+
 /// Draws a frame of `window`, which builds the list rows a change added.
 fn render(window: &slint::Window) {
     let _ = window.take_snapshot();
