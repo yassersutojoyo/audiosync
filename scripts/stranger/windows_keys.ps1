@@ -134,6 +134,7 @@ function Invoke-Named([string] $Name) {
 }
 
 function Focus-Window($Element) {
+  if (-not $Element) { Write-Host 'focus: no window to focus'; return }
   $h = [IntPtr]$Element.Current.NativeWindowHandle
   [void][Keys]::Front($h)
   try { $Element.SetFocus() } catch { }
@@ -142,7 +143,9 @@ function Focus-Window($Element) {
 }
 
 function Press([string] $Key, [switch] $Ctrl) {
-  $mods = if ($Ctrl) { [uint16[]]@($VkControl) } else { [uint16[]]@() }
+  # Not an if expression: one that yields an empty array yields $null.
+  [uint16[]] $mods = @()
+  if ($Ctrl) { $mods = @($VkControl) }
   $sent = [Keys]::Press($mods, [uint16]$VK[$Key])
   if ($sent -eq 0) { Write-Host "SendInput sent nothing for $Key" }
   Start-Sleep -Milliseconds 600
@@ -210,13 +213,19 @@ function Close-Other([string] $Title) {
 
 foreach ($name in $windows.Keys) {
   $title = $windows[$name].Title
+  # A leg that throws is one FAIL line; the next window still runs.
+  try {
   Start-App
   if (-not (Open-Under-Test $name)) {
     Record $name 'open' $false "no '$title' window"
     Stop-App $name; continue
   }
   Save-Shot $script:w "window-$name"
-  $self = { Focus-Window $script:w }
+  # The window is found again before each press: a rebuilt window has a new handle.
+  $self = {
+    if ($name -ne 'main') { $found = Find-Window $title; if ($found) { $script:w = $found } }
+    Focus-Window $script:w
+  }
 
   foreach ($pair in @(@(',', 'Settings'), @('e', 'Equalizer'))) {
     $key, $target = $pair
@@ -279,9 +288,14 @@ foreach ($name in $windows.Keys) {
     Record $name 'Ctrl+Q' $false "no '$title' window to press it in"
   }
   Stop-App $name
+  } catch {
+    Record $name 'leg' $false "stopped: $($_.Exception.Message)"
+    if ($script:app) { Stop-App $name }
+  }
 }
 
 # The PIN dialog of a pairing, opened at launch for a made-up Apple TV.
+try {
 Start-App @{ AUDIOSYNC_PREVIEW_PIN = 'code' }
 $pinTitle = 'Pair with Living Room'
 if (Wait-Until { ($script:pin = Find-Window $pinTitle) -ne $null } 10) {
@@ -293,8 +307,10 @@ if (Wait-Until { ($script:pin = Find-Window $pinTitle) -ne $null } 10) {
   Record 'PIN dialog' 'Escape' $false "no '$pinTitle' window"
 }
 Stop-App 'pin'
+} catch { Record 'PIN dialog' 'leg' $false "stopped: $($_.Exception.Message)"; if ($script:app) { Stop-App 'pin' } }
 
 # The Calibrate sheet, over the main window: a group named as its button.
+try {
 Start-App
 Focus-Window $script:main
 $calibrate = 'Calibrate All Speakers'
@@ -312,6 +328,7 @@ if ((Invoke-Named $calibrate) -and (Wait-Until $sheetShown)) {
 }
 Save-Shot $script:main 'calibrate-after-escape'
 Stop-App 'calibrate'
+} catch { Record 'Calibrate sheet' 'leg' $false "stopped: $($_.Exception.Message)"; if ($script:app) { Stop-App 'calibrate' } }
 
 $script:results.Add('NOT SET UP | main | Ctrl+S | applies a typed delay; the runner has no speaker row to type one in')
 $script:results | Set-Content (Join-Path $Work 'results.txt')
