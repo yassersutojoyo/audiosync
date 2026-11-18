@@ -33,13 +33,13 @@ def main(argv):
     header = packet[:5]
     rate, bits, channels = rate_of(header), header[1], header[2]
     print(f"relay: {rate} Hz, {bits} bit, {channels} channels into {sounddevice.query_devices(device)['name']}", flush=True)
-    if bits != 16:
+    if bits not in (16, 32):
         print(f"relay: {bits}-bit samples are not handled", flush=True)
         return 1
     stream = sounddevice.RawOutputStream(
         samplerate=rate,
         channels=channels,
-        dtype="int16",
+        dtype=f"int{bits}",
         device=device,
         latency="low",
         extra_settings=sounddevice.WasapiSettings(auto_convert=True),

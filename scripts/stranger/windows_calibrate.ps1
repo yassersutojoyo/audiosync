@@ -149,7 +149,7 @@ Get-PnpDevice -PresentOnly -Class MEDIA, AudioEndpoint -ErrorAction SilentlyCont
 Note "outputs: $([Endpoints]::Count(0)), inputs: $([Endpoints]::Count(1))"
 if ([Endpoints]::Count(0) -lt 2 -or [Endpoints]::Count(1) -lt 1) { throw 'the drivers gave fewer than two outputs and one input (see env.txt)' }
 
-$relay = Start-Process -FilePath python -ArgumentList '-I', (Join-Path $here 'scream_relay.py'), '4010', 'CABLE Input' -PassThru `
+$relay = Start-Process -FilePath python -ArgumentList '-I', (Join-Path $here 'scream_relay.py'), '4010', 'Speakers (VB-Audio' -PassThru `
   -RedirectStandardOutput "$Work/relay.out" -RedirectStandardError "$Work/relay.err"
 
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.Forms, System.Drawing
