@@ -341,7 +341,8 @@ $row = $toggles | Where-Object { $_.Current.Name -match 'Speakers|Scream' } | Se
 if (-not $row -and -not $script:builtIn) { Not-Tried 'the endpoint has no row in the main window' }
 if (-not $streaming -or -not $row) { throw 'no Streaming switch or no row for the endpoint (see toggles above)' }
 if (-not (Test-On $row)) { $row.GetCurrentPattern($TogglePattern).Toggle(); Start-Sleep -Seconds 2 }
-$streaming.GetCurrentPattern($TogglePattern).Toggle()
+# Turning the first speaker on can start streaming by itself (run 44299973570).
+if (-not (Test-On $streaming)) { $streaming.GetCurrentPattern($TogglePattern).Toggle() }
 Start-Sleep -Seconds 6
 
 # A1.11: the only output is the default; nothing to move it to.
@@ -387,7 +388,7 @@ if (-not $script:builtIn) {
   }
 }
 
-$streaming.GetCurrentPattern($TogglePattern).Toggle()
+if (Test-On $streaming) { $streaming.GetCurrentPattern($TogglePattern).Toggle() }
 Start-Sleep -Seconds 3
 Check 'A1.11' ((Get-Defaults) -eq $default) 'the default output is as found after streaming stops'
 if (Test-Alive) { Stop-Process -Id $script:app.Id -Force }
