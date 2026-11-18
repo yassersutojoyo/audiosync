@@ -60,6 +60,12 @@ impl App {
             let mut check = self.setup_check.borrow_mut();
             check.network = None;
             check.watch = profiles.map(|source| Watch::start(source, remote_window::PROFILE_CHECK));
+            // A rebuilt window has not seen the last microphone reading.
+            let attention = setup_check::attention(None, check.microphone);
+            self.setup()
+                .set_microphone(setup_microphone(check.microphone));
+            self.setup()
+                .set_microphone_needs_attention(attention.microphone);
         }
         if let Err(error) = self.setup().show() {
             self.show_window_error(&error);
@@ -72,9 +78,11 @@ impl App {
         crate::platform::bring_to_front(self.setup().window());
     }
 
-    fn hide_setup(&self) {
+    pub(super) fn hide_setup(&self) {
         // A window that fails to hide stays open; the user can still close it.
-        let _ = self.setup().hide();
+        if let Some(setup) = self.setup.built() {
+            let _ = setup.hide();
+        }
         self.setup_check.borrow_mut().watch = None;
     }
 
@@ -100,7 +108,7 @@ impl App {
         self.show_setup_check(network, microphone);
     }
 
-    fn show_setup_check(&self, network: Option<Network>, microphone: Microphone) {
+    pub(super) fn show_setup_check(&self, network: Option<Network>, microphone: Microphone) {
         let (network_before, microphone_before) = {
             let mut check = self.setup_check.borrow_mut();
             let before = (check.network, check.microphone);
@@ -113,7 +121,10 @@ impl App {
         }
         let attention = setup_check::attention(network, microphone);
         let attention_before = setup_check::attention(network_before, microphone_before);
-        let setup = &self.setup();
+        let Some(setup) = self.setup.built() else {
+            return;
+        };
+        let setup = &setup;
         setup.set_network(setup_network(network));
         setup.set_microphone(setup_microphone(microphone));
         setup.set_network_needs_attention(attention.network);

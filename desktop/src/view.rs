@@ -4172,8 +4172,10 @@ impl App {
 
     /// Closing the equalizer drops a curve name being typed, as Escape does.
     fn hide_equalizer(&self) {
-        self.equalizer().set_naming_curve(false);
-        let _ = self.equalizer().hide();
+        if let Some(eq) = self.equalizer.built() {
+            eq.set_naming_curve(false);
+            let _ = eq.hide();
+        }
     }
 
     fn connect_about(self: &Rc<Self>) {
@@ -4310,7 +4312,9 @@ impl App {
             return;
         }
         let id = self.pin_for.borrow_mut().take();
-        let _ = self.pin_dialog().hide();
+        if let Some(dialog) = self.pin_dialog.built() {
+            let _ = dialog.hide();
+        }
         if let Some(id) = id {
             self.update(|b| b.cancel_pairing(&id));
         }
@@ -4318,7 +4322,9 @@ impl App {
 
     fn close_pin_preview(&self) {
         self.pin_preview.set(false);
-        let _ = self.pin_dialog().hide();
+        if let Some(dialog) = self.pin_dialog.built() {
+            let _ = dialog.hide();
+        }
     }
 
     /// Opens the PIN dialog for a made-up Apple TV, to look at it without
@@ -5629,8 +5635,12 @@ impl App {
     }
 
     fn hide_dialog(&self) {
-        let _ = self.zone_dialog().hide();
-        self.equalizer().set_name_dialog_open(false);
+        if let Some(dialog) = self.zone_dialog.built() {
+            let _ = dialog.hide();
+        }
+        if let Some(eq) = self.equalizer.built() {
+            eq.set_name_dialog_open(false);
+        }
     }
 
     fn confirm_dialog(&self, name: &str) {
@@ -7867,7 +7877,9 @@ pub(crate) mod tests {
     /// double-click timers then see two clicks as one double-click however
     /// long a loaded machine takes between them.
     pub(super) fn hold_clock() {
-        HELD_CLOCK.with(|clock| clock.set(Some(CLOCK_START.elapsed())));
+        // Never back: an earlier advance_clock may be ahead of real time.
+        let now = CLOCK_START.elapsed();
+        HELD_CLOCK.with(|clock| clock.set(Some(clock.get().map_or(now, |held| held.max(now)))));
     }
 
     /// Moves the clock [`hold_clock`] stopped on by `by`.

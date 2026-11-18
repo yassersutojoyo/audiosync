@@ -77,10 +77,12 @@ impl App {
     }
 
     /// Cancel, Escape or the close button: the speaker stays off.
-    fn cancel_password(&self) {
+    pub(super) fn cancel_password(&self) {
         let id = self.password_for.borrow_mut().take();
-        let _ = self.password_dialog().hide();
-        self.password_dialog().set_password(SharedString::new());
+        if let Some(dialog) = self.password_dialog.built() {
+            let _ = dialog.hide();
+            dialog.set_password(SharedString::new());
+        }
         if let Some(id) = id {
             self.update(|b| b.cancel_password(&id));
         }

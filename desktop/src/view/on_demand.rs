@@ -267,6 +267,31 @@ mod tests {
     }
 
     #[test]
+    fn closing_or_refreshing_a_closed_window_builds_nothing() {
+        let app = app_over(MockBackend::new());
+        app.hide_equalizer();
+        app.cancel_pin();
+        app.close_pin_preview();
+        app.hide_dialog();
+        app.cancel_password();
+        app.hide_setup();
+        app.show_setup_check(None, crate::setup_check::Microphone::Blocked);
+        app.refresh();
+        macro_rules! unbuilt {
+            ($name:ident) => {
+                assert!(app.$name.built().is_none(), stringify!($name));
+            };
+        }
+        each_window!(unbuilt);
+        app.show_setup();
+        assert_eq!(
+            app.setup().get_microphone(),
+            crate::SetupMicrophone::Blocked,
+            "a rebuilt Check Setup shows the last microphone reading"
+        );
+    }
+
+    #[test]
     fn a_dropped_window_is_freed() {
         let app = app_over(MockBackend::new());
         macro_rules! freed {
