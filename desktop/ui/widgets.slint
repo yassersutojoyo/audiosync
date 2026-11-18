@@ -2934,7 +2934,7 @@ export component AirPlayDelayControls inherits VerticalLayout {
                 color: Tokens.secondary-text;
             }
 
-            Text {
+            title := Text {
                 text: Strings.airplay-delay-title;
                 font-size: Tokens.font-size-body;
                 color: Tokens.text;
@@ -2946,7 +2946,7 @@ export component AirPlayDelayControls inherits VerticalLayout {
             VerticalLayout {
                 alignment: center;
 
-                Rectangle {
+                value-box := Rectangle {
                     width: value-text.preferred-width + 6px;
                     height: 16px;
                     border-radius: Fluent.radius-control;

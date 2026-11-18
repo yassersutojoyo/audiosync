@@ -13636,6 +13636,25 @@ pub(crate) mod tests {
         assert_eq!(line.absolute_position().x - row.absolute_position().x, 54.0);
     }
 
+    /// The AirPlay delay's name starts where the speakers' names do, and its
+    /// value's fill ends 7 px inside the row: the Mac's 10 pt row inset
+    /// (BrandTokens.swift:154) less the 3 px the fill reaches past the value,
+    /// as on the speaker rows.
+    #[test]
+    fn the_airplay_delay_keeps_the_macs_row_inset() {
+        let app = narrow_app(MockBackend::new());
+        advance_clock(Duration::from_millis(400));
+        draw_frames_at(776, 900);
+        let row = element(&app, "SpeakerRow::hover").expect("a speaker row");
+        let name = element(&app, "SpeakerRow::name-label").expect("a speaker's name");
+        let title = element(&app, "AirPlayDelayControls::title").expect("the delay's name");
+        let value = element(&app, "AirPlayDelayControls::value-box").expect("the delay's value");
+        assert_eq!(title.absolute_position().x, name.absolute_position().x);
+        let row_end = row.absolute_position().x + row.size().width;
+        let value_end = value.absolute_position().x + value.size().width;
+        assert_eq!(row_end - value_end, 7.0);
+    }
+
     /// With Add by Address under it, the AirPlay delay's note shows whole
     /// once the speaker list is scrolled to its end, at a short and a tall
     /// window: its pane keeps the note's second line and its padding, and
