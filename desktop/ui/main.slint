@@ -1098,9 +1098,7 @@ component PresetListRow inherits Rectangle {
                     border-radius: Fluent.radius-control;
                     accessible-role: button;
                     accessible-label: root.item.name;
-                    accessible-checkable: true;
-                    accessible-checked: root.item.current;
-                    accessible-value: Strings.preset-summary(root.item.speakers, root.item.master);
+                    accessible-value: root.item.picked ? Strings.preset-in-use(Strings.preset-summary(root.item.speakers, root.item.master)) : Strings.preset-summary(root.item.speakers, root.item.master);
                     accessible-action-default => {
                         root.recall();
                     }
@@ -1152,7 +1150,7 @@ component PresetListRow inherits Rectangle {
                                     compact: true;
                                     font-size: Tokens.font-size-body;
                                     text: root.item.name;
-                                    placeholder-text: Strings.preset-placeholder;
+                                    placeholder-text: root.item.name;
                                     accessible-label: Strings.preset-field-label;
                                     init => {
                                         root.rename-done = false;
@@ -1290,6 +1288,8 @@ component PresetsCard inherits Rectangle {
     // Under Save as Preset…: why it saved nothing (empty: no caption).
     in-out property <string> save-why;
     callback save-named(string);
+    // Whether a name is empty once trimmed; Slint has no trim.
+    pure callback blank(string) -> bool;
     callback rename-named(string, string);
     // Set once Return or Escape ended the save, so the field's lost focus adds nothing.
     property <bool> save-done;
@@ -1326,7 +1326,7 @@ component PresetsCard inherits Rectangle {
             forward-focus: focus;
             accessible-role: button;
             accessible-label: Strings.presets;
-            accessible-value: root.presets.length == 0 ? Strings.no-presets : root.current != "" ? root.current : Strings.choose-preset;
+            accessible-value: root.current != "" ? root.current : Strings.choose-preset;
             accessible-description: root.open ? Strings.hide-preset-list : Strings.show-preset-list;
             accessible-action-default => {
                 root.open = !root.open;
@@ -1578,7 +1578,7 @@ component PresetsCard inherits Rectangle {
                                     if !self.has-focus && !root.save-done {
                                         root.save-done = true;
                                         root.saving = false;
-                                        if self.text != "" {
+                                        if !root.blank(self.text) {
                                             root.save-named(self.text);
                                         }
                                     }
@@ -3168,6 +3168,7 @@ export component MainWindow inherits Window {
     in-out property <string> preset-renaming;
     in-out property <string> preset-save-note;
     callback preset-save-named(string);
+    pure callback preset-name-blank(string) -> bool;
     callback preset-rename-named(string, string);
     callback zone-toggled(string);
     callback zone-expanded-changed(string, bool);
@@ -3787,6 +3788,9 @@ export component MainWindow inherits Window {
                             save-why <=> root.preset-save-note;
                             save-named(text) => {
                                 root.preset-save-named(text);
+                            }
+                            blank(text) => {
+                                return root.preset-name-blank(text);
                             }
                             rename-named(id, text) => {
                                 root.preset-rename-named(id, text);
