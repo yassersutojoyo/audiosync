@@ -36,7 +36,11 @@ fn every_curve_menu_item_is_reachable_inside_the_window() {
     // MenuRoom.rows: 24 px rows, the divider before Save Curve…, 4 px padding at each end.
     let full = (presets + 1.0) * 24.0 + 9.0 + 8.0;
     let below = button.absolute_position().y + button.size().height + 4.0;
-    let height = eq.window().size().to_logical(eq.window().scale_factor()).height;
+    let height = eq
+        .window()
+        .size()
+        .to_logical(eq.window().scale_factor())
+        .height;
     assert!(below + full > height, "the full menu runs past the window");
 
     let source = EQUALIZER.replace("\r\n", "\n");
