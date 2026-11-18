@@ -11544,6 +11544,32 @@ pub(crate) mod tests {
         }
     }
 
+    /// A note too long for its line wraps to a second line and the row grows,
+    /// as the Mac's (MainWindow.swift:2424-2430, `.lineLimit(2)`), instead of
+    /// ending in "…" after a few words.
+    #[test]
+    fn a_long_row_note_wraps_to_two_lines() {
+        use i_slint_backend_testing::ElementHandle;
+        let mut backend = MockBackend::new();
+        backend.set_running(true);
+        let mut gone = backend
+            .snapshot()
+            .speaker("airplay:kitchen")
+            .unwrap()
+            .clone();
+        gone.id = "airplay:gone".into();
+        gone.waiting = Some(ui_model::Waiting::NotOnNetwork);
+        backend.add_speaker(gone);
+        let app = app_over(backend);
+        app.main.show().expect("the main window shows");
+        draw_frames_at(696, 632);
+        draw_frames_at(696, 632);
+        let tallest = ElementHandle::find_by_element_id(&app.main, "SpeakerRow::note-label")
+            .map(|note| note.size().height)
+            .fold(0.0, f32::max);
+        // Two caption lines of 16 px, not one, nor more than two.
+        assert!((28.0..=40.0).contains(&tallest), "{tallest} px");
+    }
     /// A long name's line stops 6 px before the row's delay column, the Mac row's
     /// spacing (MainWindow.swift:2371), however close the value sits to the
     /// options after it.
