@@ -1250,6 +1250,7 @@ export component SmallButton inherits Rectangle {
     in property <length> font-size: Tokens.font-size-callout;
     // Can't be used now: grey, as the Mac's disabled push button.
     in property <bool> dimmed;
+    out property <bool> has-focus: focus.has-focus;
     callback clicked();
 
     min-width: label.preferred-width + 20px;
@@ -1924,8 +1925,8 @@ export component LevelSlider inherits Rectangle {
         width: root.vertical ? root.thickness : root.span * root.ratio;
         height: root.vertical ? root.span * root.ratio : root.thickness;
         border-radius: root.thickness / 2;
-        // On dark the Mac's small slider fill is grey, not white.
-        background: root.idle ? transparent : root.small ? (Tokens.dark ? #ffffff42 : #000000f5) : Tokens.text;
+        // The window tints its sliders in ink (MainWindow.swift:350-351): near white on dark.
+        background: root.idle ? transparent : root.small ? (Tokens.dark ? Tokens.text : #000000f5) : Tokens.text;
         animate background {
             duration: Motion.on ? 250ms : 150ms;
             easing: Motion.on ? ease-in-out : linear;
@@ -2397,8 +2398,9 @@ export component TextField inherits Rectangle {
     vertical-stretch: 0;
     forward-focus: input;
     border-radius: root.compact ? 5px : root.boxed ? 8px : Fluent.radius-control;
-    border-width: root.boxed && input.has-focus ? 2px : root.raised && !Tokens.dark && !input.has-focus ? 0px : 1px;
-    border-color: root.boxed ? (input.has-focus ? Tokens.focus : Tokens.secondary-text) : root.compact && input.has-focus ? Tokens.teal : Fluent.stroke;
+    border-width: root.boxed && input.has-focus ? 2px : 1px;
+    // A raised field's edge on light is the Mac delay field's #d9d9d9 on white (2x render).
+    border-color: root.boxed ? (input.has-focus ? Tokens.focus : Tokens.secondary-text) : root.compact && input.has-focus ? Tokens.teal : root.raised && !Tokens.dark ? #00000026 : Fluent.stroke;
     background: input.has-focus || (root.raised && !Tokens.dark) ? Tokens.surface : Tokens.surface.mix(Tokens.text, 0.98);
     drop-shadow-blur: 1px;
     drop-shadow-offset-y: 0.5px;
@@ -2544,9 +2546,10 @@ export component TextField inherits Rectangle {
 // typing not yet applied (Enter applies it), a red outline while that typing
 // is a number out of range. Drawn in the spacing around the field instead of
 // taking room, so the row is no taller than its buttons.
-// A delay step, as the Mac panel's small bordered button: 10 px digits, a
-// white pill with a soft shadow and no border, or grey in dark. 22 high, the
-// field's height, where the Mac's is 20 beside a 22 field.
+// A delay step, as the Mac panel's small bordered button (MainWindow.swift:3500-3515):
+// 10 px digits on a faint grey pill with no border or shadow, #f4f4f4 on white and
+// #282828 on #1e1e1e in the Mac's 2x render. 22 high, the field's height, where
+// the Mac's is 20 beside a 22 field.
 component DelayStep inherits Rectangle {
     in property <int> delta;
     out property <bool> has-focus: focus.has-focus;
@@ -2556,10 +2559,7 @@ component DelayStep inherits Rectangle {
     min-width: label.preferred-width + 14px;
     border-radius: 5px;
     // A Mac bordered button has no hover look; pressing it greys it, a step lighter in dark.
-    background: touch.pressed ? Tokens.text.with-alpha(Tokens.dark ? 0.3 : 0.1) : Fluent.native-control;
-    drop-shadow-blur: 1px;
-    drop-shadow-offset-y: 0.5px;
-    drop-shadow-color: Fluent.native-control-shadow;
+    background: Tokens.text.with-alpha(touch.pressed ? (Tokens.dark ? 0.3 : 0.1) : 0.05);
     animate background { duration: Fluent.fast; }
     forward-focus: focus;
     accessible-role: button;
