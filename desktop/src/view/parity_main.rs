@@ -180,13 +180,13 @@ fn cards_take_the_macs_corner() {
 }
 
 /// The main window is white in light and the Mac's system window color in
-/// dark (MainWindow.swift:32-36), #2b2b29 in every dark Mac photo of 18 Nov,
-/// so a row's knob stands off it as the Mac's does.
+/// dark (MainWindow.swift:32-36), #1e1e1e in the dark Mac photos of 18 Nov
+/// 22.24, so its cards (5 % ink over it) come out at the Mac's #282828.
 // covers: S450
 #[test]
 fn the_main_window_is_the_macs_window_color() {
     let fluent = component(include_str!("../../ui/widgets.slint"), "Fluent");
-    assert!(fluent.contains("out property <color> main-window: Tokens.dark ? #2b2b2b : #ffffff;"));
+    assert!(fluent.contains("out property <color> main-window: Tokens.dark ? #1e1e1e : #ffffff;"));
     let main = include_str!("../../ui/main.slint").replace("\r\n", "\n");
     assert!(
         main.contains("    background: Fluent.main-window;\n    default-font-family: Fluent.font;")
@@ -717,4 +717,68 @@ fn the_cards_have_the_macs_corners() {
         ),
         "the setup list"
     );
+}
+
+/// A row's small slider as the Mac's 18 Nov photos at 2x show it (a native
+/// .controlSize(.small) Slider, MainWindow.swift:2462-2473): an 18 x 14 knob,
+/// #dddddd on dark whether the row is on or off, a track of ink at 10 %
+/// past the knob and 14.5 % before it on an off row, a #f4f4f4 fill on dark.
+// covers: S450
+#[test]
+fn a_rows_slider_is_the_macs_small_slider() {
+    let widgets = include_str!("../../ui/widgets.slint");
+    let slider = component(widgets, "LevelSlider");
+    assert!(slider.contains("property <length> knob: root.small ? 18px : 16px;"));
+    assert!(slider.contains("property <length> knob-across: root.small ? 14px : 16px;"));
+    assert!(slider.contains("height: root.knob-across;"));
+    assert!(slider.contains(
+        "root.small ? (piece == 0 && root.idle ? (Tokens.dark ? #ffffff25 : #00000025) : (Tokens.dark ? #ffffff19 : #00000019)) : root.track;"
+    ));
+    assert!(slider.contains("root.small ? (Tokens.dark ? #f4f4f4 : #000000f5) : Tokens.text;"));
+    assert!(slider.contains(
+        "background: !root.small ? #ffffff : Tokens.dark ? #dddddd : touch.pressed ? #ebebeb : #ffffff;"
+    ));
+    assert!(!slider.contains("#959595"), "no grey knob on dark");
+}
+
+/// The Mac's main window fills an on speaker's badge while streaming is on,
+/// also while it reconnects or is off the network: its row state is only
+/// on and streaming (MenuBar.swift:505-507, SpeakerBadge :2191-2200).
+// covers: S450
+#[test]
+fn an_on_speaker_that_reconnects_keeps_the_macs_filled_badge() {
+    use crate::ui_model::Waiting;
+    let mut state = app_over(MockBackend::new()).snapshot();
+    state.running = true;
+    for waiting in [Waiting::Reconnecting, Waiting::NotOnNetwork] {
+        let mut speaker = state.speakers[0].clone();
+        speaker.enabled = true;
+        speaker.waiting = Some(waiting);
+        assert!(
+            super::speaker_item(&state, &speaker, true, false, None).plays,
+            "{waiting:?}"
+        );
+    }
+}
+
+/// The Mac's warning is exclamationmark.triangle.fill everywhere
+/// (MenuBar.swift:2115, :2316, :2798): a solid triangle with the mark cut
+/// out, drawn on Windows too, as the icon font's warning is an outline.
+// covers: S450
+#[test]
+fn the_warning_is_the_macs_solid_triangle() {
+    let widgets = include_str!("../../ui/widgets.slint").replace("
+", "
+");
+    let glyphs = component(&widgets, "Glyphs");
+    let everywhere = &glyphs[glyphs
+        .find("public pure function drawn-everywhere(")
+        .expect("drawn-everywhere")..];
+    let everywhere = &everywhere[..everywhere.find("
+    }").expect("it ends")];
+    assert!(everywhere.contains("glyph == root.warning"), "{everywhere}");
+    let outline = &glyphs[glyphs.find("public pure function outline(").expect("outline")
+        ..glyphs.find("public pure function solid(").expect("solid")];
+    assert!(!outline.contains("root.warning"), "no stroked triangle over it");
+    assert!(drawing(&glyphs, "solid", "warning").starts_with("return \"M8 1.5 L15 14 H1 Z"));
 }

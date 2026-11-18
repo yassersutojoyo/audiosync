@@ -217,3 +217,42 @@ fn the_availability_icon_stays_beside_its_note() {
     let caption = &note[note.find("QuietText {").expect("the caption")..];
     assert!(!caption.contains("horizontal-stretch: 1;"), "{caption}");
 }
+
+/// The Mac panel's Speakers row puts its device volume glyph at the row's
+/// right edge (its 18 Nov photos): the glyph takes no share of the row's
+/// spare width.
+// covers: S450
+#[test]
+fn a_rows_device_volume_glyph_sits_at_the_right_edge() {
+    let source = flyout();
+    let at = source
+        .find("if root.device-volume != DeviceVolumeHint.none: Glyph {")
+        .expect("the glyph");
+    let glyph = &source[at..at + 200];
+    assert!(glyph.contains("horizontal-stretch: 0;"), "{glyph}");
+}
+
+/// The Mac panel's source tile is a 48 pt square with only a 10 % ink edge
+/// and no fill, its speaker an unresized symbol in a 22 pt frame
+/// (MenuBar.swift:2372-2383, :2509-2522), 17 pt wide in its photos.
+// covers: S450
+#[test]
+fn the_source_tile_is_the_macs_unfilled_square() {
+    let source = flyout();
+    let at = source.find("cover-tile := Rectangle {").expect("the tile");
+    let tile = &source[at..at + 2000];
+    assert!(
+        !tile.contains("background: Tokens.text.with-alpha(0.06);"),
+        "{tile}"
+    );
+    let glyph = &tile[tile.find("Glyphs.volume-high;").expect("the glyph")..];
+    assert!(glyph.contains("font-size: 17px;"), "{glyph}");
+}
+
+/// The Mac panel's "Looking for speakers…" is its text alone, flush left
+/// (MenuBar.swift:1857-1867).
+// covers: S450
+#[test]
+fn looking_for_speakers_has_no_dot_before_it() {
+    assert!(!flyout().contains("a dot that beats"));
+}

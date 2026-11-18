@@ -401,7 +401,7 @@ fn the_master_volume_draws_its_levels_waves_and_a_3_to_1_track() {
     assert!(master.contains("color: Tokens.text;"));
     let slider = component_body(&widgets, "LevelSlider");
     assert!(
-        slider.contains("property <brush> track-look: root.idle ? (Tokens.dark ? #ffffff0e : #00000008) : root.small ? (Tokens.dark ? #ffffff1b : #0000000e) : root.track;")
+        slider.contains("background: root.small ? (piece == 0 && root.idle ? (Tokens.dark ? #ffffff25 : #00000025) : (Tokens.dark ? #ffffff19 : #00000019)) : root.track;")
     );
     assert!(slider.contains("border-width: root.small && Tokens.dark ? 0px : 1px;"));
 }
