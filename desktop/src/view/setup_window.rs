@@ -212,10 +212,13 @@ mod tests {
         assert!(window.is_visible(), "Settings > Check Setup… opens it");
         assert_eq!(
             app.strings().invoke_setup_summary(false, false),
-            "Windows doesn't ask AudioSync for permissions. Nothing here needs your attention."
+            "Nothing here needs your attention."
         );
         press(window, Key::Escape);
         assert!(!window.is_visible(), "Escape closes it");
+        app.main.invoke_setup_requested();
+        press(window, Key::Return);
+        assert!(!window.is_visible(), "Return presses Done (SetupWindow.swift:106-107)");
         app.main.invoke_setup_requested();
         app.setup.invoke_close_requested();
         assert!(!window.is_visible(), "Close closes it");
@@ -238,7 +241,7 @@ mod tests {
         assert_eq!(app.setup.get_announcement(), "");
         assert_eq!(
             app.strings().invoke_setup_summary(true, false),
-            "1 item needs your attention: Network type."
+            "Network type needs your attention."
         );
 
         *profiles.0.lock().expect("not poisoned") = vec![Category::Private];
@@ -247,7 +250,7 @@ mod tests {
         assert_eq!(app.setup.get_network_changes(), 1);
         assert_eq!(
             app.setup.get_announcement(),
-            "Network type: Private network Windows doesn't ask AudioSync for permissions. Nothing here needs your attention."
+            "Network type: Private network Ready to stream. Nothing here needs your attention."
         );
 
         *profiles.0.lock().expect("not poisoned") = Vec::new();
@@ -278,7 +281,7 @@ mod tests {
         assert!(app.setup.get_microphone_needs_attention());
         assert_eq!(
             app.strings().invoke_setup_summary(true, true),
-            "2 items need your attention: Network type, Microphone."
+            "Network type needs your attention. Not allowed, used only when you need them: Microphone."
         );
 
         app.update(|b| b.dismiss_all_notices());
@@ -291,5 +294,40 @@ mod tests {
                 .get_announcement()
                 .starts_with("Microphone: Working")
         );
+    }
+
+    // The Mac's names (Localization.swift:1471-1472, 1519, 1562-1563,
+    // SetupWindow.swift:61, 92): window "Setup", Settings box "Permissions",
+    // "Before you start" when it opens by itself, ready or not from Check Setup.
+    #[test]
+    fn the_window_box_and_heading_carry_the_macs_names() {
+        let strings = include_str!("../../ui/strings.slint");
+        for line in [
+            "setup-title: @tr(\"Permissions\");",
+            "setup-window-title: @tr(\"Setup\");",
+            "setup-heading: @tr(\"Before you start\");",
+            "setup-done: @tr(\"Done\");",
+            "@tr(\"Ready to stream\")",
+            "@tr(\"Not ready to stream\")",
+        ] {
+            assert!(strings.contains(line), "{line}");
+        }
+        let setup = include_str!("../../ui/setup.slint");
+        assert!(setup.contains("title: Strings.setup-window-title;"));
+        assert!(setup.contains(
+            "root.checking ? Strings.setup-summary-heading(root.network-needs-attention) : Strings.setup-heading"
+        ));
+    }
+
+    // AppDelegate.swift:477, AppDelegate+Windows.swift:234-238: a first
+    // install opens it once by itself, after the main window.
+    #[test]
+    fn a_first_install_opens_setup_by_itself_after_the_main_window() {
+        let main = include_str!("../main.rs").replace("\r\n", "\n");
+        let shown = main.find("app.show_main();").expect("main shows");
+        let first = main
+            .find("app.show_setup_at_first_install();")
+            .expect("first install opens Setup");
+        assert!(first > shown);
     }
 }
