@@ -335,6 +335,9 @@ fn info_answer_may_be_only_the_txt_record() {
 #[test]
 fn pairing_goes_on_the_session_connection() {
     let rig = transient();
+    let info = &rig.fake.requests[0].0;
+    assert_eq!(info.uri, "/info");
+    assert_eq!(info.headers.get("User-Agent"), Some("AirPlay/950.7.1"));
     let setups: Vec<&Request> = rig
         .fake
         .requests
@@ -350,12 +353,7 @@ fn pairing_goes_on_the_session_connection() {
             Some("application/octet-stream")
         );
         assert_eq!(request.headers.get("X-Apple-HKP"), Some("4"));
-        assert!(
-            request
-                .headers
-                .get("User-Agent")
-                .is_some_and(|ua| ua.starts_with("AudioSync/"))
-        );
+        assert_eq!(request.headers.get("User-Agent"), Some("AirPlay/950.7.1"));
         for name in ["CSeq", "Client-Instance", "DACP-ID", "Active-Remote"] {
             assert!(request.headers.contains(name), "{name}");
         }
