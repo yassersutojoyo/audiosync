@@ -1832,14 +1832,11 @@ component CalibrationCard inherits VerticalLayout {
     in property <string> status;
     // The status only says what a run does: it shows as the row's tooltip.
     in property <bool> status-is-hint;
-    // The microphone was blocked: Open Privacy Settings.
-    in property <bool> privacy;
     in property <[LeftOutItem]> left-out;
     // For a Calibrate Zone run: where to bring the PC; empty otherwise.
     in property <string> zone;
     callback start();
     callback cancel();
-    callback privacy-requested();
     // Include Anyway (true) or Leave Out (false) on a left-out row, by its
     // output's ID.
     callback include(string, bool);
@@ -1900,23 +1897,6 @@ component CalibrationCard inherits VerticalLayout {
         }
 
         // What follows the row keeps to the column the row's fill reaches past.
-        if root.privacy: HorizontalLayout {
-            alignment: LayoutAlignment.start;
-            padding-left: 8px;
-            padding-right: 8px;
-
-            Button {
-                changed has-focus => {
-                    root.focus-changed(self.has-focus);
-                }
-                text: Strings.open-microphone-settings;
-                accessible-label: Strings.open-microphone-settings;
-                clicked => {
-                    root.privacy-requested();
-                }
-            }
-        }
-
         if root.zone != "": HorizontalLayout {
             padding-left: 8px;
             padding-right: 8px;
@@ -3638,7 +3618,6 @@ export component MainWindow inherits Window {
                             can-start: root.calibrate-all-can-start;
                             status: root.calibrate-all-status;
                             status-is-hint: root.calibrate-all-status-is-hint;
-                            privacy: root.calibrate-all-privacy;
                             left-out: root.calibrate-all-left-out;
                             zone: root.calibrate-all-zone;
                             start => {
@@ -3646,9 +3625,6 @@ export component MainWindow inherits Window {
                             }
                             cancel => {
                                 root.cancel-calibrate-all-requested();
-                            }
-                            privacy-requested => {
-                                root.calibration-privacy-requested();
                             }
                             include(id, included) => {
                                 root.calibrate-all-include-requested(id, included);

@@ -19823,7 +19823,10 @@ pub(crate) mod tests {
         use crate::audio::backend::OutputKind;
         use crate::audio::mock::VolumeWrite;
         use i_slint_backend_testing::ElementHandle;
-        for appearance in [crate::Appearance::Light, crate::Appearance::Dark] {
+        let cases = [crate::Appearance::Light, crate::Appearance::Dark]
+            .into_iter()
+            .flat_map(|appearance| [(appearance, true), (appearance, false)]);
+        for (appearance, can_start) in cases {
             let mut audio = crate::audio::mock::MockBackend::empty();
             audio.connect_output_as("speakers", "Speakers", OutputKind::BuiltIn);
             audio.connect_output_as("usb", "USB Speakers", OutputKind::UsbSpeakers);
@@ -19865,6 +19868,17 @@ pub(crate) mod tests {
                 1,
                 "{appearance:?}: only the sheet's"
             );
+            let line = app.main.get_calibrate_all_outcome();
+            assert!(!line.is_empty(), "{appearance:?}: the run's line");
+            assert_eq!(line, app.main.get_calibrate_all_status());
+            assert!(app.main.get_calibrate_all_outcome_problem());
+            if !can_start {
+                // Calibrate All goes disabled while the sheet shows.
+                app.update(|b| b.set_running(false));
+                draw_frames();
+                assert!(!app.main.get_calibrate_all_can_start());
+                assert!(in_sheet().is_some(), "{appearance:?}: the sheet stays");
+            }
 
             let window = app.main.window();
             tab(window, 1);
@@ -19876,17 +19890,46 @@ pub(crate) mod tests {
                 [VolumeWrite::Unmute {
                     id: "speakers".to_owned()
                 }],
-                "{appearance:?}: Tab from Close reaches the fix"
+                "{appearance:?} {can_start}: Tab from Close reaches the fix"
             );
             assert!(in_sheet().is_none(), "{appearance:?}: fixed, the hint goes");
             press(window, " ");
             app.poll();
+            draw_frames();
             assert_eq!(
                 app.snapshot().calibrate_all.phase,
                 AllPhase::Idle,
-                "{appearance:?}: the focus went to Close"
+                "{appearance:?} {can_start}: the focus went to Close, which ends the failed run"
+            );
+            assert!(app.main.get_calibrate_all_outcome().is_empty());
+            assert!(
+                ElementHandle::find_by_element_id(&app.main, "CalibrateAllSheet::close-button")
+                    .next()
+                    .is_none(),
+                "{appearance:?}: the sheet closed"
             );
         }
+    }
+
+    /// Open Microphone Settings is one of the sheet's buttons, as on the Mac
+    /// (CalibrateAllViews.swift:470-472); the left column has none (:6-54).
+    // covers: S197
+    #[test]
+    fn open_microphone_settings_shows_in_the_calibrate_all_sheet_only() {
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows headless");
+        let label = app.strings().get_open_microphone_settings();
+        let count = || {
+            i_slint_backend_testing::ElementHandle::find_by_accessible_label(&app.main, &label)
+                .count()
+        };
+        app.main.set_calibrate_all_privacy(true);
+        draw_frames();
+        assert_eq!(count(), 0, "none in the left column");
+        app.main
+            .set_calibrate_all_outcome("Microphone access is off.".into());
+        draw_frames();
+        assert_eq!(count(), 1, "the sheet's");
     }
 
     // covers: S353, S354
