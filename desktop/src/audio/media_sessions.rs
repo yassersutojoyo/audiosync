@@ -791,6 +791,8 @@ mod tests {
     #[derive(Clone, Copy)]
     enum Thumbnail {
         Image,
+        /// Another song's cover.
+        Other,
         /// Never read in time.
         Hung,
         /// The app has no cover for the track yet.
@@ -838,6 +840,7 @@ mod tests {
     }
 
     const IMAGE: &[u8] = b"image";
+    const OTHER: &[u8] = b"other";
     const JPEG: &[u8] = b"jpeg";
     const NOT_AN_IMAGE: &[u8] = b"text";
 
@@ -865,6 +868,7 @@ mod tests {
             self.counts.thumbnails.fetch_add(1, Ordering::SeqCst);
             match self.thumbnail {
                 Thumbnail::Image => Ok(Some(IMAGE.to_vec())),
+                Thumbnail::Other => Ok(Some(OTHER.to_vec())),
                 Thumbnail::Empty => Ok(None),
                 Thumbnail::Undecodable => Ok(Some(NOT_AN_IMAGE.to_vec())),
                 Thumbnail::Hung => {
@@ -892,6 +896,9 @@ mod tests {
             if image == NOT_AN_IMAGE {
                 return Err("not an image".to_owned());
             }
+            if image == OTHER {
+                return Ok(Some(FittedArtwork::single(OTHER.into())));
+            }
             assert_eq!(image, IMAGE);
             Ok(Some(FittedArtwork::single(JPEG.into())))
         }
@@ -899,6 +906,9 @@ mod tests {
         fn card_artwork(&self, image: &[u8]) -> Result<Option<CardArtwork>, String> {
             if image == NOT_AN_IMAGE {
                 return Err("not an image".to_owned());
+            }
+            if image == OTHER {
+                return Ok(Some(CardArtwork::new(1, [255u8, 0, 0, 255])));
             }
             assert_eq!(image, IMAGE);
             Ok(Some(CardArtwork::new(1, [0u8, 0, 0, 255])))
@@ -1066,6 +1076,35 @@ mod tests {
         let (track, card) = poll(&mut reader);
         assert!(track.is_some_and(|track| track.artwork.is_some()));
         assert!(card.is_some_and(|card| card.artwork.is_some()));
+    }
+
+    /// Spotify can give the next song's title while its thumbnail is still
+    /// the last song's.
+    #[test]
+    fn a_title_that_comes_before_its_thumbnail_never_keeps_the_last_songs_cover() {
+        let (fake, _) = fake(Thumbnail::Other);
+        let mut reader = Reader::new(fake);
+        let last = poll(&mut reader).1.and_then(|card| card.artwork);
+        assert!(last.is_some());
+        reader.sessions.sessions[0] = MediaSession {
+            title: "Next".to_owned(),
+            album: "Next album".to_owned(),
+            ..playing()
+        };
+        let (track, card) = poll(&mut reader);
+        let card = card.expect("the card shows");
+        assert_eq!(card.title, "Next");
+        assert!(card.artwork.is_none(), "the last song's cover is not this one's");
+        assert!(!card.cover_failed, "its own cover is on its way");
+        assert!(track.is_some_and(|track| track.artwork.is_none()));
+        reader.sessions.thumbnail = Thumbnail::Image;
+        let (track, card) = poll(&mut reader);
+        let card = card.expect("the card shows");
+        assert!(card.artwork.is_some() && card.artwork != last);
+        assert_eq!(
+            track.and_then(|track| track.artwork),
+            Some(FittedArtwork::single(JPEG.into()))
+        );
     }
 
     #[test]
