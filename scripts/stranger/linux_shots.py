@@ -206,7 +206,10 @@ def run(app, main):
         if (use(app, "Options", "NOTICE-UPDATE-PACKAGE") and use(app, "Settings…", "NOTICE-UPDATE-PACKAGE")
                 and use(app, "Check for Updates…", "NOTICE-UPDATE-PACKAGE")):
             time.sleep(2)
-            shot(None, "NOTICE-UPDATE-PACKAGE")
+            # With no window manager Settings opens over the notice; move it aside.
+            subprocess.run(["xdotool", "search", "--name", "Settings", "windowmove", "%@", "720", "0"], check=False)
+            time.sleep(1)
+            shot(main, "NOTICE-UPDATE-PACKAGE")
             if not any("download the newer package" in (n.get_name() or "") for w in windows(app) for n, _ in walk(w)):
                 print(f"FAIL: no notice to download the newer package ({THEME})")
                 failed.append("update notice")

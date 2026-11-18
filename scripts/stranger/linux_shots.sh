@@ -103,9 +103,13 @@ for theme in terang gelap; do
   log=$(find "$XDG_STATE_HOME" -name '*debug.log' -print -quit)
   [ -z "$log" ] || mv "$log" "$work/audiosync-debug-$theme.log"
   # No settings portal here: motion stays on, so the cover's ambient art moves.
-  if [ "$group" = nowplaying ] && ! grep -q 'ambient art: frames start' "$work/audiosync-debug-$theme.log"; then
-    echo "FAIL: motion is off without a settings portal ($theme)"
-    failed=1
+  if [ "$group" = nowplaying ]; then
+    if grep -q 'ambient art: frames start' "$work/audiosync-debug-$theme.log"; then
+      echo "motion: on without a settings portal, ambient art frames start ($theme)"
+    else
+      echo "FAIL: motion is off without a settings portal ($theme)"
+      failed=1
+    fi
   fi
 done
 
