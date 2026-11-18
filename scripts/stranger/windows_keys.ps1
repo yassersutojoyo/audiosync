@@ -128,7 +128,9 @@ function Find-Named([string] $Name) {
 
 function Invoke-Named([string] $Name) {
   if (-not (Wait-Until { ($script:e = Find-Named $Name) -ne $null } 8)) { return $false }
-  $script:e.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+  # Invoke can report an error after the click landed; the caller checks the effect.
+  try { $script:e.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() }
+  catch { Write-Host "invoke '$Name': $($_.Exception.Message)" }
   Start-Sleep -Seconds 1
   $true
 }
