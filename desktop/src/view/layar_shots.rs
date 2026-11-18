@@ -194,6 +194,8 @@ impl Scene {
         app.apply_appearance(appearance);
         app.refresh();
         app.main.show().expect("the main window shows headless");
+        // The brand accent the app gives each window as its frame comes up.
+        app.use_brand_accent(app.main.window());
         let scene = Scene { app, state, media };
         scene.size(scene.app.main.window(), MAIN);
         scene
