@@ -69,6 +69,8 @@ mod layar_shots;
 #[cfg(test)]
 mod parity_calibrate;
 #[cfg(test)]
+mod parity_eq_guide;
+#[cfg(test)]
 mod parity_main;
 #[cfg(test)]
 mod parity_rest;
