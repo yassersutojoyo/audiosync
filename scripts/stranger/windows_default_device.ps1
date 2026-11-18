@@ -322,6 +322,7 @@ public static class SoftwareDevice {
 function Get-Defaults { "console=$([Endpoints]::Default(0)) multimedia=$([Endpoints]::Default(1))" }
 
 $script:failed = @()
+function Step([string] $What) { "step $(Get-Date -Format HH:mm:ss): $What" | Tee-Object -FilePath "$Work/result.txt" -Append }
 function Check([string] $Row, [bool] $Ok, [string] $What) {
   $line = "$(if ($Ok) { 'PASS' } else { 'FAIL' }) ${Row}: $What"
   $line | Tee-Object -FilePath "$Work/result.txt" -Append
@@ -398,23 +399,35 @@ if (-not $script:builtIn) {
   $name = '{a45c254e-df1c-4efd-8020-67d146a850e0},24'
   $read = { (reg query $key /v $name 2>$null | Select-String 'REG_') -replace '\s+', ' ' }
   "enumerator name before: $(& $read)" | Tee-Object -FilePath "$Work/env.txt" -Append
-  $cmd = Join-Path $fixture 'enumerator.cmd'
-  "reg add `"$key`" /v `"$name`" /t REG_SZ /d HDAUDIO /f > `"$fixture\enumerator.txt`" 2>&1" | Set-Content -Encoding ascii $cmd
-  $task = 'AudioSyncCI-enumerator'
-  Register-ScheduledTask -TaskName $task -Force -User 'SYSTEM' -RunLevel Highest `
-    -Action (New-ScheduledTaskAction -Execute 'cmd.exe' -Argument "/c `"$cmd`"") | Out-Null
-  Start-ScheduledTask -TaskName $task
-  for ($i = 0; $i -lt 30 -and (Get-ScheduledTask -TaskName $task).State -eq 'Running'; $i++) { Start-Sleep -Seconds 1 }
-  Start-Sleep -Seconds 1
-  "reg add as SYSTEM: $(Get-Content "$fixture\enumerator.txt" -ErrorAction SilentlyContinue)" | Tee-Object -FilePath "$Work/env.txt" -Append
-  Restart-Service -Name AudioEndpointBuilder -Force
-  Start-Service -Name Audiosrv
+  Step 'enumerator route: SYSTEM write and audio services restart'
+  # Run 44356607387 hung past the job's limit and left no log: bounded now.
+  $route = Start-Job -ArgumentList $key, $name, $fixture -ScriptBlock {
+    param($key, $name, $fixture)
+    $cmd = Join-Path $fixture 'enumerator.cmd'
+    "reg add `"$key`" /v `"$name`" /t REG_SZ /d HDAUDIO /f > `"$fixture\enumerator.txt`" 2>&1" | Set-Content -Encoding ascii $cmd
+    $task = 'AudioSyncCI-enumerator'
+    Register-ScheduledTask -TaskName $task -Force -User 'SYSTEM' -RunLevel Highest `
+      -Action (New-ScheduledTaskAction -Execute 'cmd.exe' -Argument "/c `"$cmd`"") | Out-Null
+    Start-ScheduledTask -TaskName $task
+    for ($i = 0; $i -lt 30 -and (Get-ScheduledTask -TaskName $task).State -eq 'Running'; $i++) { Start-Sleep -Seconds 1 }
+    "reg add as SYSTEM: $(Get-Content "$fixture\enumerator.txt" -ErrorAction SilentlyContinue)"
+    Restart-Service -Name AudioEndpointBuilder -Force
+    Start-Service -Name Audiosrv
+    'audio services restarted'
+  }
+  $finished = [bool](Wait-Job $route -Timeout 150)
+  Receive-Job $route -ErrorAction Continue 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath "$Work/env.txt" -Append
+  if (-not $finished) {
+    Stop-Job $route
+    "NOT TRIED A1.8: the SYSTEM write or the audio services restart did not finish in 150 s" |
+      Tee-Object -FilePath "$Work/result.txt" -Append
+  }
   $count = 0
   for ($i = 0; $i -lt 60 -and $count -eq 0; $i++) { Start-Sleep -Seconds 1; $count = [Endpoints]::ActiveCount() }
   $after = & $read
   "enumerator name after the audio services restart: $after; active output endpoints: $count" | Tee-Object -FilePath "$Work/env.txt" -Append
-  $script:patched = "$after" -match 'HDAUDIO'
-  if ($count -ne 1) { Not-Tried "$count active output endpoints after the audio services restart (one needed)" }
+  $script:patched = $finished -and "$after" -match 'HDAUDIO'
+  Step "enumerator route done (patched: $script:patched, active output endpoints: $count)"
 }
 
 [Endpoints]::SetMute($false)
@@ -476,6 +489,7 @@ function Start-App {
 $data = Join-Path $env:LOCALAPPDATA 'AudioSync'
 New-Item -ItemType Directory -Force -Path $data | Out-Null
 '{"version":3,"show_virtual_devices":true}' | Set-Content -Encoding ascii (Join-Path $data 'settings.json')
+Step 'app started on one endpoint'
 Start-App
 
 $toggles = Get-Toggles
@@ -504,6 +518,7 @@ Check 'A1.2' ([math]::Abs($level - 0.3) -lt 0.005) "the taskbar's 30% on the def
 Check 'A1.2' ((Test-Alive) -and (Test-On $streaming)) 'the stream goes on after the volume change'
 (Get-LogLines 'device volume: 30%') | Select-Object -First 2 | ForEach-Object { "log: $($_.Line)" }
 
+Step 'A1.8'
 # A1.8: the System slider on the muted default unmutes it.
 Select-String -Path $log -Pattern 'outputs listed' -SimpleMatch -Context 0, 2 -ErrorAction SilentlyContinue |
   Select-Object -First 1 | ForEach-Object { "log: $($_.Line) $($_.Context.PostContext -join ' ')" }
@@ -575,6 +590,7 @@ function Start-MovedStream([string] $Before) {
 # tone from another process plays there and AudioSync carries it to the other
 # endpoint; each app's mixer slider must change what that endpoint plays.
 function Test-Mixer {
+  Step 'A1.2 mixer'
   $rate = 48000
   $wav = Join-Path $fixture 'tone.wav'
   $w = New-Object IO.BinaryWriter([IO.File]::Create($wav))
@@ -622,6 +638,7 @@ if ($count -ne 2) {
   $found = Get-Found
   "A1.1 before the app starts:`n$found" | Tee-Object -FilePath "$Work/result.txt" -Append
   foreach ($leg in 'kill', 'uninstall') {
+    Step "A1.1 $leg leg"
     Start-App
     $moved = Start-MovedStream $defaults
     $copies = @(Get-Process audiosync -ErrorAction SilentlyContinue).Count

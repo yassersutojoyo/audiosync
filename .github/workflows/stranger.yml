@@ -359,7 +359,7 @@ jobs:
     needs: [proven, windows]
     if: ${{ !cancelled() && needs.proven.outputs.skip != 'true' }}
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -370,12 +370,14 @@ jobs:
           name: stranger-windows-setup
           path: pkg
 
+      # Shorter than the job, so a hang still leaves time for the upload.
       - name: Install, stream to the default output, change its volume and mute
         shell: pwsh
+        timeout-minutes: 25
         run: ./scripts/stranger/windows_default_device.ps1 -Setup pkg/AudioSync-Setup.exe -Work default-device
 
       - name: Upload the results and the debug log (workflow artifact)
-        if: ${{ !cancelled() }}
+        if: always()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: stranger-windows-default-device
