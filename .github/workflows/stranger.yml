@@ -97,11 +97,12 @@ jobs:
           # shellcheck disable=SC2086
           sudo apt-get install -y --no-install-recommends $packages
 
-      # A push to main makes the build the updater runs in, as linux.yml does.
+      # The build a release ships, with its updater, so the updates screens
+      # reach Check for Updates… from any branch.
       - name: Release build, the package, the stand-in tray host and receiver
         working-directory: desktop
         env:
-          AUDIOSYNC_RELEASE_BUILD: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && '1' || '' }}
+          AUDIOSYNC_RELEASE_BUILD: '1'
         run: |
           cargo build --locked --release
           top=$(objdump -T target/release/audiosync | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1)
@@ -156,14 +157,14 @@ jobs:
                 scripts/stranger/linux_session.sh "$WORK" "$STUB" dnf remove -y -q audiosync'
           fi
 
-      - name: Heard once on the receiver, not twice on the stand-in PC speaker, and the offset
+      - name: Heard once on the receiver and the stand-in PC speaker, both on, within 15 ms
         if: ${{ !cancelled() }}
         run: |
           scripts/stranger/linux_receiver.sh stop "$WORK"
           echo "--- environment"
           cat "$WORK/env.txt" "$WORK/receiver-env.txt" "$WORK/env.pkg.txt" 2>/dev/null || true
           label="$(sed -n 's/^os: //p' "$WORK/env.txt"), PipeWire $(sed -n 's/^pipewire: //p' "$WORK/env.txt")"
-          python3 -I scripts/stranger/heard.py check --label "$label" \
+          python3 -I scripts/stranger/heard.py check --label "$label" --max-offset-ms 15 \
             --receiver "$WORK/receiver.wav" "$WORK/receiver.stamps" \
             --sink "$WORK/sink.wav" "$WORK/sink.stamps"
 
@@ -264,8 +265,9 @@ jobs:
   # light and dark: the pictures pair with the Mac's LAYAR photos by name.
   # Groups: main (idle, presets list, Settings), delay (two outputs on),
   # tray (the panel from the tray icon), calibrate (the Calibrate All sheet),
-  # notices (streaming on with no speaker). not-set-up.txt names what a
-  # runner can't reach.
+  # notices (streaming on with no speaker), and on Linux nowplaying (a stand-in
+  # MPRIS player's card with Shuffle and Repeat) and updates (Check for
+  # Updates… on the .deb copy). not-set-up.txt names what a runner can't reach.
   shots-linux:
     name: Linux screens (${{ matrix.screens }})
     needs: [proven, linux]
@@ -273,7 +275,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        screens: [main, delay, tray, calibrate, notices]
+        screens: [main, delay, tray, calibrate, notices, nowplaying, updates]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
