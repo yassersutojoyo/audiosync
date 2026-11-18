@@ -6,8 +6,10 @@ Each state becomes <STATE>-<theme>.png in the work folder, named as the
 Mac's LAYAR photos where a state matches; one the session can't reach gets
 a line in not-set-up.txt as screen_compare.py reads it, and
 atspi-<theme>.txt holds the tree as AT-SPI saw it. The nowplaying group
-exits 1 when the Now Playing card lacks Shuffle or Repeat drawn on, or its
-cover reads as one colour.
+exits 1 when the Now Playing card, with the pointer over it, lacks Shuffle or
+Repeat drawn on, or its cover reads as one colour; the tray group when the
+tray panel reads as one colour; the updates group when Check for Updates…
+doesn't tell the .deb copy to install the newer package.
 
     linux_shots.py <work> <group> <theme> <pid>
 """
@@ -107,13 +109,14 @@ def extents(node):
         return None
 
 
-def shot(node, state):
+def shot(node, state, pad=0):
     path = os.path.join(WORK, f"{state}-{THEME}.png")
     crop = []
     if node is not None:
         box = extents(node)
         if box is not None and box.width > 0 and box.height > 0:
-            crop = ["-crop", f"{box.width}x{box.height}+{max(box.x, 0)}+{max(box.y, 0)}", "+repage"]
+            x, y = max(box.x - pad, 0), max(box.y - pad, 0)
+            crop = ["-crop", f"{box.width + 2 * pad}x{box.height + 2 * pad}+{x}+{y}", "+repage"]
     subprocess.run(["import", "-window", "root", *crop, path], check=True)
     print(f"shot: {os.path.basename(path)}")
 
@@ -188,11 +191,31 @@ def run(app, main):
             skip("TRAY-IDLE", f"no panel after the {how}")
         else:
             shot(flyout, "TRAY-IDLE")
+            box = extents(flyout)
+            colours = int(pixels((box.width, box.height, box.x, box.y), "-format", "%k", "info:"))
+            print(f"tray panel: {colours} colours ({THEME})")
+            if colours < 16:
+                print(f"FAIL: the tray panel isn't drawn ({THEME})")
+                failed.append("tray panel")
     elif GROUP == "notices":
         # Streaming on with no speaker on: the No Speaker notice.
         if use(app, "Streaming", "NOTICE-START"):
             time.sleep(2)
             shot(main, "NOTICE-START")
+    elif GROUP == "updates":
+        # The .deb copy doesn't update itself; a manual check says how to update.
+        if (use(app, "Options", "NOTICE-UPDATE-PACKAGE") and use(app, "Settings…", "NOTICE-UPDATE-PACKAGE")
+                and use(app, "Check for Updates…", "NOTICE-UPDATE-PACKAGE")):
+            time.sleep(2)
+            # With no window manager Settings opens over the notice; move it aside.
+            subprocess.run(["xdotool", "search", "--name", "Settings", "windowmove", "%@", "720", "0"], check=False)
+            time.sleep(1)
+            shot(main, "NOTICE-UPDATE-PACKAGE")
+            if not any("download the newer package" in (n.get_name() or "") for w in windows(app) for n, _ in walk(w)):
+                print(f"FAIL: no notice to download the newer package ({THEME})")
+                failed.append("update notice")
+        else:
+            failed.append("update notice")
     elif GROUP == "nowplaying":
         # mpris_player.py plays a patterned cover with Shuffle on and LoopStatus Playlist.
         buttons = {name: find(app, name, seconds=20) for name in ("Shuffle", "Repeat", "Previous Track")}
@@ -205,9 +228,16 @@ def run(app, main):
             print(f"FAIL: no Now Playing card ({THEME})")
             failed.append("card")
             return
-        time.sleep(2)
-        shot(card, "NOW-PLAYING")
         box = extents(card)
+        # Shuffle and Repeat show while the pointer is over the card, as on the Mac.
+        # 16 px around the card takes in its block and the dots under the toggles.
+        subprocess.run(["xdotool", "mousemove", "1270", "790"], check=True)
+        time.sleep(2)
+        shot(card, "NOW-PLAYING-REST", pad=16)
+        subprocess.run(["xdotool", "mousemove", str(box.x + box.width // 2), str(box.y + box.width // 2)],
+                       check=True)
+        time.sleep(2)
+        shot(card, "NOW-PLAYING", pad=16)
         # The cover is the card's top square; 10 px in clears its rounded corners.
         side = box.width - 20
         colours = int(pixels((side, side, box.x + 10, box.y + 10), "-format", "%k", "info:"))
@@ -236,7 +266,8 @@ def main():
         shot(None, "SCREEN")
     else:
         time.sleep(3)
-        run(app, shown[0])
+        # AT-SPI reports the hidden tray panel as showing, and lists it first.
+        run(app, next((w for w in shown if w.get_name() == "AudioSync"), shown[0]))
         save_tree(app)
     with open(os.path.join(WORK, "not-set-up.txt"), "a", encoding="utf-8") as out:
         out.writelines(line + "\n" for line in missing)

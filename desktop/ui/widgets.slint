@@ -2911,8 +2911,10 @@ export component AirPlayDelayControls inherits VerticalLayout {
     // A click on the value or the name, or Enter or Space on the value.
     callback toggled();
 
-    padding-left: 12px;
-    padding-right: 12px;
+    // The Mac's 10 pt row inset (BrandTokens.swift:154); on the right less the
+    // 3 px the value's fill reaches past it, as on the speaker rows.
+    padding-left: Fluent.row-padding-x;
+    padding-right: Fluent.row-padding-x - 3px;
     padding-top: 10px;
     padding-bottom: 12px;
     accessible-role: groupbox;
@@ -2934,7 +2936,7 @@ export component AirPlayDelayControls inherits VerticalLayout {
                 color: Tokens.secondary-text;
             }
 
-            Text {
+            title := Text {
                 text: Strings.airplay-delay-title;
                 font-size: Tokens.font-size-body;
                 color: Tokens.text;
@@ -2946,7 +2948,7 @@ export component AirPlayDelayControls inherits VerticalLayout {
             VerticalLayout {
                 alignment: center;
 
-                Rectangle {
+                value-box := Rectangle {
                     width: value-text.preferred-width + 6px;
                     height: 16px;
                     border-radius: Fluent.radius-control;
@@ -3112,7 +3114,7 @@ export component AirPlayDelayControls inherits VerticalLayout {
 
                     // Its width set, so the pane's height counts every wrapped line.
                     hint := SecondaryText {
-                        width: root.width-given - 24px - (Fluent.name-inset - Fluent.row-padding-x);
+                        width: root.width-given - root.padding-left - root.padding-right - (Fluent.name-inset - Fluent.row-padding-x);
                         text: Strings.airplay-delay-hint;
                     }
                 }
@@ -4547,6 +4549,8 @@ export component SpeakerRow inherits Rectangle {
 
                                         fix-button := LinkButton {
                                             text: Strings.device-volume-fix(hint-box.hint);
+                                            // The Mac's primary text (DeviceVolumeViews.swift:34).
+                                            text-color: Tokens.text;
                                             label: Strings.device-volume-fix-label(root.item.name, hint-box.hint);
                                             changed keyboard-focused => {
                                                 root.fix-focused = self.keyboard-focused;
