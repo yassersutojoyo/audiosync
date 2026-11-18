@@ -409,11 +409,13 @@ jobs:
     # Two virtual outputs, a tone streamed to both for five minutes from the
     # installed copy: private bytes sampled every 10 s, then the uninstall
     # while it runs, with the default output, volumes and mutes as found.
+    # One step per phase and an upload after each sampling minute: a runner
+    # that freezes loses its log, but not the step times or the curve so far.
     name: Windows memory while streaming (5 min), uninstall as found
     needs: [proven, windows]
     if: ${{ !cancelled() && needs.proven.outputs.skip != 'true' }}
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -424,11 +426,105 @@ jobs:
           name: stranger-windows-setup
           path: pkg
 
-      - name: Install, stream five minutes, sample private bytes, uninstall
+      - name: Add two Scream virtual outputs
         shell: pwsh
-        # Under the job's 25 so the upload below still runs after a hang.
-        timeout-minutes: 20
-        run: ./scripts/stranger/windows_memory.ps1 -Setup pkg/AudioSync-Setup.exe -Work memory
+        timeout-minutes: 8
+        run: ./scripts/stranger/windows_memory.ps1 -Work memory -Phase scream
+
+      - name: Play a tone on both outputs for 60 s without AudioSync
+        shell: pwsh
+        timeout-minutes: 3
+        run: ./scripts/stranger/windows_memory.ps1 -Work memory -Phase tone
+
+      - name: Install AudioSync
+        shell: pwsh
+        timeout-minutes: 5
+        run: ./scripts/stranger/windows_memory.ps1 -Work memory -Phase install -Setup pkg/AudioSync-Setup.exe
+
+      - name: Launch AudioSync and switch both outputs and Streaming on
+        shell: pwsh
+        timeout-minutes: 5
+        run: ./scripts/stranger/windows_memory.ps1 -Work memory -Phase launch
+
+      - name: Sample private and available memory, 0 to 60 s
+        shell: pwsh
+        timeout-minutes: 3
+        run: ./scripts/stranger/windows_memory.ps1 -Work memory -Phase sample -From 0 -To 60
+
+      - name: Upload the samples so far (workflow artifact)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: stranger-windows-memory
+          path: memory
+          overwrite: true
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Sample private and available memory, 60 to 120 s
+        shell: pwsh
+        timeout-minutes: 3
+        run: ./scripts/stranger/windows_memory.ps1 -Work memory -Phase sample -From 60 -To 120
+
+      - name: Upload the samples so far (workflow artifact)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: stranger-windows-memory
+          path: memory
+          overwrite: true
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Sample private and available memory, 120 to 180 s
+        shell: pwsh
+        timeout-minutes: 3
+        run: ./scripts/stranger/windows_memory.ps1 -Work memory -Phase sample -From 120 -To 180
+
+      - name: Upload the samples so far (workflow artifact)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: stranger-windows-memory
+          path: memory
+          overwrite: true
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Sample private and available memory, 180 to 240 s
+        shell: pwsh
+        timeout-minutes: 3
+        run: ./scripts/stranger/windows_memory.ps1 -Work memory -Phase sample -From 180 -To 240
+
+      - name: Upload the samples so far (workflow artifact)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: stranger-windows-memory
+          path: memory
+          overwrite: true
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Sample private and available memory, 240 to 300 s
+        shell: pwsh
+        timeout-minutes: 3
+        run: ./scripts/stranger/windows_memory.ps1 -Work memory -Phase sample -From 240 -To 300
+
+      - name: Upload the samples so far (workflow artifact)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: stranger-windows-memory
+          path: memory
+          overwrite: true
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Uninstall while it runs, outputs as found
+        shell: pwsh
+        timeout-minutes: 4
+        run: ./scripts/stranger/windows_memory.ps1 -Work memory -Phase uninstall
 
       - name: Upload the samples and the debug log (workflow artifact)
         if: ${{ always() }}
@@ -436,5 +532,6 @@ jobs:
         with:
           name: stranger-windows-memory
           path: memory
+          overwrite: true
           if-no-files-found: warn
           retention-days: 7
