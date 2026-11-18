@@ -267,6 +267,22 @@ mod tests {
     }
 
     #[test]
+    fn a_dropped_window_is_freed() {
+        let app = app_over(MockBackend::new());
+        macro_rules! freed {
+            ($name:ident) => {
+                let weak = app.$name().as_weak();
+                app.$name().show().expect("the window shows");
+                draw_frames();
+                app.$name().hide().expect("the window hides");
+                app.drop_closed_windows();
+                assert!(weak.upgrade().is_none(), stringify!($name));
+            };
+        }
+        each_window!(freed);
+    }
+
+    #[test]
     fn web_remote_keeps_its_phone_choice_over_a_rebuild() {
         let app = app_over(MockBackend::new());
         app.show_remote();

@@ -106,8 +106,12 @@ fn window_memory_stays_flat_over_ten_opens_of_each_window() {
         .set_position(slint::PhysicalPosition::new(-20_000, -20_000));
     app.main.window().show().expect("the main window shows");
 
-    let mut steps = vec![Step::Measure(None)];
+    // Settling time before each reading: the GPU memory of a dropped window
+    // comes back some frames after the drop.
+    let settle = [Step::Wait; 16];
+    let mut steps = Vec::new();
     for index in 0..WINDOWS.len() {
+        steps.extend(settle);
         steps.push(Step::Measure(None));
         for _ in 0..CYCLES {
             steps.extend([
@@ -117,20 +121,23 @@ fn window_memory_stays_flat_over_ten_opens_of_each_window() {
                 Step::Wait,
             ]);
         }
+        steps.extend(settle);
         steps.push(Step::Measure(Some(index)));
     }
     steps.push(Step::Quit);
 
     let opened_at: Rc<Cell<Option<Instant>>> = Rc::default();
     let open_ms: Rc<RefCell<Vec<Vec<f64>>>> = Rc::new(RefCell::new(vec![vec![]; WINDOWS.len()]));
+    let call_ms: Rc<RefCell<Vec<Vec<f64>>>> = Rc::new(RefCell::new(vec![vec![]; WINDOWS.len()]));
     let results: Rc<RefCell<Vec<(usize, f64, f64)>>> = Rc::default();
     let start_mb = Cell::new(0.0);
     let next = Cell::new(0);
     let timer = Timer::default();
-    let (app_t, opened_t, open_ms_t, results_t) = (
+    let (app_t, opened_t, open_ms_t, call_ms_t, results_t) = (
         app.clone(),
         opened_at.clone(),
         open_ms.clone(),
+        call_ms.clone(),
         results.clone(),
     );
     timer.start(TimerMode::Repeated, Duration::from_millis(400), move || {
@@ -140,8 +147,10 @@ fn window_memory_stays_flat_over_ten_opens_of_each_window() {
         next.set(next.get() + 1);
         match step {
             Step::Open(index) => {
-                opened_t.set(Some(Instant::now()));
+                let at = Instant::now();
+                opened_t.set(Some(at));
                 open(&app_t, index);
+                call_ms_t.borrow_mut()[index].push(at.elapsed().as_secs_f64() * 1000.0);
                 let (opened, times) = (opened_t.clone(), open_ms_t.clone());
                 with_window(&app_t, index, |window| {
                     let _ = window.set_rendering_notifier(move |state, _| {
@@ -179,8 +188,12 @@ fn window_memory_stays_flat_over_ten_opens_of_each_window() {
         times.sort_by(f64::total_cmp);
         let median = times.get(times.len() / 2).copied().unwrap_or(f64::NAN);
         let slowest = times.last().copied().unwrap_or(f64::NAN);
+        let mut calls = call_ms.borrow()[index].clone();
+        calls.sort_by(f64::total_cmp);
+        let call = calls.get(calls.len() / 2).copied().unwrap_or(f64::NAN);
+        let call_slowest = calls.last().copied().unwrap_or(f64::NAN);
         println!(
-            "{}: {start:.1} -> {end:.1} MB ({:+.1}), open to first frame median {median:.0} ms, slowest {slowest:.0} ms",
+            "{}: {start:.1} -> {end:.1} MB ({:+.1}), open call median {call:.0} ms, slowest {call_slowest:.0} ms, open to first frame median {median:.0} ms, slowest {slowest:.0} ms",
             WINDOWS[index],
             end - start
         );
