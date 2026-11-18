@@ -4,7 +4,8 @@
 //! `<ROW-ID>-gelap.png`, each with a `.json` list of its labelled elements
 //! for scripts/screen_compare.py.
 //!
-//! `cargo test --release layar_photos -- --ignored --nocapture`, with
+//! `cargo test layar_photos -- --ignored --nocapture` (not `--release`:
+//! build.rs leaves out the debug info the element lists are read from), with
 //! `AUDIOSYNC_LAYAR_BATCH=B03` (or `B01,B05`) for some batches only and
 //! `AUDIOSYNC_LAYAR_DIR` for another folder than the main checkout's ignored
 //! `.build/layar`. The rows it could not set up are printed and written to
@@ -351,7 +352,12 @@ fn elements_json(elements: &[ElementHandle], shot: &Snapshot, scale: f32) -> Str
                 let (fg, bg) = sampled_colours(shot, scale, at, size);
                 serde_json::json!({
                     "key": label.as_str(),
-                    "frame": [at.x, at.y, size.width, size.height],
+                    "frame": listed_frame(
+                        element.accessible_role()
+                            == Some(i_slint_backend_testing::AccessibleRole::Slider),
+                        at,
+                        size,
+                    ),
                     "font": null,
                     "fg": fg,
                     "bg": bg,
@@ -360,6 +366,32 @@ fn elements_json(elements: &[ElementHandle], shot: &Snapshot, scale: f32) -> Str
         })
         .collect();
     serde_json::json!({ "window": [width, height], "elements": listed }).to_string()
+}
+
+/// How far inside its box the style's slider track starts and ends, measured
+/// in the photos at 100 % (Fluent.slider-inset in widgets.slint says 10 px).
+const SLIDER_TRACK_INSET: f32 = 8.0;
+
+/// The frame listed for an element: for a horizontal slider, the style's
+/// track rather than its box, since the Mac's slider frame is its track.
+fn listed_frame(slider: bool, at: LogicalPosition, size: LogicalSize) -> [f32; 4] {
+    if slider && size.width > size.height {
+        let inset = SLIDER_TRACK_INSET;
+        return [at.x + inset, at.y, size.width - 2.0 * inset, size.height];
+    }
+    [at.x, at.y, size.width, size.height]
+}
+
+#[test]
+fn a_horizontal_slider_is_listed_by_its_track() {
+    let (at, size) = (
+        LogicalPosition::new(290.0, 133.0),
+        LogicalSize::new(334.0, 14.0),
+    );
+    assert_eq!(listed_frame(true, at, size), [298.0, 133.0, 318.0, 14.0]);
+    assert_eq!(listed_frame(false, at, size), [290.0, 133.0, 334.0, 14.0]);
+    let band = LogicalSize::new(32.0, 200.0);
+    assert_eq!(listed_frame(true, at, band), [290.0, 133.0, 32.0, 200.0]);
 }
 
 type Snapshot = slint::SharedPixelBuffer<slint::Rgba8Pixel>;
