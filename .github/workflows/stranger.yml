@@ -263,6 +263,23 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      # The app's test binary, for the System slider harness on the virtual sound card.
+      - name: Test binary for the default-output job
+        working-directory: desktop
+        run: |
+          mkdir -p target/harness
+          cargo test --locked --release --target x86_64-pc-windows-msvc --bin audiosync --no-run --message-format=json \
+            | python -I -c "import json,sys,shutil; [shutil.copy(m['executable'], 'target/harness/audiosync-tests.exe') for m in map(json.loads, sys.stdin) if m.get('reason') == 'compiler-artifact' and m.get('executable') and m['profile']['test']]"
+          test -f target/harness/audiosync-tests.exe
+
+      - name: Keep the test binary for the default-output job
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: stranger-windows-harness
+          path: desktop/target/harness/audiosync-tests.exe
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Silent install, launch, screenshot, uninstall, default output as found
         shell: pwsh
         run: ./scripts/stranger/windows_run.ps1 -Setup desktop/target/installer-x64/AudioSync-Setup.exe -Work stranger-work
@@ -381,7 +398,7 @@ jobs:
     needs: [proven, windows]
     if: ${{ !cancelled() && needs.proven.outputs.skip != 'true' }}
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -392,12 +409,33 @@ jobs:
           name: stranger-windows-setup
           path: pkg
 
+      # Shorter than the job, so a hang still leaves time for the upload.
       - name: Install, stream to the default output, change its volume and mute
         shell: pwsh
+        timeout-minutes: 25
         run: ./scripts/stranger/windows_default_device.ps1 -Setup pkg/AudioSync-Setup.exe -Work default-device
 
-      - name: Upload the results and the debug log (workflow artifact)
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         if: ${{ !cancelled() }}
+        with:
+          name: stranger-windows-harness
+          path: harness
+
+      # A1.8: the System slider's backend call on the virtual card, muted first.
+      - name: System slider harness (mute, set_device_volume, read back)
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        timeout-minutes: 3
+        env:
+          AUDIOSYNC_CI_MUTE_OUTPUT: '1'
+        run: |
+          New-Item -ItemType Directory -Force -Path default-device | Out-Null
+          ./harness/audiosync-tests.exe --ignored --exact --nocapture audio::wasapi::volume::tests::the_system_slider_unmutes_a_muted_endpoint 2>&1 |
+            Tee-Object -FilePath default-device/harness.txt
+          exit $LASTEXITCODE
+
+      - name: Upload the results and the debug log (workflow artifact)
+        if: always()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: stranger-windows-default-device

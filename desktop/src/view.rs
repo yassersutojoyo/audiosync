@@ -11368,6 +11368,48 @@ pub(crate) mod tests {
         );
     }
 
+    /// A System slider move on a muted This PC row reaches the backend's
+    /// `set_device_volume`, which unmutes the output and then sets the level;
+    /// the Stranger runner checks that function against a real endpoint.
+    // covers: S197
+    #[test]
+    fn a_system_slider_move_on_a_muted_output_unmutes_it_through_the_backend() {
+        use crate::audio::backend::OutputKind;
+        use crate::audio::mock::VolumeWrite;
+        let mut audio = crate::audio::mock::MockBackend::empty();
+        audio.connect_output_as("speakers", "Speakers", OutputKind::BuiltIn);
+        audio.set_output_level("speakers", 0.13);
+        audio.mute_output("speakers", true);
+        let record = audio.volume_record();
+        let adapter =
+            crate::adapter::AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        let app = app_over(adapter);
+        app.main.show().expect("the main window shows headless");
+        draw_frames();
+        let id = app
+            .snapshot()
+            .speakers
+            .into_iter()
+            .find(ui_model::Speaker::is_reference)
+            .expect("the reference")
+            .id;
+        // What the slider fires as it moves (the slider itself: the test above).
+        app.main
+            .invoke_system_volume_requested(id.as_str().into(), 23.0);
+        let writes = record.writes();
+        assert_eq!(
+            writes.first(),
+            Some(&VolumeWrite::Unmute {
+                id: "speakers".to_owned()
+            }),
+            "{writes:?}"
+        );
+        assert!(
+            matches!(&writes[1..], [VolumeWrite::Level { id, level }] if id == "speakers" && (level - 0.23).abs() < 0.005),
+            "{writes:?}"
+        );
+    }
+
     /// The inked box of what `window` draws inside `x`, `y`, `width`,
     /// `height` (logical pixels), against the colour at its top-left
     /// corner: left, top, right, bottom.

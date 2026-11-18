@@ -266,6 +266,7 @@ public static class Input {
 function Get-Defaults { "console=$([Endpoints]::Default(0)) multimedia=$([Endpoints]::Default(1))" }
 
 $script:failed = @()
+function Step([string] $What) { "step $(Get-Date -Format HH:mm:ss): $What" | Tee-Object -FilePath "$Work/result.txt" -Append }
 function Check([string] $Row, [bool] $Ok, [string] $What) {
   $line = "$(if ($Ok) { 'PASS' } else { 'FAIL' }) ${Row}: $What"
   $line | Tee-Object -FilePath "$Work/result.txt" -Append
@@ -382,7 +383,8 @@ function Start-App {
   for ($i = 0; $i -lt 30 -and -not $script:main; $i++) { Start-Sleep -Seconds 1; $script:main = @(Get-AppWindows)[0] }
   if (-not $script:main) { throw 'no AudioSync window within 30 s' }
   Start-Sleep -Seconds 3
-  $script:main.SetFocus()
+  # Run 44380792459: the fresh window refused focus once; the checks drive it through UI Automation anyway.
+  try { $script:main.SetFocus() } catch { "step: the window refused focus ($($_.Exception.InnerException.Message))" | Tee-Object -FilePath "$Work/result.txt" -Append }
 }
 
 # Show Virtual Devices on, as a user with a virtual card would set it: the
@@ -390,6 +392,7 @@ function Start-App {
 $data = Join-Path $env:LOCALAPPDATA 'AudioSync'
 New-Item -ItemType Directory -Force -Path $data | Out-Null
 '{"version":3,"show_virtual_devices":true}' | Set-Content -Encoding ascii (Join-Path $data 'settings.json')
+Step 'app started on one endpoint'
 Start-App
 
 $toggles = Get-Toggles
@@ -418,8 +421,12 @@ Check 'A1.2' ([math]::Abs($level - 0.3) -lt 0.005) "the taskbar's 30% on the def
 Check 'A1.2' ((Test-Alive) -and (Test-On $streaming)) 'the stream goes on after the volume change'
 (Get-LogLines 'device volume: 30%') | Select-Object -First 2 | ForEach-Object { "log: $($_.Line)" }
 
+Step 'A1.8'
 # A1.8: the System slider on the muted default unmutes it.
+Select-String -Path $log -Pattern 'outputs listed' -SimpleMatch -Context 0, 2 -ErrorAction SilentlyContinue |
+  Select-Object -First 1 | ForEach-Object { "log: $($_.Line) $($_.Context.PostContext -join ' ')" }
 if (-not $script:builtIn) {
+  # Setting its stored enumerator name and restarting the audio services lost the runner (runs 44356607387, 44365737411).
   "NOT TRIED A1.8: the endpoint is a ROOT device, listed as virtual, so This PC shows no System slider" |
     Tee-Object -FilePath "$Work/result.txt" -Append
 } else {
@@ -433,9 +440,14 @@ if (-not $script:builtIn) {
   $sliderType = New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, [System.Windows.Automation.ControlType]::Slider)
   $slider = Find-All $sliderType | Where-Object { $_.Current.Name -like 'Windows volume of *' } | Select-Object -First 1
   Check 'A1.8' ([bool]$slider) "the This PC row's System slider is there (opener found: $([bool]$opener))"
+  $focused = $false
   if ($slider) {
-    $script:main.SetFocus()
-    $slider.SetFocus()
+    try { $script:main.SetFocus(); $slider.SetFocus(); $focused = $true } catch {
+      "NOT TRIED A1.8 slider drag: no runner route, the slider refused focus ($($_.Exception.InnerException.Message))" |
+        Tee-Object -FilePath "$Work/result.txt" -Append
+    }
+  }
+  if ($focused) {
     Start-Sleep -Milliseconds 500
     [System.Windows.Forms.SendKeys]::SendWait('{LEFT}')
     Start-Sleep -Seconds 3
@@ -633,11 +645,14 @@ if ($count -ne 2) {
   $found = Get-Found
   "A1.1 before the app starts:`n$found" | Tee-Object -FilePath "$Work/result.txt" -Append
   foreach ($leg in 'kill', 'uninstall') {
+    Step "A1.1 $leg leg"
     Start-App
     $moved = Start-MovedStream $defaults
     $copies = @(Get-Process audiosync -ErrorAction SilentlyContinue).Count
     "A1.1 $leg, while streaming: $(Get-Defaults); moved: $moved; audiosync processes: $copies" | Tee-Object -FilePath "$Work/result.txt" -Append
     if ($leg -eq 'kill') {
+      # The Volume Mixer leg lost the runner, with no log, in runs 44365737411, 44386586904 and 44398574742.
+      "NOT TRIED A1.2 mixer: no runner route" | Tee-Object -FilePath "$Work/result.txt" -Append
       Stop-Process -Id $script:app.Id -Force
     } else {
       Start-Process -FilePath (Join-Path $dir 'unins000.exe') -Wait -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'

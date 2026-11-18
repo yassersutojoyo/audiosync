@@ -750,6 +750,61 @@ mod tests {
         assert_eq!(Some(read), default.volume);
     }
 
+    /// The System slider's backend call on a real, muted endpoint: the
+    /// default output is muted through Windows, its row switched on, then
+    /// `set_device_volume` must leave it unmuted at the level, as Windows
+    /// reads it back. It mutes the default output, so it runs only with
+    /// AUDIOSYNC_CI_MUTE_OUTPUT=1, which only the Stranger runner sets.
+    // covers: S197
+    #[test]
+    #[ignore = "mutes this PC's default output; the Stranger runner runs it"]
+    fn the_system_slider_unmutes_a_muted_endpoint() {
+        use crate::audio::backend::AudioBackend;
+        if std::env::var("AUDIOSYNC_CI_MUTE_OUTPUT").as_deref() != Ok("1") {
+            println!("not run: AUDIOSYNC_CI_MUTE_OUTPUT=1 is not set");
+            return;
+        }
+        let _apartment = Apartment::enter().expect("COM initializes");
+        let mut backend = super::super::open().expect("the backend opens");
+        let outputs = backend.list_outputs().expect("the outputs are listed");
+        let id = outputs
+            .iter()
+            .find(|output| output.is_default)
+            .expect("a default output")
+            .id
+            .clone();
+        let windows = control(&enumerator().expect("an enumerator"), &id).expect("its control");
+        let found = read_control(&windows).expect("its volume reads");
+        backend
+            .set_output_enabled(&id, true)
+            .expect("its row switches on");
+        // SAFETY: one write on a live volume control; no event context.
+        unsafe { windows.SetMute(true, std::ptr::null()) }.expect("Windows mutes it");
+        let muted_seen = (0..50).any(|_| {
+            backend.poll();
+            let shown = backend.outputs().into_iter().find(|output| output.id == id);
+            if shown.and_then(|output| output.device_volume?.muted) == Some(true) {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(100));
+            false
+        });
+        let taken = backend.set_device_volume(&id, 0.4);
+        let after = read_control(&windows).expect("its volume reads again");
+        println!(
+            "A1.8 harness: {id}: found {found:?}, row saw the mute: {muted_seen}, taken: {taken}, after {after:?}"
+        );
+        // SAFETY: as above; puts back what the test found.
+        unsafe {
+            let _ = windows.SetMasterVolumeLevelScalar(found.level, std::ptr::null());
+            let _ = windows.SetMute(found.muted, std::ptr::null());
+        }
+        assert!(muted_seen, "the row followed Windows' mute");
+        assert!(taken, "the write was taken");
+        assert!(!after.muted, "{after:?}");
+        assert!((after.level - 0.4).abs() < 0.01, "{after:?}");
+    }
+
     /// A volume control whose two reads answer as set.
     struct FakeControl {
         muted: Result<bool, BackendError>,
