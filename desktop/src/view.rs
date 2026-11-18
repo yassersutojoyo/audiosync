@@ -14815,6 +14815,40 @@ pub(crate) mod tests {
         }
     }
 
+    /// A main-window notice's x centres where the Mac's 16 pt dismiss button
+    /// does, in the card's top right corner inside its 10 pt padding
+    /// (MenuBar.swift:2788, :2822-2834); its 32 px hit area reaches past.
+    #[test]
+    fn a_notices_dismiss_centres_where_the_macs_does() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = main_window_over(MockBackend::new());
+        let notice = NoticeItem {
+            id: 1,
+            message: "A notice".into(),
+            title: "test".into(),
+            ..NoticeItem::default()
+        };
+        app.main
+            .set_notices(ModelRc::from(Rc::new(VecModel::from(vec![notice]))));
+        draw_frames();
+        let one = |id: &str| {
+            ElementHandle::find_by_element_id(&app.main, id)
+                .next()
+                .unwrap_or_else(|| panic!("{id}"))
+        };
+        let (card, dismiss) = (one("NoticeStack::row"), one("NoticeStack::dismiss"));
+        let (at, size) = (dismiss.absolute_position(), dismiss.size());
+        let right = card.absolute_position().x + card.size().width;
+        assert_eq!(
+            (
+                right - (at.x + size.width / 2.0),
+                at.y + size.height / 2.0 - card.absolute_position().y
+            ),
+            (18.0, 18.0),
+            "x centre from the card's right and top"
+        );
+    }
+
     // covers: S308
     /// Tab reaches each button of the updater's notice, Space or Enter
     /// presses it, and the notice reports its focus.
