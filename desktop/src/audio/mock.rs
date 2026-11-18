@@ -33,7 +33,9 @@ use audiosync_core::volume::SharedGain;
 
 use super::SESSION_RATE;
 use super::backend::{BackendError, OutputKind, UNKNOWN_DEVICE_NAME};
-use super::capture::{CAPTURE_ATTEMPTS, CaptureAttempt, CaptureTarget, Feeds, LoopbackMode};
+use super::capture::{
+    CAPTURE_ATTEMPTS, CaptureAttempt, CaptureTarget, Feeds, LoopbackMode, NameReader,
+};
 use super::controller::{
     CaptureHandle, CaptureState, Controller, Driver, FEED_FADE, PowerNotice, RendererHandle,
 };
@@ -362,6 +364,7 @@ pub struct MockDriver {
     processes: Vec<ProcessEntry>,
     session_pids: Vec<u32>,
     window_pids: Vec<u32>,
+    app_names: BTreeMap<u32, String>,
     outputs: Vec<Endpoint>,
     /// The active capture endpoints, as Windows would describe them.
     inputs: Vec<EndpointReading>,
@@ -463,6 +466,7 @@ impl MockDriver {
             ],
             session_pids: Vec::new(),
             window_pids: Vec::new(),
+            app_names: BTreeMap::new(),
             outputs: Vec::new(),
             inputs: Vec::new(),
             inputs_error: None,
@@ -703,6 +707,11 @@ impl Driver for MockDriver {
 
     fn window_pids(&mut self) -> Option<Vec<u32>> {
         Some(self.window_pids.clone())
+    }
+
+    fn app_name_reader(&self) -> NameReader {
+        let names = self.app_names.clone();
+        Arc::new(move |pid| names.get(&pid).cloned())
     }
 
     fn outputs(&mut self) -> Result<Listing, BackendError> {
@@ -1000,6 +1009,11 @@ impl Controller<MockDriver> {
     pub fn add_app(&mut self, pid: u32, executable: &str) {
         self.add_process(pid, EXPLORER_PID, executable, true);
         self.driver_mut().window_pids.push(pid);
+    }
+
+    /// Has the app whose top process is `pid` give itself `name`.
+    pub fn name_app(&mut self, pid: u32, name: &str) {
+        self.driver_mut().app_names.insert(pid, name.to_owned());
     }
 
     /// Starts a helper process of `parent_pid` that holds the app's audio

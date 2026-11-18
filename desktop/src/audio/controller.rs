@@ -80,9 +80,9 @@ use super::backend::{
 };
 use super::calibration::{CalibrationTap, Engine, Microphone, MicrophoneError};
 use super::capture::{
-    Activation, CaptureAttempt, CaptureGlitches, CaptureTarget, Feeds, LoopbackMode, SampleType,
-    decide_apps_capture, decide_capture, decide_except_capture, describe_pair, display_name,
-    input_sources, name_apps, running_app, source_list,
+    Activation, AppNames, CaptureAttempt, CaptureGlitches, CaptureTarget, Feeds, LoopbackMode,
+    NameReader, SampleType, decide_apps_capture, decide_capture, decide_except_capture,
+    describe_pair, display_name, input_sources, name_apps, running_app, source_list,
 };
 use super::cast::{CastLink, CastSpeakers, CastTrack};
 use super::cast_address::CastAddress;
@@ -380,10 +380,10 @@ pub trait Driver: Send {
         None
     }
 
-    /// The name the app whose top process is `pid` gives itself, as the
-    /// Start menu or Task Manager shows it; `None` where it can't be read.
-    fn app_name(&mut self, _pid: u32) -> Option<String> {
-        None
+    /// Reads the name an app gives itself, as the Start menu or Task
+    /// Manager shows it, from its top process ID; `None` where it can't.
+    fn app_name_reader(&self) -> NameReader {
+        Arc::new(|_| None)
     }
 
     /// The connected render endpoints, and notes for the log on the ones
@@ -906,6 +906,8 @@ pub struct Controller<D: Driver> {
     /// listed, so the chosen one doesn't show as unplugged while it captures.
     inputs_error: Option<BackendError>,
     inputs_listed: Vec<SourceInfo>,
+    /// The names the listed apps give themselves, read off this thread.
+    app_names: AppNames,
     /// The name and kind of each input device listed in this run, and the
     /// endpoint IDs a device left when a capture followed it to another
     /// (S329).
@@ -1067,6 +1069,7 @@ impl<D: Driver> Controller<D> {
             sources_error: None,
             inputs_error: None,
             inputs_listed: Vec::new(),
+            app_names: AppNames::default(),
             inputs_seen: BTreeMap::new(),
             inputs_left_behind: BTreeSet::new(),
             listing_notes: Vec::new(),
@@ -1924,6 +1927,12 @@ impl<D: Driver> Controller<D> {
 
     /// The driver, to change.
     #[cfg(test)]
+    /// Waits for the app names being read.
+    #[cfg(test)]
+    pub fn wait_app_names(&mut self) {
+        self.app_names.wait();
+    }
+
     pub fn driver_mut(&mut self) -> &mut D {
         &mut self.driver
     }
@@ -4782,7 +4791,9 @@ impl<D: Driver> Controller<D> {
             window_pids.as_deref(),
             self.driver.own_pid(),
         );
-        name_apps(&mut sources, |pid| self.driver.app_name(pid));
+        let read = self.driver.app_name_reader();
+        self.app_names.ask(&sources, &read);
+        name_apps(&mut sources, &self.app_names);
         match self.driver.inputs() {
             Ok(readings) => {
                 if self.inputs_error.take().is_some() {
@@ -14120,6 +14131,35 @@ mod tests {
             mix_artist(&reader, &mut backend, None).as_deref(),
             Some("Player + Chat")
         );
+    }
+
+    // covers: S476
+    #[test]
+    fn a_mix_is_named_to_airplay_receivers_by_the_names_its_apps_give_themselves() {
+        let (mut backend, fake, kitchen) = with_airplay();
+        let reader = FakeReader::with_icon(b"icon");
+        backend.set_track_reader(reader.reader());
+        backend.set_receiver_labels(shared_labels());
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        backend.add_app(7000, "WhatsApp.Root.exe");
+        backend.name_app(7000, "WhatsApp");
+        backend.list_sources().unwrap();
+        backend.wait_app_names();
+
+        backend
+            .start(&SourceId::Apps {
+                root_pids: Vec::new(),
+                executables: vec!["player.exe".to_owned(), "WhatsApp.Root.exe".to_owned()],
+            })
+            .unwrap();
+        backend.poll();
+        reader.read(None);
+        backend.poll();
+        let artist = now_playing_sent(&fake)
+            .last()
+            .and_then(|sent| sent.track.as_ref())
+            .map(|track| track.artist.clone());
+        assert_eq!(artist.as_deref(), Some("Player + WhatsApp"));
     }
 
     // covers: S218
