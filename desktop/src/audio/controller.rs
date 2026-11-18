@@ -506,6 +506,12 @@ pub trait Driver: Send {
     fn open_microphone(&mut self, _seconds: f64) -> Result<Box<dyn Microphone>, MicrophoneError> {
         Err(MicrophoneError::Missing)
     }
+
+    /// The default output's seam for S469's switch, where the driver keeps
+    /// one itself (S490).
+    fn default_endpoints(&self) -> Option<Box<dyn DefaultEndpoints>> {
+        None
+    }
 }
 
 /// `gain` with `equalizer`'s headroom cut given back as far as unity allows,
@@ -1285,6 +1291,15 @@ impl<D: Driver> Controller<D> {
     /// levels as they are: a test copy (S475).
     pub fn leave_system_outputs(&mut self) {
         self.leaves_system_outputs = true;
+    }
+
+    /// The driver's own seam for [`Self::set_default_switch`], if it has one.
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(dead_code, reason = "only the PipeWire driver keeps one")
+    )]
+    pub fn driver_default_endpoints(&self) -> Option<Box<dyn DefaultEndpoints>> {
+        self.driver.default_endpoints()
     }
 
     /// Holds the default output out of a whole-system stream, where the

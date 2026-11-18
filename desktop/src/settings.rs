@@ -61,7 +61,7 @@ use crate::audio::app_output::AppRecordStore;
 use crate::audio::backend::OutputKind;
 use crate::audio::cast_address;
 use crate::audio::default_output::Record as DefaultRecord;
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 use crate::audio::default_output::RecordStore;
 use crate::audio::local_volume::LocalVolumes;
 use crate::data_folder;
@@ -1892,10 +1892,10 @@ impl SettingsFile {
 /// reads the file and saves it back with the record, through the same
 /// atomic write. A file that doesn't read as settings is left alone, and
 /// without a file there is nowhere to keep the record, so nothing moves.
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 pub struct DefaultRecordFile(pub Option<PathBuf>);
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 impl RecordStore for DefaultRecordFile {
     fn load(&mut self) -> Result<Option<DefaultRecord>, String> {
         let Some(path) = &self.0 else {
