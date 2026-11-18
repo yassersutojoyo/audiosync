@@ -265,12 +265,18 @@ impl From<slint::PlatformError> for StartError {
     }
 }
 
+/// Whether Setup opens by itself at this launch: on a first install, with no
+/// settings file at `settings`.
+fn opens_setup_at_launch(settings: &std::path::Path) -> bool {
+    !settings.exists()
+}
+
 /// Shows the main window and runs the UI until the user exits.
 fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
     // Read before the engine starts: its first change writes the file. Linux
     // has no Setup window yet.
-    let first_install =
-        cfg!(windows) && settings::SettingsFile::default_path().is_some_and(|path| !path.exists());
+    let first_install = cfg!(windows)
+        && settings::SettingsFile::default_path().is_some_and(|path| opens_setup_at_launch(&path));
     #[cfg(windows)]
     let renderer_record = renderer_choice::select(log);
     #[cfg(feature = "mock-backend")]
@@ -521,6 +527,18 @@ fn session_ending(
 
 #[cfg(test)]
 mod tests {
+    // PermissionFlow.swift:152, 160-162: once, even when the first launch
+    // saved nothing.
+    #[test]
+    fn setup_opens_by_itself_at_the_first_launch_only() {
+        let settings = super::debug_log::test_dir("setup-once").join("settings.json");
+        assert!(super::opens_setup_at_launch(&settings), "first launch");
+        assert!(
+            !super::opens_setup_at_launch(&settings),
+            "a second launch that saved nothing"
+        );
+    }
+
     #[test]
     fn the_preview_play_switch_works_only_with_the_debug_log_on() {
         let steam = || Some("Steam".to_owned());
