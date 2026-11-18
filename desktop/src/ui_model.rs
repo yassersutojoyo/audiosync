@@ -1253,11 +1253,18 @@ impl AppState {
 
     /// A speaker that is on while streaming is on plays, unless it waits.
     pub fn speaker_state(&self, speaker: &Speaker) -> SpeakerState {
-        match SpeakerState::new(speaker.enabled, self.running) {
-            SpeakerState::Playing => speaker
-                .waiting
-                .map_or(SpeakerState::Playing, SpeakerState::Waiting),
-            state => state,
+        match (
+            SpeakerState::new(speaker.enabled, self.running),
+            speaker.waiting,
+        ) {
+            (SpeakerState::Playing, waiting) => {
+                waiting.map_or(SpeakerState::Playing, SpeakerState::Waiting)
+            }
+            // A prompt waits for the user whether or not it streams (S223).
+            (SpeakerState::WillPlay, Some(prompt @ (Waiting::ForPassword | Waiting::ForPin))) => {
+                SpeakerState::Waiting(prompt)
+            }
+            (state, _) => state,
         }
     }
 
