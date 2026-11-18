@@ -1514,6 +1514,20 @@ impl AppState {
         })
     }
 
+    /// The AirPlay delay in tenths of a second that the main window's state
+    /// line names while streaming to an AirPlay speaker.
+    pub fn status_airplay_tenths(&self) -> Option<u32> {
+        let airplay_on = self
+            .speakers
+            .iter()
+            .any(|s| s.enabled && matches!(s.kind, SpeakerKind::AirPlay | SpeakerKind::AirPlay2));
+        if !self.running || !airplay_on {
+            return None;
+        }
+        self.airplay_delay_ms
+            .map(|ms| (ms.max(0.0) / 100.0).round() as u32)
+    }
+
     /// The speaker lists both windows show: the PC's own outputs in their
     /// order, then every other speaker by name, case-insensitively, numbers
     /// by value.

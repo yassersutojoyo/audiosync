@@ -891,6 +891,21 @@ pub mod tests {
         updater
     }
 
+    /// An updater that reads the fixture's appcast through WinHTTP from a
+    /// server on 127.0.0.1, as a release copy reads the real feed.
+    pub(crate) fn loopback_updater(name: &str) -> Updater {
+        let mut f = fixture(name, false, Arc::new(RealFiles), DebugLog::default());
+        let appcast = f.fetch.files[flow::tests::FEED].clone();
+        let files = [("/appcast.xml".to_owned(), appcast)].into_iter().collect();
+        let port = flow::tests::serve(files);
+        f.env.feed = format!("http://127.0.0.1:{port}/appcast.xml");
+        f.env.fetch = Arc::new(fetch::WinHttp {
+            user_agent: fetch::user_agent("Windows", "0.8.0", "x64"),
+            plain_loopback: true,
+        });
+        Updater::new(f.env)
+    }
+
     /// Holds the fetch of one kind after its first byte until the test
     /// opens the gate, so the test can act while it runs.
     struct GatedFetch {

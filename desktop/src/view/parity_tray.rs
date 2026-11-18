@@ -202,3 +202,18 @@ fn a_long_names_timer_rests_while_the_flyout_is_hidden() {
     assert!(component("FlyoutRow").contains("live: root.live;"));
     assert_eq!(flyout().matches("live: root.shown;").count(), 3);
 }
+
+/// The lock or warning sits 3 px before its note at the row's end, as the
+/// Mac's AvailabilityNote after its Spacer (MenuBar.swift:2042, :2313-2318),
+/// not at the start of the room the note may take.
+#[test]
+fn the_availability_icon_stays_beside_its_note() {
+    let row = component("FlyoutRow");
+    let at = row
+        .find("// The Mac's AvailabilityNote leads with")
+        .expect("the note");
+    let note = &row[at..at + 900];
+    assert!(note.contains("alignment: end;"), "{note}");
+    let caption = &note[note.find("QuietText {").expect("the caption")..];
+    assert!(!caption.contains("horizontal-stretch: 1;"), "{caption}");
+}

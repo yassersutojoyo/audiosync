@@ -237,10 +237,17 @@ pub fn open(
     let (stop, stop_receiver) = pw::channel::channel();
     let (ready, ready_receiver) = mpsc::channel();
     let thread_status = Arc::clone(&status);
+    let target = device.clone();
     let thread = std::thread::Builder::new()
         .name("audiosync-pw-mic".to_owned())
         .spawn(move || {
-            let recorded = serve(recording, stop_receiver, ready.clone(), &thread_status);
+            let recorded = serve(
+                recording,
+                &target,
+                stop_receiver,
+                ready.clone(),
+                &thread_status,
+            );
             thread_status.stopped.store(true, Ordering::Release);
             match recorded {
                 Ok(samples) => samples,
@@ -267,6 +274,7 @@ pub fn open(
 
 fn serve(
     recording: Recording,
+    target: &str,
     stop: pw::channel::Receiver<()>,
     ready: mpsc::Sender<Result<(), MicrophoneError>>,
     status: &Arc<Status>,
@@ -302,6 +310,8 @@ fn serve(
         *pw::keys::MEDIA_ROLE => "Production",
         *pw::keys::NODE_NAME => "audiosync-microphone",
         *pw::keys::APP_NAME => "AudioSync",
+        // By name: the session manager's own pick may be AudioSync's sink monitor (S477).
+        "target.object" => target,
     };
     let stream = StreamRc::new(core.clone(), "audiosync-microphone", properties)
         .map_err(|_| MicrophoneError::Missing)?;

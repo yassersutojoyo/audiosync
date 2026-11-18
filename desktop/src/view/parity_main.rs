@@ -94,6 +94,29 @@ fn the_transport_draws_the_macs_filled_glyphs_on_every_system() {
     }
 }
 
+/// Auto-connect's bolt is solid on every system, as the Mac's bolt.fill
+/// (MainWindow.swift:2435), where the icon font's is an outline.
+#[test]
+fn the_auto_connect_bolt_is_solid_on_every_system() {
+    let glyphs = component(include_str!("../../ui/widgets.slint"), "Glyphs");
+    let drawn = &glyphs[glyphs
+        .find("public pure function drawn-everywhere(")
+        .expect("drawn-everywhere")..];
+    assert!(drawn[..drawn.find('}').expect("its end")].contains("glyph == root.auto-connect"));
+    let outline = &glyphs[glyphs
+        .find("public pure function outline(")
+        .expect("outline")
+        ..glyphs.find("public pure function solid(").expect("solid")];
+    assert!(
+        !outline.contains("if glyph == root.auto-connect {"),
+        "no stroked part"
+    );
+    assert_eq!(
+        drawing(&glyphs, "solid", "auto-connect"),
+        r#"return "M9.5 1.5 L3.5 9 H8 L6.5 14.5 L12.5 7 H8 Z";"#
+    );
+}
+
 /// A speaker's name is regular whether it plays or not, as the Mac's; the
 /// round mark says it plays.
 // covers: S450

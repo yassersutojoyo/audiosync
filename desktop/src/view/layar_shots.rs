@@ -23,10 +23,10 @@ use audiosync_core::eq::{EqSettings, UserCurve};
 use audiosync_core::policy::device_volume::Hint;
 use audiosync_core::policy::source_quit::WhenSourceQuits;
 use i_slint_backend_testing::{ElementHandle, ElementQuery};
-use slint::platform::{Key, PointerEventButton, WindowEvent};
-use slint::{ComponentHandle, LogicalPosition, LogicalSize, SharedString};
+use slint::platform::{PointerEventButton, WindowEvent};
+use slint::{ComponentHandle, LogicalPosition, LogicalSize};
 
-use super::tests::{app_over, hold_clock, leaked};
+use super::tests::{advance_clock, app_over, hold_clock, leaked};
 use super::{App, RenamePlace};
 use crate::audio::calibration::{Failure, Phase, Step, Which};
 use crate::now_playing_card::fake::FakeControls;
@@ -194,6 +194,8 @@ impl Scene {
         app.apply_appearance(appearance);
         app.refresh();
         app.main.show().expect("the main window shows headless");
+        // The brand accent the app gives each window as its frame comes up.
+        app.use_brand_accent(app.main.window());
         let scene = Scene { app, state, media };
         scene.size(scene.app.main.window(), MAIN);
         scene
@@ -254,8 +256,14 @@ impl Scene {
         let equalizer = &self.app.equalizer();
         equalizer.show().map_err(|error| error.to_string())?;
         equalizer.invoke_enabled_toggled(true);
-        equalizer.invoke_gain_changed(1, 6.0);
-        equalizer.invoke_gain_changed(4, -4.5);
+        // As the Mac render's Mock.equalizer: on, preamp -2 dB, the Loudness curve.
+        equalizer.invoke_preamp_changed(-2.0);
+        let loudness = audiosync_core::eq::PRESETS
+            .iter()
+            .find(|p| p.id == "loudness");
+        for (band, gain) in loudness.expect("Loudness").gains_db.iter().enumerate() {
+            equalizer.invoke_gain_changed(band as i32, *gain as f32);
+        }
         self.size(equalizer.window(), size);
         Ok(Win(Shown::Equalizer, size))
     }
@@ -398,6 +406,40 @@ fn a_horizontal_slider_is_listed_by_its_track() {
     assert_eq!(listed_frame(true, at, band), [290.0, 133.0, 32.0, 200.0]);
 }
 
+/// CAL-SHEET-RESULT: the AirPlay delay's summary under four results takes
+/// both lines it wraps to, inside the results list, as the Mac's does
+/// (CalibrateAllViews.swift:328-333).
+#[test]
+fn calibrate_alls_airplay_summary_shows_both_lines_in_the_results() {
+    let scene = Scene::new(ui_model::Appearance::Light);
+    calibrate_all(&scene, |state| {
+        state.calibrate_all.sheet = Some(results(SHEET_NAMES));
+    })
+    .expect("the example speakers");
+    settle(scene.app.main.window());
+    let list = ElementHandle::find_by_accessible_label(&scene.app.main, "Results")
+        .next()
+        .expect("the results list");
+    let summary = find(&scene.app.main, "AirPlay delay:").expect("the AirPlay summary");
+    let line = find(&scene.app.main, "Calibration finished")
+        .expect("the run's outcome, one line")
+        .size()
+        .height;
+    let (height, bottom) = (
+        summary.size().height,
+        summary.absolute_position().y + summary.size().height,
+    );
+    let end = list.absolute_position().y + list.size().height;
+    assert!(
+        height >= 1.8 * line,
+        "the summary is {height} high, one line {line}"
+    );
+    assert!(
+        bottom <= end,
+        "the summary ends at {bottom}, the list at {end}"
+    );
+}
+
 type Snapshot = slint::SharedPixelBuffer<slint::Rgba8Pixel>;
 
 /// The commonest pixel inside the frame as the background, and the one farthest
@@ -481,7 +523,7 @@ fn render(window: &slint::Window) {
     let _ = window.take_snapshot();
 }
 
-/// Lets the timers and animations run for 600 ms of Slint's held clock.
+/// Lets the timers and animations run for about 900 ms of Slint's held clock.
 fn settle(window: &slint::Window) {
     for _ in 0..4 {
         std::thread::sleep(Duration::from_millis(150));
@@ -489,6 +531,13 @@ fn settle(window: &slint::Window) {
         slint::platform::update_timers_and_animations();
         render(window);
     }
+    // The header's state line fades one step per 16 ms frame; four frames
+    // left it at under half its opacity in the 18 Nov photos.
+    for _ in 0..20 {
+        advance_clock(Duration::from_millis(16));
+        slint::platform::update_timers_and_animations();
+    }
+    render(window);
 }
 
 /// The first element of `component` with a size whose accessible label is
@@ -550,12 +599,6 @@ fn scroll(window: &slint::Window, position: LogicalPosition, delta_y: f32) {
         delta_y,
     });
     settle(window);
-}
-
-fn key(window: &slint::Window, key: Key) {
-    let text: SharedString = key.into();
-    window.dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
-    window.dispatch_event(WindowEvent::KeyReleased { text });
 }
 
 /// A cover drawn here: a two-way gradient, so the ambient art has bands.
@@ -667,7 +710,9 @@ fn calibrating(s: &Scene, phase: Phase) -> Result<Win, String> {
             phase,
             busy: running,
             own_run_holds: running,
-        }
+        };
+        // As the adapter reports a speaker's own run to Calibrate All.
+        state.calibrate_all.other_running = running;
     });
     s.app.toggle_sync(DESK);
     s.main()
@@ -890,8 +935,12 @@ fn b02() -> Vec<Row> {
             s.play(long_track());
             s.main()
         }),
+        // As the Mac render's empty model: AirPlay has looked and found none.
         row("B02", "MAIN-EMPTY", |s| {
-            s.edit(|state| state.speakers.clear());
+            s.edit(|state| {
+                state.speakers.clear();
+                state.airplay_none_found = true;
+            });
             s.main()
         }),
         row("B02", "MAIN-SMALLEST", |s| s.main_at(MAIN_SMALLEST)),
@@ -1025,7 +1074,7 @@ fn b03() -> Vec<Row> {
         }),
         row("B03", "MAIN-ROW-CONNECTING", |s| {
             s.speaker(KITCHEN, |kitchen| {
-                kitchen.waiting = Some(Waiting::ForDevice)
+                kitchen.waiting = Some(Waiting::Reconnecting)
             })?;
             s.main()
         }),
@@ -1170,7 +1219,12 @@ fn b05() -> Vec<Row> {
             s.edit(|state| state.airplay_delay_ms = None);
             s.main()
         }),
-        row("B05", "MAIN-AIRPLAY-DELAY-OPEN", |s| s.main()),
+        row("B05", "MAIN-AIRPLAY-DELAY-OPEN", |s| {
+            s.app.toggle_sync(super::AIRPLAY_DELAY_FIELD);
+            let at = center(&find(&s.app.main, "Kitchen")?);
+            scroll(s.app.main.window(), at, -1200.0);
+            s.main()
+        }),
         row("B05", "MAIN-SYSVOL-FOLDED", |s| s.main()),
         row("B05", "MAIN-SYSVOL-OPEN", |s| {
             s.app.toggle_sync(SPEAKERS);
@@ -1333,8 +1387,12 @@ fn b08() -> Vec<Row> {
             s.play(track(true, true));
             s.flyout()
         }),
+        // As the Mac render's empty panel, whose sender is not up yet: it looks.
         row("B08", "TRAY-EMPTY", |s| {
-            s.edit(|state| state.speakers.clear());
+            s.edit(|state| {
+                state.speakers.clear();
+                state.airplay_searching = true;
+            });
             s.flyout()
         }),
         row("B08", "TRAY-LONGNAME", |s| {
@@ -1520,11 +1578,8 @@ fn b10() -> Vec<Row> {
     vec![
         row("B10", "EQ-WINDOW", |s| {
             let win = s.equalizer(EQUALIZER)?;
+            // As the Mac render's: just opened, with no band focused.
             s.app.equalizer().invoke_take_focus();
-            s.app.note_focus_input(FocusInput::Tab);
-            for _ in 0..4 {
-                key(leaked(s.app.equalizer()), Key::Tab);
-            }
             Ok(win)
         }),
         row("B10", "EQ-CURVE-MENU", |s| {
@@ -1824,4 +1879,46 @@ fn motion_frames_of_a_song_change_and_a_speaker_switched_off() {
     std::fs::write(dir.join("frames.txt"), lines.join("\n") + "\n")
         .expect("the frame list is written");
     println!("{}", lines.join("\n"));
+}
+
+/// NOTICE-SOURCE and MAIN-ROW-LOWVOL: a notice and a low-volume hint push
+/// the speaker list past the window's bottom, and the list scrolls to show
+/// Add by Address… whole, as the Mac's scroll view does.
+#[test]
+fn a_list_pushed_down_by_a_notice_scrolls_to_add_by_address() {
+    let scene = Scene::new(ui_model::Appearance::Light);
+    scene
+        .speaker(SPEAKERS, |speaker| {
+            speaker.enabled = true;
+            speaker.device_volume = Some(Hint::Low { percent: 13 });
+        })
+        .expect("the example speakers");
+    notice(
+        &scene,
+        NoticeMessage::SourceQuit {
+            source: music_player(),
+        },
+    )
+    .expect("the notice shows");
+    let window = scene.app.main.window();
+    settle(window);
+    let list = ElementHandle::find_by_element_id(&scene.app.main, "MainWindow::scroll")
+        .next()
+        .expect("the speaker list");
+    let (at, size) = (list.absolute_position(), list.size());
+    let position = LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0);
+    window.dispatch_event(WindowEvent::PointerMoved { position });
+    window.dispatch_event(WindowEvent::PointerScrolled {
+        position,
+        delta_x: 0.0,
+        delta_y: -3000.0,
+    });
+    settle(window);
+    let button = find(&scene.app.main, "Add by Address").expect("Add by Address…");
+    let bottom = button.absolute_position().y + button.size().height;
+    assert!(
+        bottom <= at.y + size.height,
+        "Add by Address… ends at {bottom}, the list at {}",
+        at.y + size.height
+    );
 }

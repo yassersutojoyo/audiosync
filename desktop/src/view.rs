@@ -1271,7 +1271,12 @@ fn guide_place_to_show(
     Some(WindowPlace {
         x: fitted.x.round() as i32,
         y: fitted.y.round() as i32,
-        size: place.size,
+        size: place.size.map(|(width, height)| {
+            (
+                (fitted.width / scale - GUIDE_CHROME.0).min(width),
+                (fitted.height / scale - GUIDE_CHROME.1).min(height),
+            )
+        }),
     })
 }
 
@@ -3240,8 +3245,17 @@ impl App {
         if state.master_volume >= UNMUTE_FLOOR {
             self.unmute_to.set(state.master_volume);
         }
-        for window in [&self.main as &dyn WindowState, &self.flyout] {
-            window.show_state(&state, &status, source_index);
+        let main_status = match state.status_airplay_tenths() {
+            Some(tenths) => strings.invoke_main_status(
+                status.clone(),
+                format!("{}.{}", tenths / 10, tenths % 10).into(),
+            ),
+            None => status.clone(),
+        };
+        let windows: [(&dyn WindowState, &SharedString); 2] =
+            [(&self.main, &main_status), (&self.flyout, &status)];
+        for (window, status) in windows {
+            window.show_state(&state, status, source_index);
             window.show_live_input_hint(&live_hint);
         }
         self.main.set_equalizer_on(state.equalizer.enabled);
@@ -11555,6 +11569,32 @@ pub(crate) mod tests {
         }
     }
 
+    /// A note too long for its line wraps to a second line and the row grows,
+    /// as the Mac's (MainWindow.swift:2424-2430, `.lineLimit(2)`), instead of
+    /// ending in "…" after a few words.
+    #[test]
+    fn a_long_row_note_wraps_to_two_lines() {
+        use i_slint_backend_testing::ElementHandle;
+        let mut backend = MockBackend::new();
+        backend.set_running(true);
+        let mut gone = backend
+            .snapshot()
+            .speaker("airplay:kitchen")
+            .unwrap()
+            .clone();
+        gone.id = "airplay:gone".into();
+        gone.waiting = Some(ui_model::Waiting::NotOnNetwork);
+        backend.add_speaker(gone);
+        let app = app_over(backend);
+        app.main.show().expect("the main window shows");
+        draw_frames_at(696, 632);
+        draw_frames_at(696, 632);
+        let tallest = ElementHandle::find_by_element_id(&app.main, "SpeakerRow::note-label")
+            .map(|note| note.size().height)
+            .fold(0.0, f32::max);
+        // Two caption lines of about 13.5 px, not one (17 px with the name), nor three.
+        assert!((24.0..=32.0).contains(&tallest), "{tallest} px");
+    }
     /// A long name's line stops 6 px before the row's delay column, the Mac row's
     /// spacing (MainWindow.swift:2371), however close the value sits to the
     /// options after it.
@@ -13604,6 +13644,20 @@ pub(crate) mod tests {
         assert!(line.contains("wrap: no-wrap;"), "it stays on one line");
     }
 
+    /// While an AirPlay speaker streams, the main window's state line names
+    /// the AirPlay delay to a tenth of a second and the tray panel's doesn't,
+    /// as on the Mac (Localization.swift:190-195, MenuBar.swift:658-667).
+    #[test]
+    fn the_main_status_names_the_airplay_delay_while_airplay_streams() {
+        let app = app_over(MockBackend::new());
+        app.main.invoke_power_toggled(true);
+        let (main, tray) = (app.main.get_status(), app.flyout.get_status());
+        assert!(main.ends_with(" · AirPlay delay 1.8 s"), "{main}");
+        assert_eq!(main.as_str(), format!("{tray} · AirPlay delay 1.8 s"));
+        app.main.invoke_power_toggled(false);
+        assert_eq!(app.main.get_status(), app.flyout.get_status(), "off");
+    }
+
     /// Flipping the switch cross-fades the header's old state into the new
     /// one in place, both ways, as the Mac's: 250 ms ease-in-out, or 150 ms
     /// linear with Animation effects off.
@@ -13870,6 +13924,34 @@ pub(crate) mod tests {
                 y >= top && end <= bottom,
                 "{label} at {y}..{end} in the column's {top}..{bottom}"
             );
+        }
+    }
+
+    /// The AirPlay delay's note ends inside its pane at every window width,
+    /// at 100% and 150% scale: the pane counts each line the note wraps to,
+    /// as the Mac's note sizes to its text (MainWindow.swift:3409-3412).
+    #[test]
+    fn the_airplay_delay_note_fits_its_pane_at_every_width() {
+        for scale_factor in [1.0f32, 1.5] {
+            let app = narrow_app(MockBackend::new());
+            app.main
+                .window()
+                .dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor });
+            let physical = |logical: u32| (logical as f32 * scale_factor) as u32;
+            draw_frames_at(physical(776), physical(900));
+            app.main.invoke_sync_toggled(AIRPLAY_DELAY_FIELD.into());
+            advance_clock(Duration::from_millis(400));
+            for width in (640..=1400).step_by(8) {
+                draw_frames_at(physical(width), physical(900));
+                let note = element(&app, "AirPlayDelayControls::hint").expect("the delay's note");
+                let pane = element(&app, "AirPlayDelayControls::pane").expect("its pane");
+                let note_bottom = note.absolute_position().y + note.size().height;
+                let pane_bottom = pane.absolute_position().y + pane.size().height;
+                assert!(
+                    note_bottom <= pane_bottom + 0.5,
+                    "at {scale_factor}x, {width} px wide: note ends {note_bottom}, pane {pane_bottom}"
+                );
+            }
         }
     }
 
@@ -15157,6 +15239,54 @@ pub(crate) mod tests {
             app.refresh();
             assert!(app.help().get_updater_available());
         }
+    }
+
+    /// The launch check reads a newer version from an appcast served on
+    /// 127.0.0.1 and the main window's notice offers it with its buttons.
+    #[cfg(windows)]
+    #[test]
+    fn a_newer_version_on_a_loopback_feed_is_offered_in_the_main_window() {
+        if std::env::var_os("CI").is_none() {
+            eprintln!("skipped: serves on 127.0.0.1, which runs in CI only");
+            return;
+        }
+        use i_slint_backend_testing::ElementHandle;
+        let app = main_window_over(MockBackend::new());
+        *app.updater.borrow_mut() = Some(crate::updater::tests::loopback_updater("offer-window"));
+        app.ui.borrow_mut().check_updates_automatically = true;
+        app.ui.borrow_mut().last_update_check = None;
+        app.launch_update_check();
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while app.updater_notice().is_none() {
+            assert!(std::time::Instant::now() < deadline, "no offer within 20 s");
+            std::thread::sleep(Duration::from_millis(50));
+            app.poll_updater();
+        }
+        // The notice slides in on the held clock before it is in the tree.
+        advance_clock(Duration::from_millis(400));
+        draw_frames();
+        let text = app
+            .strings()
+            .invoke_notice_update_available("0.9.0".into(), "0.8.0".into());
+        assert!(
+            ElementHandle::find_by_accessible_label(&app.main, &text)
+                .next()
+                .is_some(),
+            "{text:?} is in the main window"
+        );
+        println!("offer in the main window: {text}");
+        let notice = app.updater_notice().expect("the offer is a notice");
+        assert_eq!(
+            notice_item(&app.strings(), &notice)
+                .update_buttons
+                .iter()
+                .collect::<Vec<_>>(),
+            [
+                UpdateButton::NotNow,
+                UpdateButton::SkipThisVersion,
+                UpdateButton::Download
+            ]
+        );
     }
 
     /// The volume keys' pop-up reads as the Mac's (LevelPopup.swift:90-119,
@@ -16470,6 +16600,47 @@ pub(crate) mod tests {
             .collect();
         assert!(!heights.is_empty(), "the speaker rows show");
         assert!(heights.iter().all(|h| *h == 36.0), "{heights:?}");
+    }
+
+    /// The tray panel with no speakers spaces its volume and buttons as the
+    /// Mac panel (MenuBar.swift:1730-1771).
+    #[test]
+    fn the_empty_flyout_spaces_its_volume_and_buttons_as_the_macs() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.refresh();
+        app.flyout.set_this_pc(ModelRc::default());
+        app.flyout.set_speakers(ModelRc::default());
+        app.flyout.set_zones(ModelRc::default());
+        app.flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        let height = app.fit_flyout(1000.0);
+        app.flyout
+            .window()
+            .set_size(slint::LogicalSize::new(300.0, height));
+        draw_frames();
+        let card = flyout_element(&app, "TrayFlyout::hero-card");
+        let card_bottom = card.absolute_position().y + card.size().height;
+        let strings = app.flyout.global::<Strings>();
+        let mute = ElementHandle::find_by_accessible_label(&app.flyout, &strings.get_mute_master())
+            .next()
+            .expect("the mute button");
+        let centre = mute.absolute_position().y + mute.size().height / 2.0;
+        let line = flyout_element(&app, "TrayFlyout::rows-divider")
+            .absolute_position()
+            .y;
+        // The stack's 10, cardToVolume's 2 and half the 18 pt row; then the other half
+        // and rowsToDivider's 7 (WindowRules.swift:1128, :1135; MenuBar.swift:2974).
+        assert_eq!(centre - card_bottom, 21.0);
+        assert_eq!(line - centre, 16.0);
+        let last_line = ElementHandle::find_by_element_type_name(&app.flyout, "Divider")
+            .map(|line| line.absolute_position().y + line.size().height)
+            .fold(0.0, f32::max);
+        let exit = ElementHandle::find_by_accessible_label(&app.flyout, &strings.get_exit_app())
+            .next()
+            .expect("Exit");
+        // The stack's 10 less the buttons' 8 (MenuBar.swift:1770).
+        assert_eq!(exit.absolute_position().y - last_line, 2.0);
     }
 
     fn flyout_element(app: &App, id: &str) -> i_slint_backend_testing::ElementHandle {

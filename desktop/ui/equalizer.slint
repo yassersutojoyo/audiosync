@@ -3,10 +3,10 @@
 // steps), saving curves, and Reset. Opened with Ctrl+E or from the
 // Equalizer card.
 
-import { Button, Palette } from "std-widgets.slint";
+import { Palette } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { FocusRing, Fluent, Glyph, Glyphs, MenuDivider, MenuPanel, MenuRepaint, MenuRoom, MenuRow, MenuState, NameField, LevelSlider, OverlayScrollView, QuietText, SecondaryText, TextField, ToggleSwitch } from "widgets.slint";
+import { FocusRing, Fluent, Glyph, Glyphs, MenuDivider, MenuPanel, MenuRepaint, MenuRoom, MenuRow, MenuState, NameField, LevelSlider, OverlayScrollView, QuietText, SecondaryText, SmallButton, TextField, ToggleSwitch } from "widgets.slint";
 
 // One vertical gain slider with its value above and its label below.
 component Band inherits VerticalLayout {
@@ -90,7 +90,8 @@ component Band inherits VerticalLayout {
                         y: min(track.zero-y, track.thumb-y);
                         width: 4px;
                         height: abs(track.thumb-y - track.zero-y);
-                        background: Palette.accent-background;
+                        // The Mac's tint (EqualizerWindow.swift:122), not the system accent.
+                        background: Tokens.teal;
                     }
 
                     Rectangle {
@@ -116,7 +117,7 @@ component Band inherits VerticalLayout {
                             width: slider.has-focus ? 10px : hover.has-hover ? 14px : 12px;
                             height: self.width;
                             border-radius: self.width / 2;
-                            background: slider.has-focus ? Palette.accent-background.with-alpha(0.8) : hover.has-hover ? Palette.accent-background.with-alpha(0.9) : Palette.accent-background;
+                            background: slider.has-focus ? Tokens.teal.with-alpha(0.8) : hover.has-hover ? Tokens.teal.with-alpha(0.9) : Tokens.teal;
                             animate background, width { duration: 150ms; }
                         }
                     }
@@ -645,7 +646,10 @@ export component EqualizerWindow inherits Window {
                     horizontal-stretch: 1;
                 }
 
-                Button {
+                // The Mac's HouseButtonStyle (EqualizerWindow.swift:183): 13 pt, 26 pt high.
+                SmallButton {
+                    height: 26px;
+                    font-size: Tokens.font-size-body;
                     text: Strings.equalizer-reset;
                     accessible-label: Strings.equalizer-reset;
                     clicked => {

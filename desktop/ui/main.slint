@@ -1570,7 +1570,10 @@ component PresetsCard inherits Rectangle {
                         VerticalLayout {
                             alignment: center;
                             // Turns a quarter with the 250 ms fold, as on the Mac.
+                            // The software renderer draws no rotation, so a down
+                            // chevron, turned back a quarter, fades in as this one fades out.
                             Rectangle {
+                                width: right-chevron.preferred-width;
                                 height: label.preferred-height;
                                 transform-rotation: root.open ? 90deg : 0deg;
                                 animate transform-rotation {
@@ -1578,10 +1581,33 @@ component PresetsCard inherits Rectangle {
                                     easing: ease-in-out;
                                 }
 
-                                Glyph {
-                                    glyph: Glyphs.chevron-right;
-                                    font-size: Tokens.font-size-callout;
-                                    color: Tokens.secondary-text;
+                                Rectangle {
+                                    opacity: root.open ? 0 : 1;
+                                    animate opacity {
+                                        duration: Motion.on ? 250ms : 0ms;
+                                        easing: ease-in-out;
+                                    }
+
+                                    right-chevron := Glyph {
+                                        glyph: Glyphs.chevron-right;
+                                        font-size: Tokens.font-size-callout;
+                                        color: Tokens.secondary-text;
+                                    }
+                                }
+
+                                Rectangle {
+                                    transform-rotation: -90deg;
+                                    opacity: root.open ? 1 : 0;
+                                    animate opacity {
+                                        duration: Motion.on ? 250ms : 0ms;
+                                        easing: ease-in-out;
+                                    }
+
+                                    Glyph {
+                                        glyph: Glyphs.chevron-down;
+                                        font-size: Tokens.font-size-callout;
+                                        color: Tokens.secondary-text;
+                                    }
                                 }
                             }
 
@@ -2378,7 +2404,8 @@ component CalibrateAllSheet inherits FocusScope {
                                 VerticalLayout {
                                     alignment: center;
 
-                                    volume-fix := Button {
+                                    // Tinted as the Mac's (CalibrateAllViews.swift:236-242, the sheet's teal tint).
+                                    volume-fix := SmallButton {
                                         text: Strings.device-volume-fix(root.volume);
                                         accessible-label: Strings.device-volume-fix-label(root.reference, root.volume);
                                         changed has-focus => {
@@ -2564,16 +2591,19 @@ component CalibrateAllSheet inherits FocusScope {
                         if row.can-measure-again: VerticalLayout {
                             alignment: center;
 
-                            Button {
+                            // The Mac's small tinted button (CalibrateAllViews.swift:396-398).
+                            SmallButton {
                                 changed has-focus => {
                                     root.focus-changed(self.has-focus);
                                 }
                                 text: Strings.calibrate-all-again;
-                                enabled: !root.running;
+                                dimmed: root.running;
                                 accessible-label: Strings.calibrate-all-again-label(row.name);
                                 accessible-description: row.detail;
                                 clicked => {
-                                    root.measure-again(index);
+                                    if !root.running {
+                                        root.measure-again(index);
+                                    }
                                 }
                             }
                         }
@@ -2590,7 +2620,9 @@ component CalibrateAllSheet inherits FocusScope {
                         padding-top: 10px;
                         padding-bottom: 10px;
 
+                        // Its width set, so the list's height counts every wrapped line.
                         Text {
+                            width: root.width - 40px - 24px;
                             text: root.airplay;
                             font-size: Tokens.font-size-body;
                             color: Tokens.text;

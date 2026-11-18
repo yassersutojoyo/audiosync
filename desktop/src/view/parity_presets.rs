@@ -185,3 +185,15 @@ fn the_hidden_speakers_list_moves_as_the_macs() {
     );
     assert!(list.contains("easing: Motion.on ? cubic-bezier(0.2, 0.9, 0.3, 1) : linear;"));
 }
+
+/// An open Presets list points its chevron down, as the Mac's FoldTurn
+/// (MainWindow.swift:179-193, 920-923), on every renderer: the software
+/// renderer draws no rotation, so a down chevron fades in as the right one
+/// turns away.
+#[test]
+fn an_open_presets_list_points_its_chevron_down() {
+    let card = component(include_str!("../../ui/main.slint"), "PresetsCard");
+    assert!(card.contains("glyph: Glyphs.chevron-down;"), "{card}");
+    assert!(card.contains("opacity: root.open ? 1 : 0;"));
+    assert!(card.contains("opacity: root.open ? 0 : 1;"));
+}

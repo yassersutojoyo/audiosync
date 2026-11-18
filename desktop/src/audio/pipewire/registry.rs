@@ -2,7 +2,9 @@
 //! registry for the outputs and inputs, the default devices, each output's
 //! own mute and volume, and the apps' streams and links. The controller
 //! reads a copy of the [`Graph`] and never waits for the daemon; volume
-//! fixes the user clicks reach the thread through a PipeWire channel.
+//! fixes the user clicks reach the thread through a PipeWire channel. Each
+//! connection also keeps AudioSync's own null sink, the default sink while
+//! the whole system streams (S477), which [`SinkDefaults`] moves.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -27,12 +29,17 @@ use pw::spa::utils::SpaTypes;
 use pw::spa::utils::dict::DictRef;
 use pw::types::ObjectType;
 
-use super::graph::{self, Graph, Kind, SINK_CLASS, STREAM_CLASS};
+use super::graph::{self, Graph, Kind, OWN_SINK, SINK_CLASS, STREAM_CLASS};
 use crate::audio::backend::BackendError;
+use crate::audio::backend::OutputKind;
+use crate::audio::default_output::{Candidate, DefaultEndpoints, Role};
 use crate::audio::routing::EndpointVolume;
 
 /// How long the first full listing may take.
 const SYNC_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long a default sink set through the metadata may take to read back.
+const DEFAULT_READ_BACK: Duration = Duration::from_secs(2);
 
 /// How often the graph thread looks at its connection, and tries a new one
 /// once the daemon is gone.
@@ -103,6 +110,9 @@ struct Shared {
     failed: AtomicBool,
     watched: Mutex<BTreeSet<String>>,
     volume_changes: Mutex<BTreeSet<String>>,
+    /// The node name `default.configured.audio.sink` holds: the user's
+    /// choice, or S477's move.
+    configured_sink: Mutex<Option<String>>,
 }
 
 fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -121,6 +131,10 @@ enum Command {
     SetVolume {
         node: String,
         change: Change,
+        reply: mpsc::Sender<Result<(), BackendError>>,
+    },
+    SetDefault {
+        sink: String,
         reply: mpsc::Sender<Result<(), BackendError>>,
     },
     Stop,
@@ -178,13 +192,15 @@ impl Registry {
     /// first full listing came, and [`BackendError::ServiceNotRunning`]
     /// once the daemon went away.
     pub fn graph(&self) -> Result<Graph, BackendError> {
-        if self.shared.failed.load(Ordering::Acquire) {
-            return Err(BackendError::ServiceNotRunning);
+        copy(&self.shared)
+    }
+
+    /// The default sink's seam for S469's switch, as S477 moves it.
+    pub fn sink_defaults(&self) -> SinkDefaults {
+        SinkDefaults {
+            shared: Arc::clone(&self.shared),
+            commands: self.commands.clone(),
         }
-        if !self.shared.synced.load(Ordering::Acquire) {
-            return Err(BackendError::NotResponding);
-        }
-        Ok(locked(&self.shared.graph).clone())
     }
 
     pub fn take_outputs_changed(&self) -> bool {
@@ -276,6 +292,89 @@ fn props_param(property: Property) -> Option<Vec<u8>> {
         .map(|(cursor, _)| cursor.into_inner())
 }
 
+fn copy(shared: &Shared) -> Result<Graph, BackendError> {
+    if shared.failed.load(Ordering::Acquire) {
+        return Err(BackendError::ServiceNotRunning);
+    }
+    if !shared.synced.load(Ordering::Acquire) {
+        return Err(BackendError::NotResponding);
+    }
+    Ok(locked(&shared.graph).clone())
+}
+
+/// The default sink as S469's switch reads and moves it (S477): the
+/// configured one, else the one in use, set through the `default`
+/// metadata on the graph thread. Both roles are the one default sink.
+pub struct SinkDefaults {
+    shared: Arc<Shared>,
+    commands: pw::channel::Sender<Command>,
+}
+
+impl SinkDefaults {
+    fn graph(&self) -> Result<Graph, String> {
+        copy(&self.shared).map_err(|error| error.to_string())
+    }
+
+    fn configured(&self) -> Result<Option<String>, String> {
+        let graph = self.graph()?;
+        Ok(locked(&self.shared.configured_sink)
+            .clone()
+            .or(graph.default_sink))
+    }
+}
+
+impl DefaultEndpoints for SinkDefaults {
+    fn default_id(&mut self, _role: Role) -> Result<Option<String>, String> {
+        self.configured()
+    }
+
+    fn set_default(&mut self, id: &str, _role: Role) -> Result<(), String> {
+        if self.configured()?.as_deref() == Some(id) {
+            return Ok(());
+        }
+        let (reply, answer) = mpsc::channel();
+        self.commands
+            .send(Command::SetDefault {
+                sink: id.to_owned(),
+                reply,
+            })
+            .map_err(|_| BackendError::ServiceNotRunning.to_string())?;
+        answer
+            .recv_timeout(SYNC_TIMEOUT)
+            .map_err(|_| BackendError::NotResponding.to_string())?
+            .map_err(|error| error.to_string())?;
+        let deadline = std::time::Instant::now() + DEFAULT_READ_BACK;
+        while self.configured()?.as_deref() != Some(id) && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        Ok(())
+    }
+
+    /// Every listed sink, each other virtual one counted as listened to
+    /// since its monitor may pass the sound on, and the own sink.
+    fn endpoints(&mut self) -> Result<Vec<Candidate>, String> {
+        let graph = self.graph()?;
+        let mut candidates: Vec<Candidate> = graph
+            .listing()
+            .endpoints
+            .into_iter()
+            .map(|endpoint| Candidate {
+                listened: endpoint.kind == OutputKind::Virtual,
+                kind: endpoint.kind,
+                id: endpoint.id,
+            })
+            .collect();
+        if graph.named(OWN_SINK).is_some() {
+            candidates.push(Candidate {
+                id: OWN_SINK.to_owned(),
+                kind: OutputKind::Virtual,
+                listened: false,
+            });
+        }
+        Ok(candidates)
+    }
+}
+
 /// The one global of a kind the thread binds, such as the `default`
 /// metadata: bound while none is held, and let go when its global goes, so
 /// the one a restarted session manager makes is bound in turn.
@@ -317,7 +416,8 @@ struct Session {
     bound: Rc<RefCell<HashMap<u32, Bound>>>,
     devices: Rc<RefCell<HashMap<u32, Routes>>>,
     _clients: Rc<RefCell<HashMap<u32, FollowedClient>>>,
-    _defaults: Rc<RefCell<Slot<(Metadata, MetadataListener)>>>,
+    defaults: Rc<RefCell<Slot<(Metadata, MetadataListener)>>>,
+    _own_sink: Option<NodeProxy>,
     _registry: pw::registry::RegistryRc,
     _core: pw::core::CoreRc,
     /// Whether the connection is gone.
@@ -375,6 +475,15 @@ fn serve(
                         &node,
                         &change,
                     ),
+                    _ => Err(BackendError::ServiceNotRunning),
+                };
+                let _ = reply.send(written);
+            }
+            Command::SetDefault { sink, reply } => {
+                let written = match session.try_borrow().as_deref() {
+                    Ok(Some(held)) if !held.lost.get() => {
+                        set_default(&held.defaults.borrow(), &sink)
+                    }
                     _ => Err(BackendError::ServiceNotRunning),
                 };
                 let _ = reply.send(written);
@@ -528,7 +637,8 @@ fn connect(
         bound,
         devices,
         _clients: clients,
-        _defaults: defaults,
+        defaults,
+        _own_sink: own_sink(&core),
         _registry: registry,
         _core: core,
         lost,
@@ -761,6 +871,42 @@ fn bind_node(
     })
 }
 
+/// AudioSync's own null sink (S477): low in priority, so the session
+/// manager never makes it the default by itself, and gone with the
+/// connection that made it.
+fn own_sink(core: &pw::core::CoreRc) -> Option<NodeProxy> {
+    let properties = pw::properties::properties! {
+        "factory.name" => "support.null-audio-sink",
+        "node.name" => OWN_SINK,
+        "node.description" => "AudioSync",
+        "media.class" => SINK_CLASS,
+        "audio.position" => "FL,FR",
+        "priority.session" => "0",
+        "priority.driver" => "0",
+        "object.linger" => "false",
+    };
+    core.create_object::<NodeProxy>("adapter", &properties).ok()
+}
+
+/// Makes `sink` the configured default sink through the bound `default`
+/// metadata.
+fn set_default(
+    defaults: &Slot<(Metadata, MetadataListener)>,
+    sink: &str,
+) -> Result<(), BackendError> {
+    let Some((_, (metadata, _))) = &defaults.held else {
+        return Err(BackendError::NotResponding);
+    };
+    let value = serde_json::json!({ "name": sink }).to_string();
+    metadata.set_property(
+        pw::core::PW_ID_CORE,
+        "default.configured.audio.sink",
+        Some("Spa:String:JSON"),
+        Some(&value),
+    );
+    Ok(())
+}
+
 /// Binds the `default` metadata and keeps the default output and input in
 /// the graph.
 fn follow_defaults(
@@ -786,9 +932,11 @@ fn follow_defaults(
                     }
                 }
                 Some("default.audio.source") => graph.default_source = name,
+                Some("default.configured.audio.sink") => *locked(&shared.configured_sink) = name,
                 // Every key cleared at once.
                 None => {
                     graph.default_sink = None;
+                    *locked(&shared.configured_sink) = None;
                     graph.default_source = None;
                     shared.outputs_changed.store(true, Ordering::Release);
                 }
