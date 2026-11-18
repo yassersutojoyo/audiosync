@@ -2,12 +2,13 @@
 """Switches an AirPlay speaker on through AudioSync's web remote, as a paired
 phone would, for the stranger workflow.
 
-  remote.py <debug log> <port> <name part> [--timeout S]
+  remote.py <debug log> <port> <name part>... [--timeout S]
 
 The app must run with AUDIOSYNC_DEBUG=1 and AUDIOSYNC_WEB_REMOTE=1, so its
 debug log carries the pairing code. Pairs over loopback, picks the whole
-system as the source, waits for a speaker whose name holds <name part>,
-switches it on and waits until the state says it is on. Prints the speakers
+system as the source and, for each <name part> in turn, waits for a
+speaker whose name holds it, switches it on and waits until the state says
+it is on. Prints the speakers
 it saw. Exits 1 when a step times out. Standard library only.
 """
 
@@ -65,12 +66,33 @@ def pairing_code(log_path):
     return codes[-1] if codes else None
 
 
+def switch_on(remote, state, name_part, timeout):
+    def speaker():
+        found = state()
+        for item in (found or {}).get("speakers", []):
+            if name_part in item.get("name", "") and item.get("available"):
+                return item
+        return None
+
+    target = wait(f"a speaker named *{name_part}*", timeout, speaker)
+    path = "/api/speakers/" + urllib.parse.quote(target["id"], safe="")
+    status, text = remote.call("POST", path, {"on": True})
+    print(f"remote: switch on {target['name']} ({target['kind']}): {status} {text}")
+
+    def switched_on():
+        found = state()
+        return next((s for s in (found or {}).get("speakers", []) if s["id"] == target["id"] and s["on"]), None)
+
+    wait(f"{target['name']} on", timeout, switched_on)
+
+
 def main(argv):
     if len(argv) < 3:
         print(__doc__, file=sys.stderr)
         return 2
-    log_path, port, name_part = argv[0], int(argv[1]), argv[2]
+    log_path, port = argv[0], int(argv[1])
     timeout = float(argv[argv.index("--timeout") + 1]) if "--timeout" in argv else 90.0
+    names = argv[2:argv.index("--timeout")] if "--timeout" in argv else argv[2:]
     remote = Remote(port)
 
     def paired():
@@ -96,23 +118,8 @@ def main(argv):
         status, text = remote.call("POST", "/api/source", {"id": system["id"]})
         print(f"remote: source {system['name']}: {status} {text}")
 
-    def speaker():
-        found = state()
-        for item in (found or {}).get("speakers", []):
-            if name_part in item.get("name", "") and item.get("available"):
-                return item
-        return None
-
-    target = wait(f"a speaker named *{name_part}*", timeout, speaker)
-    path = "/api/speakers/" + urllib.parse.quote(target["id"], safe="")
-    status, text = remote.call("POST", path, {"on": True})
-    print(f"remote: switch on {target['name']} ({target['kind']}): {status} {text}")
-
-    def switched_on():
-        found = state()
-        return next((s for s in (found or {}).get("speakers", []) if s["id"] == target["id"] and s["on"]), None)
-
-    wait(f"{target['name']} on", timeout, switched_on)
+    for name_part in names:
+        switch_on(remote, state, name_part, timeout)
     for item in state().get("speakers", []):
         print(f"remote: speaker {item['name']!r} kind={item['kind']} on={item['on']} volume={item.get('volume')}")
     return 0
