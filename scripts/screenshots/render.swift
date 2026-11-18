@@ -586,6 +586,34 @@ func layarRemote(look: Look, _ configure: (WebRemoteSettings) -> Void = { _ in }
     return (window, content)
 }
 
+/// The desktop's six extra AirPlay speakers (layar_shots.rs `more_speakers`),
+/// so the list is longer than the window.
+func layarMoreSpeakers(_ model: AppModel) {
+    for name in ["Office", "Garage", "Hallway", "Studio", "Patio", "Guest Room"] {
+        model.airplay.append(AppModel.Speaker(id: name.lowercased(), name: name, tag: .airplay, enabled: false,
+                                              volume: 60, offsetMs: nil))
+    }
+}
+
+/// Scrolls the scroll view with the most overflow down by `points`, as the
+/// desktop's MAIN-SCROLLED wheel turn does.
+func layarScrolled(_ shown: (NSWindow, NSView), by points: CGFloat) -> (NSWindow, NSView) {
+    shown.1.layoutSubtreeIfNeeded()
+    settle()
+    func scrollViews(in view: NSView) -> [NSScrollView] {
+        (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap { scrollViews(in: $0) }
+    }
+    func room(_ scroll: NSScrollView) -> CGFloat {
+        max(0, (scroll.documentView?.frame.height ?? 0) - scroll.contentView.bounds.height)
+    }
+    if let scroll = scrollViews(in: shown.1).max(by: { room($0) < room($1) }), let document = scroll.documentView {
+        let down = min(points, room(scroll))
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: document.isFlipped ? down : room(scroll) - down))
+        scroll.reflectScrolledClipView(scroll.contentView)
+    }
+    return shown
+}
+
 /// The desktop's three presets (ui_model.rs `presets_preview`), Evening in use.
 func layarPresets(_ model: AppModel) {
     model.presets = [
@@ -624,6 +652,12 @@ let layarRows: [(id: String, draw: (Look) -> (NSWindow, NSView))] = [
         $0.airplayFoundNone = true
         $0.localNetworkHint = .possible
     }, look: $0) }),
+    ("MAIN-NO-SPEAKER-ON", { layarMain(layarModel { model in
+        for at in model.local.indices { model.local[at].enabled = false }
+        for at in model.airplay.indices { model.airplay[at].enabled = false }
+        model.nowPlaying = layarTrack()
+    }, look: $0) }),
+    ("MAIN-SCROLLED", { layarScrolled(layarMain(layarModel { layarMoreSpeakers($0) }, look: $0), by: 240) }),
     ("MAIN-LONGNAME", { layarMain(layarModel {
         layarRename($0, "kitchen")
         $0.nowPlaying = layarTrack(long: true)
@@ -675,6 +709,7 @@ let layarRows: [(id: String, draw: (Look) -> (NSWindow, NSView))] = [
     ("MAIN-AIRPLAY-DELAY-OPEN", { layarMain(layarModel(), look: $0) }),
     ("MAIN-SYSVOL-FOLDED", { layarMain(layarModel(), look: $0) }),
     ("MAIN-SYSVOL-OPEN", { layarMain(layarModel { $0.toggleDelayPanel("speakers") }, look: $0) }),
+    ("MAIN-SYSVOL-PANEL", { layarMain(layarModel { $0.toggleDelayPanel("speakers") }, look: $0) }),
     ("MAIN-CAST-SEARCHING", { layarMain(layarModel { $0.castList = .searching }, look: $0) }),
     ("MAIN-CAST-NONEFOUND", { layarMain(layarModel { $0.castList = .noneFound }, look: $0) }),
     ("MAIN-CAST-FAILED", { layarMain(layarModel { $0.castList = .failed }, look: $0) }),
@@ -682,6 +717,7 @@ let layarRows: [(id: String, draw: (Look) -> (NSWindow, NSView))] = [
         $0.notices.post($0.text.sourceTerminated(name: "Music Player"), subject: Notice.source)
     }, look: $0) }),
     ("TRAY-IDLE", { layarPanel(layarModel { $0.running = false }, look: $0) }),
+    ("TRAY-HEADER-OFF", { layarPanel(layarModel { $0.running = false }, look: $0) }),
     ("TRAY-PLAYING", { layarPanel(layarModel { $0.nowPlaying = layarTrack() }, look: $0) }),
     ("TRAY-EMPTY", { layarPanel(layarModel {
         $0.local = []
@@ -835,7 +871,7 @@ let layarRows: [(id: String, draw: (Look) -> (NSWindow, NSView))] = [
 /// not-set-up.txt as layar_shots writes its own, for scripts/screen_compare.py.
 let layarNotSetUp: [(ids: [String], reason: String)] = [
     (["MAIN-ROW-HOVER", "MAIN-ROW-OFF-HOVER", "MAIN-TRANSPORT-HOVER", "MAIN-EQ-BUTTON-HOVER", "TRAY-HOVER",
-      "TRAY-ROW-OFF-HOVER", "MAIN-ROW-FOCUS", "MAIN-SCROLLED", "MAIN-ZONE-PLACEHOLDER", "EQ-SLIDER-DRAG"],
+      "TRAY-ROW-OFF-HOVER", "MAIN-ROW-FOCUS", "MAIN-ZONE-PLACEHOLDER", "EQ-SLIDER-DRAG"],
      "needs a pointer, keyboard focus or scroll the renderer does not drive"),
     (["MAIN-ROW-MENU", "MAIN-ROW-MOVE-ZONE-MENU", "MAIN-SOURCE-MENU", "MAIN-SOURCE-MENU-LONG", "MAIN-GEAR-MENU",
       "MAIN-ZONE-MENU", "MAIN-PRESET-ROW-MENU", "TRAY-SOURCE-MENU", "EQ-CURVE-MENU"],

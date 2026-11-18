@@ -867,6 +867,15 @@ fn b01() -> Vec<Row> {
             });
             s.main()
         }),
+        row("B01", "MAIN-NO-SPEAKER-ON", |s| {
+            s.edit(|state| {
+                for speaker in &mut state.speakers {
+                    speaker.enabled = false;
+                }
+            });
+            s.play(track(true, true));
+            s.main()
+        }),
     ]
 }
 
@@ -1161,6 +1170,10 @@ fn b05() -> Vec<Row> {
             s.app.toggle_sync(SPEAKERS);
             s.main()
         }),
+        row("B05", "MAIN-SYSVOL-PANEL", |s| {
+            s.app.toggle_sync(SPEAKERS);
+            s.main()
+        }),
     ]
 }
 
@@ -1303,6 +1316,10 @@ fn b07() -> Vec<Row> {
 fn b08() -> Vec<Row> {
     vec![
         row("B08", "TRAY-IDLE", |s| {
+            s.edit(|state| state.running = false);
+            s.flyout()
+        }),
+        row("B08", "TRAY-HEADER-OFF", |s| {
             s.edit(|state| state.running = false);
             s.flyout()
         }),
