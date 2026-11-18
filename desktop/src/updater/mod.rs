@@ -45,12 +45,13 @@ pub fn enabled() -> bool {
     runs(
         marked(option_env!("AUDIOSYNC_RELEASE_BUILD")),
         crate::package::current(),
+        crate::test_instance::current(),
     ) && !cfg!(test)
 }
 
 /// A package's files are read-only and the Microsoft Store updates them.
-fn runs(release: bool, package: Option<&crate::package::Package>) -> bool {
-    release && package.is_none()
+fn runs(release: bool, package: Option<&crate::package::Package>, instance: Option<&str>) -> bool {
+    release && package.is_none() && instance.is_none()
 }
 
 fn marked(value: Option<&str>) -> bool {
@@ -1097,10 +1098,16 @@ pub mod tests {
             local_folder: None,
             local_cache: None,
         };
-        assert!(!runs(true, Some(&package)));
-        assert!(!runs(false, Some(&package)));
-        assert!(runs(true, None));
-        assert!(!runs(false, None));
+        assert!(!runs(true, Some(&package), None));
+        assert!(!runs(false, Some(&package), None));
+        assert!(runs(true, None, None));
+        assert!(!runs(false, None, None));
+    }
+
+    // covers: S511
+    #[test]
+    fn a_test_copy_never_updates_the_installed_exe() {
+        assert!(!runs(true, None, Some("test")));
     }
 
     // covers: S424

@@ -150,7 +150,10 @@ pub fn debug_log_file(state_base: Option<PathBuf>) -> Result<PathBuf, String> {
         .ok_or_else(|| "neither XDG_STATE_HOME nor a home folder is set".to_owned())?
         .join(FOLDER_NAME);
     create_private_dir_all(&folder).map_err(|error| format!("{}: {error}", folder.display()))?;
-    Ok(folder.join(LOG_FILE_NAME))
+    Ok(folder.join(crate::debug_log::file_name_for(
+        LOG_FILE_NAME,
+        crate::test_instance::current(),
+    )))
 }
 
 /// No encryption: Linux keeps the pairing files private by their mode

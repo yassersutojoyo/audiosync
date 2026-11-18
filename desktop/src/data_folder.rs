@@ -156,14 +156,28 @@ fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
 /// put a renamed-over one in the package, splitting one store across both.
 #[cfg(os_backend)]
 pub fn folder() -> Option<PathBuf> {
-    folder_for(crate::package::current(), crate::os::data_base())
+    folder_for(
+        crate::package::current(),
+        crate::os::data_base(),
+        crate::test_instance::current(),
+    )
 }
 
 #[cfg(os_backend)]
-fn folder_for(package: Option<&crate::package::Package>, base: Option<PathBuf>) -> Option<PathBuf> {
-    match package {
-        Some(package) => package.local_folder.clone(),
-        None => base.map(|base| base.join(FOLDER_NAME)),
+fn folder_for(
+    package: Option<&crate::package::Package>,
+    base: Option<PathBuf>,
+    instance: Option<&str>,
+) -> Option<PathBuf> {
+    match (package, instance) {
+        (Some(package), None) => package.local_folder.clone(),
+        (Some(package), Some(name)) => package
+            .local_folder
+            .as_ref()
+            .map(|folder| folder.join(format!("instance-{name}"))),
+        (None, _) => {
+            base.map(|base| base.join(crate::test_instance::qualified(FOLDER_NAME, instance)))
+        }
     }
 }
 
@@ -265,7 +279,7 @@ mod tests {
             local_cache: None,
         };
         assert_eq!(
-            folder_for(Some(&package), Some(base.clone())),
+            folder_for(Some(&package), Some(base.clone()), None),
             package.local_folder
         );
         let no_folder = crate::package::Package {
@@ -273,12 +287,12 @@ mod tests {
             ..package
         };
         // Never the unpackaged copy's folder, which Windows would share.
-        assert_eq!(folder_for(Some(&no_folder), Some(base.clone())), None);
+        assert_eq!(folder_for(Some(&no_folder), Some(base.clone()), None), None);
         assert_eq!(
-            folder_for(None, Some(base.clone())),
+            folder_for(None, Some(base.clone()), None),
             Some(base.join(FOLDER_NAME))
         );
-        assert_eq!(folder_for(None, None), None);
+        assert_eq!(folder_for(None, None, None), None);
     }
 
     // covers: S385

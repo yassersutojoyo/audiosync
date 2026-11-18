@@ -351,7 +351,7 @@ impl<D: Driver> Controller<D> {
     /// fading out any more (S472); an output that isn't listed keeps it
     /// until it is, and one already at that level isn't written.
     pub(super) fn put_back_local_volumes(&mut self) {
-        if !self.retiring.is_empty() {
+        if !self.retiring.is_empty() || self.leaves_system_outputs {
             return;
         }
         let running = self.session.is_some();
@@ -387,6 +387,9 @@ impl<D: Driver> Controller<D> {
     /// At the first listing, before anything plays: the found levels an
     /// unclean quit left go back on the outputs listed now (S472).
     pub(super) fn recover_local_volumes(&mut self) {
+        if self.leaves_system_outputs {
+            return;
+        }
         let left: Vec<String> = self.local_volumes.stored.found.keys().cloned().collect();
         let mut current = BTreeMap::new();
         for id in left {
@@ -530,6 +533,29 @@ mod tests {
             "the level it last played at is set again"
         );
         assert_eq!(hint(&backend, HEADPHONES), None);
+    }
+
+    // covers: S511
+    #[test]
+    fn a_test_copy_writes_no_remembered_level() {
+        let mut backend = backend();
+        backend.leave_system_outputs();
+        let record = backend.volume_record();
+        backend.set_output_level(HEADPHONES, 0.18);
+        backend.poll();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.poll();
+        backend.set_output_level(HEADPHONES, 0.6);
+        backend.poll();
+        backend.set_output_enabled(HEADPHONES, false).unwrap();
+        backend.poll();
+        backend.set_output_level(HEADPHONES, 0.18);
+        backend.poll();
+        backend.set_output_enabled(HEADPHONES, true).unwrap();
+        backend.poll();
+        backend.stop();
+        backend.poll();
+        assert!(record.writes().is_empty(), "{:?}", record.writes());
     }
 
     // covers: S472

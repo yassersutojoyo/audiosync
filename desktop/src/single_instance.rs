@@ -29,14 +29,19 @@ use std::time::Duration;
 /// The names derive from the app's bundle identifier, shared with the Mac
 /// app. `Local\` keeps them per session, so each signed-in user runs one.
 #[cfg(windows)]
-const MUTEX_NAME: windows::core::PCWSTR =
-    windows::core::w!("Local\\io.github.yassersutojoyo.audiosync.instance");
+const MUTEX_NAME: &str = "Local\\io.github.yassersutojoyo.audiosync.instance";
 #[cfg(windows)]
-const REQUEST_NAME: windows::core::PCWSTR =
-    windows::core::w!("Local\\io.github.yassersutojoyo.audiosync.show-main");
+const REQUEST_NAME: &str = "Local\\io.github.yassersutojoyo.audiosync.show-main";
 #[cfg(windows)]
-const ANSWER_NAME: windows::core::PCWSTR =
-    windows::core::w!("Local\\io.github.yassersutojoyo.audiosync.main-shown");
+const ANSWER_NAME: &str = "Local\\io.github.yassersutojoyo.audiosync.main-shown";
+
+/// `base`, with a test copy's name appended (`crate::test_instance`).
+#[cfg(windows)]
+fn name(base: &str) -> windows::core::HSTRING {
+    crate::test_instance::qualified(base, crate::test_instance::current())
+        .as_str()
+        .into()
+}
 
 /// How long a second launch waits for the running copy to show its window.
 pub const ANSWER_WAIT: Duration = Duration::from_secs(2);
@@ -226,9 +231,9 @@ pub fn acquire() -> Acquired<Instance> {
     };
     use windows::Win32::System::Threading::{CreateEventW, CreateMutexW};
 
-    // SAFETY: the name is a NUL-terminated UTF-16 literal; no security
+    // SAFETY: the name is a NUL-terminated UTF-16 string; no security
     // attributes. The last error is read right after the call that set it.
-    let mutex = unsafe { CreateMutexW(None, false, MUTEX_NAME) };
+    let mutex = unsafe { CreateMutexW(None, false, &name(MUTEX_NAME)) };
     let state = match &mutex {
         Ok(_) if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS => MutexState::Existed,
         Ok(_) => MutexState::Created,
@@ -255,8 +260,11 @@ pub fn acquire() -> Acquired<Instance> {
             }
             // SAFETY: as above; auto-reset events, not signaled.
             let events = unsafe {
-                CreateEventW(None, false, false, REQUEST_NAME).and_then(|request| {
-                    Ok((request, CreateEventW(None, false, false, ANSWER_NAME)?))
+                CreateEventW(None, false, false, &name(REQUEST_NAME)).and_then(|request| {
+                    Ok((
+                        request,
+                        CreateEventW(None, false, false, &name(ANSWER_NAME))?,
+                    ))
                 })
             };
             Acquired::First(
@@ -315,9 +323,9 @@ pub fn hand_over() -> HandOver {
     // SAFETY: no pointers.
     let _ = unsafe { AllowSetForegroundWindow(ASFW_ANY) };
     let access = EVENT_MODIFY_STATE | SYNCHRONIZATION_SYNCHRONIZE;
-    // SAFETY: the names are NUL-terminated UTF-16 literals.
-    let request = unsafe { OpenEventW(access, false, REQUEST_NAME) };
-    let answer = unsafe { OpenEventW(access, false, ANSWER_NAME) };
+    // SAFETY: the names are NUL-terminated UTF-16 strings.
+    let request = unsafe { OpenEventW(access, false, &name(REQUEST_NAME)) };
+    let answer = unsafe { OpenEventW(access, false, &name(ANSWER_NAME)) };
     let outcome = match (&request, &answer) {
         (Ok(request), Ok(answer)) => HandOver::run(
             || {

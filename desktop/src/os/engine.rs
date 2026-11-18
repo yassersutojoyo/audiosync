@@ -26,6 +26,9 @@ pub fn backend<D: Driver + 'static>(
         settings::SettingsFile::in_memory,
         settings::SettingsFile::at,
     );
+    if crate::test_instance::current().is_some() {
+        audio.leave_system_outputs();
+    }
     // Before the settings are read, so a record restored now isn't read.
     #[cfg(windows)]
     restore_records(&mut audio, log, settings_file.path());
