@@ -630,25 +630,22 @@ fn custom_controls_are_accessible_and_show_focus() {
     }
 }
 
-/// The delay steps and the light Appearance track look like the Mac's AppKit
-/// controls: white with a soft shadow in light, a grey fill in
-/// dark that keeps the text at 4.5:1 on the window and on a card.
+/// The light Appearance track looks like the Mac's AppKit control: white
+/// with a soft shadow in light, a grey fill in dark that keeps the text at
+/// 4.5:1 on the window and on a card.
 #[test]
-fn delay_steps_and_the_appearance_track_look_like_the_macs_native_controls() {
-    let step = component_body(include_str!("../ui/widgets.slint"), "DelayStep");
+fn the_appearance_track_looks_like_the_macs_native_control() {
     let settings = include_str!("../ui/settings.slint");
     let track = settings
         .split("accessible-label: Strings.appearance;")
         .next()
         .and_then(|before| before.rsplit("Rectangle {").next())
         .expect("the Appearance track");
-    for (name, body) in [("delay step", step), ("Appearance track", track)] {
-        for needle in [
-            "Fluent.native-control",
-            "drop-shadow-color: Fluent.native-control-shadow",
-        ] {
-            assert!(body.contains(needle), "the {name} has {needle}");
-        }
+    for needle in [
+        "Fluent.native-control",
+        "drop-shadow-color: Fluent.native-control-shadow",
+    ] {
+        assert!(track.contains(needle), "the Appearance track has {needle}");
     }
     let prefix = "out property <brush> native-control: Tokens.dark ? Tokens.text.with-alpha(";
     let alpha: f64 = include_str!("../ui/widgets.slint")
@@ -669,20 +666,38 @@ fn delay_steps_and_the_appearance_track_look_like_the_macs_native_controls() {
     }
 }
 
-/// In light the delay steps and both delay fields are white with a soft shadow
-/// and no border, as the Mac's; a field shows its border again on focus.
+/// The delay steps are the Mac's small bordered buttons as its 2x render
+/// draws them (MainWindow.swift:3500-3515): a faint grey pill, the text color
+/// at 5% (#f4f4f4 on white, #282828 on #1e1e1e), with no border or shadow,
+/// so they show on a white card. Both delay fields have the Mac field's
+/// #d9d9d9 edge in light.
 #[test]
-fn delay_steps_and_fields_draw_no_border_in_light() {
+fn delay_steps_are_grey_pills_and_fields_have_an_edge_in_light() {
     let widgets = include_str!("../ui/widgets.slint");
+    let step = component_body(widgets, "DelayStep");
     assert!(
-        !component_body(widgets, "DelayStep").contains("border-width"),
-        "a delay step draws no border"
+        step.contains(
+            "background: Tokens.text.with-alpha(touch.pressed ? (Tokens.dark ? 0.3 : 0.1) : 0.05);"
+        ),
+        "a delay step is the text color at 5%"
     );
+    for needle in ["border-width", "drop-shadow"] {
+        assert!(!step.contains(needle), "a delay step draws no {needle}");
+    }
+    for appearance in [Appearance::Light, Appearance::Dark] {
+        let text = srgb("text", appearance);
+        let below = srgb("surface", appearance);
+        let fill = [0, 1, 2].map(|i| text[i] * 0.05 + below[i] * 0.95);
+        let value = contrast(text, fill);
+        assert!(
+            value >= MIN_TEXT_CONTRAST,
+            "a step's digits on its fill: {value:.2}:1"
+        );
+    }
     let field = component_body(widgets, "TextField");
     for needle in [
-        "root.raised && !Tokens.dark && !input.has-focus ? 0px",
-        "input.has-focus || (root.raised && !Tokens.dark) ? Tokens.surface",
-        "drop-shadow-color: root.raised ? Fluent.native-control-shadow",
+        "border-width: root.boxed && input.has-focus ? 2px : 1px;",
+        "root.raised && !Tokens.dark ? #00000026 : Fluent.stroke;",
     ] {
         assert!(field.contains(needle), "the text field has {needle}");
     }
