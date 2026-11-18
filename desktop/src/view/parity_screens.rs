@@ -399,3 +399,11 @@ fn the_tray_panels_empty_note_is_set_at_the_macs_subheadline() {
     // The Mac panel's .subheadline (MenuBar.swift:1865), not the caption size.
     assert!(text.contains("font-size: Tokens.font-size-subheadline;"), "{text}");
 }
+
+#[test]
+fn the_equalizer_fills_its_bands_in_the_brand_teal() {
+    let source = include_str!("../../ui/equalizer.slint");
+    // The Mac's .tint(Brand.teal) (EqualizerWindow.swift:122), not the system accent.
+    assert!(!source.contains("Palette.accent-background"));
+    assert!(source.contains("background: Tokens.teal;"));
+}
