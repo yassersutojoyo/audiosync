@@ -13804,6 +13804,63 @@ pub(crate) mod tests {
         }
     }
 
+    /// At the opening 696 x 632 with a song and the presets list open, the
+    /// mouse wheel over the left column scrolls it until Save as Preset…
+    /// shows whole.
+    #[test]
+    fn the_wheel_scrolls_the_left_column_to_save_as_preset() {
+        use crate::now_playing_card::fake::{FakeControls, track};
+        use crate::now_playing_card::{CardArtwork, PlayModes, Repeat};
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        let fake = FakeControls::default();
+        app.set_media_controls(fake.controls());
+        app.main.show().expect("the main window shows");
+        app.poll();
+        let mut song = track("Spotify.exe", "Song", "Band", true);
+        song.artwork = Some(CardArtwork::new(8, [90u8, 40, 30, 255].repeat(64)));
+        song.modes = PlayModes {
+            shuffle: Some(false),
+            repeat: Some(Repeat::Off),
+        };
+        fake.read(Some(song));
+        app.poll();
+        hold_clock();
+        app.main.set_presets_open(true);
+        advance_clock(Duration::from_millis(400));
+        draw_frames_at(696, 632);
+        let column = element(&app, "MainWindow::left-column").expect("the left column");
+        let (at, size) = (column.absolute_position(), column.size());
+        let position =
+            slint::LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0);
+        let window = app.main.window();
+        window.dispatch_event(WindowEvent::PointerMoved { position });
+        // One wheel notch at a time, each played out before the next.
+        for _ in 0..3 {
+            window.dispatch_event(WindowEvent::PointerScrolled {
+                position,
+                delta_x: 0.0,
+                delta_y: -120.0,
+            });
+            advance_clock(Duration::from_millis(400));
+            draw_frames_at(696, 632);
+        }
+        let save = ElementHandle::find_by_accessible_label(
+            &app.main,
+            &app.main.global::<Strings>().get_save_preset(),
+        )
+        .next()
+        .expect("Save as Preset…");
+        let top = save.absolute_position().y;
+        let bottom = top + save.size().height;
+        assert!(
+            top >= at.y && bottom <= at.y + size.height,
+            "Save as Preset… {top}..{bottom} in the column's {}..{}",
+            at.y,
+            at.y + size.height
+        );
+    }
+
     /// Speaker rows in one list step 54 px from badge to badge, divider
     /// included, as the Mac's rows with a volume slider step 54 pt.
     #[test]
