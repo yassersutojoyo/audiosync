@@ -1530,10 +1530,10 @@ fn the_guide_has_the_ten_topics_the_spec_names() {
     let strings = include_str!("../ui/strings.slint");
     let topics = [
         ("start", "First Steps"),
-        ("sync", "Sync"),
+        ("cast", "Google Cast"),
         ("calibration", "Calibration"),
         ("volume", "Volume"),
-        ("bluetooth", "Bluetooth"),
+        ("tips", "Tips"),
         ("double", "Hearing Sound Twice"),
         ("more", "More Controls"),
         ("airplay", "AirPlay"),
