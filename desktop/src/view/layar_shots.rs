@@ -1859,3 +1859,45 @@ fn motion_frames_of_a_song_change_and_a_speaker_switched_off() {
         .expect("the frame list is written");
     println!("{}", lines.join("\n"));
 }
+
+/// NOTICE-SOURCE and MAIN-ROW-LOWVOL: a notice and a low-volume hint push
+/// the speaker list past the window's bottom, and the list scrolls to show
+/// Add by Address… whole, as the Mac's scroll view does.
+#[test]
+fn a_list_pushed_down_by_a_notice_scrolls_to_add_by_address() {
+    let scene = Scene::new(ui_model::Appearance::Light);
+    scene
+        .speaker(SPEAKERS, |speaker| {
+            speaker.enabled = true;
+            speaker.device_volume = Some(Hint::Low { percent: 13 });
+        })
+        .expect("the example speakers");
+    notice(
+        &scene,
+        NoticeMessage::SourceQuit {
+            source: music_player(),
+        },
+    )
+    .expect("the notice shows");
+    let window = scene.app.main.window();
+    settle(window);
+    let list = ElementHandle::find_by_element_id(&scene.app.main, "MainWindow::scroll")
+        .next()
+        .expect("the speaker list");
+    let (at, size) = (list.absolute_position(), list.size());
+    let position = LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0);
+    window.dispatch_event(WindowEvent::PointerMoved { position });
+    window.dispatch_event(WindowEvent::PointerScrolled {
+        position,
+        delta_x: 0.0,
+        delta_y: -3000.0,
+    });
+    settle(window);
+    let button = find(&scene.app.main, "Add by Address").expect("Add by Address…");
+    let bottom = button.absolute_position().y + button.size().height;
+    assert!(
+        bottom <= at.y + size.height,
+        "Add by Address… ends at {bottom}, the list at {}",
+        at.y + size.height
+    );
+}
