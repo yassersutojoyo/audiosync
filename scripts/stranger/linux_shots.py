@@ -7,7 +7,8 @@ Mac's LAYAR photos where a state matches; one the session can't reach gets
 a line in not-set-up.txt as screen_compare.py reads it, and
 atspi-<theme>.txt holds the tree as AT-SPI saw it. The nowplaying group
 exits 1 when the Now Playing card, with the pointer over it, lacks Shuffle or
-Repeat drawn on, or its cover reads as one colour.
+Repeat drawn on, or its cover reads as one colour; the tray group when the
+tray panel reads as one colour.
 
     linux_shots.py <work> <group> <theme> <pid>
 """
@@ -188,6 +189,12 @@ def run(app, main):
             skip("TRAY-IDLE", f"no panel after the {how}")
         else:
             shot(flyout, "TRAY-IDLE")
+            box = extents(flyout)
+            colours = int(pixels((box.width, box.height, box.x, box.y), "-format", "%k", "info:"))
+            print(f"tray panel: {colours} colours ({THEME})")
+            if colours < 16:
+                print(f"FAIL: the tray panel isn't drawn ({THEME})")
+                failed.append("tray panel")
     elif GROUP == "notices":
         # Streaming on with no speaker on: the No Speaker notice.
         if use(app, "Streaming", "NOTICE-START"):
@@ -239,7 +246,8 @@ def main():
         shot(None, "SCREEN")
     else:
         time.sleep(3)
-        run(app, shown[0])
+        # AT-SPI reports the hidden tray panel as showing, and lists it first.
+        run(app, next((w for w in shown if w.get_name() == "AudioSync"), shown[0]))
         save_tree(app)
     with open(os.path.join(WORK, "not-set-up.txt"), "a", encoding="utf-8") as out:
         out.writelines(line + "\n" for line in missing)
