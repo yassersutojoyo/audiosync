@@ -1,0 +1,77 @@
+name: Calibrate loop
+
+# Calibration and Calibrate All on a clean runner through a digital audio
+# loop instead of a room: the outputs and the fake AirPlay receiver play into
+# a virtual microphone. It proves the flow and the numbers, not acoustics.
+# Runs when its scripts change and by hand.
+on:
+  push:
+    paths:
+      - .github/workflows/calibrate-loop.yml
+      - scripts/stranger/linux_calibrate.*
+      - scripts/stranger/windows_calibrate.ps1
+  workflow_dispatch:
+
+concurrency:
+  group: calibrate-loop-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  SLINT_COMPILER_DENY_WARNINGS: '1'
+
+jobs:
+  linux:
+    name: Linux calibrate loop
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Rust toolchain (1.99.1)
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal
+          rustup default 1.99.1
+
+      - name: System packages
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends libfontconfig1-dev libxkbcommon-dev libwayland-dev \
+            libx11-dev libssl-dev pkg-config libpipewire-0.3-dev clang libclang-dev \
+            pipewire pipewire-bin wireplumber pipewire-pulse pulseaudio-utils dbus dbus-user-session xvfb \
+            libx11-xcb1 libxcursor1 libxkbcommon-x11-0 libxi6 libxrandr2 \
+            at-spi2-core python3-gi gir1.2-atspi-2.0 imagemagick
+
+      - name: Release build, the package, the stand-in tray host and receiver
+        working-directory: desktop
+        run: |
+          cargo build --locked --release
+          cargo build --locked --release --example sni_watcher_stub
+          cargo build --locked --release --manifest-path ../airplay/Cargo.toml --example stranger_rx
+          python3 -I ../scripts/windows_notices.py x86_64-unknown-linux-gnu --output target/release/THIRD-PARTY-NOTICES.txt
+          version=$(cargo metadata --locked --no-deps --format-version 1 | python3 -c 'import json, sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "audiosync-desktop"))')
+          mkdir -p ../dist
+          ../scripts/build_deb.sh target/release/audiosync target/release/THIRD-PARTY-NOTICES.txt "$version" \
+            "../dist/AudioSync-$version-amd64.deb"
+          sudo apt-get install -y "../dist/AudioSync-$version-amd64.deb"
+
+      - name: Calibrate one speaker and all speakers through the loop
+        run: scripts/stranger/linux_calibrate.sh calibrate-work desktop/target/release/examples/sni_watcher_stub airplay/target/release/examples/stranger_rx
+
+      - name: Upload the pictures, record and logs (workflow artifact)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: calibrate-loop-linux
+          path: |
+            calibrate-work/*.png
+            calibrate-work/*.txt
+            calibrate-work/*.log
+            calibrate-work/*.out
+            calibrate-work/*.json
+          if-no-files-found: warn
+          retention-days: 7
