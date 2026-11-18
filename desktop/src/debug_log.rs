@@ -201,14 +201,18 @@ fn open_file(path: &Path, empty: bool) -> Option<File> {
 /// `.log` for a test copy (`crate::test_instance`), so it never empties the
 /// user's log.
 pub fn file_name_for(base: &str, instance: Option<&str>) -> String {
-    let _ = instance;
-    base.to_owned()
+    match (instance, base.strip_suffix(".log")) {
+        (Some(name), Some(stem)) => format!("{stem}-{name}.log"),
+        _ => base.to_owned(),
+    }
 }
 
-/// Where the log goes for the value of `AUDIOSYNC_DEBUG`: [`FILE_NAME`] in
+/// Where the log goes for the value of `AUDIOSYNC_DEBUG`: [`FILE_NAME`]
+/// ([`file_name_for`] in a test copy) in
 /// `dir` when the value is exactly `1`, nowhere for any other value or none.
 pub fn log_path(setting: Option<&OsStr>, dir: &Path) -> Option<PathBuf> {
-    (setting == Some(OsStr::new("1"))).then(|| dir.join(FILE_NAME))
+    (setting == Some(OsStr::new("1")))
+        .then(|| dir.join(file_name_for(FILE_NAME, crate::test_instance::current())))
 }
 
 /// The log's folder: the temporary folder, or in an MSIX install the
