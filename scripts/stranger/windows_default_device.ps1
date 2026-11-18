@@ -9,8 +9,10 @@
 #   volume keys: a volume set on the default as the taskbar does it stays
 #     while streaming, and the stream goes on (S192);
 #   muted output: the System slider on a muted default unmutes it (S197);
-#   real volume keys move AudioSync's master, not the default (S429);
+#   real volume keys move AudioSync's master, not the default (S429), and
+#     show the level pop-up;
 #   a muted, then a quiet, default shows the hint, its fix and its tooltip;
+#   a speaker's slider volume is the same after Ctrl+Q and a relaunch;
 #   a source app killed while streaming leaves a notice (S227);
 #   restore: with a second endpoint added, the default the app moved and every
 #     output's volume and mute are as found after a kill and an uninstall (S474).
@@ -225,6 +227,38 @@ public static class Input {
   public static void Hover(int x, int y) {
     SetCursorPos(x - 1, y);
     mouse_event(1, 1, 0, 0, UIntPtr.Zero);
+  }
+
+  public static void Click(int x, int y) {
+    SetCursorPos(x, y);
+    mouse_event(2, 0, 0, 0, UIntPtr.Zero);
+    mouse_event(4, 0, 0, 0, UIntPtr.Zero);
+  }
+
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+  static extern IntPtr FindWindowW(string cls, string title);
+  [DllImport("user32.dll")]
+  static extern bool IsWindowVisible(IntPtr hwnd);
+
+  // Whether the volume keys' level pop-up is on screen.
+  public static bool PopupShown() {
+    IntPtr hwnd = FindWindowW("AudioSyncLevelPopup", null);
+    return hwnd != IntPtr.Zero && IsWindowVisible(hwnd);
+  }
+
+  [DllImport("user32.dll")]
+  static extern IntPtr GetDC(IntPtr hwnd);
+  [DllImport("user32.dll")]
+  static extern int ReleaseDC(IntPtr hwnd, IntPtr dc);
+  [DllImport("gdi32.dll")]
+  static extern bool BitBlt(IntPtr dst, int x, int y, int w, int h, IntPtr src, int sx, int sy, uint rop);
+
+  // The screen with layered windows in it: SRCCOPY | CAPTUREBLT, which
+  // Graphics.CopyFromScreen refuses as a CopyPixelOperation.
+  public static void CopyScreen(IntPtr dst, int x, int y, int w, int h) {
+    IntPtr screen = GetDC(IntPtr.Zero);
+    BitBlt(dst, 0, 0, w, h, screen, x, y, 0x00CC0020 | 0x40000000);
+    ReleaseDC(IntPtr.Zero, screen);
   }
 }
 '@
@@ -443,6 +477,16 @@ $seen = (Get-LogLines 'master volume: ').Count
 $down = Wait-Master $seen
 $seen = (Get-LogLines 'master volume: ').Count
 [Input]::Press(0xAF)
+Start-Sleep -Milliseconds 400
+$popup = [Input]::PopupShown()
+$b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+$shot = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+$g = [System.Drawing.Graphics]::FromImage($shot)
+$hdc = $g.GetHdc()
+[Input]::CopyScreen($hdc, $b.X, $b.Y, $b.Width, $b.Height)
+$g.ReleaseHdc($hdc)
+$shot.Save((Join-Path $Work 'A10.10-level-popup.png'), [System.Drawing.Imaging.ImageFormat]::Png)
+Check 'A10.10' $popup 'the level pop-up is on screen 0.4 s after a real Volume Up press (shot: A10.10-level-popup.png)'
 $up = Wait-Master $seen
 $after = [Endpoints]::Level()
 Check 'A10.11' (($null -ne $down) -and ($null -ne $up) -and [math]::Abs($up - $down - 3) -lt 0.01) "two Volume Down presses then one Volume Up: master $down, then $up"
@@ -470,9 +514,48 @@ foreach ($pass in 'muted', 'low') {
 }
 [Endpoints]::SetLevel(0.5)
 
+# A10.10: a speaker's volume set on its slider is the same after Ctrl+Q and a
+# relaunch. A plain launch, since a test instance saves no settings. The slider
+# is set while streaming, when its row is on and the slider takes the focus.
+function Get-RowSlider {
+  $c = New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, [System.Windows.Automation.ControlType]::Slider)
+  Find-All $c | Where-Object { $_.Current.Name -match '(Speakers|Scream).* volume$' -and $_.Current.Name -notlike 'Windows volume of*' } | Select-Object -First 1
+}
+function Get-SliderValue($Slider) {
+  try { $Slider.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).Current.Value }
+  catch { [double]$Slider.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value }
+}
+$slider = Get-RowSlider
+Check 'A10.10' ([bool]$slider) "the speaker row's volume slider is there ('$(if ($slider) { $slider.Current.Name })', enabled: $(if ($slider) { $slider.Current.IsEnabled }))"
+$set = $null
+if ($slider) {
+  $r = $slider.Current.BoundingRectangle
+  [Input]::Click([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2))
+  Start-Sleep -Milliseconds 500
+  [System.Windows.Forms.SendKeys]::SendWait('{HOME}{PGUP}{PGUP}{PGUP}{RIGHT}{RIGHT}{RIGHT}{RIGHT}{RIGHT}{RIGHT}{RIGHT}')
+  Start-Sleep -Seconds 3
+  $set = Get-SliderValue $slider
+  "A10.10 volume memory: slider set to $set" | Tee-Object -FilePath "$Work/result.txt" -Append
+  Save-Shot 'A10.10-volume-set'
+}
+
 if (Test-On $streaming) { $streaming.GetCurrentPattern($TogglePattern).Toggle() }
 Start-Sleep -Seconds 3
 Check 'A1.11' ((Get-Defaults) -eq $default) 'the default output is as found after streaming stops'
+
+if ($slider) {
+  [System.Windows.Forms.SendKeys]::SendWait('^q')
+  $quit = $script:app.WaitForExit(20000)
+  Check 'A10.10' $quit 'Ctrl+Q quit the app within 20 s'
+  if (-not $quit) { Stop-Process -Id $script:app.Id -Force; Start-Sleep -Seconds 2 }
+  if (Test-Path $log) { Copy-Item $log (Join-Path $Work 'audiosync-debug-before-quit.log') }
+  Copy-Item (Join-Path $data 'settings.json') (Join-Path $Work 'settings-after-quit.json')
+  Start-App
+  $again = Get-RowSlider
+  $read = if ($again) { Get-SliderValue $again }
+  Check 'A10.10' (($set -eq 37) -and ($read -eq $set)) "the slider set to $set reads $read after Ctrl+Q and a relaunch"
+  Save-Shot 'A10.10-volume-relaunched'
+}
 if (Test-Alive) { Stop-Process -Id $script:app.Id -Force }
 Start-Sleep -Seconds 2
 if (Test-Path $log) { Copy-Item $log (Join-Path $Work 'audiosync-debug.log') }
