@@ -298,8 +298,9 @@ pub fn display_name(executable: &str) -> String {
 /// Executables whose windows belong to the system shell, to another app they
 /// host, or to a vendor's background helper, so their windows never make them
 /// an app to offer.
-const WINDOW_HOSTS: [&str; 9] = [
+const WINDOW_HOSTS: [&str; 10] = [
     "ApplicationFrameHost.exe",
+    "PickerHost.exe",
     "TextInputHost.exe",
     "msedgewebview2.exe",
     "SystemSettings.exe",
@@ -366,6 +367,10 @@ pub fn source_list(
             })
             .collect()
     });
+    let own_executable = processes
+        .get(own_pid)
+        .map(|entry| entry.executable.as_str())
+        .unwrap_or_default();
     let mut apps: Vec<SourceInfo> = Vec::new();
     let windowed = regular.iter().flatten().map(|&pid| (pid, false));
     for (pid, has_session) in session_pids.iter().map(|&pid| (pid, true)).chain(windowed) {
@@ -386,10 +391,13 @@ pub fn source_list(
             .get(root_pid)
             .map(|entry| entry.executable.clone())
             .unwrap_or_default();
-        if !has_session
-            && apps
-                .iter()
-                .any(|app| app.executable.eq_ignore_ascii_case(&executable))
+        // As the Mac never offers its own bundle ID, another copy of
+        // AudioSync isn't offered either.
+        if executable.eq_ignore_ascii_case(own_executable)
+            || !has_session
+                && apps
+                    .iter()
+                    .any(|app| app.executable.eq_ignore_ascii_case(&executable))
         {
             continue;
         }
@@ -401,12 +409,7 @@ pub fn source_list(
             hands_free: false,
         });
     }
-    apps.sort_by(|a, b| {
-        a.name
-            .to_lowercase()
-            .cmp(&b.name.to_lowercase())
-            .then_with(|| a.executable.cmp(&b.executable))
-    });
+    sort_by_name(&mut apps);
     let mut sources = Vec::with_capacity(apps.len() + 1);
     sources.push(SourceInfo {
         id: SourceId::WholeSystem,
@@ -419,7 +422,35 @@ pub fn source_list(
     sources
 }
 
-pub fn name_apps(_sources: &mut [SourceInfo], _name_of: impl FnMut(u32) -> Option<String>) {}
+fn sort_by_name(apps: &mut [SourceInfo]) {
+    apps.sort_by(|a, b| {
+        a.name
+            .to_lowercase()
+            .cmp(&b.name.to_lowercase())
+            .then_with(|| a.executable.cmp(&b.executable))
+    });
+}
+
+/// Names each app among `sources` (a [`source_list`]) by the name `name_of`
+/// reads for its top process, trimmed, as the Mac shows an app's own name,
+/// and sorts the apps again. An app without a non-blank name keeps its
+/// executable's ([`display_name`]).
+pub fn name_apps(sources: &mut [SourceInfo], mut name_of: impl FnMut(u32) -> Option<String>) {
+    for source in sources.iter_mut() {
+        if let SourceId::App { root_pid } = source.id
+            && let Some(name) = name_of(root_pid)
+            && !name.trim().is_empty()
+        {
+            source.name = name.trim().to_owned();
+        }
+    }
+    let first_app = usize::from(
+        sources
+            .first()
+            .is_some_and(|source| source.id == SourceId::WholeSystem),
+    );
+    sort_by_name(&mut sources[first_app..]);
+}
 
 /// The input devices to offer, from the active capture endpoints Windows
 /// listed, by name, then endpoint ID. An endpoint without an ID can't be

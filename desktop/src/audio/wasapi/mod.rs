@@ -98,6 +98,10 @@ impl Driver for WasapiDriver {
         Some(processes::window_pids())
     }
 
+    fn app_name(&mut self, pid: u32) -> Option<String> {
+        processes::app_name(pid)
+    }
+
     fn outputs(&mut self) -> Result<Listing, BackendError> {
         devices::render_endpoints()
     }

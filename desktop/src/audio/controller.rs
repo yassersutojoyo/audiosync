@@ -82,7 +82,7 @@ use super::calibration::{CalibrationTap, Engine, Microphone, MicrophoneError};
 use super::capture::{
     Activation, CaptureAttempt, CaptureGlitches, CaptureTarget, Feeds, LoopbackMode, SampleType,
     decide_apps_capture, decide_capture, decide_except_capture, describe_pair, display_name,
-    input_sources, running_app, source_list,
+    input_sources, name_apps, running_app, source_list,
 };
 use super::cast::{CastLink, CastSpeakers, CastTrack};
 use super::cast_address::CastAddress;
@@ -377,6 +377,12 @@ pub trait Driver: Send {
     /// desktop, so an app can be offered before it plays and a background
     /// process isn't; `None` where the platform can't tell.
     fn window_pids(&mut self) -> Option<Vec<u32>> {
+        None
+    }
+
+    /// The name the app whose top process is `pid` gives itself, as the
+    /// Start menu or Task Manager shows it; `None` where it can't be read.
+    fn app_name(&mut self, _pid: u32) -> Option<String> {
         None
     }
 
@@ -4776,6 +4782,7 @@ impl<D: Driver> Controller<D> {
             window_pids.as_deref(),
             self.driver.own_pid(),
         );
+        name_apps(&mut sources, |pid| self.driver.app_name(pid));
         match self.driver.inputs() {
             Ok(readings) => {
                 if self.inputs_error.take().is_some() {
