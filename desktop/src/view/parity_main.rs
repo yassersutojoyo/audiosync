@@ -689,7 +689,7 @@ fn the_cards_have_the_macs_corners() {
     let setup = include_str!("../../ui/setup.slint").replace("\r\n", "\n");
     assert!(
         setup.contains(
-            "background: Tokens.surface;\n                    // The Mac's setup list (SetupWindow.swift:150).\n                    border-radius: 8px;"
+            "background: Tokens.surface;\n                        // The Mac's setup list (SetupWindow.swift:150).\n                        border-radius: 8px;"
         ),
         "the setup list"
     );

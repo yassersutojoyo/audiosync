@@ -269,8 +269,8 @@ impl From<slint::PlatformError> for StartError {
 fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
     // Read before the engine starts: its first change writes the file. Linux
     // has no Setup window yet.
-    let first_install = cfg!(windows)
-        && settings::SettingsFile::default_path().is_some_and(|path| !path.exists());
+    let first_install =
+        cfg!(windows) && settings::SettingsFile::default_path().is_some_and(|path| !path.exists());
     #[cfg(windows)]
     let renderer_record = renderer_choice::select(log);
     #[cfg(feature = "mock-backend")]

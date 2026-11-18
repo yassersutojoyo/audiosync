@@ -231,7 +231,10 @@ mod tests {
         assert!(!window.is_visible(), "Escape closes it");
         app.main.invoke_setup_requested();
         press(window, Key::Return);
-        assert!(!window.is_visible(), "Return presses Done (SetupWindow.swift:106-107)");
+        assert!(
+            !window.is_visible(),
+            "Return presses Done (SetupWindow.swift:106-107)"
+        );
         app.main.invoke_setup_requested();
         app.setup.invoke_close_requested();
         assert!(!window.is_visible(), "Close closes it");
@@ -368,7 +371,9 @@ mod tests {
         assert!(at("Strings.setup-later") < at("title: Strings.setup-microphone;"));
         assert!(setup.contains("    width: 480px;\n"));
         assert!(!setup.contains("preferred-width: 520px;"));
-        assert!(setup.contains("stroke: Tokens.teal-text;\n                stroke-width: root.icon-stroke;"));
+        assert!(setup.contains(
+            "stroke: Tokens.teal-text;\n                stroke-width: root.icon-stroke;"
+        ));
         assert!(setup.contains("if Motion.on && root.changes > 0"));
         assert!(setup.contains("enter: Motion.on;"));
     }
