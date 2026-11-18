@@ -9346,8 +9346,8 @@ do {
             && sliderSource.contains("click.clicked = true")
             && sliderSource.contains(".focusEffectDisabled(!NSApp.isFullKeyboardAccessEnabled)"),
           "master slider source: a click or drag takes the arrow keys without a focus ring under keyboard navigation off, Tab reaches it with keyboard navigation on")
-    check(sliderSource.contains(".onEnded { _ in click.clicked = true; focused = true }"),
-          "master slider source: a still click on the thumb takes the arrow keys, its mouse-down focus loss is won back at mouse-up")
+    check(sliderSource.contains(".onEnded { _ in SliderClick.takeWindowFocus(); click.clicked = true; focused = true }"),
+          "master slider source: a still click on the thumb takes the arrow keys, also the first click after the window comes forward")
     // covers: S403
     check(rowsSource.contains(".clipShape(FoldClip(moving: zoneDisclosure.moving))") && mainSource.contains("moving = true"),
           "menu bar panel source: a fold clips each zone to its own moving edge, so the rows and the footer below never slide over its fading rows")
@@ -18736,8 +18736,13 @@ do {
           "equalizer band: Tab reaches a band it was not clicked into only with keyboard navigation on")
     check(inBandSlider(".focusEffectDisabled(!NSApp.isFullKeyboardAccessEnabled)") == 1,
           "equalizer band: a click shows no focus ring with keyboard navigation off")
-    check(inBandSlider(".onEnded { _ in click.clicked = true; focused = true }") == 1,
-          "equalizer band: a still click takes the arrow keys, its mouse-down focus loss is won back at mouse-up")
+    check(inBandSlider(".onEnded { _ in SliderClick.takeWindowFocus(); click.clicked = true; focused = true }") == 1,
+          "equalizer band: a still click takes the arrow keys, also the first click after the window comes forward")
+    let sliderClick = equalizer.components(separatedBy: "final class SliderClick").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    check(sliderClick.contains("guard let window = NSApp.keyWindow, window.firstResponder === window else { return }")
+            && sliderClick.contains("window.makeFirstResponder(window.contentView)"),
+          "slider click: when the window itself holds AppKit's focus, the click hands it to the hosting view so the arrow keys reach SwiftUI")
     check(inBandSlider(".accessibilityRepresentation {") == 1 && inBandSlider("Slider(value:") == 1,
           "equalizer band: the accessibility API sees a slider, not an unknown element")
 }
