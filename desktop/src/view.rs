@@ -6765,7 +6765,7 @@ fn calibration_status(
                     SharedString::default()
                 }
             },
-            |failure| calibration_failure(strings, reference, failure),
+            |failure| failure_text(strings, state, reference, failure),
         ),
         Phase::Running(Step::Preparing) => strings.get_calibration_preparing(),
         Phase::Running(Step::Measuring(Which::Reference)) => {
@@ -6785,7 +6785,7 @@ fn calibration_status(
         }
         Phase::Cancelled => strings.get_calibration_cancelled(),
         Phase::Failed(failure) => {
-            strings.invoke_calibration_failed(calibration_failure(strings, reference, failure))
+            strings.invoke_calibration_failed(failure_text(strings, state, reference, failure))
         }
     }
 }
@@ -6891,7 +6891,7 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
             strings.invoke_calibrate_all_stopped(strings.invoke_calibrate_zone_nothing(zone.into()))
         }
         AllPhase::Failed(failure) => {
-            strings.invoke_calibrate_all_stopped(calibration_failure(strings, reference, *failure))
+            strings.invoke_calibrate_all_stopped(failure_text(strings, state, reference, *failure))
         }
         AllPhase::Stale => strings.get_calibrate_all_stale(),
         AllPhase::Ended(reason) => {
@@ -6901,17 +6901,16 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
             calibration_needs(strings, reference, *missing, name.as_str().into()),
         ),
         AllPhase::AgainFailed(name, failure) => strings.invoke_calibrate_all_again_stopped(
-            calibration_failure(strings, reference, *failure),
+            failure_text(strings, state, reference, *failure),
             name.as_str().into(),
         ),
         AllPhase::Idle if all.other_running => strings.get_calibrate_all_busy(),
         AllPhase::Idle => match all.blocked {
-            Some(Failure::NoReference) => strings.get_calibration_no_reference(),
             Some(Failure::NothingToMeasure) => {
                 strings.invoke_calibrate_all_nothing(reference.into())
             }
             Some(Failure::OnlyLeftOut) => strings.get_calibrate_all_only_left_out(),
-            Some(failure) => calibration_failure(strings, reference, failure),
+            Some(failure) => failure_text(strings, state, reference, failure),
             None => strings.invoke_calibrate_all_hint(reference.into()),
         },
     };
@@ -7263,6 +7262,25 @@ fn airplay_moves_line(strings: &Strings<'_>, moves: &AirPlayMoves) -> Option<Sha
         (None, true) => Some(strings.get_calibrate_zone_airplay_no_zone()),
         (Some(named), false) => Some(strings.invoke_calibrate_zone_airplay_zones(named)),
         (Some(named), true) => Some(strings.invoke_calibrate_zone_airplay_both(named)),
+    }
+}
+
+/// Why a calibration can't run; headphones on the PC's jack mute its own
+/// speakers, which is why no reference is listed then.
+fn failure_text(
+    strings: &Strings<'_>,
+    state: &AppState,
+    reference: &str,
+    failure: Failure,
+) -> SharedString {
+    let jack = state
+        .speakers
+        .iter()
+        .any(|speaker| speaker.kind == ui_model::SpeakerKind::Headphones);
+    if failure == Failure::NoReference && jack {
+        strings.get_calibration_reference_headphones()
+    } else {
+        calibration_failure(strings, reference, failure)
     }
 }
 
@@ -10013,6 +10031,46 @@ pub(crate) mod tests {
             calibration_status(&strings, &state, &desk),
             strings.get_calibrate_all_busy(),
             "Calibrate All holds the outputs"
+        );
+    }
+
+    // covers: S174
+    #[test]
+    fn headphones_on_the_pc_jack_say_why_calibration_has_no_reference() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let mut state = app.snapshot();
+        state.reference_name = None;
+        state.calibrate_all.phase = AllPhase::Idle;
+        state.calibrate_all.other_running = false;
+        state.calibrate_all.blocked = Some(Failure::NoReference);
+        let desk = state.speaker("local:desk").unwrap().clone();
+        let lines = |state: &AppState| {
+            [
+                calibration_status(&strings, state, &desk).to_string(),
+                calibrate_all_card(&strings, state).status.to_string(),
+            ]
+        };
+        state
+            .speakers
+            .retain(|speaker| speaker.kind != ui_model::SpeakerKind::Headphones);
+        let unlisted =
+            "Calibration measures against the PC's own speakers, and they aren't listed.";
+        assert_eq!(lines(&state), [unlisted, unlisted]);
+
+        let phones = "Headphones are plugged into the PC, so its own speakers are silent. Unplug them to calibrate.";
+        state
+            .speakers
+            .iter_mut()
+            .find(|speaker| speaker.id == "local:speakers")
+            .unwrap()
+            .kind = ui_model::SpeakerKind::Headphones;
+        assert_eq!(lines(&state), [phones, phones]);
+
+        state.calibrate_all.phase = AllPhase::AgainFailed("Desk".into(), Failure::NoReference);
+        assert!(
+            calibrate_all_card(&strings, &state).status.contains(phones),
+            "Measure Again refused"
         );
     }
 
@@ -13660,6 +13718,25 @@ pub(crate) mod tests {
         assert_eq!(line.absolute_position().x - row.absolute_position().x, 54.0);
     }
 
+    /// The AirPlay delay's name starts where the speakers' names do, and its
+    /// value's fill ends 7 px inside the row: the Mac's 10 pt row inset
+    /// (BrandTokens.swift:154) less the 3 px the fill reaches past the value,
+    /// as on the speaker rows.
+    #[test]
+    fn the_airplay_delay_keeps_the_macs_row_inset() {
+        let app = narrow_app(MockBackend::new());
+        advance_clock(Duration::from_millis(400));
+        draw_frames_at(776, 900);
+        let row = element(&app, "SpeakerRow::hover").expect("a speaker row");
+        let name = element(&app, "SpeakerRow::name-label").expect("a speaker's name");
+        let title = element(&app, "AirPlayDelayControls::title").expect("the delay's name");
+        let value = element(&app, "AirPlayDelayControls::value-box").expect("the delay's value");
+        assert_eq!(title.absolute_position().x, name.absolute_position().x);
+        let row_end = row.absolute_position().x + row.size().width;
+        let value_end = value.absolute_position().x + value.size().width;
+        assert_eq!(row_end - value_end, 7.0);
+    }
+
     /// With Add by Address under it, the AirPlay delay's note shows whole
     /// once the speaker list is scrolled to its end, at a short and a tall
     /// window: its pane keeps the note's second line and its padding, and
@@ -16254,6 +16331,24 @@ pub(crate) mod tests {
                 row.accessible_label()
             );
         }
+    }
+
+    /// The tray panel's speaker rows are 36 px tall at the height it fits,
+    /// as the Mac panel's (MenuBar.swift:1692).
+    #[test]
+    fn the_flyout_rows_are_36_px_at_the_fitted_height() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = measured_flyout();
+        let height = app.fit_flyout(1000.0);
+        app.flyout
+            .window()
+            .set_size(slint::LogicalSize::new(300.0, height));
+        draw_frames();
+        let heights: Vec<f32> = ElementHandle::find_by_element_type_name(&app.flyout, "FlyoutRow")
+            .map(|row| row.size().height)
+            .collect();
+        assert!(!heights.is_empty(), "the speaker rows show");
+        assert!(heights.iter().all(|h| *h == 36.0), "{heights:?}");
     }
 
     fn flyout_element(app: &App, id: &str) -> i_slint_backend_testing::ElementHandle {
