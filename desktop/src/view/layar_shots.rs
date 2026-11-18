@@ -194,6 +194,8 @@ impl Scene {
         app.apply_appearance(appearance);
         app.refresh();
         app.main.show().expect("the main window shows headless");
+        // The brand accent the app gives each window as its frame comes up.
+        app.use_brand_accent(app.main.window());
         let scene = Scene { app, state, media };
         scene.size(scene.app.main.window(), MAIN);
         scene
@@ -396,6 +398,40 @@ fn a_horizontal_slider_is_listed_by_its_track() {
     assert_eq!(listed_frame(false, at, size), [290.0, 133.0, 334.0, 14.0]);
     let band = LogicalSize::new(32.0, 200.0);
     assert_eq!(listed_frame(true, at, band), [290.0, 133.0, 32.0, 200.0]);
+}
+
+/// CAL-SHEET-RESULT: the AirPlay delay's summary under four results takes
+/// both lines it wraps to, inside the results list, as the Mac's does
+/// (CalibrateAllViews.swift:328-333).
+#[test]
+fn calibrate_alls_airplay_summary_shows_both_lines_in_the_results() {
+    let scene = Scene::new(ui_model::Appearance::Light);
+    calibrate_all(&scene, |state| {
+        state.calibrate_all.sheet = Some(results(SHEET_NAMES));
+    })
+    .expect("the example speakers");
+    settle(scene.app.main.window());
+    let list = ElementHandle::find_by_accessible_label(&scene.app.main, "Results")
+        .next()
+        .expect("the results list");
+    let summary = find(&scene.app.main, "AirPlay delay:").expect("the AirPlay summary");
+    let line = find(&scene.app.main, "Calibration finished")
+        .expect("the run's outcome, one line")
+        .size()
+        .height;
+    let (height, bottom) = (
+        summary.size().height,
+        summary.absolute_position().y + summary.size().height,
+    );
+    let end = list.absolute_position().y + list.size().height;
+    assert!(
+        height >= 1.8 * line,
+        "the summary is {height} high, one line {line}"
+    );
+    assert!(
+        bottom <= end,
+        "the summary ends at {bottom}, the list at {end}"
+    );
 }
 
 type Snapshot = slint::SharedPixelBuffer<slint::Rgba8Pixel>;
@@ -674,7 +710,9 @@ fn calibrating(s: &Scene, phase: Phase) -> Result<Win, String> {
             phase,
             busy: running,
             own_run_holds: running,
-        }
+        };
+        // As the adapter reports a speaker's own run to Calibrate All.
+        state.calibrate_all.other_running = running;
     });
     s.app.toggle_sync(DESK);
     s.main()
@@ -1839,4 +1877,46 @@ fn motion_frames_of_a_song_change_and_a_speaker_switched_off() {
     std::fs::write(dir.join("frames.txt"), lines.join("\n") + "\n")
         .expect("the frame list is written");
     println!("{}", lines.join("\n"));
+}
+
+/// NOTICE-SOURCE and MAIN-ROW-LOWVOL: a notice and a low-volume hint push
+/// the speaker list past the window's bottom, and the list scrolls to show
+/// Add by Address… whole, as the Mac's scroll view does.
+#[test]
+fn a_list_pushed_down_by_a_notice_scrolls_to_add_by_address() {
+    let scene = Scene::new(ui_model::Appearance::Light);
+    scene
+        .speaker(SPEAKERS, |speaker| {
+            speaker.enabled = true;
+            speaker.device_volume = Some(Hint::Low { percent: 13 });
+        })
+        .expect("the example speakers");
+    notice(
+        &scene,
+        NoticeMessage::SourceQuit {
+            source: music_player(),
+        },
+    )
+    .expect("the notice shows");
+    let window = scene.app.main.window();
+    settle(window);
+    let list = ElementHandle::find_by_element_id(&scene.app.main, "MainWindow::scroll")
+        .next()
+        .expect("the speaker list");
+    let (at, size) = (list.absolute_position(), list.size());
+    let position = LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0);
+    window.dispatch_event(WindowEvent::PointerMoved { position });
+    window.dispatch_event(WindowEvent::PointerScrolled {
+        position,
+        delta_x: 0.0,
+        delta_y: -3000.0,
+    });
+    settle(window);
+    let button = find(&scene.app.main, "Add by Address").expect("Add by Address…");
+    let bottom = button.absolute_position().y + button.size().height;
+    assert!(
+        bottom <= at.y + size.height,
+        "Add by Address… ends at {bottom}, the list at {}",
+        at.y + size.height
+    );
 }
