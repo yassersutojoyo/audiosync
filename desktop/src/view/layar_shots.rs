@@ -50,6 +50,10 @@ const EQUALIZER_SMALLEST: Size = (520.0, 360.0);
 /// help.slint's and remote.slint's preferred sizes.
 const GUIDE: Size = (640.0, 600.0);
 const REMOTE: Size = (460.0, 640.0);
+/// setup.slint:267's width; a headless window has no height of its own, and
+/// at 565 the first-run rows end at their 14 px padding (setup.slint:132),
+/// as measured on a 1000 px photo whose rows stretched.
+const SETUP: Size = (480.0, 565.0);
 /// flyout.slint's width; its height is its fit-height.
 const FLYOUT_WIDTH: f32 = 300.0;
 
@@ -64,7 +68,7 @@ const BEDROOM: &str = "airplay:bedroom";
 const LONG: &str = "Living Room Speaker Next to the Big Window by the Bookshelves";
 
 /// Rows a headless window cannot show, and why.
-const NOT_HEADLESS: [(&str, &str, &str); 2] = [
+const NOT_HEADLESS: [(&str, &str, &str); 5] = [
     (
         "B01",
         "MAIN-TRANSPORT-DISABLED",
@@ -74,6 +78,21 @@ const NOT_HEADLESS: [(&str, &str, &str); 2] = [
         "B09",
         "NOTICE-WINDOW-LIST",
         "no written meaning says which window list the row shows",
+    ),
+    (
+        "B12",
+        "ICON-MENUBAR-TRAY",
+        "the notification area icon is drawn by Windows, outside any Slint window",
+    ),
+    (
+        "B12",
+        "TRAY-MENU",
+        "the tray icon's right-click menu is a native Win32 menu, not a Slint window",
+    ),
+    (
+        "B12",
+        "ALERT-PRESET-NAME",
+        "Windows asks a preset's name in the Presets list's field (MAIN-PRESET-SAVE-FIELD), never in an alert",
     ),
 ];
 
@@ -98,6 +117,8 @@ enum Shown {
     Guide,
     Remote,
     About,
+    Pin,
+    Setup,
 }
 
 /// The window a row photographs, at the size it is taken.
@@ -178,6 +199,8 @@ struct Scene {
     app: Rc<App>,
     state: Rc<RefCell<AppState>>,
     media: FakeControls,
+    /// A motion frame: photographed as it stands, without settling.
+    still: std::cell::Cell<bool>,
 }
 
 impl Scene {
@@ -196,7 +219,12 @@ impl Scene {
         app.main.show().expect("the main window shows headless");
         // The brand accent the app gives each window as its frame comes up.
         app.use_brand_accent(app.main.window());
-        let scene = Scene { app, state, media };
+        let scene = Scene {
+            app,
+            state,
+            media,
+            still: std::cell::Cell::new(false),
+        };
         scene.size(scene.app.main.window(), MAIN);
         scene
     }
@@ -304,10 +332,14 @@ impl Scene {
             Shown::Guide => leaked(self.app.help()),
             Shown::Remote => leaked(self.app.remote_window()),
             Shown::About => leaked(self.app.about()),
+            Shown::Pin => leaked(self.app.pin_dialog()),
+            Shown::Setup => leaked(self.app.setup()),
         }
     }
 
     fn size(&self, window: &slint::Window, (width, height): Size) {
+        // The Mac renderer draws at Retina 2x; the testing backend reads no SLINT_SCALE_FACTOR.
+        window.dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor: 2.0 });
         window.set_size(LogicalSize::new(width, height));
         render(window);
     }
@@ -315,10 +347,12 @@ impl Scene {
     /// The photo as a PNG and its elements as the JSON screen_compare.py reads.
     fn photo(&self, Win(shown, size): Win) -> Result<(Vec<u8>, String), String> {
         let window = self.window(shown);
-        settle(window);
-        match shown {
-            Shown::Flyout => self.fit_flyout(),
-            _ => self.size(window, size),
+        if !self.still.get() {
+            settle(window);
+            match shown {
+                Shown::Flyout => self.fit_flyout(),
+                _ => self.size(window, size),
+            }
         }
         let shot = window.take_snapshot().map_err(|error| error.to_string())?;
         let elements = match shown {
@@ -329,6 +363,8 @@ impl Scene {
             Shown::Guide => ElementQuery::from_root(&self.app.help()).find_all(),
             Shown::Remote => ElementQuery::from_root(&self.app.remote_window()).find_all(),
             Shown::About => ElementQuery::from_root(&self.app.about()).find_all(),
+            Shown::Pin => ElementQuery::from_root(&self.app.pin_dialog()).find_all(),
+            Shown::Setup => ElementQuery::from_root(&self.app.setup()).find_all(),
         };
         let listed = elements_json(&elements, &shot, window.scale_factor());
         Ok((png(shot.width(), shot.height(), shot.as_bytes()), listed))
@@ -1137,8 +1173,11 @@ fn b04() -> Vec<Row> {
         }),
         row("B04", "MAIN-ROW-MOVE-ZONE-MENU", |s| {
             s.load(MockBackend::zones_preview());
-            options(s, "Headset")?;
-            click(&s.app.main, "Move to Zone")?;
+            // The list builds only the rows in view, and Living Room's are the first.
+            options(s, "Kitchen")?;
+            // A click inside the popup lands at its window's coordinates, outside it.
+            find(&s.app.main, "Move to Zone")?.invoke_accessible_default_action();
+            settle(s.app.main.window());
             s.main()
         }),
         row("B04", "MAIN-SOURCE-MENU", |s| {
@@ -1304,7 +1343,7 @@ fn b07() -> Vec<Row> {
         }),
         row("B07", "MAIN-ZONE-MENU", |s| {
             s.load(MockBackend::zones_preview());
-            options(s, "Upstairs")?;
+            options(s, "Living Room")?;
             s.main()
         }),
         row("B07", "MAIN-ZONE-RENAME", |s| {
@@ -1314,8 +1353,15 @@ fn b07() -> Vec<Row> {
         }),
         row("B07", "MAIN-ZONE-PLACEHOLDER", |s| {
             s.load(MockBackend::zones_preview());
-            let at = center(&find(&s.app.main, "Upstairs")?);
-            scroll(s.app.main.window(), at, -1200.0);
+            // Office, the empty zone, is built only once the list scrolls to it.
+            let at = center(&find(&s.app.main, "Living Room")?);
+            for _ in 0..20 {
+                if find(&s.app.main, "Office").is_ok_and(|office| center(&office).y < 480.0) {
+                    break;
+                }
+                scroll(s.app.main.window(), at, -60.0);
+                render(s.app.main.window());
+            }
             s.main()
         }),
         row("B07", "MAIN-PRESETS", |s| {
@@ -1680,6 +1726,98 @@ fn b11() -> Vec<Row> {
 }
 
 /// The main checkout's `.build/layar`, from any worktree.
+/// Runs `window`'s animations `by` past where they stand, then holds them.
+fn step(window: &slint::Window, by: Duration) {
+    advance_clock(by);
+    slint::platform::update_timers_and_animations();
+    render(window);
+}
+
+/// Tier 1 rows that had no scene before.
+fn b12() -> Vec<Row> {
+    vec![
+        row("B12", "MAIN-ROW-VOLUME-DRAG", |s| {
+            s.speaker(KITCHEN, |kitchen| kitchen.enabled = true)?;
+            let at = center(&find(&s.app.main, "Kitchen volume")?);
+            let window = s.app.main.window();
+            let button = PointerEventButton::Left;
+            window.dispatch_event(WindowEvent::PointerMoved { position: at });
+            window.dispatch_event(WindowEvent::PointerPressed {
+                position: at,
+                button,
+            });
+            let position = LogicalPosition::new(at.x - 30.0, at.y);
+            window.dispatch_event(WindowEvent::PointerMoved { position });
+            settle(window);
+            s.main()
+        }),
+        row("B12", "MAIN-ROWS-TIDY", |s| {
+            s.speaker(DESK, |desk| desk.enabled = true)?;
+            s.main()
+        }),
+        row("B12", "MAIN-ZONE-HEADER", |s| {
+            s.load(MockBackend::zones_preview());
+            s.main()
+        }),
+        row("B12", "MAIN-PRESET-SAVE-FIELD", |s| {
+            s.load(MockBackend::presets_preview(PresetsPreview::List));
+            s.app.ask_save_preset();
+            s.main()
+        }),
+        row("B12", "ALERT-DOUBLE", |s| {
+            notice(
+                s,
+                NoticeMessage::HeardTwice {
+                    source: None,
+                    mute: vec!["Headphones".into()],
+                    shared: Vec::new(),
+                    default_output: Some("Headphones".into()),
+                },
+            )
+        }),
+        row("B12", "ALERT-PAIR-PIN", |s| {
+            s.edit(|state| {
+                state.pin_prompt = Some(ui_model::PinPrompt {
+                    speaker_id: "airplay:living".into(),
+                    name: "Living Room".into(),
+                    phase: ui_model::PinPhase::Ready,
+                    wrong_pin: false,
+                });
+            });
+            // A headless dialog has no size of its own; dialogs.slint:150 fixes the width.
+            Ok(Win(
+                Shown::Pin,
+                (380.0, s.app.pin_dialog().get_fit_height()),
+            ))
+        }),
+        row("B12", "SETUP-WAITING", |s| {
+            s.app.show_setup_at_first_install();
+            Ok(Win(Shown::Setup, SETUP))
+        }),
+        row("B12", "MOTION-TRAY-OPEN", |s| {
+            s.app.prepare_flyout_open(true);
+            s.app.flyout.show().map_err(|error| error.to_string())?;
+            s.fit_flyout();
+            s.app.flyout.set_revealed(true);
+            // The first rows part-way into their 440 ms rise (flyout.slint:807-808).
+            step(s.app.flyout.window(), Duration::from_millis(160));
+            s.still.set(true);
+            Ok(Win(Shown::Flyout, (FLYOUT_WIDTH, 0.0)))
+        }),
+        row("B12", "MOTION-SETTINGS-OPEN", |s| {
+            s.app.main.global::<Motion>().set_on(true);
+            let win = s.settings()?;
+            let window = leaked(s.app.settings());
+            // The first frame's timer reveals it; then part-way into the 560 ms
+            // fade (settings.slint:267-270).
+            step(window, super::FLYOUT_FIRST_FRAME);
+            step(window, Duration::from_millis(60));
+            s.still.set(true);
+            Ok(win)
+        }),
+    ]
+}
+
 fn photo_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("AUDIOSYNC_LAYAR_DIR") {
         return PathBuf::from(dir);
@@ -1723,6 +1861,7 @@ fn layar_photos_of_the_headless_rows() {
         b09(),
         b10(),
         b11(),
+        b12(),
     ];
     let mut taken = 0;
     let mut missed = Vec::new();
