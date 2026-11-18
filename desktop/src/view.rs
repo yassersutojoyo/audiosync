@@ -14919,6 +14919,30 @@ pub(crate) mod tests {
         );
     }
 
+    /// A one-line notice with its time is 48 px high, as the Mac's: 10 pt
+    /// padding round a 13 pt caption line, 2 pt, a 13 pt caption2 line
+    /// (MenuBar.swift:2788-2808, :2833).
+    #[test]
+    fn a_one_line_notice_is_as_high_as_the_macs() {
+        let app = main_window_over(MockBackend::new());
+        let notice = NoticeItem {
+            id: 1,
+            message: "A notice".into(),
+            time: "09.40".into(),
+            ..NoticeItem::default()
+        };
+        app.main
+            .set_notices(ModelRc::from(Rc::new(VecModel::from(vec![notice]))));
+        draw_frames();
+        let card = i_slint_backend_testing::ElementHandle::find_by_element_id(
+            &app.main,
+            "NoticeStack::row",
+        )
+        .next()
+        .expect("the notice");
+        assert_eq!(card.size().height, 48.0);
+    }
+
     // covers: S308
     /// Tab reaches each button of the updater's notice, Space or Enter
     /// presses it, and the notice reports its focus.
