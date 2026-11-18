@@ -763,7 +763,7 @@ pub mod tests {
 
     /// Serves `files` by path over plain HTTP on 127.0.0.1, and answers
     /// `/redirect/<path>` with a 302 to `/<path>`.
-    fn serve(files: HashMap<String, Vec<u8>>) -> u16 {
+    pub fn serve(files: HashMap<String, Vec<u8>>) -> u16 {
         use std::io::{BufRead, BufReader};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
         let port = listener.local_addr().unwrap().port();
