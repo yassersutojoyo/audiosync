@@ -18752,6 +18752,44 @@ pub(crate) mod tests {
         )
     }
 
+    /// A dark row's knob has the Mac's light edge on top only: #ad over its
+    /// #95 fill (the Mac's dark photos, 18 Nov), nothing lighter at the bottom.
+    #[test]
+    fn a_dark_rows_knob_has_the_macs_light_top_edge() {
+        use slint::language::ColorScheme;
+        let app = narrow_app(MockBackend::new());
+        app.main
+            .global::<Palette>()
+            .set_color_scheme(ColorScheme::Dark);
+        draw_frames();
+        let label = app
+            .main
+            .global::<crate::Strings>()
+            .invoke_volume_of("Speakers".into());
+        let (left, top, width, height) = slider_box(&app.main, &label);
+        let at = pixels(app.main.window());
+        let rows: Vec<u8> = ((top - 2.0) as i32..(top + height + 2.0) as i32)
+            .map(|y| {
+                (0..width as i32)
+                    .map(|dx| at(left + dx as f32, y as f32)[0])
+                    .max()
+                    .unwrap_or_default()
+            })
+            .collect();
+        let knob: Vec<usize> = (0..rows.len()).filter(|&i| rows[i] > 0x60).collect();
+        let (first, last) = (knob[0], knob[knob.len() - 1]);
+        let fill = rows[(first + last) / 2];
+        assert!(fill >= 0x90, "an on row's knob: {rows:02x?}");
+        assert!(
+            rows[first].max(rows[first + 1]) >= 0xab,
+            "top edge {rows:02x?}"
+        );
+        assert!(
+            rows[last].max(rows[last - 1]) <= fill,
+            "no edge at the bottom {rows:02x?}"
+        );
+    }
+
     /// An off speaker's slider keeps the Mac's contrast on its row, plain or
     /// under the pointer, in both themes (measured on the Mac's off
     /// row at 2x: on dark the track is
