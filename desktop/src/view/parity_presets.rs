@@ -2,7 +2,8 @@
 //! (MainWindow.swift PresetsRow, AppDelegate+Presets.swift,
 //! CastAddressSheet.swift, SettingsWindow.swift).
 
-use slint::{ComponentHandle, Model};
+use slint::platform::WindowEvent;
+use slint::{ComponentHandle, Model, SharedString};
 
 use super::tests::{app_over, main_window_over, press, settle_cast_check, type_text};
 use crate::ui_model::MockBackend;
@@ -116,7 +117,13 @@ fn add_by_address_clears_the_reason_on_typing_and_when_add_starts() {
     press(window, slint::platform::Key::Return);
     settle_cast_check(&app);
     assert_ne!(app.cast_sheet().get_error(), "");
-    press(window, slint::platform::Key::Return);
+    // Not press(): its frame runs the timers, and on a slow host the 50 ms poll
+    // can take the mock check's instant answer before checking is read.
+    let enter = SharedString::from(slint::platform::Key::Return);
+    window.dispatch_event(WindowEvent::KeyPressed {
+        text: enter.clone(),
+    });
+    window.dispatch_event(WindowEvent::KeyReleased { text: enter });
     assert!(app.cast_sheet().get_checking());
     assert_eq!(app.cast_sheet().get_error(), "", "Add clears it");
     settle_cast_check(&app);
