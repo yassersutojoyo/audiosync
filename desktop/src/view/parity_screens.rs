@@ -382,9 +382,7 @@ fn presets_equalizer_and_calibrate_are_28_high_rows_6_apart_with_no_border() {
 
 #[test]
 fn the_device_volume_fix_reads_in_the_text_colour() {
-    let source = include_str!("../../ui/widgets.slint").replace("
-", "
-");
+    let source = include_str!("../../ui/widgets.slint").replace("\r\n", "\n");
     let row = component(&source, "SpeakerRow");
     let fix = &row[row.find("fix-button := LinkButton {").expect("the fix")..];
     let fix = &fix[..fix.find("clicked =>").unwrap()];
