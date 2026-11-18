@@ -14999,6 +14999,83 @@ pub(crate) mod tests {
         );
     }
 
+    /// A notice with a long heading and a three-line message keeps its
+    /// dismiss button's 32 px hit area out of the text column, so a click on
+    /// the text never dismisses it, at 125 % and 150 %; and the message's
+    /// last line keeps its descenders, here and in the flyout.
+    #[test]
+    fn a_notices_dismiss_stays_off_its_text_and_its_descenders_show() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = main_window_over(MockBackend::new());
+        let notice = NoticeItem {
+            id: 1,
+            title: "Kitchen reconnecting".into(),
+            heading: "Kitchen is reconnecting after the network dropped it twice".into(),
+            message: ["Speakers grouping gyp"; 9].join(" ").into(),
+            time: "09.40".into(),
+            ..NoticeItem::default()
+        };
+        let dismissed = Rc::new(Cell::new(false));
+        let flag = dismissed.clone();
+        app.main.on_notice_dismissed(move |_| flag.set(true));
+        app.main
+            .set_notices(ModelRc::from(Rc::new(VecModel::from(vec![notice.clone()]))));
+        app.flyout
+            .set_notices(ModelRc::from(Rc::new(VecModel::from(vec![notice]))));
+        for scale_factor in [1.25f32, 1.5] {
+            for window in [app.main.window(), app.flyout.window()] {
+                window.dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor });
+            }
+            draw_frames();
+            let main = |id: &str| {
+                ElementHandle::find_by_element_id(&app.main, id)
+                    .next()
+                    .unwrap_or_else(|| panic!("{id}"))
+            };
+            let (message, dismiss) = (main("NoticeStack::message"), main("NoticeStack::dismiss"));
+            let (top, right) = (
+                message.absolute_position().y,
+                message.absolute_position().x + message.size().width,
+            );
+            assert!(
+                dismiss.absolute_position().x >= right,
+                "at {scale_factor}x the hit area starts at {}, the text ends at {right}",
+                dismiss.absolute_position().x
+            );
+            for y in [top - 8.0, top + 1.0, top + message.size().height - 2.0] {
+                click(app.main.window(), right - 0.5, y);
+                assert!(
+                    !dismissed.get(),
+                    "at {scale_factor}x a click on the text at {y} dismissed it"
+                );
+            }
+            let flyout = |id: &str| {
+                ElementHandle::find_by_element_id(&app.flyout, id)
+                    .next()
+                    .unwrap_or_else(|| panic!("{id}"))
+            };
+            for (place, message, slot) in [
+                (
+                    "main window",
+                    main("NoticeStack::message"),
+                    main("NoticeStack::slot"),
+                ),
+                (
+                    "flyout",
+                    flyout("NoticeStack::message"),
+                    flyout("NoticeStack::slot"),
+                ),
+            ] {
+                let ends = message.absolute_position().y + message.size().height;
+                let shown = slot.absolute_position().y + slot.size().height;
+                assert!(
+                    ends <= shown,
+                    "at {scale_factor}x the {place} message ends at {ends}, its room at {shown}"
+                );
+            }
+        }
+    }
+
     /// A one-line notice with its time is 48 px high, as the Mac's: 10 pt
     /// padding round a 13 pt caption line, 2 pt, a 13 pt caption2 line
     /// (MenuBar.swift:2788-2808, :2833).
@@ -18868,6 +18945,106 @@ pub(crate) mod tests {
             rows[last].max(rows[last - 1]) <= fill,
             "no edge at the bottom {rows:02x?}"
         );
+    }
+
+    /// At 125 % and 150 % the dark knob's top edge, clipped at 6 px (7.5 and
+    /// 9 device px), leaves no gap in its rim, no line across the knob and no
+    /// edge at the bottom, on or off, with or without the pointer; on light
+    /// no line crosses the knob either.
+    #[test]
+    fn a_rows_knob_has_no_seam_at_fractional_scales() {
+        use slint::language::ColorScheme;
+        let app = narrow_app(MockBackend::new());
+        for name in ["Speakers", "Headphones"] {
+            let label = app
+                .main
+                .global::<crate::Strings>()
+                .invoke_volume_of(name.into());
+            for scale in [1.25f32, 1.5] {
+                app.main
+                    .window()
+                    .dispatch_event(WindowEvent::ScaleFactorChanged {
+                        scale_factor: scale,
+                    });
+                let (mut first, mut last) = (0, 0);
+                for scheme in [ColorScheme::Dark, ColorScheme::Light] {
+                    app.main.global::<Palette>().set_color_scheme(scheme);
+                    for hovered in [false, true] {
+                        draw_frames();
+                        let (left, top, width, height) = slider_box(&app.main, &label);
+                        let middle = top + height / 2.0;
+                        let window = app.main.window();
+                        let position = if hovered {
+                            slint::LogicalPosition::new((first + last) as f32 / 2.0 / scale, middle)
+                        } else {
+                            slint::LogicalPosition::new(2.0, 2.0)
+                        };
+                        window.dispatch_event(WindowEvent::PointerMoved { position });
+                        advance_clock(Duration::from_secs(1));
+                        draw_frames();
+                        let shot = window.take_snapshot().expect("drawn");
+                        let stride = shot.width() as usize;
+                        let at = |x: i32, y: i32| {
+                            shot.as_bytes()[(y as usize * stride + x as usize) * 4]
+                        };
+                        // 5 px above the track only the knob is drawn.
+                        let probe = ((middle - 5.0) * scale) as i32;
+                        if scheme == ColorScheme::Dark && !hovered {
+                            let row = at(((left - 4.0) * scale) as i32, probe);
+                            let inked: Vec<i32> = ((left * scale) as i32
+                                ..((left + width) * scale) as i32)
+                                .filter(|&x| at(x, probe) > row.saturating_add(8))
+                                .collect();
+                            (first, last) = (inked[0], inked[inked.len() - 1]);
+                        }
+                        let centre = (first + last + 1) as f32 / 2.0;
+                        let columns = (centre - 8.0 * scale).floor() as i32
+                            ..(centre + 8.0 * scale).ceil() as i32;
+                        let knob_top = (top - 1.0) * scale;
+                        let clip_end = (knob_top + 6.0 * scale).floor() as i32;
+                        let case = format!("{name} {scale}x {scheme:?} hovered {hovered}");
+                        let fill = at(centre as i32, (middle * scale) as i32 - 1);
+                        let inner = columns.start + 3..columns.end - 3;
+                        for y in clip_end - 1..=clip_end + 1 {
+                            let line: Vec<u8> = inner.clone().map(|x| at(x, y)).collect();
+                            assert!(
+                                line.iter().all(|&g| g.abs_diff(fill) <= 2),
+                                "{case}: a line across the knob at {y}, fill {fill:02x}: {line:02x?}"
+                            );
+                        }
+                        if scheme == ColorScheme::Light {
+                            continue;
+                        }
+                        let centre_y = knob_top + 8.0 * scale;
+                        for y in knob_top as i32..(centre_y - 2.5 * scale) as i32 {
+                            let mirror = (2.0 * centre_y) as i32 - 1 - y;
+                            for x in columns.clone() {
+                                let (above, below) = (at(x, y), at(x, mirror));
+                                assert!(
+                                    above.saturating_add(2) >= below,
+                                    "{case}: a gap in the rim at {x},{y}: {above:02x} over {below:02x}"
+                                );
+                                if y >= clip_end {
+                                    assert!(
+                                        above <= below.saturating_add(12),
+                                        "{case}: the edge goes on past the clip at {x},{y}: {above:02x} over {below:02x}"
+                                    );
+                                }
+                            }
+                        }
+                        let bottom = (knob_top + 16.0 * scale) as i32 - 2;
+                        for y in bottom..bottom + 2 {
+                            let lightest =
+                                columns.clone().map(|x| at(x, y)).max().unwrap_or_default();
+                            assert!(
+                                lightest <= fill,
+                                "{case}: an edge at the bottom, {lightest:02x} at {y}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// An off speaker's slider keeps the Mac's contrast on its row, plain or
