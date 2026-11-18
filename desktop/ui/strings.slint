@@ -255,8 +255,6 @@ export global Strings {
     out property <string> rename-preset-title: @tr("Rename Preset");
     out property <string> update-preset: @tr("Update to Current Settings");
     out property <string> delete-preset: @tr("Delete");
-    // The Presets row while there is none.
-    out property <string> no-presets: @tr("No Presets");
     // The open presets list while there is none, above Save as Preset….
     out property <string> no-presets-hint: @tr("No presets yet. Turn on the speakers you want, set the volumes and the curve, then save them as a preset.");
     // The Presets row, here and in the flyout, while no preset is current.
@@ -2222,6 +2220,11 @@ export global Strings {
     // A new preset's name when none was typed.
     public pure function numbered-preset(n: int) -> string {
         return @tr("Preset {}", n);
+    }
+
+    // A list row's value for screen readers while it is the preset picked last.
+    public pure function preset-in-use(summary: string) -> string {
+        return @tr("In use, {}", summary);
     }
 
     // A row's second line in the Presets list: what the preset holds.

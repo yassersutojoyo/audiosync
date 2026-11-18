@@ -1,10 +1,9 @@
 //! The equalizer and the Guide as the Mac's (EqualizerWindow.swift,
 //! Localization.swift's helpText, AppDelegate+Windows.swift's Guide window).
 
-use slint::ComponentHandle;
 use slint::platform::Key;
 
-use super::tests::{app_over, click, draw_frames, press};
+use super::tests::{app_over, click, draw_frames, leaked, press};
 use crate::ui_model::{Backend, MockBackend};
 
 const EQUALIZER: &str = include_str!("../../ui/equalizer.slint");
@@ -27,9 +26,7 @@ fn the_equalizer_has_a_fixed_size_and_only_a_close_button() {
     assert!(!EQUALIZER.contains("min-height: 140px;"));
     assert!(!EQUALIZER.contains("min-height: 360px;"));
     assert!(EQUALIZER.contains("max-height: content.preferred-height;"));
-    assert!(
-        VIEW.contains("self.follow_dialog_frame(|app| app.equalizer.window(), \"equalizer\");")
-    );
+    assert!(VIEW.contains("self.follow_dialog_frame(&self.equalizer(), \"equalizer\");"));
 }
 
 // Mac Equalizer.swift:224-226: the curve keeps the gains at the moment
@@ -37,9 +34,9 @@ fn the_equalizer_has_a_fixed_size_and_only_a_close_button() {
 #[test]
 fn save_curve_keeps_a_band_moved_while_naming() {
     let app = app_over(MockBackend::new());
-    app.equalizer.invoke_save_curve();
-    app.equalizer.invoke_gain_changed(3, 6.0);
-    app.equalizer.invoke_curve_named("Mine".into(), true);
+    app.equalizer().invoke_save_curve();
+    app.equalizer().invoke_gain_changed(3, 6.0);
+    app.equalizer().invoke_curve_named("Mine".into(), true);
     let curves = app.snapshot().equalizer_curves;
     let mine = curves.iter().find(|c| c.name == "Mine").expect("saved");
     assert_eq!(mine.gains_db[3], 6.0);
@@ -137,17 +134,19 @@ fn the_guide_text_is_selectable_and_has_no_close_button() {
 #[test]
 fn the_guide_reopens_where_it_was_scrolled() {
     let app = app_over(MockBackend::new());
-    let window = app.help.window();
+    let window = leaked(app.help());
     app.main.invoke_help_requested();
     draw_frames();
     press(window, Key::End);
-    let bottom = app.help.get_scrolled();
+    let bottom = app.help().get_scrolled();
     assert!(bottom > 0.0);
     press(window, Key::Escape);
     assert!(!window.is_visible());
+    app.drop_closed_windows();
+    assert!(app.help.built().is_none(), "the closed Guide is dropped");
     app.main.invoke_help_requested();
     draw_frames();
-    assert_eq!(app.help.get_scrolled(), bottom);
+    assert_eq!(app.help().get_scrolled(), bottom);
 }
 
 // Mac AppDelegate+Windows.swift:940-945: place and size both kept across
@@ -155,11 +154,11 @@ fn the_guide_reopens_where_it_was_scrolled() {
 #[test]
 fn the_guide_keeps_its_size_across_launches() {
     let app = app_over(MockBackend::new());
-    let window = app.help.window();
+    let window = leaked(app.help());
     app.main.invoke_help_requested();
     draw_frames();
     window.set_size(slint::LogicalSize::new(700.0, 500.0));
-    app.help.invoke_close_requested();
+    app.help().invoke_close_requested();
     app.remember_view();
     let saved = app.backend.borrow().view_settings();
     assert_eq!(
@@ -172,7 +171,7 @@ fn the_guide_keeps_its_size_across_launches() {
     let again = app_over(backend);
     // No draw_frames: it gives every headless window one size.
     again.main.invoke_help_requested();
-    let help = again.help.window();
+    let help = leaked(again.help());
     let size = help.size().to_logical(help.scale_factor());
     assert_eq!((size.width, size.height), (700.0, 500.0));
 }
@@ -182,20 +181,20 @@ fn the_guide_keeps_its_size_across_launches() {
 #[test]
 fn the_guide_scrolls_by_keyboard_after_a_click_and_tab_skips_its_text() {
     let app = app_over(MockBackend::new());
-    let window = app.help.window();
+    let window = leaked(app.help());
     app.main.invoke_help_requested();
     draw_frames();
     click(window, 200.0, 120.0);
     draw_frames();
     press(window, Key::DownArrow);
-    let after_click = app.help.get_scrolled();
+    let after_click = app.help().get_scrolled();
     assert!(after_click > 0.0, "Down scrolls after a click in the text");
     for _ in 0..3 {
         press(window, Key::Tab);
     }
     press(window, Key::DownArrow);
     assert!(
-        app.help.get_scrolled() > after_click,
+        app.help().get_scrolled() > after_click,
         "Down scrolls after Tab"
     );
     press(window, Key::Escape);
