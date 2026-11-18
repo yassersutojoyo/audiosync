@@ -1254,11 +1254,18 @@ impl AppState {
 
     /// A speaker that is on while streaming is on plays, unless it waits.
     pub fn speaker_state(&self, speaker: &Speaker) -> SpeakerState {
-        match SpeakerState::new(speaker.enabled, self.running) {
-            SpeakerState::Playing => speaker
-                .waiting
-                .map_or(SpeakerState::Playing, SpeakerState::Waiting),
-            state => state,
+        match (
+            SpeakerState::new(speaker.enabled, self.running),
+            speaker.waiting,
+        ) {
+            (SpeakerState::Playing, waiting) => {
+                waiting.map_or(SpeakerState::Playing, SpeakerState::Waiting)
+            }
+            // A prompt waits for the user whether or not it streams (S223).
+            (SpeakerState::WillPlay, Some(prompt @ (Waiting::ForPassword | Waiting::ForPin))) => {
+                SpeakerState::Waiting(prompt)
+            }
+            (state, _) => state,
         }
     }
 
@@ -3391,6 +3398,24 @@ mod tests {
         state.running = true;
         kitchen.enabled = false;
         assert_eq!(state.speaker_state(&kitchen), SpeakerState::Off);
+    }
+
+    // covers: S223
+    #[test]
+    fn a_code_prompt_shows_on_the_row_with_streaming_off() {
+        let mut state = MockBackend::new().snapshot();
+        state.running = false;
+        let mut kitchen = state.speaker("airplay:kitchen").unwrap().clone();
+        for waiting in [Waiting::ForPassword, Waiting::ForPin] {
+            kitchen.waiting = Some(waiting);
+            assert_eq!(
+                state.speaker_state(&kitchen),
+                SpeakerState::Waiting(waiting),
+                "the Mac row note names the prompt whether or not it streams"
+            );
+        }
+        kitchen.waiting = Some(Waiting::Reconnecting);
+        assert_eq!(state.speaker_state(&kitchen), SpeakerState::WillPlay);
     }
 
     // covers: S257
