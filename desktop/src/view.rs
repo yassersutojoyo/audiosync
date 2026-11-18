@@ -3240,8 +3240,17 @@ impl App {
         if state.master_volume >= UNMUTE_FLOOR {
             self.unmute_to.set(state.master_volume);
         }
-        for window in [&self.main as &dyn WindowState, &self.flyout] {
-            window.show_state(&state, &status, source_index);
+        let main_status = match state.status_airplay_tenths() {
+            Some(tenths) => strings.invoke_main_status(
+                status.clone(),
+                format!("{}.{}", tenths / 10, tenths % 10).into(),
+            ),
+            None => status.clone(),
+        };
+        let windows: [(&dyn WindowState, &SharedString); 2] =
+            [(&self.main, &main_status), (&self.flyout, &status)];
+        for (window, status) in windows {
+            window.show_state(&state, status, source_index);
             window.show_live_input_hint(&live_hint);
         }
         self.main.set_equalizer_on(state.equalizer.enabled);
