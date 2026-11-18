@@ -239,6 +239,10 @@ def self_test():
         if ok != expected:
             failed += 1
             print(f"self-test offset limit {limit} ms: expected {'PASS' if expected else 'FAIL'}")
+    early_lines, ok = check((train, rate, stamps), (delayed(train, 0.02), rate, stamps), 6, max_offset_ms=30)
+    if not ok or not any(line.startswith("offset: receiver -20 ms") for line in early_lines):
+        failed += 1
+        print(f"self-test receiver 20 ms ahead of the sink: {early_lines}")
     print("heard.py self-test: " + (f"{failed} FAILED" if failed else f"{len(cases)} cases passed"))
     return 1 if failed else 0
 
