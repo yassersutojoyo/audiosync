@@ -11567,8 +11567,8 @@ pub(crate) mod tests {
         let tallest = ElementHandle::find_by_element_id(&app.main, "SpeakerRow::note-label")
             .map(|note| note.size().height)
             .fold(0.0, f32::max);
-        // Two caption lines of 16 px, not one, nor more than two.
-        assert!((28.0..=40.0).contains(&tallest), "{tallest} px");
+        // Two caption lines of about 13.5 px, not one (17 px with the name), nor three.
+        assert!((24.0..=32.0).contains(&tallest), "{tallest} px");
     }
     /// A long name's line stops 6 px before the row's delay column, the Mac row's
     /// spacing (MainWindow.swift:2371), however close the value sits to the

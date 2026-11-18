@@ -3829,6 +3829,8 @@ export component SpeakerRow inherits Rectangle {
         duration: Motion.on ? 440ms : 150ms;
         easing: Motion.on ? ease-out : linear;
     }
+    // The note's height, at most the Mac's two lines (MainWindow.swift:2429).
+    property <length> note-height;
     property <float> delay-reveal: root.revealed || root.focused-part == RowPart.delay ? 1 : 0;
     animate delay-reveal {
         duration: Motion.on ? 440ms : 150ms;
@@ -3920,9 +3922,10 @@ export component SpeakerRow inherits Rectangle {
                                 horizontal-stretch: 1;
 
                                 // Fixed, so the 22 px rename field takes no more
-                                // room than the name and the row keeps its 52 px step.
+                                // room than the name and the row keeps its 52 px step,
+                                // unless the note wraps to its second line.
                                 HorizontalLayout {
-                                    height: 17px;
+                                    height: root.note == "" ? 17px : max(17px, root.note-height);
                                     spacing: 6px;
                                     alignment: start;
 
@@ -4033,6 +4036,20 @@ export component SpeakerRow inherits Rectangle {
                                         min-width: 0px;
                                         preferred-width: note-label.preferred-width + self.lead;
                                         max-width: note-label.preferred-width + self.lead;
+                                        property <length> wanted: min(note-label.preferred-height, 2 * one-line.preferred-height);
+                                        init => {
+                                            root.note-height = self.wanted;
+                                        }
+                                        changed wanted => {
+                                            root.note-height = self.wanted;
+                                        }
+
+                                        one-line := Text {
+                                            visible: false;
+                                            text: "X";
+                                            font-size: Tokens.font-size-caption;
+                                            accessible-role: none;
+                                        }
 
                                         if note-box.lead > 0: note-icon := Glyph {
                                             x: 0;
@@ -4051,6 +4068,7 @@ export component SpeakerRow inherits Rectangle {
                                             font-size: Tokens.font-size-caption;
                                             color: Tokens.secondary-text;
                                             vertical-alignment: center;
+                                            wrap: word-wrap;
                                             overflow: elide;
                                             accessible-role: none;
                                         }
