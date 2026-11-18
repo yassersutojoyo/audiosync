@@ -241,11 +241,25 @@ def drive(work, pid, log_path, port):
         time.sleep(3)
         return True
 
-    # Calibrate All: Before you start, Include Anyway, then cancelled.
+    # Calibrate All: Before you start with the reference low and its Set to 75%, Include Anyway, then cancelled.
+    at = mark()
+    subprocess.run(["pactl", "set-sink-volume", "stranger-speakers", "20%"], check=False)
+    low = wait_log(r"stranger-speakers. device volume: fine → low[^\n]*", at, 15)
+    note(f"reference at 20%: {low}")
     found = open_sheet("CAL-ALL-BEFORE")
     if found is not None:
         shot("CAL-ALL-BEFORE")
         tree(app, "atspi-all-before.txt")
+        at = mark()
+        if press(app, "Set to 75%, Speakers", "CAL-ALL-VOLUME-FIXED", within=found, seconds=5):
+            fine = wait_log(r"stranger-speakers. device volume: low → fine[^\n]*", at, 15)
+            note(f"set to 75%: {fine}")
+            volume = subprocess.run(["pactl", "get-sink-volume", "stranger-speakers"], capture_output=True, text=True)
+            note(f"pactl after Set to 75%: {volume.stdout.strip()}")
+            shot("CAL-ALL-VOLUME-FIXED")
+            tree(app, "atspi-all-volume-fixed.txt")
+        # Back to full scale so the loop's levels match the runs before this step.
+        subprocess.run(["pactl", "set-sink-volume", "stranger-speakers", "100%"], check=False)
         if press(app, "Include Anyway, Headset", "CAL-ALL-INCLUDED", within=found):
             shot("CAL-ALL-INCLUDED")
         at = mark()
@@ -271,6 +285,13 @@ def drive(work, pid, log_path, port):
             time.sleep(2)
             shot("CAL-ALL-RESULTS")
             tree(app, "atspi-all-results.txt")
+            at = mark()
+            if press(app, "Measure Again, Desk Speaker", "CAL-ALL-MEASURED-AGAIN", within=found, seconds=5):
+                line = wait_log(r"Measure Again of \S+ started[\s\S]*?Calibrate All ended[^\n]*", at, 120)
+                note(f"all, measure again: {line and line[-200:]}")
+                time.sleep(2)
+                shot("CAL-ALL-MEASURED-AGAIN")
+                tree(app, "atspi-all-measured-again.txt")
             at = mark()
             if press(app, "Apply", "CAL-ALL-APPLIED", within=found, seconds=5):
                 line = wait_log(r"Calibrate All (?:applied|: Apply refused)[^\n]*", at, 10)
@@ -353,6 +374,12 @@ def check(work):
             lines.append(f"  {key}: still {float(difference):.1f} ms off")
             if abs(float(difference)) > 5.0:
                 failed.append(f"{key} is {float(difference):.1f} ms off after Apply")
+    fixed = section("Set to 75% on the low reference", r"[^\n]*stranger-speakers\) device volume(?: fix)?: [^\n]*(?:75%|→)[^\n]*")
+    if not any("low → fine (75%" in line for line in fixed):
+        failed.append("Set to 75% did not bring the reference from low to 75%")
+    section("Measure Again", r"Measure Again of [^\n]*")
+    if not re.search(r"Measure Again of local:stranger-desk started(?:(?!Calibrate All started)[\s\S])*?Calibrate All ended", text):
+        failed.append("Measure Again of the desk speaker did not start and run to its end")
     lines.append("")
     if not applied:
         failed.append("Calibrate All was never applied")
