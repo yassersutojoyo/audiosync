@@ -266,10 +266,19 @@ impl From<slint::PlatformError> for StartError {
 }
 
 /// Whether Setup opens by itself at this launch: on a first install, with no
-/// settings file at `settings`.
+/// settings file at `settings`, and once, marked by a file beside it (the
+/// Mac's `permissionSetupSeen`, PermissionFlow.swift:152).
 fn opens_setup_at_launch(settings: &std::path::Path) -> bool {
-    !settings.exists()
+    let seen = settings.with_file_name(SETUP_SEEN_FILE);
+    if settings.exists() || seen.exists() {
+        return false;
+    }
+    // A mark that can't be written still lets this launch show it.
+    let _ = data_folder::write_atomically(&seen, b"");
+    true
 }
+
+const SETUP_SEEN_FILE: &str = "setup-seen";
 
 /// Shows the main window and runs the UI until the user exits.
 fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
