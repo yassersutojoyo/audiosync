@@ -471,6 +471,8 @@ struct Shared {
     /// in ns (S231); they differ only when the report was rejected.
     reported_latency_ns: AtomicU64,
     output_latency_ns: AtomicU64,
+    /// How long after a read its first frame is heard, in ns (S478).
+    heard_after_ns: AtomicU64,
     /// The level the device got, for the debug log.
     level: OutputLevel,
     /// The ring whose session lead counts this renderer, and its slot
@@ -562,6 +564,7 @@ impl RendererControl {
                 bluetooth: AtomicBool::new(false),
                 reported_latency_ns: AtomicU64::new(0),
                 output_latency_ns: AtomicU64::new(0),
+                heard_after_ns: AtomicU64::new(0),
                 level: OutputLevel::default(),
                 ring,
                 slot,
@@ -798,6 +801,13 @@ impl RendererControl {
             .store(reported_ns, Ordering::Relaxed);
         self.shared.output_latency_ns.store(used, Ordering::Relaxed);
         used
+    }
+
+    /// Sets how long after a read its first frame is heard, in ns, which
+    /// the reader's delay leaves out (S478); 0, the default, leaves it whole.
+    pub fn set_heard_after_ns(&self, ns: u64) {
+        self.shared.heard_after_ns.store(ns, Ordering::Relaxed);
+        self.shared.delay_flag.store(true, Ordering::Release);
     }
 
     /// The output latency in use, in ns (S231); 0 before one was reported.
@@ -2749,6 +2759,21 @@ mod tests {
                 s.built_in_off()
             );
         }
+    }
+
+    // covers: S478
+    #[test]
+    fn a_sink_heard_one_quantum_after_the_read_reads_one_quantum_closer() {
+        let mut s = Stepped::new();
+        s.control.set_delay_frames(4800);
+        // 1024 frames at 48 kHz, as a PipeWire null sink reports.
+        s.control.set_heard_after_ns(21_333_334);
+        s.step(100);
+        let lead = s.renderer.shared.leads().session_lead();
+        assert_eq!(
+            s.renderer.reader_delay,
+            4800 + lead - s.renderer.latency - 1024
+        );
     }
 
     // covers: S187
