@@ -2418,7 +2418,9 @@ component CalibrateAllSheet inherits FocusScope {
                         padding-top: 10px;
                         padding-bottom: 10px;
 
+                        // Its width set, so the list's height counts every wrapped line.
                         Text {
+                            width: root.width - 40px - 24px;
                             text: root.airplay;
                             font-size: Tokens.font-size-body;
                             color: Tokens.text;
