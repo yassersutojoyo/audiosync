@@ -274,24 +274,30 @@ def drive(work, pid, log_path, port):
             tree(app, "atspi-all-cancelled.txt")
         press(app, "Close the calibration results", "CAL-ALL-CANCELLED", within=found, seconds=3)
 
-    # Calibrate All to the end, Apply, then Done. Run 44382163449's virtual microphone
-    # dropped audio mid-run (MicrophoneSkipped), so that one stop gets a second run.
-    for attempt in range(2):
-        found = open_sheet("CAL-ALL-RESULTS")
-        if found is None:
-            break
-        press(app, "Include Anyway, Headset", "CAL-ALL-RESULTS", within=found)
-        at = mark()
-        started = start(found, "CAL-ALL-RESULTS")
-        line = wait_log(r"Calibrate All ended[^\n]*", at, 240) if started else None
-        if attempt == 0 and "stopped: MicrophoneSkipped" in log_text()[at:]:
-            note("all: the microphone skipped, running once more")
-            press(app, "Close the calibration results", "CAL-ALL-RESULTS", within=found, seconds=3)
-            time.sleep(3)
-            continue
-        break
+    # The runner's virtual microphone drops audio now and then (MicrophoneSkipped in runs
+    # 44382163449 and 44385227248), so a run stopped that way is run again, up to twice.
+    def run_to_end(state_name):
+        for attempt in range(3):
+            found = open_sheet(state_name)
+            if found is None:
+                return None, None
+            press(app, "Include Anyway, Headset", state_name, within=found)
+            at = mark()
+            if not start(found, state_name):
+                return found, None
+            line = wait_log(r"Calibrate All ended[^\n]*", at, 240)
+            if attempt < 2 and "stopped: MicrophoneSkipped" in log_text()[at:]:
+                note(f"{state_name}: the microphone skipped, running once more")
+                press(app, "Close the calibration results", state_name, within=found, seconds=3)
+                time.sleep(3)
+                continue
+            return found, line
+        return None, None
+
+    # Calibrate All to the end, Measure Again, Apply, then Done.
+    found, line = run_to_end("CAL-ALL-RESULTS")
     if found is not None:
-        if started:
+        if line is not None:
             note(f"all: {line}")
             time.sleep(2)
             shot("CAL-ALL-RESULTS")
@@ -313,12 +319,9 @@ def drive(work, pid, log_path, port):
 
     # Once more after Apply: in time means each speaker's new delay is its current one.
     time.sleep(3)
-    found = open_sheet("CAL-ALL-AGAIN")
+    found, line = run_to_end("CAL-ALL-AGAIN")
     if found is not None:
-        press(app, "Include Anyway, Headset", "CAL-ALL-AGAIN", within=found)
-        at = mark()
-        if start(found, "CAL-ALL-AGAIN"):
-            line = wait_log(r"Calibrate All ended[^\n]*", at, 240)
+        if line is not None:
             note(f"all, again: {line}")
             time.sleep(2)
             shot("CAL-ALL-AGAIN")
@@ -385,6 +388,13 @@ def check(work):
             lines.append(f"  {key}: still {float(difference):.1f} ms off")
             if abs(float(difference)) > 5.0:
                 failed.append(f"{key} is {float(difference):.1f} ms off after Apply")
+        if not ended[-1].startswith("Calibrate All ended (None)"):
+            failed.append("the run after Apply did not run to its end")
+        for line in applied:
+            for target in re.findall(r'target: Speaker\("([^"]+)"\)|target: (AirPlay)', line):
+                key = target[0] or "airplay:"
+                if not re.search(rf'id: "{re.escape(key)}[^"]*"[^}}]*?difference_ms', ended[-1]):
+                    failed.append(f"{key} was applied but not measured in the run after Apply")
     fixed = section("Set to 75% on the low reference", r"[^\n]*stranger-speakers\) device volume(?: fix)?: [^\n]*(?:75%|→)[^\n]*")
     if not any("low → fine (75%" in line for line in fixed):
         failed.append("Set to 75% did not bring the reference from low to 75%")
