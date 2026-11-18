@@ -9,7 +9,7 @@
 # The nowplaying group adds a stand-in MPRIS player (mpris_player.py) and
 # fails when the Now Playing card lacks Shuffle or Repeat.
 #
-#   scripts/stranger/linux_shots.sh <work folder> <sni_watcher_stub> <main|delay|tray|calibrate|notices|nowplaying>
+#   scripts/stranger/linux_shots.sh <work folder> <sni_watcher_stub> <main|delay|tray|calibrate|notices|nowplaying|updates>
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -102,6 +102,11 @@ for theme in terang gelap; do
   kill -KILL -- "-$app" 2>/dev/null || true
   log=$(find "$XDG_STATE_HOME" -name '*debug.log' -print -quit)
   [ -z "$log" ] || mv "$log" "$work/audiosync-debug-$theme.log"
+  # No settings portal here: motion stays on, so the cover's ambient art moves.
+  if [ "$group" = nowplaying ] && ! grep -q 'ambient art: frames start' "$work/audiosync-debug-$theme.log"; then
+    echo "FAIL: motion is off without a settings portal ($theme)"
+    failed=1
+  fi
 done
 
 shots=$(find "$work" -maxdepth 1 -name '*.png' | wc -l)

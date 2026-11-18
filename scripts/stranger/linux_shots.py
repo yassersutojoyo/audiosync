@@ -8,7 +8,8 @@ a line in not-set-up.txt as screen_compare.py reads it, and
 atspi-<theme>.txt holds the tree as AT-SPI saw it. The nowplaying group
 exits 1 when the Now Playing card, with the pointer over it, lacks Shuffle or
 Repeat drawn on, or its cover reads as one colour; the tray group when the
-tray panel reads as one colour.
+tray panel reads as one colour; the updates group when Check for Updates…
+doesn't tell the .deb copy to install the newer package.
 
     linux_shots.py <work> <group> <theme> <pid>
 """
@@ -200,6 +201,16 @@ def run(app, main):
         if use(app, "Streaming", "NOTICE-START"):
             time.sleep(2)
             shot(main, "NOTICE-START")
+    elif GROUP == "updates":
+        # The .deb copy doesn't update itself; a manual check says how to update.
+        if use(app, "Options", "NOTICE-UPDATE-PACKAGE") and use(app, "Check for Updates…", "NOTICE-UPDATE-PACKAGE"):
+            time.sleep(2)
+            shot(main, "NOTICE-UPDATE-PACKAGE")
+            if not any("download the newer package" in (n.get_name() or "") for w in windows(app) for n, _ in walk(w)):
+                print(f"FAIL: no notice to download the newer package ({THEME})")
+                failed.append("update notice")
+        else:
+            failed.append("update notice")
     elif GROUP == "nowplaying":
         # mpris_player.py plays a patterned cover with Shuffle on and LoopStatus Playlist.
         buttons = {name: find(app, name, seconds=20) for name in ("Shuffle", "Repeat", "Previous Track")}
