@@ -19830,7 +19830,7 @@ pub(crate) mod tests {
 
     // covers: S453
     #[test]
-    fn a_flat_equalizer_band_is_empty_with_its_0_db_tick_showing() {
+    fn a_flat_equalizer_band_is_empty_with_its_0_db_tick_under_the_knob() {
         let app = app_over(MockBackend::new());
         app.equalizer()
             .show()
@@ -19847,9 +19847,10 @@ pub(crate) mod tests {
         let beside = center + width / 2.0 + 3.0;
         let zero = (y + height / 2.0).round();
         let background = pixel(beside, zero + 8.0);
+        // The Mac's 12 pt tick hides under its 16 pt knob at 0 dB (EqualizerWindow.swift:330-341).
         assert!(
-            (-1..=1).any(|row| pixel(beside, zero + row as f32) != background),
-            "the 0 dB tick shows beside the thumb"
+            (-1..=1).all(|row| pixel(beside, zero + row as f32) == background),
+            "the 0 dB tick stays under the knob"
         );
     }
 
@@ -21475,8 +21476,8 @@ pub(crate) mod tests {
         let popup = &main[main.find("calibrate-sheet := PopupWindow").unwrap()..];
         let popup = &popup[..popup.find("running: root.calibrate-all-running;").unwrap()];
         assert!(
-            popup.contains("y: Fluent.window-margin / 2;"),
-            "a gap above the sheet"
+            popup.contains("y: 0;"),
+            "right under the title row, as the Mac's sheet"
         );
     }
 

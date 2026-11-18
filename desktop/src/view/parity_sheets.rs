@@ -33,7 +33,11 @@ fn the_calibrate_all_sheet_sits_under_the_title_row_with_mac_sized_buttons() {
         .next()
         .expect("the sheet");
     // Its popup starts under the 32 px title row; the sheet sits at the popup's top.
-    assert_eq!(sheet.absolute_position().y, 0.0, "right under the title row");
+    assert_eq!(
+        sheet.absolute_position().y,
+        0.0,
+        "right under the title row"
+    );
     assert_eq!(height(&app, "CalibrateAllSheet::close-button"), 24.0);
     assert_eq!(height(&app, "CalibrateAllSheet::start-button"), 24.0);
 }

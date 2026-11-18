@@ -1250,6 +1250,12 @@ export component SmallButton inherits Rectangle {
     in property <length> font-size: Tokens.font-size-callout;
     // Can't be used now: grey, as the Mac's disabled push button.
     in property <bool> dimmed;
+    // The Mac's system push button in a teal-tinted sheet: teal at 5% with no
+    // edge (measured on its Calibrate All sheet), or filled as the default button.
+    in property <bool> system;
+    in property <bool> primary;
+    // The Mac's untinted small push button in the main window: grey at 5%.
+    in property <bool> grey;
     out property <bool> has-focus: focus.has-focus;
     callback clicked();
 
@@ -1257,12 +1263,13 @@ export component SmallButton inherits Rectangle {
     preferred-width: self.min-width;
     height: 24px;
     border-radius: Tokens.radius-control;
-    background: root.dimmed ? Tokens.text.with-alpha(0.05) : Tokens.teal.with-alpha(touch.pressed ? (Tokens.dark ? 0.30 : 0.28) : touch.has-hover ? (Tokens.dark ? 0.20 : 0.18) : (Tokens.dark ? 0.14 : 0.12));
+    // A Mac system button has no hover look; pressing it darkens it, as DelayStep's.
+    background: root.dimmed ? Tokens.text.with-alpha(0.05) : root.primary ? (touch.pressed ? Tokens.teal-deep : Tokens.segment-chosen) : root.system || root.grey ? (root.grey ? Tokens.text : Tokens.teal).with-alpha(touch.pressed ? (Tokens.dark ? 0.3 : 0.1) : 0.05) : Tokens.teal.with-alpha(touch.pressed ? (Tokens.dark ? 0.30 : 0.28) : touch.has-hover ? (Tokens.dark ? 0.20 : 0.18) : (Tokens.dark ? 0.14 : 0.12));
     animate background {
         duration: 120ms;
         easing: ease-out;
     }
-    border-width: root.dimmed ? 0px : max(0.5px, 1phx);
+    border-width: root.dimmed || root.system || root.primary || root.grey ? 0px : max(0.5px, 1phx);
     border-color: Tokens.teal.with-alpha(0.3);
     forward-focus: focus;
     accessible-role: button;
@@ -1272,8 +1279,10 @@ export component SmallButton inherits Rectangle {
         root.clicked();
     }
 
+    // A dimmed button is out of the Tab order, as the Mac's disabled one.
     focus := FocusScope {
         focus-on-click: false;
+        focus-on-tab-navigation: !root.dimmed;
         key-pressed(event) => {
             if event.text == " " || event.text == Key.Return {
                 root.clicked();
@@ -1300,7 +1309,8 @@ export component SmallButton inherits Rectangle {
         text: root.text;
         font-size: root.font-size;
         font-weight: Fluent.weight-medium;
-        color: root.dimmed ? Tokens.text.with-alpha(0.5) : Fluent.house-text;
+        // Teal text at 4.5:1 or more, where the Mac's #1c9f91 is 3.27:1.
+        color: root.dimmed ? Tokens.text.with-alpha(0.5) : root.primary ? #ffffff : root.grey ? Tokens.text : root.system ? Tokens.teal-text : Fluent.house-text;
         horizontal-alignment: center;
         vertical-alignment: center;
         accessible-role: none;
@@ -2397,12 +2407,13 @@ export component TextField inherits Rectangle {
     }
 
     min-width: 48px;
-    min-height: root.compact ? 22px : max(32px, input.preferred-height + 12px);
-    max-height: root.compact ? 22px : 10000px;
+    // A compact or boxed field is the Mac's 22 pt one (HouseButtonStyle.swift:58).
+    min-height: root.compact || root.boxed ? 22px : max(32px, input.preferred-height + 12px);
+    max-height: root.compact || root.boxed ? 22px : 10000px;
     horizontal-stretch: 1;
     vertical-stretch: 0;
     forward-focus: input;
-    border-radius: root.compact ? 5px : root.boxed ? 8px : Fluent.radius-control;
+    border-radius: root.compact ? 5px : root.boxed ? 6px : Fluent.radius-control;
     border-width: root.boxed && input.has-focus ? 2px : 1px;
     // A raised field's edge on light is the Mac delay field's #d9d9d9 on white (2x render).
     border-color: root.boxed ? (input.has-focus ? Tokens.focus : Tokens.secondary-text) : root.compact && input.has-focus ? Tokens.teal : root.raised && !Tokens.dark ? #00000026 : Fluent.stroke;
@@ -2484,8 +2495,8 @@ export component TextField inherits Rectangle {
         }
 
         HorizontalLayout {
-            padding-left: root.compact ? 6px : 10px;
-            padding-right: root.compact ? 6px : 10px;
+            padding-left: root.compact || root.boxed ? 6px : 10px;
+            padding-right: root.compact || root.boxed ? 6px : 10px;
             // Skia sets the delay fields' 12 px Segoe digits 1 px under the middle.
             padding-bottom: root.raised ? 2 * Fluent.digit-lift : 0px;
 
@@ -2561,7 +2572,8 @@ component DelayStep inherits Rectangle {
     callback clicked();
 
     height: 22px;
-    min-width: label.preferred-width + 14px;
+    // The Mac's small step (MainWindow.swift:3500-3516) as its photo measures: 12 pt text, 11 pt each side.
+    min-width: label.preferred-width + 22px;
     border-radius: 5px;
     // A Mac bordered button has no hover look; pressing it greys it, a step lighter in dark.
     background: Tokens.text.with-alpha(touch.pressed ? (Tokens.dark ? 0.3 : 0.1) : 0.05);
@@ -2600,7 +2612,7 @@ component DelayStep inherits Rectangle {
         y: -Fluent.digit-lift;
         height: parent.height;
         text: Strings.delay-step(root.delta);
-        font-size: Tokens.font-size-caption;
+        font-size: Tokens.font-size-callout;
         color: Tokens.text;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -2849,15 +2861,21 @@ export component SyncControls inherits VerticalLayout {
 
             // One button for both, so the keyboard focus stays on it when
             // a calibration starts or ends.
-            Button {
+            // The Mac's small push button (CalibrationViews.swift:53-56): 20 pt high, 11 pt text.
+            SmallButton {
+                grey: true;
+                height: 20px;
+                font-size: Tokens.font-size-subheadline;
+                horizontal-stretch: 0;
                 text: root.calibrating ? Strings.calibration-cancel : Strings.calibrate-with-microphone;
-                enabled: root.calibrating || root.calibration-enabled;
+                dimmed: !(root.calibrating || root.calibration-enabled);
+                accessible-enabled: root.calibrating || root.calibration-enabled;
                 accessible-label: root.calibrating ? Strings.calibration-cancel-label(root.name) : Strings.calibrate-label(root.name);
                 accessible-description: root.calibration-status != "" ? root.calibration-status : Strings.calibration-hint(root.reference-name);
                 clicked => {
                     if root.calibrating {
                         root.cancel-calibration();
-                    } else {
+                    } else if root.calibration-enabled {
                         root.calibrate();
                     }
                 }

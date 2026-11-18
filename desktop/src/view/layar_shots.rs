@@ -44,8 +44,8 @@ type Size = (f32, f32);
 /// main.slint's preferred size and its smallest (min-width, min-height).
 const MAIN: Size = (696.0, 632.0);
 const MAIN_SMALLEST: Size = (696.0, 440.0);
-/// equalizer.slint's fixed width; 420 is the height the older shot test used.
-const EQUALIZER: Size = (520.0, 420.0);
+/// equalizer.slint's fixed width; the window's height is its content's.
+const EQUALIZER_WIDTH: f32 = 520.0;
 const EQUALIZER_SMALLEST: Size = (520.0, 360.0);
 /// help.slint's and remote.slint's preferred sizes.
 const GUIDE: Size = (640.0, 600.0);
@@ -252,7 +252,7 @@ impl Scene {
         self.size(window, (FLYOUT_WIDTH, self.app.flyout.get_fit_height()));
     }
 
-    fn equalizer(&self, size: Size) -> Result<Win, String> {
+    fn equalizer(&self, size: Option<Size>) -> Result<Win, String> {
         let equalizer = &self.app.equalizer();
         equalizer.show().map_err(|error| error.to_string())?;
         equalizer.invoke_enabled_toggled(true);
@@ -264,6 +264,7 @@ impl Scene {
         for (band, gain) in loudness.expect("Loudness").gains_db.iter().enumerate() {
             equalizer.invoke_gain_changed(band as i32, *gain as f32);
         }
+        let size = size.unwrap_or((EQUALIZER_WIDTH, equalizer.get_fit_height()));
         self.size(equalizer.window(), size);
         Ok(Win(Shown::Equalizer, size))
     }
@@ -730,8 +731,9 @@ fn results(names: [&str; 4]) -> SheetState {
         name: name.into(),
         class,
         old_ms: Some(2000.0),
+        // As adapter.rs sets it: the reference has no Measure Again.
+        can_measure_again: state != SheetRowState::Reference,
         state,
-        can_measure_again: true,
     };
     SheetState {
         rows: vec![
@@ -1577,18 +1579,18 @@ fn b09() -> Vec<Row> {
 fn b10() -> Vec<Row> {
     vec![
         row("B10", "EQ-WINDOW", |s| {
-            let win = s.equalizer(EQUALIZER)?;
+            let win = s.equalizer(None)?;
             // As the Mac render's: just opened, with no band focused.
             s.app.equalizer().invoke_take_focus();
             Ok(win)
         }),
         row("B10", "EQ-CURVE-MENU", |s| {
-            let win = s.equalizer(EQUALIZER)?;
+            let win = s.equalizer(None)?;
             click(&s.app.equalizer(), "Curve")?;
             Ok(win)
         }),
         row("B10", "EQ-SLIDER-DRAG", |s| {
-            let win = s.equalizer(EQUALIZER)?;
+            let win = s.equalizer(None)?;
             let at = center(&find(&s.app.equalizer(), "32 Hz")?);
             let window = leaked(s.app.equalizer());
             let button = PointerEventButton::Left;
@@ -1602,7 +1604,9 @@ fn b10() -> Vec<Row> {
             settle(window);
             Ok(win)
         }),
-        row("B10", "EQ-SMALLEST", |s| s.equalizer(EQUALIZER_SMALLEST)),
+        row("B10", "EQ-SMALLEST", |s| {
+            s.equalizer(Some(EQUALIZER_SMALLEST))
+        }),
     ]
 }
 
