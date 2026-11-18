@@ -1008,21 +1008,23 @@ final class OutputRenderer: FadingOutput {
             timer.setEventHandler { [weak self] in
                 guard let self else { return }
                 let longest = target.intervalMaxNs.exchange(0, ordering: .relaxed)
-                guard target.anchorBase.load(ordering: .relaxed) != .min else { return }
-                let anchorNs = target.anchorLast.load(ordering: .relaxed)
-                let hostNs = HostClock.now()
+                let callbacks = target.callbacks.exchange(0, ordering: .relaxed)
                 var measured: Double?
-                if let previous {
-                    if let step = BluetoothWatch.anchorStep(previousNs: previous.anchorNs, currentNs: anchorNs) {
-                        DebugTrace.log(BluetoothWatch.stepLine(name: self.name, stepNs: step))
+                if target.anchorBase.load(ordering: .relaxed) != .min {
+                    let anchorNs = target.anchorLast.load(ordering: .relaxed)
+                    let hostNs = HostClock.now()
+                    if let previous {
+                        if let step = BluetoothWatch.anchorStep(previousNs: previous.anchorNs, currentNs: anchorNs) {
+                            DebugTrace.log(BluetoothWatch.stepLine(name: self.name, stepNs: step))
+                        }
+                        measured = BluetoothWatch.measuredRate(nominal: nominalRate,
+                                                               anchorDeltaNs: anchorNs &- previous.anchorNs,
+                                                               hostDeltaNs: hostNs &- previous.hostNs)
                     }
-                    measured = BluetoothWatch.measuredRate(nominal: nominalRate,
-                                                           anchorDeltaNs: anchorNs &- previous.anchorNs,
-                                                           hostDeltaNs: hostNs &- previous.hostNs)
+                    previous = (anchorNs, hostNs)
                 }
-                previous = (anchorNs, hostNs)
                 DebugTrace.log(BluetoothWatch.pacingLine(name: self.name, nominal: nominalRate, measured: measured,
-                                                         maxIntervalNs: longest))
+                                                         maxIntervalNs: longest, callbacks: callbacks))
             }
             timer.resume()
             self.timer = timer
@@ -1391,11 +1393,16 @@ enum BluetoothWatch {
         return nominal * (1 - Double(anchorDeltaNs) / Double(hostDeltaNs))
     }
 
-    static func pacingLine(name: String, nominal: Double, measured: Double?, maxIntervalNs: UInt64) -> String {
+    /// Without a callback in the span the anchor stood still, so a rate would read as a healthy one.
+    static func pacingLine(name: String, nominal: Double, measured: Double?, maxIntervalNs: UInt64,
+                           callbacks: UInt64) -> String {
+        guard callbacks > 0 else {
+            return "[AudioSync] \"\(name)\" IO pacing over \(pacingEveryS) s: no callbacks"
+        }
         let rate = measured.map { String(format: "%.2f Hz (%+.1f ppm)", $0, ($0 / nominal - 1) * 1e6) } ?? "n/a"
         let interval = maxIntervalNs > 0 ? String(format: "%.1f ms", Double(maxIntervalNs) / 1e6) : "n/a"
         return "[AudioSync] \"\(name)\" IO pacing over \(pacingEveryS) s: sample rate vs host clock \(rate), "
-            + "longest callback interval \(interval)"
+            + "longest callback interval \(interval), \(callbacks) callbacks"
     }
 }
 
@@ -1449,6 +1456,8 @@ private final class RenderTarget {
     /// interval between two starts since the Bluetooth probe's last take.
     let previousStartNs = Atomic<UInt64>(0)
     let intervalMaxNs = Atomic<UInt64>(0)
+    /// Render callbacks since the Bluetooth probe's last take.
+    let callbacks = Atomic<UInt64>(0)
 
     init(owner: OutputRenderer, renderer: CoreRenderer, channels: Int, leadNs: UInt64, rate: Double) {
         self.owner = owner
@@ -1462,6 +1471,7 @@ private final class RenderTarget {
     /// buffer ends. Lock-free stores only.
     @inline(__always)
     private func timeBuffer(_ stamp: AudioTimeStamp, frames: Int) {
+        _ = callbacks.wrappingAdd(1, ordering: .relaxed)
         // A gap in the device's own output timeline is time it played with no buffer from us.
         guard stamp.mFlags.contains(.hostTimeValid) else { return }
         let startNs = clock.nanoseconds(ticks: stamp.mHostTime)

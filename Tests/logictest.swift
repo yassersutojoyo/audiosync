@@ -11002,13 +11002,18 @@ do {
     check(BluetoothWatch.measuredRate(nominal: 44_100, anchorDeltaNs: 0, hostDeltaNs: 0) == nil
               && BluetoothWatch.measuredRate(nominal: 0, anchorDeltaNs: 0, hostDeltaNs: 5_000_000_000) == nil,
           "Bluetooth probe: no rate without a span or a nominal rate")
-    let btPacing = BluetoothWatch.pacingLine(name: "Soundcore", nominal: 44_100, measured: btRate, maxIntervalNs: 23_400_000)
+    let btPacing = BluetoothWatch.pacingLine(name: "Soundcore", nominal: 44_100, measured: btRate, maxIntervalNs: 23_400_000,
+                                             callbacks: 431)
     check(btPacing == "[AudioSync] \"Soundcore\" IO pacing over 5 s: sample rate vs host clock 44095.59 Hz (-100.0 ppm), "
-              + "longest callback interval 23.4 ms",
+              + "longest callback interval 23.4 ms, 431 callbacks",
           "Bluetooth probe: the pacing line", btPacing)
-    check(BluetoothWatch.pacingLine(name: "Soundcore", nominal: 44_100, measured: nil, maxIntervalNs: 0)
-              == "[AudioSync] \"Soundcore\" IO pacing over 5 s: sample rate vs host clock n/a, longest callback interval n/a",
+    check(BluetoothWatch.pacingLine(name: "Soundcore", nominal: 44_100, measured: nil, maxIntervalNs: 0, callbacks: 1)
+              == "[AudioSync] \"Soundcore\" IO pacing over 5 s: sample rate vs host clock n/a, longest callback interval n/a, 1 callbacks",
           "Bluetooth probe: the first pacing line has no rate yet")
+    // A stalled output's anchor stands still, which alone would read as +0.0 ppm.
+    check(BluetoothWatch.pacingLine(name: "Soundcore", nominal: 44_100, measured: 44_100, maxIntervalNs: 0, callbacks: 0)
+              == "[AudioSync] \"Soundcore\" IO pacing over 5 s: no callbacks",
+          "Bluetooth probe: a span without callbacks says so instead of a rate")
 }
 
 // MARK: Output stall: a render callback that stops while its device stays alive (OutputStall.swift, S334)
