@@ -2639,8 +2639,7 @@ impl<D: Driver> Controller<D> {
     /// Moves each restart of an output on a new Bluetooth link a poll on
     /// (S325): one due fades out, one whose fade has played (or that is
     /// still fading after [`STOP_FADE_CAP`]) is released and rests, and one
-    /// rested is left to the output sync, which starts it again. Then each
-    /// second restart that is due begins the same way.
+    /// rested is left to the output sync, which starts it again.
     fn tick_fresh_restarts(&mut self) {
         // First, so one whose rest ends as its device leaves is still lost.
         self.cancel_stale_fresh_restarts();

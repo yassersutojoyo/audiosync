@@ -6394,18 +6394,18 @@ do {
         _ = reseatLinks.decide(uid: "bt", bluetooth: true, now: 23.5, session: 1)
         let atQuickRestart = reseatLinks.takeReseat(uid: "bt", session: 1, now: 23.5)
         _ = reseatLinks.decide(uid: "bt", bluetooth: true, now: 326.5, session: 1)
-        let atCalmRestart = reseatLinks.takeReseat(uid: "bt", session: 1, now: 326.5)
+        let atLaterStart = reseatLinks.takeReseat(uid: "bt", session: 1, now: 326.5)
         reseatLinks.noteListing(["builtin", "usb"], now: 400, session: 1)
         reseatLinks.noteListing(["bt", "builtin", "usb"], now: 410, session: 1)
         let reseatNextSession = reseatLinks.takeReseat(uid: "bt", session: 2, now: 700)
         let reseatCalls = FreshLinkWatch.reseats(of: "bt", running: ["bt", "builtin", "usb"],
                                                  holdBacks: ["bt": 0, "builtin": 211, "usb": 361],
                                                  before: ["bt": 0, "builtin": 211, "usb": 361])
-        check(!atSessionStart && atReturn && !atReturnAgain && !atQuickRestart && !atCalmRestart
+        check(!atSessionStart && atReturn && !atReturnAgain && !atQuickRestart && !atLaterStart
                 && !reseatNextSession && reseatCalls == ["builtin": 211, "usb": 361],
               "EC2 Bluetooth fresh link: a link back mid-session gives every other output one call at its current "
                 + "hold-back at its first start, none at an ordinary start",
-              "\(atSessionStart) \(atReturn) \(atReturnAgain) \(atQuickRestart) \(atCalmRestart) "
+              "\(atSessionStart) \(atReturn) \(atReturnAgain) \(atQuickRestart) \(atLaterStart) "
                 + "\(reseatNextSession) \(reseatCalls)")
     }
     // covers: S325 (a re-seat comes at most once per 5 minutes per speaker, skips an output this sync re-timed, ends with a sleep)
@@ -6418,7 +6418,10 @@ do {
         flapLinks.noteListing(["builtin"], now: 60, session: 1)
         flapLinks.noteListing(["bt", "builtin"], now: 70, session: 1)
         let flapSecond = flapLinks.takeReseat(uid: "bt", session: 1, now: 70.5)
-        let flapCalm = flapLinks.takeReseat(uid: "bt", session: 1, now: 375.5)
+        let flapLaterStart = flapLinks.takeReseat(uid: "bt", session: 1, now: 375.5)
+        flapLinks.noteListing(["builtin"], now: 380, session: 1)
+        flapLinks.noteListing(["bt", "builtin"], now: 390, session: 1)
+        let flapThird = flapLinks.takeReseat(uid: "bt", session: 1, now: 390.5)
         let nappedLinks = FreshLinkWatch()
         nappedLinks.noteListing(["bt"], now: 0, session: 1)
         nappedLinks.noteListing([], now: 5, session: 1)
@@ -6428,10 +6431,12 @@ do {
         let reseatSkipped = FreshLinkWatch.reseats(of: "bt", running: ["bt", "builtin", "usb"],
                                                    holdBacks: ["bt": 0, "builtin": 211, "usb": 361],
                                                    before: ["bt": 0, "builtin": 0, "usb": 361])
-        check(flapFirst && !flapSecond && !flapCalm && !nappedReseat && reseatSkipped == ["usb": 361],
-              "EC2 Bluetooth fresh link: a return 60 s after a re-seat re-seats nothing, nor does a start 305 s on; "
+        check(flapFirst && !flapSecond && !flapLaterStart && flapThird && !nappedReseat
+                && reseatSkipped == ["usb": 361],
+              "EC2 Bluetooth fresh link: a return 60 s after a re-seat re-seats nothing, nor does a start 305 s on, "
+                + "a return 380 s after it does; "
                 + "a sleep drops a re-seat due, and an output this sync re-timed is not re-seated again",
-              "\(flapFirst) \(flapSecond) \(flapCalm) \(nappedReseat) \(reseatSkipped)")
+              "\(flapFirst) \(flapSecond) \(flapLaterStart) \(flapThird) \(nappedReseat) \(reseatSkipped)")
     }
     do {
         var defaultLog = DefaultDeviceLog()
