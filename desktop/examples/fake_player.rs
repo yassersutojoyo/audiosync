@@ -15,6 +15,9 @@
 //! Audio" follows it. It plays no audio, so it is never offered as an app
 //! source of its own.
 
+// Off Windows only `main`'s notice builds; the player stays for its tests.
+#![cfg_attr(not(windows), allow(dead_code))]
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Track {
     title: String,
