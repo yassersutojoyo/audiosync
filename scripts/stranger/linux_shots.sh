@@ -74,7 +74,9 @@ fi
 sleep 1
 
 if [ "$group" = nowplaying ]; then
-  convert -size 300x300 xc:'#2f6f8f' "$work/cover.png"
+  # A patterned test cover: a two-colour gradient over a checkerboard.
+  convert -size 300x300 gradient:'#2f6f8f-#f0c040' -size 300x300 pattern:checkerboard \
+    -compose multiply -composite "$work/cover.png"
   python3 -I "$here/mpris_player.py" "$work/cover.png" > "$work/player.out" 2>&1 &
   pids+=($!)
   sleep 1
