@@ -49,6 +49,10 @@ PLATFORM_LABELS = [
     (re.compile(r"^Exit AudioSync$"), "Quit AudioSync"),
 ]
 
+# The header's status line, keyed by its role: its text differs by platform
+# (the Mac adds the AirPlay delay), so the text is compared apart.
+STATUS_LINE = re.compile(r"^Streaming to \d+ speakers?")
+
 
 def load(folder):
     states = {}
@@ -95,6 +99,9 @@ def as_mac(state):
 
 
 def keyed(elements):
+    elements = [
+        dict(e, key="Status line", text=e["key"]) if STATUS_LINE.match(e["key"]) else e for e in elements
+    ]
     ordered = sorted(elements, key=lambda e: (e["frame"][1], e["frame"][0]))
     seen = {}
     out = {}
@@ -128,6 +135,8 @@ def moved(a, b, shifts):
 
 def changes(a, b, frame_moved):
     found = []
+    if a.get("text", "") != b.get("text", ""):
+        found.append(f'text {a["text"]} vs {b["text"]}')
     if frame_moved:
         found.append(f'frame {fmt(a["frame"])} vs {fmt(b["frame"])}')
     fa, fb = a.get("font"), b.get("font")

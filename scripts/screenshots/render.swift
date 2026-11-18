@@ -297,8 +297,8 @@ func panelShot(_ model: AppModel, look: Look) -> NSBitmapImageRep {
 // MARK: - LAYAR states
 
 /// The commonest pixel in `rect` (points from the top left) as the background,
-/// and the commonest one whose channels differ from it by more than 96 in sum
-/// as the foreground, one sample per point: the desktop's layar_shots samples
+/// and the one farthest from it (channel sum, more than 96) as the foreground,
+/// one sample per point: the desktop's layar_shots samples
 /// its photos the same way (`sampled_colours`). The capture leaves the window's
 /// background out (transparent pixels read as black), so each pixel is laid
 /// over `behind` (0-255 sRGB) first, as the window shows it.
@@ -321,9 +321,11 @@ func sampledColours(_ rep: NSBitmapImageRep, _ rect: CGRect, behind: [Int]) -> (
     }
     guard let bg = commonest({ _ in true }) else { return (nil, nil) }
     func channels(_ rgb: UInt32) -> [Int] { [Int(rgb >> 16 & 255), Int(rgb >> 8 & 255), Int(rgb & 255)] }
-    let far = { (rgb: UInt32) in zip(channels(rgb), channels(bg)).map { abs($0 - $1) }.reduce(0, +) > 96 }
+    let distance = { (rgb: UInt32) in zip(channels(rgb), channels(bg)).map { abs($0 - $1) }.reduce(0, +) }
+    let farthest = counts.filter { distance($0.key) > 96 }
+        .max { (distance($0.key), $0.value, $0.key) < (distance($1.key), $1.value, $1.key) }?.key
     let hex = { (rgb: UInt32) in String(format: "#%06x", rgb) }
-    return (commonest(far).map(hex), hex(bg))
+    return (farthest.map(hex), hex(bg))
 }
 
 /// The `layarKey` marks of the view last drawn, in its points from the top left.
