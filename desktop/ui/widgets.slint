@@ -2091,6 +2091,8 @@ export component FadeScrollView {
     in property <color> fade-color;
     // Room past each side that the content may reach without being cut.
     in property <length> bleed;
+    // Room under the content, for the bottom fade to fall on.
+    in property <length> end-padding: root.fade;
     callback blank-clicked();
     out property <length> fade: 12px;
     out property <float> top-fade: clamp(-flickable.content-y / root.fade, 0, 1);
@@ -2117,7 +2119,7 @@ export component FadeScrollView {
             VerticalLayout {
                 padding-left: root.bleed;
                 padding-right: root.bleed;
-                padding-bottom: root.fade;
+                padding-bottom: root.end-padding;
                 @children
             }
         }
