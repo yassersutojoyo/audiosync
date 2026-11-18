@@ -650,6 +650,11 @@ export global Strings {
         }
         return @tr("Streaming to {n} speaker" | "Streaming to {n} speakers" % speakers);
     }
+    // The main window's state line while an AirPlay speaker streams.
+    // `seconds` has one decimal, such as "1.8".
+    public pure function main-status(status: string, seconds: string) -> string {
+        return @tr("{0} · AirPlay delay {1} s", status, seconds);
+    }
 
     // The tray icon's tooltip, with the facts VoiceOver reads on the Mac's
     // menu bar icon: streaming on or off, the speakers on, the notices.

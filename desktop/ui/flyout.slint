@@ -494,6 +494,7 @@ component FlyoutRow inherits Rectangle {
             // The Mac's AvailabilityNote leads with a lock or a triangle, 3 apart.
             HorizontalLayout {
                 horizontal-stretch: 1;
+                alignment: end;
                 spacing: 3px;
 
                 if root.availability-note != "": Glyph {
@@ -504,7 +505,6 @@ component FlyoutRow inherits Rectangle {
 
                 if Strings.speaker-caption(root.caption, root.note) != "": QuietText {
                     text: Strings.speaker-caption(root.caption, root.note);
-                    horizontal-stretch: 1;
                     horizontal-alignment: right;
                     vertical-alignment: center;
                     wrap: no-wrap;

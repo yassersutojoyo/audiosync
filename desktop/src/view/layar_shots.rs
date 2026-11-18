@@ -26,7 +26,7 @@ use i_slint_backend_testing::{ElementHandle, ElementQuery};
 use slint::platform::{Key, PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, SharedString};
 
-use super::tests::{app_over, hold_clock, leaked};
+use super::tests::{advance_clock, app_over, hold_clock, leaked};
 use super::{App, RenamePlace};
 use crate::audio::calibration::{Failure, Phase, Step, Which};
 use crate::now_playing_card::fake::FakeControls;
@@ -481,7 +481,7 @@ fn render(window: &slint::Window) {
     let _ = window.take_snapshot();
 }
 
-/// Lets the timers and animations run for 600 ms of Slint's held clock.
+/// Lets the timers and animations run for about 900 ms of Slint's held clock.
 fn settle(window: &slint::Window) {
     for _ in 0..4 {
         std::thread::sleep(Duration::from_millis(150));
@@ -489,6 +489,13 @@ fn settle(window: &slint::Window) {
         slint::platform::update_timers_and_animations();
         render(window);
     }
+    // The header's state line fades one step per 16 ms frame; four frames
+    // left it at under half its opacity in the 18 Nov photos.
+    for _ in 0..20 {
+        advance_clock(Duration::from_millis(16));
+        slint::platform::update_timers_and_animations();
+    }
+    render(window);
 }
 
 /// The first element of `component` with a size whose accessible label is
@@ -890,8 +897,12 @@ fn b02() -> Vec<Row> {
             s.play(long_track());
             s.main()
         }),
+        // As the Mac's photo: AirPlay's first look is over and found nothing.
         row("B02", "MAIN-EMPTY", |s| {
-            s.edit(|state| state.speakers.clear());
+            s.edit(|state| {
+                state.speakers.clear();
+                state.airplay_none_found = true;
+            });
             s.main()
         }),
         row("B02", "MAIN-SMALLEST", |s| s.main_at(MAIN_SMALLEST)),
@@ -1025,7 +1036,7 @@ fn b03() -> Vec<Row> {
         }),
         row("B03", "MAIN-ROW-CONNECTING", |s| {
             s.speaker(KITCHEN, |kitchen| {
-                kitchen.waiting = Some(Waiting::ForDevice)
+                kitchen.waiting = Some(Waiting::Reconnecting)
             })?;
             s.main()
         }),
@@ -1333,8 +1344,12 @@ fn b08() -> Vec<Row> {
             s.play(track(true, true));
             s.flyout()
         }),
+        // As the Mac's photo: AirPlay is still taking its first look.
         row("B08", "TRAY-EMPTY", |s| {
-            s.edit(|state| state.speakers.clear());
+            s.edit(|state| {
+                state.speakers.clear();
+                state.airplay_searching = true;
+            });
             s.flyout()
         }),
         row("B08", "TRAY-LONGNAME", |s| {

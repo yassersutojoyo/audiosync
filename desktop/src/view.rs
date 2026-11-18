@@ -3240,8 +3240,17 @@ impl App {
         if state.master_volume >= UNMUTE_FLOOR {
             self.unmute_to.set(state.master_volume);
         }
-        for window in [&self.main as &dyn WindowState, &self.flyout] {
-            window.show_state(&state, &status, source_index);
+        let main_status = match state.status_airplay_tenths() {
+            Some(tenths) => strings.invoke_main_status(
+                status.clone(),
+                format!("{}.{}", tenths / 10, tenths % 10).into(),
+            ),
+            None => status.clone(),
+        };
+        let windows: [(&dyn WindowState, &SharedString); 2] =
+            [(&self.main, &main_status), (&self.flyout, &status)];
+        for (window, status) in windows {
+            window.show_state(&state, status, source_index);
             window.show_live_input_hint(&live_hint);
         }
         self.main.set_equalizer_on(state.equalizer.enabled);
@@ -11535,6 +11544,32 @@ pub(crate) mod tests {
         }
     }
 
+    /// A note too long for its line wraps to a second line and the row grows,
+    /// as the Mac's (MainWindow.swift:2424-2430, `.lineLimit(2)`), instead of
+    /// ending in "…" after a few words.
+    #[test]
+    fn a_long_row_note_wraps_to_two_lines() {
+        use i_slint_backend_testing::ElementHandle;
+        let mut backend = MockBackend::new();
+        backend.set_running(true);
+        let mut gone = backend
+            .snapshot()
+            .speaker("airplay:kitchen")
+            .unwrap()
+            .clone();
+        gone.id = "airplay:gone".into();
+        gone.waiting = Some(ui_model::Waiting::NotOnNetwork);
+        backend.add_speaker(gone);
+        let app = app_over(backend);
+        app.main.show().expect("the main window shows");
+        draw_frames_at(696, 632);
+        draw_frames_at(696, 632);
+        let tallest = ElementHandle::find_by_element_id(&app.main, "SpeakerRow::note-label")
+            .map(|note| note.size().height)
+            .fold(0.0, f32::max);
+        // Two caption lines of about 13.5 px, not one (17 px with the name), nor three.
+        assert!((24.0..=32.0).contains(&tallest), "{tallest} px");
+    }
     /// A long name's line stops 6 px before the row's delay column, the Mac row's
     /// spacing (MainWindow.swift:2371), however close the value sits to the
     /// options after it.
@@ -13582,6 +13617,20 @@ pub(crate) mod tests {
         let line = &line[..line.find('}').expect("its end")];
         assert!(line.contains("overflow: elide;"), "a long name elides");
         assert!(line.contains("wrap: no-wrap;"), "it stays on one line");
+    }
+
+    /// While an AirPlay speaker streams, the main window's state line names
+    /// the AirPlay delay to a tenth of a second and the tray panel's doesn't,
+    /// as on the Mac (Localization.swift:190-195, MenuBar.swift:658-667).
+    #[test]
+    fn the_main_status_names_the_airplay_delay_while_airplay_streams() {
+        let app = app_over(MockBackend::new());
+        app.main.invoke_power_toggled(true);
+        let (main, tray) = (app.main.get_status(), app.flyout.get_status());
+        assert!(main.ends_with(" · AirPlay delay 1.8 s"), "{main}");
+        assert_eq!(main.as_str(), format!("{tray} · AirPlay delay 1.8 s"));
+        app.main.invoke_power_toggled(false);
+        assert_eq!(app.main.get_status(), app.flyout.get_status(), "off");
     }
 
     /// Flipping the switch cross-fades the header's old state into the new
