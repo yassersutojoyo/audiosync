@@ -1,0 +1,11 @@
+{"window": [696, 600], "elements": [
+ {"key": "Alpha", "frame": [450, 106, 32, 32], "font": null, "fg": null, "bg": null},
+ {"key": "Beta", "frame": [450, 160, 32, 32], "font": null, "fg": null, "bg": null},
+ {"key": "Gamma", "frame": [450, 226, 32, 32], "font": null, "fg": null, "bg": null},
+ {"key": "Room", "frame": [256, 100, 32, 32], "font": null, "fg": null, "bg": null},
+ {"key": "Room name", "frame": [300, 99, 52, 18], "font": null, "fg": null, "bg": null},
+ {"key": "Den", "frame": [256, 156, 32, 32], "font": null, "fg": null, "bg": null},
+ {"key": "Hall", "frame": [256, 216, 32, 32], "font": null, "fg": null, "bg": null},
+ {"key": "Gear", "frame": [601, 35, 32, 32], "font": null, "fg": null, "bg": null},
+ {"key": "Notice", "frame": [20, 300, 400, 80], "font": null, "fg": null, "bg": null}
+]}
