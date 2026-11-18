@@ -224,12 +224,20 @@ $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\si
 & $signtool.FullName sign /fd SHA256 /sm /s My /sha1 $cert.Thumbprint (Join-Path $driver 'scream.cat')
 if ($LASTEXITCODE -ne 0) { Not-Tried "signtool could not sign the catalog (exit $LASTEXITCODE)" }
 pnputil /add-driver (Join-Path $driver 'Scream.inf') /install | Tee-Object -FilePath "$Work/env.txt" -Append
-"software device: $([SoftwareDevice]::Create('AudioSyncCI', '*Scream', 'Speakers'))" | Tee-Object -FilePath "$Work/env.txt" -Append
+$created = [SoftwareDevice]::Create('AudioSyncCI', '*Scream', 'Speakers')
+"software device: $created" | Tee-Object -FilePath "$Work/env.txt" -Append
+# Run 44292105824 (Server 2025) refused SWD with 0x8007007E: a ROOT device
+# instead, which AudioSync lists as virtual, so This PC has no System slider.
+$script:builtIn = $created.StartsWith('0x00000000')
+if (-not $script:builtIn) {
+  & (Join-Path $fixture 'scream/Install/helpers/devcon-x64.exe') install (Join-Path $driver 'Scream.inf') '*Scream' |
+    Tee-Object -FilePath "$Work/env.txt" -Append
+}
 
 $count = 0
 for ($i = 0; $i -lt 60 -and $count -eq 0; $i++) { Start-Sleep -Seconds 1; $count = [Endpoints]::ActiveCount() }
 "active output endpoints with the driver: $count" | Tee-Object -FilePath "$Work/env.txt" -Append
-Get-PnpDevice -PresentOnly -Class MEDIA, AudioEndpoint | Format-Table -AutoSize Status, Class, FriendlyName, InstanceId |
+Get-PnpDevice -PresentOnly -Class MEDIA, AudioEndpoint -ErrorAction SilentlyContinue | Format-Table -AutoSize Status, Class, FriendlyName, InstanceId |
   Out-String -Width 200 | Tee-Object -FilePath "$Work/env.txt" -Append
 $default = Get-Defaults
 "default output: $default" | Tee-Object -FilePath "$Work/env.txt" -Append
@@ -291,6 +299,7 @@ $toggles = Get-Toggles
 "toggles: $(($toggles | ForEach-Object { "'$($_.Current.Name)'=$(Test-On $_)" }) -join ', ')" | Tee-Object -FilePath "$Work/result.txt" -Append
 $streaming = $toggles | Where-Object { $_.Current.Name -eq 'Streaming' } | Select-Object -First 1
 $row = $toggles | Where-Object { $_.Current.Name -match 'Speakers|Scream' } | Select-Object -First 1
+if (-not $row -and -not $script:builtIn) { Not-Tried 'the ROOT endpoint has no row in the main window' }
 if (-not $streaming -or -not $row) { throw 'no Streaming switch or no row for the endpoint (see toggles above)' }
 if (-not (Test-On $row)) { $row.GetCurrentPattern($TogglePattern).Toggle(); Start-Sleep -Seconds 2 }
 $streaming.GetCurrentPattern($TogglePattern).Toggle()
@@ -312,26 +321,31 @@ Check 'A1.2' ((Test-Alive) -and (Test-On $streaming)) 'the stream goes on after 
 (Get-LogLines 'device volume: 30%') | Select-Object -First 2 | ForEach-Object { "log: $($_.Line)" }
 
 # A1.8: the System slider on the muted default unmutes it.
-[Endpoints]::SetMute($true)
-Start-Sleep -Seconds 3
-$opener = Find-Named 'System volume'
-if ($opener) {
-  $opener.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-  Start-Sleep -Seconds 2
-}
-$sliderType = New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, [System.Windows.Automation.ControlType]::Slider)
-$slider = Find-All $sliderType | Where-Object { $_.Current.Name -like 'Windows volume of *' } | Select-Object -First 1
-Check 'A1.8' ([bool]$slider) "the This PC row's System slider is there (opener found: $([bool]$opener))"
-if ($slider) {
-  $main.SetFocus()
-  $slider.SetFocus()
-  Start-Sleep -Milliseconds 500
-  [System.Windows.Forms.SendKeys]::SendWait('{LEFT}')
+if (-not $script:builtIn) {
+  "NOT TRIED A1.8: the endpoint is a ROOT device, listed as virtual, so This PC shows no System slider" |
+    Tee-Object -FilePath "$Work/result.txt" -Append
+} else {
+  [Endpoints]::SetMute($true)
   Start-Sleep -Seconds 3
-  $muted = [Endpoints]::Muted()
-  $after = [Endpoints]::Level()
-  Check 'A1.8' (-not $muted) "a move of the System slider unmuted the default (muted: $muted, level $([math]::Round($after * 100, 1))%)"
-  Check 'A1.8' ((Test-Alive) -and (Test-On $streaming)) 'the stream goes on after the slider move'
+  $opener = Find-Named 'System volume'
+  if ($opener) {
+    $opener.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Start-Sleep -Seconds 2
+  }
+  $sliderType = New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, [System.Windows.Automation.ControlType]::Slider)
+  $slider = Find-All $sliderType | Where-Object { $_.Current.Name -like 'Windows volume of *' } | Select-Object -First 1
+  Check 'A1.8' ([bool]$slider) "the This PC row's System slider is there (opener found: $([bool]$opener))"
+  if ($slider) {
+    $main.SetFocus()
+    $slider.SetFocus()
+    Start-Sleep -Milliseconds 500
+    [System.Windows.Forms.SendKeys]::SendWait('{LEFT}')
+    Start-Sleep -Seconds 3
+    $muted = [Endpoints]::Muted()
+    $after = [Endpoints]::Level()
+    Check 'A1.8' (-not $muted) "a move of the System slider unmuted the default (muted: $muted, level $([math]::Round($after * 100, 1))%)"
+    Check 'A1.8' ((Test-Alive) -and (Test-On $streaming)) 'the stream goes on after the slider move'
+  }
 }
 
 $streaming.GetCurrentPattern($TogglePattern).Toggle()
