@@ -25,6 +25,7 @@ permissions:
 
 env:
   SLINT_COMPILER_DENY_WARNINGS: '1'
+  SKIA_BINARIES_URL: file://${{ github.workspace }}/skia-cache/{tag}/skia-binaries-{key}.tar.gz
 
 jobs:
   skia:
