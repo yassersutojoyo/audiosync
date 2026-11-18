@@ -82,7 +82,7 @@ use super::calibration::{CalibrationTap, Engine, Microphone, MicrophoneError};
 use super::capture::{
     Activation, AppNames, CaptureAttempt, CaptureGlitches, CaptureTarget, Feeds, LoopbackMode,
     NameReader, SampleType, decide_apps_capture, decide_capture, decide_except_capture,
-    describe_pair, display_name, input_sources, name_apps, running_app, source_list,
+    describe_pair, input_sources, name_apps, running_app, source_list,
 };
 use super::cast::{CastLink, CastSpeakers, CastTrack};
 use super::cast_address::CastAddress;
@@ -1860,7 +1860,10 @@ impl<D: Driver> Controller<D> {
                     },
                     name: None,
                     mix: Some(Mix {
-                        apps: executables.iter().map(|app| display_name(app)).collect(),
+                        apps: executables
+                            .iter()
+                            .map(|app| self.app_names.label(app))
+                            .collect(),
                         except: matches!(id, SourceId::AppsExcept { .. }),
                     }),
                 }
@@ -1881,7 +1884,7 @@ impl<D: Driver> Controller<D> {
                     .map(|entry| entry.executable.clone())
                     .unwrap_or_default();
                 TrackSource {
-                    name: (!executable.is_empty()).then(|| display_name(&executable)),
+                    name: (!executable.is_empty()).then(|| self.app_names.label(&executable)),
                     follow: Follow::App {
                         executable,
                         pid: Some(*root_pid),
@@ -1925,14 +1928,14 @@ impl<D: Driver> Controller<D> {
         &self.driver
     }
 
-    /// The driver, to change.
-    #[cfg(test)]
     /// Waits for the app names being read.
     #[cfg(test)]
     pub fn wait_app_names(&mut self) {
         self.app_names.wait();
     }
 
+    /// The driver, to change.
+    #[cfg(test)]
     pub fn driver_mut(&mut self) -> &mut D {
         &mut self.driver
     }

@@ -18,7 +18,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::thread::JoinHandle;
+use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 use audiosync_core::channels::{InputPair, pair_to_stereo};
@@ -34,6 +34,7 @@ use super::calibration::{CalibrationTap, Route};
 use super::cast::CastLease;
 use super::outputs::{EndpointReading, is_hands_free};
 use super::process::{IDLE_PID, ProcessTable, SYSTEM_PID};
+use crate::adapter::compare_app_names;
 
 /// The name of the whole-system source in English, as the macOS app shows
 /// it: for logs and the mock. The UI, and AirPlay receivers while no track
@@ -425,10 +426,7 @@ pub fn source_list(
 
 fn sort_by_name(apps: &mut [SourceInfo]) {
     apps.sort_by(|a, b| {
-        a.name
-            .to_lowercase()
-            .cmp(&b.name.to_lowercase())
-            .then_with(|| a.executable.cmp(&b.executable))
+        compare_app_names(&a.name, &b.name).then_with(|| a.executable.cmp(&b.executable))
     });
 }
 
@@ -443,21 +441,56 @@ pub struct AppNames {
 }
 
 impl AppNames {
+    /// Starts reading with `read`, on a thread of its own, the names of the
+    /// apps among `sources` whose executable was never asked for: one read
+    /// can take most of a second, and the window lists sources every few
+    /// seconds.
     pub fn ask(&mut self, sources: &[SourceInfo], read: &NameReader) {
-        let mut known = self.known.lock().unwrap_or_else(PoisonError::into_inner);
-        for source in sources {
-            if let SourceId::App { root_pid } = source.id {
-                known.insert(source.executable.to_lowercase(), read(root_pid));
-            }
+        let unseen: Vec<(u32, String)> = {
+            let mut known = self.known.lock().unwrap_or_else(PoisonError::into_inner);
+            sources
+                .iter()
+                .filter_map(|source| match source.id {
+                    SourceId::App { root_pid } => {
+                        let key = source.executable.to_lowercase();
+                        (!known.contains_key(&key)).then(|| {
+                            known.insert(key.clone(), None);
+                            (root_pid, key)
+                        })
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        if unseen.is_empty() {
+            return;
         }
+        let known = Arc::clone(&self.known);
+        let read = Arc::clone(read);
+        let earlier = self.reading.take();
+        self.reading = Some(thread::spawn(move || {
+            if let Some(earlier) = earlier {
+                let _ = earlier.join();
+            }
+            for (pid, key) in unseen {
+                let name = read(pid);
+                known
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(key, name);
+            }
+        }));
     }
 
+    /// The name read for `executable`, compared without case, once it
+    /// arrived and isn't blank.
     pub fn name(&self, executable: &str) -> Option<String> {
         let known = self.known.lock().unwrap_or_else(PoisonError::into_inner);
         let name = known.get(&executable.to_lowercase())?.as_deref()?.trim();
         (!name.is_empty()).then(|| name.to_owned())
     }
 
+    /// The name to show for `executable`: the one read, else its own.
     pub fn label(&self, executable: &str) -> String {
         self.name(executable)
             .unwrap_or_else(|| display_name(executable))
