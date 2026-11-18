@@ -6899,7 +6899,7 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
             calibration_needs(strings, reference, *missing, name.as_str().into()),
         ),
         AllPhase::AgainFailed(name, failure) => strings.invoke_calibrate_all_again_stopped(
-            calibration_failure(strings, reference, *failure),
+            failure_text(strings, state, reference, *failure),
             name.as_str().into(),
         ),
         AllPhase::Idle if all.other_running => strings.get_calibrate_all_busy(),
@@ -7263,8 +7263,8 @@ fn airplay_moves_line(strings: &Strings<'_>, moves: &AirPlayMoves) -> Option<Sha
     }
 }
 
-/// Why a calibration can't run, where headphones on the PC's jack leave no
-/// reference listed (Mac Localization.swift:489-490).
+/// Why a calibration can't run; headphones on the PC's jack mute its own
+/// speakers, which is why no reference is listed then.
 fn failure_text(
     strings: &Strings<'_>,
     state: &AppState,
@@ -10056,7 +10056,6 @@ pub(crate) mod tests {
             "Calibration measures against the PC's own speakers, and they aren't listed.";
         assert_eq!(lines(&state), [unlisted, unlisted]);
 
-        // Mac Localization.swift:489-490, the Mac's word made the PC's.
         let phones = "Headphones are plugged into the PC, so its own speakers are silent. Unplug them to calibrate.";
         state
             .speakers

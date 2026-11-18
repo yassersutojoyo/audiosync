@@ -15063,7 +15063,7 @@ mod tests {
         // Its endpoint disabled in Windows Sound, the other built-in output
         // becomes the reference (S174).
         unplug(&mut adapter, "builtin");
-        // The results stay, as on the Mac (AppDelegate+CalibrateAll.swift:158-163).
+        // Apply and Measure Again say why they refuse, so the results stay.
         assert!(adapter.snapshot().calibrate_all.sheet.is_some());
         adapter.apply_calibrate_all();
         let state = adapter.snapshot().calibrate_all;
