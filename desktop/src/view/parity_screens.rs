@@ -122,7 +122,7 @@ fn save_curve_names_the_curve_in_place_of_the_menu() {
     use slint::ComponentHandle;
     use slint::platform::Key;
     let app = app_over(crate::ui_model::MockBackend::new());
-    let eq_window = &app.equalizer;
+    let eq_window = &app.equalizer();
     eq_window.show().expect("the equalizer shows headless");
     let window = eq_window.window();
     let names = || {
@@ -137,7 +137,7 @@ fn save_curve_names_the_curve_in_place_of_the_menu() {
     };
     eq_window.invoke_save_curve();
     draw_frames();
-    assert!(!app.zone_dialog.window().is_visible(), "no dialog");
+    assert!(!app.zone_dialog.is_visible(), "no dialog");
     type_text(window, "Desk");
     press(window, Key::Return);
     assert_eq!(names(), ["Desk"]);
@@ -201,7 +201,7 @@ fn the_guide_keeps_its_place_once_shown_and_none_before() {
     app.save_settings();
     assert_eq!(app.backend.borrow().view_settings().guide, None);
     app.show_help();
-    app.help.invoke_close_requested();
+    app.help().invoke_close_requested();
     app.save_settings();
     assert!(app.backend.borrow().view_settings().guide.is_some());
 }
@@ -236,7 +236,7 @@ fn closing_the_equalizer_drops_a_curve_name_being_typed() {
     use super::tests::{app_over, draw_frames, type_text};
     use slint::ComponentHandle;
     let app = app_over(crate::ui_model::MockBackend::new());
-    let eq_window = &app.equalizer;
+    let eq_window = &app.equalizer();
     let window = eq_window.window();
     let closes: [fn(&crate::EqualizerWindow); 2] = [
         |eq| eq.invoke_close_requested(),

@@ -51,14 +51,14 @@ fn open(app: &App, index: usize) {
     let shown = |result: Result<(), slint::PlatformError>| result.expect("the window shows");
     match index {
         0 => app.show_equalizer(),
-        1 => shown(app.zone_dialog.show()),
-        2 => shown(app.pin_dialog.show()),
-        3 => shown(app.password_dialog.show()),
-        4 => shown(app.about.show()),
-        5 => shown(app.guide.show()),
+        1 => shown(app.zone_dialog().show()),
+        2 => shown(app.pin_dialog().show()),
+        3 => shown(app.password_dialog().show()),
+        4 => shown(app.about().show()),
+        5 => shown(app.guide().show()),
         6 => app.show_help(),
         7 => app.show_remote(),
-        8 => shown(app.setup.show()),
+        8 => shown(app.setup().show()),
         _ => app.show_settings(),
     }
 }
@@ -66,16 +66,16 @@ fn open(app: &App, index: usize) {
 /// Runs `f` on the native window of window `index` of [`WINDOWS`].
 fn with_window(app: &App, index: usize, f: impl FnOnce(&slint::Window)) {
     match index {
-        0 => f(app.equalizer.window()),
-        1 => f(app.zone_dialog.window()),
-        2 => f(app.pin_dialog.window()),
-        3 => f(app.password_dialog.window()),
-        4 => f(app.about.window()),
-        5 => f(app.guide.window()),
-        6 => f(app.help.window()),
-        7 => f(app.remote_window.window()),
-        8 => f(app.setup.window()),
-        _ => f(app.settings.window()),
+        0 => f(app.equalizer().window()),
+        1 => f(app.zone_dialog().window()),
+        2 => f(app.pin_dialog().window()),
+        3 => f(app.password_dialog().window()),
+        4 => f(app.about().window()),
+        5 => f(app.guide().window()),
+        6 => f(app.help().window()),
+        7 => f(app.remote_window().window()),
+        8 => f(app.setup().window()),
+        _ => f(app.settings().window()),
     }
 }
 

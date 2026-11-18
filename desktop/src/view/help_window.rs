@@ -14,27 +14,24 @@ use crate::ui_model::{AppState, WindowPlace};
 
 impl App {
     pub(super) fn connect_help(self: &Rc<Self>) {
-        self.follow_frame(|app| app.help.window(), "AudioSync Guide");
+        self.follow_frame(&self.help(), "AudioSync Guide");
         let weak = Rc::downgrade(self);
         let w = weak.clone();
-        self.main
-            .on_help_requested(move || with_app(&w, App::show_help));
-        let w = weak.clone();
-        self.help
+        self.help()
             .on_show_how_requested(move || with_app(&w, App::show_help_double_audio));
         let w = weak.clone();
-        self.help.on_close_requested(move || {
+        self.help().on_close_requested(move || {
             with_app(&w, |app| {
                 app.ui.borrow_mut().guide_place = app.guide_place();
                 // A window that fails to hide stays open; the user can still close it.
-                let _ = app.help.hide();
+                let _ = app.help().hide();
             })
         });
         let w = weak;
-        self.help.window().on_close_requested(move || {
+        self.help().window().on_close_requested(move || {
             with_app(&w, |app| {
                 app.ui.borrow_mut().guide_place = app.guide_place();
-                let _ = app.help.hide();
+                let _ = app.help().hide();
             });
             slint::CloseRequestResponse::HideWindow
         });
@@ -42,28 +39,28 @@ impl App {
 
     /// Opens the Guide, or brings it to the front when it is open.
     pub fn show_help(&self) {
-        let opening = !self.help.window().is_visible();
+        let opening = !self.help.is_visible();
         if opening {
             self.place_guide();
         }
-        if let Err(error) = self.help.show() {
+        if let Err(error) = self.help().show() {
             self.show_window_error(&error);
             return;
         }
         if opening {
-            self.help.invoke_scroll_to_top();
+            self.help().invoke_scroll_to_top();
             self.log.log(|| "AudioSync Guide: opened".to_owned());
         }
-        self.help.invoke_take_focus();
-        crate::platform::bring_to_front(self.help.window());
+        self.help().invoke_take_focus();
+        crate::platform::bring_to_front(self.help().window());
     }
 
     /// Where the Guide is while it shows, else where it was last.
     pub(super) fn guide_place(&self) -> Option<WindowPlace> {
-        let window = self.help.window();
-        if !window.is_visible() {
+        let Some(help) = self.help.built().filter(|help| help.window().is_visible()) else {
             return self.ui.borrow().guide_place;
-        }
+        };
+        let window = help.window();
         let position = window.position();
         Some(WindowPlace {
             x: position.x,
@@ -85,7 +82,8 @@ impl App {
             (0, 0)
         };
         let monitor = crate::platform::monitor_at(f64::from(x), f64::from(y));
-        let window = self.help.window();
+        let help = self.help();
+        let window = help.window();
         let size = window.size().to_logical(window.scale_factor());
         // Before its first showing the window may have no size yet: the Guide's own.
         let size = if size.width > 0.0 {
@@ -109,17 +107,16 @@ impl App {
 
     /// Shows Show How in the Guide only while it has a guide to open.
     pub(super) fn refresh_help(&self, state: &AppState) {
-        self.help
+        self.help()
             .set_show_how_shown(guide::notice_with_guide(&state.notices).is_some());
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use slint::ComponentHandle;
     use slint::platform::Key;
 
-    use super::super::tests::{app_over, draw_frames, hold_clock, let_notice_close, press};
+    use super::super::tests::{app_over, draw_frames, hold_clock, leaked, let_notice_close, press};
     use crate::ui_model::{MockBackend, NoticeMessage, SourceName};
 
     fn heard_twice() -> NoticeMessage {
@@ -134,37 +131,34 @@ mod tests {
     #[test]
     fn help_opens_one_guide_window_that_escape_closes() {
         let app = app_over(MockBackend::new());
-        let window = app.help.window();
+        let window = leaked(app.help());
         assert!(!window.is_visible());
         app.main.invoke_help_requested();
         draw_frames();
         assert!(window.is_visible(), "AudioSync Guide opens it");
-        assert!(
-            !app.guide.window().is_visible(),
-            "not the double-audio guide"
-        );
+        assert!(!app.guide.is_visible(), "not the double-audio guide");
         // The one window, scrolled down, is brought to the front as it is.
         press(window, Key::PageDown);
-        let scrolled = app.help.get_scrolled();
+        let scrolled = app.help().get_scrolled();
         app.main.invoke_help_requested();
         assert!(window.is_visible());
-        assert_eq!(app.help.get_scrolled(), scrolled, "the same window");
+        assert_eq!(app.help().get_scrolled(), scrolled, "the same window");
         press(window, Key::Escape);
         assert!(!window.is_visible(), "Escape closes it");
 
         app.main.invoke_help_requested();
         assert!(window.is_visible(), "it opens again after Escape");
-        app.help.invoke_close_requested();
+        app.help().invoke_close_requested();
         assert!(!window.is_visible(), "Close closes it");
     }
 
     #[test]
     fn the_keyboard_scrolls_the_guide() {
         let app = app_over(MockBackend::new());
-        let window = app.help.window();
+        let window = leaked(app.help());
         app.main.invoke_help_requested();
         draw_frames();
-        let scrolled = || app.help.get_scrolled();
+        let scrolled = || app.help().get_scrolled();
         assert_eq!(scrolled(), 0.0, "it opens at the top");
         press(window, Key::DownArrow);
         let line = scrolled();
@@ -196,13 +190,13 @@ mod tests {
         backend.post("app:player", heard_twice(), "09.41");
         let app = app_over(backend);
         app.main.invoke_help_requested();
-        assert!(app.help.get_show_how_shown(), "the notice is showing");
-        app.help.invoke_show_how_requested();
+        assert!(app.help().get_show_how_shown(), "the notice is showing");
+        app.help().invoke_show_how_requested();
         assert!(
-            app.guide.window().is_visible(),
+            app.guide.is_visible(),
             "Show How opens the double-audio guide"
         );
-        assert!(app.help.window().is_visible(), "the Guide stays open");
+        assert!(app.help.is_visible(), "the Guide stays open");
 
         let id = app.snapshot().notices[0].id;
         hold_clock();
@@ -210,7 +204,7 @@ mod tests {
             .invoke_notice_dismissed(i32::try_from(id).expect("a small ID"));
         let_notice_close();
         assert!(
-            !app.help.get_show_how_shown(),
+            !app.help().get_show_how_shown(),
             "no notice, no Show How in the Guide"
         );
     }
@@ -220,8 +214,8 @@ mod tests {
         let app = app_over(MockBackend::new());
         assert!(app.snapshot().notices.is_empty());
         app.main.invoke_help_requested();
-        assert!(!app.help.get_show_how_shown());
-        app.help.invoke_show_how_requested();
-        assert!(!app.guide.window().is_visible());
+        assert!(!app.help().get_show_how_shown());
+        app.help().invoke_show_how_requested();
+        assert!(!app.guide.is_visible());
     }
 }

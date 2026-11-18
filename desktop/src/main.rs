@@ -796,18 +796,29 @@ mod tests {
     /// windows without a menu bar too.
     #[test]
     fn ctrl_q_exits_from_the_windows_without_a_menu_bar() {
-        let view = include_str!("view.rs");
+        let view = [include_str!("view.rs"), include_str!("view/on_demand.rs")].concat();
         for (name, source) in windows_without_a_menu_bar() {
             let source = lf(source);
             let keys = &source[source.find("keys := FocusScope {").expect("its keys")..];
             assert!(keys.contains(CTRL_Q), "the {name} exits on Ctrl+Q");
         }
-        for window in ["equalizer", "help", "guide", "about"] {
+        for window in ["equalizer", "help", "guide"] {
+            let wire = &view[view
+                .find(&format!("fn wire_{window}("))
+                .expect("its wiring")..];
+            let wire = &wire[..wire
+                .find(
+                    "
+    }
+",
+                )
+                .expect("its end")];
             assert!(
-                view.contains(&format!("self.{window}.on_exit_requested(quit);")),
+                wire.contains("window.on_exit_requested(quit);"),
                 "the {window} window's Ctrl+Q quits"
             );
         }
+        assert!(view.contains("self.about().on_exit_requested(quit);"));
     }
 
     /// `platform::repaint_frame` sends muda's private `MENU_UPDATE_THEME`
@@ -961,8 +972,8 @@ mod tests {
             );
         }
         assert!(include_str!("tray.rs").contains("app.flyout.invoke_take_focus();"));
-        assert!(include_str!("view.rs").contains("self.equalizer.invoke_take_focus();"));
-        assert!(include_str!("view.rs").contains("self.guide.invoke_take_focus();"));
+        assert!(include_str!("view.rs").contains("self.equalizer().invoke_take_focus();"));
+        assert!(include_str!("view.rs").contains("self.guide().invoke_take_focus();"));
     }
 
     /// Slint leaves nothing focused when the focused control is removed, and
