@@ -5289,6 +5289,12 @@ export component ZoneHeader inherits Rectangle {
     changed focused-part => {
         root.focus-changed(self.focused-part);
     }
+    // The options reveal as a speaker row's do (MainWindow.swift:2055).
+    property <float> reveal: hover.has-hover || (MenuState.open != 0 && MenuState.open == root.menu-serial) || root.focused-part == RowPart.options ? 1 : 0;
+    animate reveal {
+        duration: Motion.on ? 440ms : 150ms;
+        easing: Motion.on ? ease-out : linear;
+    }
 
     // A press on the name hides its tooltip until the pointer leaves the name.
     property <bool> tip-allowed: true;
@@ -5482,7 +5488,7 @@ export component ZoneHeader inherits Rectangle {
                                         height: 100%;
                                         text: root.item.name;
                                         font-size: Tokens.font-size-body;
-                                        font-weight: root.item.state == RowState.playing ? Fluent.weight-semibold : Fluent.weight-regular;
+                                        font-weight: Fluent.weight-regular;
                                         text-color: Tokens.text;
                                         accessible-role: none;
                                     }
@@ -5499,9 +5505,9 @@ export component ZoneHeader inherits Rectangle {
                                             }
                                         }
 
-                                        if root.tip-allowed: Tooltip {
+                                        if root.tip-allowed && name-text.preferred-width > name-text.width: Tooltip {
                                             name-tip := LabelTip {
-                                                text: Strings.speaker-name-tooltip(root.item.name, "");
+                                                text: root.item.name;
                                                 max-tip-width: root.width;
                                             }
                                         }
@@ -5621,7 +5627,9 @@ export component ZoneHeader inherits Rectangle {
                             options := IconButton {
                                 glyph: Glyphs.more;
                                 label: Strings.speaker-options(root.item.name);
-                                glyph-color: Tokens.teal-text;
+                                glyph-color: Tokens.secondary-text;
+                                opacity: root.reveal;
+                                glyph-shift: Motion.on ? (1 - root.reveal) * 4px : 0px;
                                 clicked => {
                                     root.open-menu-under-options();
                                 }
