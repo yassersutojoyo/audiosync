@@ -333,6 +333,7 @@ fn buffers_are_sized_by_the_spec_and_allocated_at_the_start() {
     let rig = Rig::new(StreamConfig {
         latency_frames: DEFAULT_LATENCY_FRAMES,
         input_frames: 100,
+        ..StreamConfig::default()
     });
     assert_eq!(rig.stream.input_frames(), 44_100);
     let mut rig = Rig::with_host();
@@ -574,6 +575,7 @@ fn sync_latency_and_times() {
         let rig = Rig::new(StreamConfig {
             latency_frames: asked,
             input_frames: 88_200,
+            ..StreamConfig::default()
         });
         assert_eq!(rig.stream.latency_frames(), got);
     }

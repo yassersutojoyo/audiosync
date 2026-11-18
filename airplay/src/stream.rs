@@ -92,6 +92,10 @@ pub struct StreamConfig {
     pub latency_frames: u32,
     /// The input ring's size in frames, at least 1 s (P111).
     pub input_frames: usize,
+    /// The host answers every latency event with [`Stream::set_latency`],
+    /// so a speaker joining a stream that sent no audio yet waits for it
+    /// (P201).
+    pub host_answers_latency: bool,
 }
 
 impl Default for StreamConfig {
@@ -99,6 +103,7 @@ impl Default for StreamConfig {
         StreamConfig {
             latency_frames: DEFAULT_LATENCY_FRAMES,
             input_frames: DEFAULT_INPUT_FRAMES,
+            host_answers_latency: false,
         }
     }
 }

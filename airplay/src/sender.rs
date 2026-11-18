@@ -709,6 +709,7 @@ impl Sender {
         let stream_config = StreamConfig {
             latency_frames: config.latency_frames,
             input_frames: config.input_frames,
+            ..StreamConfig::default()
         };
         let (stream, writer) = Stream::new(stream_config, clock, Instant::now());
         let stream_counters = stream.counters();

@@ -34,6 +34,7 @@ fn low_rig() -> Rig {
     let mut rig = Rig::new(StreamConfig {
         latency_frames: LOW,
         input_frames: 88_200,
+        ..StreamConfig::default()
     });
     rig.host = Some(Host::new(0.0));
     rig
