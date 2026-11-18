@@ -11385,6 +11385,32 @@ mod tests {
 
     // covers: S325
     #[test]
+    fn a_bluetooth_output_back_mid_session_restarts_once_and_not_at_305_s() {
+        let (mut backend, log, dir) = logged_backend("controller-no-calm-restart");
+        backend.connect_output_as(BUDS, "Buds", OutputKind::Bluetooth);
+        backend.set_output_enabled(BUDS, true).unwrap();
+        backend.list_outputs().unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        power_cycle_buds(&mut backend);
+        run_polls(&mut backend, 20);
+        assert_eq!(
+            buds_restarts(&backend),
+            (3, 1),
+            "back, then its 2 s restart"
+        );
+        run_polls(&mut backend, 2000);
+        assert_eq!(buds_restarts(&backend), (3, 1), "nothing at 305 s");
+        assert!(playing(&backend).contains(&BUDS.to_owned()));
+        let lines = logged(&log, &dir);
+        assert!(
+            !lines.iter().any(|line| line.contains("quiet restart")),
+            "{lines:?}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S325
+    #[test]
     fn a_bluetooth_output_back_mid_session_restarts_again_305_s_after_its_return() {
         let (mut backend, log, dir) = logged_backend("controller-calm-restart");
         backend.connect_output_as(BUDS, "Buds", OutputKind::Bluetooth);

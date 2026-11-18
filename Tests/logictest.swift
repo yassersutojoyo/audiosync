@@ -6364,6 +6364,20 @@ do {
               "EC2 Bluetooth fresh link: the first stream after a refused start, 3 s later, still restarts once",
               "\(decision)")
     }
+    // covers: S325 (a link back mid-session restarts once, 2 s after its start, and nothing restarts it at 305 s)
+    do {
+        let onceLinks = FreshLinkWatch()
+        onceLinks.noteListing(["bt", "usb"], now: 0, session: 1)
+        onceLinks.noteListing(["usb"], now: 10, session: 1)
+        onceLinks.noteListing(["bt", "usb"], now: 20, session: 1)
+        let onceQuick = onceLinks.decide(uid: "bt", bluetooth: true, now: 20.5, session: 1)
+        let onceRan = onceLinks.begin(uid: "bt", ticket: onceLinks.pendingTicket(uid: "bt") ?? -1, session: 1)
+        onceLinks.release(uid: "bt")
+        let laterRestarts = (0...20).filter { onceLinks.begin(uid: "bt", ticket: $0, session: 1) }
+        check(onceQuick == .restart(linkAgeS: 0.5) && onceRan && laterRestarts.isEmpty && onceLinks.held.isEmpty,
+              "EC2 Bluetooth fresh link: one that came back mid-session restarts once, 2 s after its start, and not again",
+              "\(onceQuick) \(onceRan) \(laterRestarts)")
+    }
     // covers: S325 (a link that left the list and came back mid-session gets one more restart once it is calm)
     do {
         let links = FreshLinkWatch()
