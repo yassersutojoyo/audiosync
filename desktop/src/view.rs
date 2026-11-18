@@ -13584,6 +13584,20 @@ pub(crate) mod tests {
         assert!(line.contains("wrap: no-wrap;"), "it stays on one line");
     }
 
+    /// While an AirPlay speaker streams, the main window's state line names
+    /// the AirPlay delay to a tenth of a second and the tray panel's doesn't,
+    /// as on the Mac (Localization.swift:190-195, MenuBar.swift:658-667).
+    #[test]
+    fn the_main_status_names_the_airplay_delay_while_airplay_streams() {
+        let app = app_over(MockBackend::new());
+        app.main.invoke_power_toggled(true);
+        let (main, tray) = (app.main.get_status(), app.flyout.get_status());
+        assert!(main.ends_with(" · AirPlay delay 1.8 s"), "{main}");
+        assert_eq!(main.as_str(), format!("{tray} · AirPlay delay 1.8 s"));
+        app.main.invoke_power_toggled(false);
+        assert_eq!(app.main.get_status(), app.flyout.get_status(), "off");
+    }
+
     /// Flipping the switch cross-fades the header's old state into the new
     /// one in place, both ways, as the Mac's: 250 ms ease-in-out, or 150 ms
     /// linear with Animation effects off.
