@@ -13804,6 +13804,34 @@ pub(crate) mod tests {
         }
     }
 
+    /// The AirPlay delay's note ends inside its pane at every window width,
+    /// at 100% and 150% scale: the pane counts each line the note wraps to,
+    /// as the Mac's note sizes to its text (MainWindow.swift:3409-3412).
+    #[test]
+    fn the_airplay_delay_note_fits_its_pane_at_every_width() {
+        for scale_factor in [1.0f32, 1.5] {
+            let app = narrow_app(MockBackend::new());
+            app.main
+                .window()
+                .dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor });
+            let physical = |logical: u32| (logical as f32 * scale_factor) as u32;
+            draw_frames_at(physical(776), physical(900));
+            app.main.invoke_sync_toggled(AIRPLAY_DELAY_FIELD.into());
+            advance_clock(Duration::from_millis(400));
+            for width in (640..=1400).step_by(8) {
+                draw_frames_at(physical(width), physical(900));
+                let note = element(&app, "AirPlayDelayControls::hint").expect("the delay's note");
+                let pane = element(&app, "AirPlayDelayControls::pane").expect("its pane");
+                let note_bottom = note.absolute_position().y + note.size().height;
+                let pane_bottom = pane.absolute_position().y + pane.size().height;
+                assert!(
+                    note_bottom <= pane_bottom + 0.5,
+                    "at {scale_factor}x, {width} px wide: note ends {note_bottom}, pane {pane_bottom}"
+                );
+            }
+        }
+    }
+
     /// Speaker rows in one list step 54 px from badge to badge, divider
     /// included, as the Mac's rows with a volume slider step 54 pt.
     #[test]
