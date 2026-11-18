@@ -37,7 +37,7 @@ use audiosync_core::volume::SharedGain;
 
 use super::backend::BackendError;
 use super::calibration::{Microphone, MicrophoneError};
-use super::capture::{CaptureTarget, Feeds};
+use super::capture::{CaptureTarget, Feeds, NameReader};
 use super::controller::{Controller, Driver, PowerNotice};
 use super::outputs::{Endpoint, EndpointReading, Listing, RenderFormat};
 use super::process::ProcessTable;
@@ -96,6 +96,10 @@ impl Driver for WasapiDriver {
 
     fn window_pids(&mut self) -> Option<Vec<u32>> {
         Some(processes::window_pids())
+    }
+
+    fn app_name_reader(&self) -> NameReader {
+        Arc::new(processes::app_name)
     }
 
     fn outputs(&mut self) -> Result<Listing, BackendError> {

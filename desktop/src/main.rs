@@ -266,8 +266,27 @@ impl From<slint::PlatformError> for StartError {
     }
 }
 
+/// Whether Setup opens by itself at this launch: on a first install, with no
+/// settings file at `settings`, and once, marked by a file beside it (the
+/// Mac's `permissionSetupSeen`, PermissionFlow.swift:152).
+fn opens_setup_at_launch(settings: &std::path::Path) -> bool {
+    let seen = settings.with_file_name(SETUP_SEEN_FILE);
+    if settings.exists() || seen.exists() {
+        return false;
+    }
+    // A mark that can't be written still lets this launch show it.
+    let _ = data_folder::write_atomically(&seen, b"");
+    true
+}
+
+const SETUP_SEEN_FILE: &str = "setup-seen";
+
 /// Shows the main window and runs the UI until the user exits.
 fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
+    // Read before the engine starts: its first change writes the file. Linux
+    // has no Setup window yet.
+    let first_install = cfg!(windows)
+        && settings::SettingsFile::default_path().is_some_and(|path| opens_setup_at_launch(&path));
     #[cfg(windows)]
     let renderer_record = renderer_choice::select(log);
     #[cfg(feature = "mock-backend")]
@@ -389,6 +408,9 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
                 launch_at_login::BACKGROUND_FLAG
             )
         });
+    }
+    if first_install {
+        app.show_setup_at_first_install();
     }
     // To look at the double-audio guide without streaming: a made-up notice,
     // only while the debug log is on.
@@ -519,6 +541,18 @@ fn session_ending(
 
 #[cfg(test)]
 mod tests {
+    // PermissionFlow.swift:152, 160-162: once, even when the first launch
+    // saved nothing.
+    #[test]
+    fn setup_opens_by_itself_at_the_first_launch_only() {
+        let settings = super::debug_log::test_dir("setup-once").join("settings.json");
+        assert!(super::opens_setup_at_launch(&settings), "first launch");
+        assert!(
+            !super::opens_setup_at_launch(&settings),
+            "a second launch that saved nothing"
+        );
+    }
+
     #[test]
     fn the_preview_play_switch_works_only_with_the_debug_log_on() {
         let steam = || Some("Steam".to_owned());
@@ -1048,12 +1082,12 @@ mod tests {
                 "zone-focused",
             ),
             (
-                "for speaker in root.this-pc: FlyoutRow {",
+                "for speaker[index] in root.this-pc: RowEase {",
                 "focus-changed(focused)",
                 "speaker-focused",
             ),
             (
-                "for speaker in root.speakers: FlyoutRow {",
+                "for speaker[index] in root.speakers: RowEase {",
                 "focus-changed(focused)",
                 "speaker-focused",
             ),
@@ -1090,13 +1124,13 @@ mod tests {
         let flyout = include_str!("../ui/flyout.slint");
         let at = |part: &str| flyout.find(part).unwrap_or_else(|| panic!("{part}"));
         let volume = at("MasterVolume {");
-        let this_pc = at("for speaker in root.this-pc: FlyoutRow {");
+        let this_pc = at("for speaker[index] in root.this-pc: RowEase {");
         let divider = volume
             + flyout[volume..]
                 .find("rows-divider := Divider {")
                 .expect("a divider");
         let zones = at("for zone in root.zones: VerticalLayout {");
-        let connected = at("for speaker in root.speakers: FlyoutRow {");
+        let connected = at("for speaker[index] in root.speakers: RowEase {");
         assert!(
             volume < this_pc && this_pc < divider,
             "this PC sits with the volume"

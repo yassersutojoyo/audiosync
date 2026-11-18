@@ -32,7 +32,7 @@ use crate::audio::now_playing::{
 };
 use crate::debug_log::DebugLog;
 use crate::now_playing_card::{
-    ArtworkCache, CardArtwork, CardSource, CardTrack, MediaControls, Transport,
+    ART_HOLD, ArtworkCache, CardArtwork, CardSource, CardTrack, MediaControls, Transport,
 };
 
 /// How soon the sessions are read again after a button: long enough for
@@ -436,6 +436,13 @@ struct Reader<L> {
     misses: HashMap<String, Instant>,
     /// The last track logged as having no thumbnail, so it is said once.
     uncovered: Option<String>,
+    /// The hash of each track's thumbnail as read.
+    covers: HashMap<String, u64>,
+    /// By app: the album and cover hash of the track shown last.
+    last_cover: HashMap<String, (String, u64)>,
+    /// A track whose thumbnail is still another album's, and since when.
+    /// Its cover isn't kept, so it is read again until it changes.
+    stale: Option<(String, Instant)>,
     /// The last listing failed, and said so.
     failing: bool,
     /// The last tracks read, for the log.
@@ -462,6 +469,9 @@ impl<L: SessionList> Reader<L> {
             tiles: ArtworkCache::default(),
             misses: HashMap::new(),
             uncovered: None,
+            covers: HashMap::new(),
+            last_cover: HashMap::new(),
+            stale: None,
             failing: false,
             last_track: None,
             last_card: None,
@@ -503,8 +513,9 @@ impl<L: SessionList> Reader<L> {
             Some(made) => made.clone(),
             None => self
                 .thumbnail(listing, index, &key, log)
-                .and_then(|image| self.jpeg(key, &session, &image, log)),
+                .and_then(|image| self.jpeg(key.clone(), &session, &image, log)),
         };
+        self.shown(&session, &key);
         Some(Track {
             session,
             artwork,
@@ -567,7 +578,10 @@ impl<L: SessionList> Reader<L> {
             Some(made) => made,
             None => self.thumbnail(listing, index, &key, log).and_then(|image| {
                 let made = self.sessions.card_artwork(&image);
-                let (tile, error) = self.tiles.keep(&key, made);
+                let (tile, error) = match made {
+                    Ok(tile) if self.held_back(&key) => (tile, None),
+                    made => self.tiles.keep(&key, made),
+                };
                 if let Some(error) = error {
                     log.log(|| {
                         format!(
@@ -582,15 +596,21 @@ impl<L: SessionList> Reader<L> {
                 tile
             }),
         };
+        self.shown(&session, &key);
         if artwork.is_none()
             && self.tiles.get(&key).is_none()
             && !self.tiles.failed(&key)
             && !self.misses.contains_key(&key)
             && self.uncovered.as_ref() != Some(&key)
         {
+            let why = if self.held_back(&key) {
+                "its thumbnail is still the last song's"
+            } else {
+                "the session gives no thumbnail"
+            };
             log.log(|| {
                 format!(
-                    "now playing card: \"{}\" has no cover yet: the session gives no thumbnail",
+                    "now playing card: \"{}\" has no cover yet: {why}",
                     session.title
                 )
             });
@@ -720,7 +740,7 @@ impl<L: SessionList> Reader<L> {
         let image = match read {
             Ok(image) => {
                 self.misses.remove(key);
-                image
+                self.own_cover(session, key, image)
             }
             Err(error) => {
                 if self.misses.len() >= ARTWORK_CACHE && !self.misses.contains_key(key) {
@@ -739,6 +759,55 @@ impl<L: SessionList> Reader<L> {
         };
         listing.thumbnails.push((index, image.clone()));
         image
+    }
+
+    /// `image` unless it is still the last album's cover: Spotify gives a
+    /// new song's title before its thumbnail. Past [`ART_HOLD`] it is
+    /// taken, as another album may share the cover.
+    fn own_cover(
+        &mut self,
+        session: &MediaSession,
+        key: &str,
+        image: Option<Vec<u8>>,
+    ) -> Option<Vec<u8>> {
+        let image = image?;
+        let mut hasher = std::hash::DefaultHasher::new();
+        std::hash::Hash::hash(&image, &mut hasher);
+        let hash = std::hash::Hasher::finish(&hasher);
+        if let Some((album, last)) = self.last_cover.get(&session.app_id)
+            && *album != session.album
+            && *last == hash
+        {
+            let since = match &self.stale {
+                Some((stale, since)) if stale == key => *since,
+                _ => Instant::now(),
+            };
+            self.stale = Some((key.to_owned(), since));
+            return (since.elapsed() >= ART_HOLD).then_some(image);
+        }
+        if self.held_back(key) {
+            self.stale = None;
+        }
+        if self.covers.len() >= ARTWORK_CACHE {
+            self.covers.clear();
+        }
+        self.covers.insert(key.to_owned(), hash);
+        Some(image)
+    }
+
+    fn held_back(&self, key: &str) -> bool {
+        self.stale.as_ref().is_some_and(|(stale, _)| stale == key)
+    }
+
+    /// Notes the cover of `session`, shown now, as the one its app's next
+    /// song can't keep.
+    fn shown(&mut self, session: &MediaSession, key: &str) {
+        if let Some(hash) = self.covers.get(key)
+            && !self.held_back(key)
+        {
+            self.last_cover
+                .insert(session.app_id.clone(), (session.album.clone(), *hash));
+        }
     }
 
     /// Receiver artwork fitted from `image`, kept for the track.
@@ -770,6 +839,9 @@ impl<L: SessionList> Reader<L> {
                 None
             }
         };
+        if self.held_back(&key) {
+            return artwork;
+        }
         if self.jpegs.len() >= ARTWORK_CACHE {
             self.jpegs.clear();
         }
@@ -791,6 +863,8 @@ mod tests {
     #[derive(Clone, Copy)]
     enum Thumbnail {
         Image,
+        /// Another song's cover.
+        Other,
         /// Never read in time.
         Hung,
         /// The app has no cover for the track yet.
@@ -838,6 +912,7 @@ mod tests {
     }
 
     const IMAGE: &[u8] = b"image";
+    const OTHER: &[u8] = b"other";
     const JPEG: &[u8] = b"jpeg";
     const NOT_AN_IMAGE: &[u8] = b"text";
 
@@ -865,6 +940,7 @@ mod tests {
             self.counts.thumbnails.fetch_add(1, Ordering::SeqCst);
             match self.thumbnail {
                 Thumbnail::Image => Ok(Some(IMAGE.to_vec())),
+                Thumbnail::Other => Ok(Some(OTHER.to_vec())),
                 Thumbnail::Empty => Ok(None),
                 Thumbnail::Undecodable => Ok(Some(NOT_AN_IMAGE.to_vec())),
                 Thumbnail::Hung => {
@@ -892,6 +968,9 @@ mod tests {
             if image == NOT_AN_IMAGE {
                 return Err("not an image".to_owned());
             }
+            if image == OTHER {
+                return Ok(Some(FittedArtwork::single(OTHER.into())));
+            }
             assert_eq!(image, IMAGE);
             Ok(Some(FittedArtwork::single(JPEG.into())))
         }
@@ -899,6 +978,9 @@ mod tests {
         fn card_artwork(&self, image: &[u8]) -> Result<Option<CardArtwork>, String> {
             if image == NOT_AN_IMAGE {
                 return Err("not an image".to_owned());
+            }
+            if image == OTHER {
+                return Ok(Some(CardArtwork::new(1, [255u8, 0, 0, 255])));
             }
             assert_eq!(image, IMAGE);
             Ok(Some(CardArtwork::new(1, [0u8, 0, 0, 255])))
@@ -1051,6 +1133,108 @@ mod tests {
             said,
             ["now playing card: \"Song\" has no cover yet: the session gives no thumbnail"]
         );
+    }
+
+    /// Windows debug log, 2026-11-18 03:41: Spotify's "Missing You" showed
+    /// without a cover; its thumbnail can come after the title.
+    #[test]
+    fn a_thumbnail_that_comes_after_the_title_reaches_both_readers() {
+        let (fake, _) = fake(Thumbnail::Empty);
+        let mut reader = Reader::new(fake);
+        let (track, card) = poll(&mut reader);
+        assert!(track.is_some_and(|track| track.artwork.is_none()));
+        assert!(card.is_some_and(|card| card.artwork.is_none()));
+        reader.sessions.thumbnail = Thumbnail::Image;
+        let (track, card) = poll(&mut reader);
+        assert!(track.is_some_and(|track| track.artwork.is_some()));
+        assert!(card.is_some_and(|card| card.artwork.is_some()));
+    }
+
+    /// Spotify can give the next song's title while its thumbnail is still
+    /// the last song's.
+    #[test]
+    fn a_title_that_comes_before_its_thumbnail_never_keeps_the_last_songs_cover() {
+        let (fake, _) = fake(Thumbnail::Other);
+        let mut reader = Reader::new(fake);
+        let last = poll(&mut reader).1.and_then(|card| card.artwork);
+        assert!(last.is_some());
+        reader.sessions.sessions[0] = MediaSession {
+            title: "Next".to_owned(),
+            album: "Next album".to_owned(),
+            ..playing()
+        };
+        let (track, card) = poll(&mut reader);
+        let card = card.expect("the card shows");
+        assert_eq!(card.title, "Next");
+        assert!(
+            card.artwork.is_none(),
+            "the last song's cover is not this one's"
+        );
+        assert!(!card.cover_failed, "its own cover is on its way");
+        assert!(track.is_some_and(|track| track.artwork.is_none()));
+        reader.sessions.thumbnail = Thumbnail::Image;
+        let (track, card) = poll(&mut reader);
+        let card = card.expect("the card shows");
+        assert!(card.artwork.is_some() && card.artwork != last);
+        assert_eq!(
+            track.and_then(|track| track.artwork),
+            Some(FittedArtwork::single(JPEG.into()))
+        );
+    }
+
+    /// The cover a new song is checked against is the one shown last, also
+    /// when that song's cover was made before.
+    #[test]
+    fn a_song_shown_from_the_cache_is_the_one_whose_cover_a_new_song_cant_keep() {
+        let (fake, _) = fake(Thumbnail::Other);
+        let mut reader = Reader::new(fake);
+        let last = poll(&mut reader).1.and_then(|card| card.artwork);
+        let song = |title: &str, album: &str| MediaSession {
+            title: title.to_owned(),
+            album: album.to_owned(),
+            ..playing()
+        };
+        reader.sessions.sessions[0] = song("Before", "Before album");
+        reader.sessions.thumbnail = Thumbnail::Image;
+        let _ = poll(&mut reader);
+        reader.sessions.sessions[0] = playing();
+        reader.sessions.thumbnail = Thumbnail::Other;
+        let card = poll(&mut reader).1.expect("the card shows");
+        assert_eq!(card.artwork, last, "the song is shown from the cache");
+        reader.sessions.sessions[0] = song("Next", "Next album");
+        let (track, card) = poll(&mut reader);
+        let card = card.expect("the card shows");
+        assert!(
+            card.artwork.is_none(),
+            "the last song's cover is not this one's"
+        );
+        assert!(track.is_some_and(|track| track.artwork.is_none()));
+    }
+
+    #[test]
+    fn a_cover_taken_past_the_hold_is_read_again_until_it_changes() {
+        let (fake, counts) = fake(Thumbnail::Other);
+        let mut reader = Reader::new(fake);
+        let last = poll(&mut reader).1.and_then(|card| card.artwork);
+        reader.sessions.sessions[0] = MediaSession {
+            title: "Next".to_owned(),
+            album: "Next album".to_owned(),
+            ..playing()
+        };
+        let _ = poll(&mut reader);
+        let key = track_key(&reader.sessions.sessions[0]);
+        reader.stale = Instant::now()
+            .checked_sub(ART_HOLD)
+            .map(|since| (key, since));
+        let read = counts.thumbnails();
+        for _ in 0..2 {
+            let card = poll(&mut reader).1.expect("the card shows");
+            assert_eq!(card.artwork, last, "past the hold the cover is taken");
+        }
+        assert_eq!(counts.thumbnails(), read + 2, "and read again each poll");
+        reader.sessions.thumbnail = Thumbnail::Image;
+        let card = poll(&mut reader).1.expect("the card shows");
+        assert!(card.artwork.is_some() && card.artwork != last);
     }
 
     #[test]

@@ -363,7 +363,7 @@ fn mix_mode(chosen: &Chosen, remembered: MixMode) -> MixMode {
 /// Compares app names as the Mac's `localizedCaseInsensitiveCompare` orders
 /// the several-apps list (S211): by letter ignoring case and accents, an
 /// accent only breaking a tie, and digits not compared by value.
-fn compare_app_names(a: &str, b: &str) -> Ordering {
+pub(crate) fn compare_app_names(a: &str, b: &str) -> Ordering {
     fn letters(name: &str) -> impl Iterator<Item = char> + '_ {
         DecomposingNormalizerBorrowed::new_nfd()
             .normalize_iter(name.chars())
@@ -14703,7 +14703,11 @@ mod tests {
             presets_list_open: true,
             appearance: ui_model::Appearance::Light,
             window: None,
-            guide: Some(ui_model::WindowPlace { x: -1500, y: 120 }),
+            guide: Some(ui_model::WindowPlace {
+                x: -1500,
+                y: 120,
+                size: Some((700.0, 500.0)),
+            }),
             remote: crate::remote::RemoteSettings {
                 on: true,
                 port: 8123,
@@ -14755,7 +14759,11 @@ mod tests {
         );
         assert_eq!(
             adapter.view_settings().guide,
-            Some(ui_model::WindowPlace { x: -1500, y: 120 })
+            Some(ui_model::WindowPlace {
+                x: -1500,
+                y: 120,
+                size: Some((700.0, 500.0)),
+            })
         );
 
         // A new zone gets the next number, and streaming starts from the

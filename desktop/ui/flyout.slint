@@ -9,7 +9,7 @@ import { Tokens } from "tokens.slint";
 import { AmbientArt, AmbientLook } from "ambient.slint";
 import { IncomingCover, OutgoingSong, SlideLook, SlidLine, TrackMotion } from "track_slide.slint";
 import { Strings } from "strings.slint";
-import { CastList, DeviceVolumeHint, NoticeItem, PresetItem, UpdateButton, RowState, SourceLook, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
+import { Availability, CastList, CastState, DeviceVolumeHint, NoticeItem, PresetItem, UpdateButton, RowState, SourceLook, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
 import { Announcer, BrandMark, DeviceIcons, Divider, FocusRing, Fluent, Glyph, Glyphs, KindIcon, LabelTip, ChoiceLine, LinkButton, MarqueeText, MasterVolume, MenuDivider, MenuPanel, MenuRepaint, MenuRoom, MenuRow, SourceMenuRow, MenuState, NoticeStack, OverlayScrollView, PairPicker, QuietText, SecondaryText, SpeakerBadge, PowerSwitch, Wordmark, ZoneArrowFocus, Motion, FoldPane } from "widgets.slint";
 
 // The Mac panel's row text size, smaller than the window's on Windows.
@@ -285,32 +285,48 @@ component SourceMenu inherits Rectangle {
 }
 
 // A compact row's round mark: a teal disc with a white glyph while it
-// plays, a teal ring while it is on and waits, a grey ring while off. The
-// disc grows in as the speaker starts playing; with animation effects off it
-// fades in.
+// plays, a teal ring while it is on and waits, a grey ring while off, and a
+// grey ring with a turning amber arc while it connects. The disc grows in
+// from 0.6 as the speaker starts playing, as the Mac's SpeakerBadge
+// (PowerMotion, MenuBar.swift); with animation effects off it fades in.
 component RowDisc inherits Rectangle {
     in property <image> icon;
     in property <bool> on;
     in property <bool> plays;
-    property <float> fill: root.plays ? 1 : 0;
+    in property <bool> connecting;
+    property <bool> filled: root.plays && !root.connecting;
+    property <float> fill: root.filled ? 1 : 0;
     animate fill {
-        duration: Motion.on ? 440ms : 150ms;
-        easing: cubic-bezier(0.2, 0.8, 0.2, 1);
+        duration: Motion.on ? 250ms : 150ms;
+        easing: Motion.on ? ease-in-out : linear;
     }
 
     // The Mac panel's 26 pt.
     width: 26px;
     height: 26px;
     border-radius: self.width / 2;
-    border-width: root.plays ? 0px : root.on ? 2.5px : 1.5px;
-    border-color: root.on ? Tokens.teal : Tokens.secondary-text;
+    border-width: root.filled ? 0px : root.on && !root.connecting ? 2.5px : 1.5px;
+    border-color: root.on && !root.connecting ? Tokens.teal : Tokens.secondary-text;
 
     Rectangle {
-        width: root.width * (Motion.on ? root.fill : 1);
+        width: root.width * (Motion.on ? (0.6 + 0.4 * root.fill) : 1);
         height: self.width;
         border-radius: self.width / 2;
         background: Tokens.teal;
-        opacity: Motion.on ? 1 : root.fill;
+        opacity: root.fill;
+    }
+
+    // A quarter of amber ring turning once every 0.9 s; still with motion off.
+    if root.connecting: Path {
+        width: root.width;
+        height: root.height;
+        viewbox-width: 26;
+        viewbox-height: 26;
+        commands: "M13 1 A12 12 0 0 1 24.79 10.75";
+        stroke: Tokens.warn;
+        stroke-width: 2px;
+        stroke-line-cap: round;
+        transform-rotation: Motion.on ? mod(animation-tick() / 1ms, 900) / 900 * 360deg : 0deg;
     }
 
     Image {
@@ -319,7 +335,7 @@ component RowDisc inherits Rectangle {
         width: 16px;
         height: 16px;
         source: root.icon;
-        colorize: root.plays ? #ffffff : root.on ? Tokens.teal-text : Tokens.secondary-text;
+        colorize: root.filled ? #ffffff : root.on && !root.connecting ? Tokens.teal-text : Tokens.secondary-text;
         accessible-role: none;
     }
 }
@@ -353,14 +369,23 @@ component FlyoutRow inherits Rectangle {
     in property <bool> show-kind;
     // A zone's speakers start past its arrow.
     in property <length> indent;
+    in property <CastState> cast-state;
+    in property <Availability> availability;
+    in property <bool> code-every-time;
+    // False while the flyout is hidden, so a long name's timer rests.
+    in property <bool> live: true;
+    // MenuBar.swift: an on speaker whose Cast session or AirPlay link is
+    // being made again.
+    property <bool> connecting: root.state != RowState.off && (root.cast-state == CastState.connecting || root.cast-state == CastState.reconnecting || root.state == RowState.reconnecting);
+    property <string> availability-note: Strings.speaker-availability(root.availability, root.code-every-time, root.state);
     callback toggled();
     // The row gained (true) or lost (false) keyboard focus.
     callback focus-changed(bool);
 
     min-height: 36px;
-    border-radius: Fluent.radius-control;
-    background: !root.enabled ? transparent : touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : transparent;
-    animate background { duration: Fluent.fast; }
+    border-radius: Tokens.radius-row;
+    background: !root.enabled ? transparent : touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.row-hover : transparent;
+    animate background { duration: touch.has-hover ? Fluent.row-hover-in : 0ms; }
     forward-focus: focus;
     // A toggle button, not a switch: see ToggleSwitch.
     accessible-role: button;
@@ -418,9 +443,8 @@ component FlyoutRow inherits Rectangle {
                 icon: root.icon;
                 on: root.state != RowState.off;
                 plays: root.plays;
+                connecting: root.connecting;
                 opacity: root.enabled ? 1 : Tokens.disabled-opacity;
-                transform-scale: !Motion.on || !root.enabled ? 1 : touch.pressed ? 0.92 : touch.has-hover ? 1.04 : 1;
-                animate transform-scale { duration: Fluent.fast; }
             }
         }
 
@@ -439,17 +463,15 @@ component FlyoutRow inherits Rectangle {
                 max-width: name-label.preferred-width;
                 min-height: name-label.preferred-height;
 
-                // Cut with "…", as drawn; the tooltip has the whole name.
-                name-label := Text {
+                // Too long, it scrolls as the Mac's ScrollingTitle; cut with
+                // "…" with motion off. The tooltip has the whole name.
+                name-label := MarqueeText {
+                    live: root.live;
                     width: 100%;
                     height: 100%;
                     text: root.name;
                     font-size: PanelText.row;
-                    color: Tokens.text;
-                    font-weight: root.plays ? Fluent.weight-semibold : Fluent.weight-regular;
-                    vertical-alignment: center;
-                    wrap: no-wrap;
-                    overflow: elide;
+                    font-weight: Fluent.weight-regular;
                     accessible-role: none;
                 }
             }
@@ -467,13 +489,26 @@ component FlyoutRow inherits Rectangle {
                 horizontal-stretch: 1;
             }
 
-            if Strings.speaker-caption(root.caption, root.note) != "": QuietText {
-                text: Strings.speaker-caption(root.caption, root.note);
+            // The Mac's AvailabilityNote leads with a lock or a triangle, 3 apart.
+            HorizontalLayout {
                 horizontal-stretch: 1;
-                horizontal-alignment: right;
-                vertical-alignment: center;
-                wrap: no-wrap;
-                overflow: elide;
+                spacing: 3px;
+
+                if root.availability-note != "": Glyph {
+                    glyph: root.availability == Availability.needs-code || root.code-every-time ? Glyphs.lock : Glyphs.warning;
+                    font-size: 10px;
+                    color: Tokens.secondary-text;
+                }
+
+                if Strings.speaker-caption(root.caption, root.note) != "": QuietText {
+                    text: Strings.speaker-caption(root.caption, root.note);
+                    horizontal-stretch: 1;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                    wrap: no-wrap;
+                    overflow: elide;
+                    color: root.connecting ? Tokens.warn : Tokens.secondary-text;
+                }
             }
         }
 
@@ -495,6 +530,113 @@ component FlyoutRow inherits Rectangle {
 // and the arrow included, shows or hides its speakers. Left and Right on the
 // toggle do that from the keyboard, and so do Space and Enter on the arrow,
 // a Tab stop of its own as on the Mac.
+// A row that comes or goes: it fades and moves 6 px over the Mac panel's
+// 0.35 s ease-out, 35 ms after the row before it (MenuBar.swift:1961-1965,
+// WindowRules.swift:857-862), at once with animation effects off.
+component RowEase inherits Rectangle {
+    in property <bool> fresh;
+    in property <bool> leaving;
+    in property <int> index;
+    property <float> shown: root.fresh || root.leaving ? 0 : 1;
+    init => {
+        if !root.leaving {
+            root.shown = 1;
+        }
+    }
+    changed leaving => {
+        root.shown = root.leaving ? 0 : 1;
+    }
+    animate shown {
+        duration: Motion.on ? 350ms : 0ms;
+        delay: Motion.on ? root.index * 35ms : 0ms;
+        easing: ease-out;
+    }
+    height: content.preferred-height;
+
+    content := Rectangle {
+        y: (root.shown - 1) * 6px;
+        width: parent.width;
+        height: self.preferred-height;
+        opacity: root.shown;
+
+        @children
+    }
+
+    // Over a leaving row, so no click or hover reaches it.
+    if root.leaving: TouchArea { }
+}
+
+// The Mac's AirPlayProblemView, compact (MenuBar.swift:2098-2126): a red
+// triangle and the message, then an underlined Retry, all in Brand.errorText.
+component AirPlayProblemRow inherits HorizontalLayout {
+    in property <string> message;
+    callback retry();
+
+    spacing: 8px;
+    accessible-role: groupbox;
+
+    Glyph {
+        glyph: Glyphs.warning;
+        font-size: Tokens.font-size-subheadline;
+        color: Tokens.error-text;
+        vertical-alignment: center;
+    }
+
+    Text {
+        text: root.message;
+        font-size: Tokens.font-size-subheadline;
+        color: Tokens.error-text;
+        wrap: word-wrap;
+        vertical-alignment: center;
+        horizontal-stretch: 1;
+    }
+
+    retry-link := Rectangle {
+        accessible-role: button;
+        accessible-label: Strings.notice-retry-label;
+        accessible-action-default => {
+            root.retry();
+        }
+        forward-focus: retry-focus;
+        preferred-width: retry-text.preferred-width;
+
+        retry-focus := FocusScope {
+            key-pressed(event) => {
+                if event.text == " " || event.text == Key.Return {
+                    root.retry();
+                    return accept;
+                }
+                return reject;
+            }
+        }
+
+        TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.retry();
+            }
+        }
+
+        retry-text := Text {
+            text: Strings.notice-retry;
+            font-size: Tokens.font-size-subheadline;
+            color: Tokens.error-text;
+            vertical-alignment: center;
+        }
+
+        // Slint draws no underline: a hairline under the word instead.
+        Rectangle {
+            y: (parent.height + retry-text.preferred-height) / 2 - 1px;
+            height: 1px;
+            background: Tokens.error-text;
+        }
+
+        FocusRing {
+            visible-focus: retry-focus.has-focus;
+        }
+    }
+}
+
 component FlyoutZoneHeader inherits Rectangle {
     in property <ZoneItem> item;
     callback toggled();
@@ -671,7 +813,7 @@ component FooterButton inherits Rectangle {
     callback clicked();
 
     height: 24px;
-    border-radius: Fluent.radius-control;
+    border-radius: Tokens.radius-control;
     background: touch.pressed ? Fluent.pressed : touch.has-hover ? Tokens.text.with-alpha(0.07) : transparent;
     animate background { duration: Fluent.fast; }
     forward-focus: focus;
@@ -722,6 +864,28 @@ export component TrayFlyout inherits Window {
     // The header's mark breathes (mark_breath in src/window_rules.rs).
     in property <bool> mark-breathes;
     in property <string> status;
+    // Two slots in one place, so the old and the new status cross-fade as
+    // the Mac's header does (MenuBar.swift, .transition(.opacity)); the new
+    // text goes to the slot that is fading out.
+    property <string> status-a;
+    property <string> status-b;
+    property <float> status-mix: 1;
+    animate status-mix {
+        duration: Motion.on ? 250ms : 150ms;
+        easing: ease-in-out;
+    }
+    init => {
+        self.status-a = self.status;
+    }
+    changed status => {
+        if self.status-mix > 0.5 {
+            self.status-b = self.status;
+            self.status-mix = 0;
+        } else {
+            self.status-a = self.status;
+            self.status-mix = 1;
+        }
+    }
     in property <[string]> sources;
     // Each source's section and icon, in the order of sources.
     in property <[SourceLook]> source-looks;
@@ -769,6 +933,10 @@ export component TrayFlyout inherits Window {
     // What Narrator says about a new notice, while the app wants it said
     // here (empty otherwise).
     in property <string> notice-announcement;
+    // Why AirPlay stopped, while its notice is up; empty otherwise.
+    in property <string> airplay-problem;
+    // Whether the flyout is up; set by the app as it shows and hides.
+    in property <bool> shown: true;
     callback power-toggled(bool);
     callback source-selected(int);
     // Several Apps… under the source: opens the main window's list.
@@ -808,7 +976,7 @@ export component TrayFlyout inherits Window {
     // Set false then true by the app as the flyout opens: its parts fade in
     // and rise into place one after another, as the Mac panel's do.
     in property <bool> revealed: true;
-    background: Tokens.surface;
+    background: Tokens.dark ? Tokens.background : Tokens.surface;
     default-font-family: Fluent.font;
     default-font-weight: Fluent.weight-regular;
     default-font-size: Tokens.font-size-body;
@@ -895,7 +1063,7 @@ export component TrayFlyout inherits Window {
             alignment: start;
             padding: 14px;
             padding-bottom: 8px;
-            spacing: 8px;
+            spacing: 10px;
 
             header-part := IntroPart {
                 index: 0;
@@ -969,8 +1137,19 @@ export component TrayFlyout inherits Window {
                                     dim: !root.running;
                                 }
 
-                                QuietText {
-                                    text: root.status;
+                                Rectangle {
+                                    min-height: status-a-text.preferred-height;
+                                    status-a-text := QuietText {
+                                        width: parent.width;
+                                        text: root.status-a;
+                                        opacity: root.status-mix;
+                                    }
+
+                                    QuietText {
+                                        width: parent.width;
+                                        text: root.status-b;
+                                        opacity: 1 - root.status-mix;
+                                    }
                                 }
                             }
                         }
@@ -1279,8 +1458,7 @@ export component TrayFlyout inherits Window {
                                     }
                                 }
 
-                                // Four rows, then it scrolls, so a PC with many outputs
-                                // still fits a small screen.
+                                // In full, as the Mac's above its divider; only the list under it scrolls.
                                 // Rows reach 6 px left of their circles, 14 px from the panel's
                                 // edge, and 8 px from the other, as on the Mac (MenuBar.swift:1778, :1871, :1873).
                                 HorizontalLayout {
@@ -1288,25 +1466,35 @@ export component TrayFlyout inherits Window {
                                     padding-right: -6px;
 
                                     this-pc-view := OverlayScrollView {
-                                        height: min(this-pc-list.preferred-height, 144px);
+                                        height: this-pc-list.preferred-height;
 
                                         this-pc-list := VerticalLayout {
-                                            for speaker in root.this-pc: FlyoutRow {
-                                                icon: DeviceIcons.glyph16(speaker.kind);
-                                                name: speaker.name;
-                                                label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
-                                                description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
-                                                note: Strings.speaker-note(speaker);
-                                                system-name: speaker.system-name;
-                                                state: speaker.state;
-                                                plays: speaker.plays;
-                                                device-volume: speaker.device-volume;
+                                            for speaker[index] in root.this-pc: RowEase {
+                                                fresh: speaker.fresh;
+                                                leaving: speaker.leaving;
+                                                index: index;
 
-                                                toggled => {
-                                                    root.speaker-toggled(speaker.id);
-                                                }
-                                                focus-changed(focused) => {
-                                                    root.speaker-focused = focused;
+                                                FlyoutRow {
+                                                    icon: DeviceIcons.glyph16(speaker.kind);
+                                                    name: speaker.name;
+                                                    label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
+                                                    description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
+                                                    note: Strings.speaker-note(speaker);
+                                                    system-name: speaker.system-name;
+                                                    state: speaker.state;
+                                                    plays: speaker.plays;
+                                                    cast-state: speaker.cast-state;
+                                                    availability: speaker.availability;
+                                                    code-every-time: speaker.code-every-time;
+                                                    live: root.shown;
+                                                    device-volume: speaker.device-volume;
+
+                                                    toggled => {
+                                                        root.speaker-toggled(speaker.id);
+                                                    }
+                                                    focus-changed(focused) => {
+                                                        root.speaker-focused = focused;
+                                                    }
                                                 }
                                             }
                                         }
@@ -1428,6 +1616,10 @@ export component TrayFlyout inherits Window {
                                                     show-kind: speaker.show-kind && !speaker.cast-group;
                                                     state: speaker.state;
                                                     plays: speaker.plays;
+                                                    cast-state: speaker.cast-state;
+                                                    availability: speaker.availability;
+                                                    code-every-time: speaker.code-every-time;
+                                                    live: root.shown;
                                                     enabled: !speaker.missing;
                                                     device-volume: speaker.device-volume;
                                                     toggled => {
@@ -1440,28 +1632,47 @@ export component TrayFlyout inherits Window {
                                             }
                                         }
 
-                                        for speaker in root.speakers: FlyoutRow {
-                                            icon: DeviceIcons.glyph16(speaker.kind);
-                                            name: speaker.name;
-                                            label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
-                                            description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
-                                            note: Strings.speaker-note(speaker);
-                                            system-name: speaker.system-name;
-                                            kind: speaker.kind;
-                                            show-kind: speaker.show-kind && !speaker.cast-group;
-                                            state: speaker.state;
-                                            plays: speaker.plays;
-                                            device-volume: speaker.device-volume;
+                                        for speaker[index] in root.speakers: RowEase {
+                                            fresh: speaker.fresh;
+                                            leaving: speaker.leaving;
+                                            index: index;
 
-                                            toggled => {
-                                                root.speaker-toggled(speaker.id);
-                                            }
-                                            focus-changed(focused) => {
-                                                root.speaker-focused = focused;
+                                            FlyoutRow {
+                                                icon: DeviceIcons.glyph16(speaker.kind);
+                                                name: speaker.name;
+                                                label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
+                                                description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
+                                                note: Strings.speaker-note(speaker);
+                                                system-name: speaker.system-name;
+                                                kind: speaker.kind;
+                                                show-kind: speaker.show-kind && !speaker.cast-group;
+                                                state: speaker.state;
+                                                plays: speaker.plays;
+                                                cast-state: speaker.cast-state;
+                                                availability: speaker.availability;
+                                                code-every-time: speaker.code-every-time;
+                                                live: root.shown;
+                                                device-volume: speaker.device-volume;
+
+                                                toggled => {
+                                                    root.speaker-toggled(speaker.id);
+                                                }
+                                                focus-changed(focused) => {
+                                                    root.speaker-focused = focused;
+                                                }
                                             }
                                         }
                                     }
                                 }
+                            }
+                        }
+
+                        // AirPlay comes last in the list, so what's wrong with it goes
+                        // right after it, as on the Mac.
+                        if root.airplay-problem != "": AirPlayProblemRow {
+                            message: root.airplay-problem;
+                            retry => {
+                                root.notice-retry-requested(-1);
                             }
                         }
 

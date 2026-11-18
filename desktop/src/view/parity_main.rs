@@ -156,13 +156,14 @@ fn cards_take_the_macs_corner() {
     assert!(fluent.contains("out property <length> radius-card: 12px;"));
 }
 
-/// The main window is white in light and the Mac's system window color
-/// (#323232, Brand.swift:17-21, MainWindow.swift:32-36) in dark.
+/// The main window is white in light and the Mac's system window color in
+/// dark (MainWindow.swift:32-36), #2b2b29 in every dark Mac photo of 18 Nov,
+/// so a row's knob stands off it as the Mac's does.
 // covers: S450
 #[test]
 fn the_main_window_is_the_macs_window_color() {
     let fluent = component(include_str!("../../ui/widgets.slint"), "Fluent");
-    assert!(fluent.contains("out property <color> main-window: Tokens.dark ? #323232 : #ffffff;"));
+    assert!(fluent.contains("out property <color> main-window: Tokens.dark ? #2b2b2b : #ffffff;"));
     let main = include_str!("../../ui/main.slint").replace("\r\n", "\n");
     assert!(
         main.contains("    background: Fluent.main-window;\n    default-font-family: Fluent.font;")
@@ -689,7 +690,7 @@ fn the_cards_have_the_macs_corners() {
     let setup = include_str!("../../ui/setup.slint").replace("\r\n", "\n");
     assert!(
         setup.contains(
-            "background: Tokens.surface;\n                    // The Mac's setup list (SetupWindow.swift:150).\n                    border-radius: 8px;"
+            "background: Tokens.surface;\n                        // The Mac's setup list (SetupWindow.swift:150).\n                        border-radius: 8px;"
         ),
         "the setup list"
     );
