@@ -137,16 +137,16 @@ def offset_ms(rx, sink):
     """Median of each receiver click's time after the same click on the sink.
 
     rx and sink are (times, phase) pairs; a click's identity is its cycle
-    position, so a match lies under one whole cycle later."""
+    position, so a match lies within half a cycle either way."""
     period = sum(CYCLE)
     (rx_times, rx_start), (sink_times, sink_start) = rx, sink
     diffs = []
     for i, t in enumerate(rx_times):
         identity = (rx_start + i) % len(CYCLE)
-        later = [t - s for j, s in enumerate(sink_times)
-                 if (sink_start + j) % len(CYCLE) == identity and 0 <= t - s < period]
-        if later:
-            diffs.append(min(later))
+        near = [t - s for j, s in enumerate(sink_times)
+                if (sink_start + j) % len(CYCLE) == identity and abs(t - s) < period / 2]
+        if near:
+            diffs.append(min(near, key=abs))
     return statistics.median(diffs) * 1000 if diffs else None
 
 
@@ -239,6 +239,10 @@ def self_test():
         if ok != expected:
             failed += 1
             print(f"self-test offset limit {limit} ms: expected {'PASS' if expected else 'FAIL'}")
+    early_lines, ok = check((train, rate, stamps), (delayed(train, 0.02), rate, stamps), 6, max_offset_ms=30)
+    if not ok or not any(line.startswith("offset: receiver -20 ms") for line in early_lines):
+        failed += 1
+        print(f"self-test receiver 20 ms ahead of the sink: {early_lines}")
     print("heard.py self-test: " + (f"{failed} FAILED" if failed else f"{len(cases)} cases passed"))
     return 1 if failed else 0
 
