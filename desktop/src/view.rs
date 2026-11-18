@@ -13539,6 +13539,26 @@ pub(crate) mod tests {
         );
     }
 
+    /// The line above the AirPlay delay starts at the names, as the lines
+    /// between speaker rows do (MainWindow.swift:636).
+    #[test]
+    fn the_line_above_the_airplay_delay_starts_at_the_names() {
+        let app = narrow_app(MockBackend::new());
+        advance_clock(Duration::from_millis(400));
+        draw_frames_at(776, 900);
+        let row = element(&app, "SpeakerRow::hover").expect("a speaker row");
+        let pane = element(&app, "MainWindow::delay-pane").expect("the delay pane");
+        let top = pane.absolute_position().y;
+        let line =
+            i_slint_backend_testing::ElementHandle::find_by_element_type_name(&app.main, "Divider")
+                .find(|line| (line.absolute_position().y - top).abs() < 0.5)
+                .expect("the line at the pane's top");
+        assert_eq!(
+            line.absolute_position().x - row.absolute_position().x,
+            54.0
+        );
+    }
+
     /// With Add by Address under it, the AirPlay delay's note shows whole
     /// once the speaker list is scrolled to its end, at a short and a tall
     /// window: its pane keeps the note's second line and its padding, and
