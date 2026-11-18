@@ -354,4 +354,22 @@ mod tests {
             .expect("first install opens Setup");
         assert!(first > shown);
     }
+
+    // SetupWindow.swift:99-100, 114, 162, 115/158/181 and PermissionFlow.swift:154-156:
+    // two groups (network before capture), a fixed 480 width, teal row icons,
+    // and no flash or state fade when animations are off.
+    #[test]
+    fn the_rows_sit_in_the_macs_two_groups_with_its_width_icons_and_motion() {
+        let setup = include_str!("../../ui/setup.slint").replace("\r\n", "\n");
+        let at = |needle: &str| setup.find(needle).unwrap_or_else(|| panic!("{needle}"));
+        assert!(at("Strings.setup-needed") < at("title: Strings.setup-network;"));
+        assert!(at("title: Strings.setup-network;") < at("title: Strings.setup-capture;"));
+        assert!(at("title: Strings.setup-capture;") < at("Strings.setup-later"));
+        assert!(at("Strings.setup-later") < at("title: Strings.setup-microphone;"));
+        assert!(setup.contains("    width: 480px;\n"));
+        assert!(!setup.contains("preferred-width: 520px;"));
+        assert!(setup.contains("stroke: Tokens.teal-text;\n                stroke-width: root.icon-stroke;"));
+        assert!(setup.contains("if Motion.on && root.changes > 0"));
+        assert!(setup.contains("enter: Motion.on;"));
+    }
 }
