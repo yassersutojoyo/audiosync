@@ -18,13 +18,14 @@ gives for it (`ID: reason` or `ID theme: reason` per line). A field that is null
 
 Usage: python -I scripts/screen_compare.py <mac-dir> <other-dir>
        python -I scripts/screen_compare.py --self-test
-Exits 1 when it printed a row.
+Exits 1 when it printed a row other than a `#` offset comment.
 """
 
 import io
 import json
 import os
 import re
+import statistics
 import sys
 
 FRAME_SLACK = 1.0
@@ -164,9 +165,17 @@ def compare(left_dir, right_dir):
             rows.append(f"{state}\t-\t{missing(state, right_dir, left_dir)}")
             continue
         a, b = keyed(left[state]["elements"]), keyed(as_mac(right[state]))
+        # A renderer that puts the whole content lower (a taller title bar) shifts
+        # every element; the median shift of the paired elements is taken out first
+        # and printed as a `#` comment row, which readers of the rows skip.
+        common = set(a) & set(b)
+        offset = statistics.median(b[k]["frame"][1] - a[k]["frame"][1] for k in common) if common else 0
+        if offset:
+            rows.append(f"# {state}\toffset y {offset:+g}")
+        aligned = {k: dict(e, frame=[e["frame"][0], e["frame"][1] - offset, *e["frame"][2:]]) for k, e in b.items()}
         shifts = []
         frames = {
-            key: moved(a[key], b[key], shifts)
+            key: moved(a[key], aligned[key], shifts)
             for key in sorted(set(a) & set(b), key=lambda k: (a[k]["frame"][1], a[k]["frame"][0]))
         }
         for key in sorted(set(a) | set(b)):
@@ -242,7 +251,7 @@ def main(argv):
     sys.stdout.buffer.write("".join(row + "\n" for row in rows).encode("utf-8"))
     sys.stdout.flush()
     print(f"{len(rows)} differences", file=sys.stderr)
-    return 1 if rows else 0
+    return 1 if any(not row.startswith("#") for row in rows) else 0
 
 
 if __name__ == "__main__":
