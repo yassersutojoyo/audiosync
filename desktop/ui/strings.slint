@@ -1850,6 +1850,7 @@ export global Strings {
     out property <string> calibration-this-speaker: @tr("this speaker");
     out property <string> calibration-a-speaker: @tr("a speaker");
     out property <string> calibration-no-reference: @tr("Calibration measures against the PC's own speakers, and they aren't listed.");
+    out property <string> calibration-reference-headphones: @tr("Headphones are plugged into the PC, so its own speakers are silent. Unplug them to calibrate.");
     out property <string> calibration-own-speakers: @tr("the PC's own speakers");
     out property <string> calibration-microphone-denied: Platform.os == OperatingSystemType.linux ? @tr("PipeWire didn't let AudioSync use the microphone. Allow microphone access for AudioSync in your desktop's privacy settings, and try again.") : @tr("Windows is blocking microphone access for desktop apps. Turn on “Let desktop apps access your microphone” and “Microphone access” in Settings > Privacy & security > Microphone, and try again.");
     out property <string> calibration-no-microphone: Platform.os == OperatingSystemType.linux ? @tr("AudioSync couldn't record from the microphone. Check the input in Sound settings.") : @tr("AudioSync couldn't record from the microphone. Check the input in Settings > System > Sound.");

@@ -1593,9 +1593,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
     }
 
-    /// Results measured against a reference that changed before Apply go;
-    /// while `applying`, a measured speaker's delay changed since the run
-    /// refuses Apply instead (its new value would undo that change, S238).
+    /// While `applying`, a reference or a measured speaker's delay that
+    /// changed since the run refuses Apply and the results stay (S238).
     /// Undo goes once a value Apply wrote changed since (Undo would undo it).
     /// Returns whether the card changed.
     fn follow_calibrate_all(&mut self, applying: bool) -> bool {
@@ -1653,25 +1652,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 }
                 _ => !holds(self.calibrated_now(m.class, &m.id), m.offset_ms),
             });
-        if !moved {
+        if !moved || !applying {
             return false;
         }
-        let reference_moved = kept.sheet.rows().iter().zip(&kept.members).any(|(row, m)| {
-            row.state == RowState::Reference && reference.as_deref() != Some(m.id.as_str())
+        self.log.log(|| {
+            "Calibrate All: a delay or the reference changed before Apply, Apply refused".to_owned()
         });
-        if !reference_moved {
-            if !applying {
-                return false;
-            }
-            self.log
-                .log(|| "Calibrate All: a delay changed before Apply, Apply refused".to_owned());
-            self.calibrate_all.phase = AllPhase::Stale;
-            self.calibrate_all.endings += 1;
-            return true;
-        }
-        self.log
-            .log(|| "Calibrate All: the reference changed before Apply, the results go".to_owned());
-        self.calibrate_all.sheet = None;
         self.calibrate_all.phase = AllPhase::Stale;
         self.calibrate_all.endings += 1;
         true
@@ -15056,7 +15042,7 @@ mod tests {
 
     // covers: S238
     #[test]
-    fn calibrate_all_results_go_once_the_reference_changes_before_apply() {
+    fn calibrate_all_results_stay_once_the_reference_changes_before_apply() {
         let mut audio = reference_audio();
         audio.connect_output_as("builtin2", "Headphones", OutputKind::BuiltIn);
         let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
@@ -15077,11 +15063,19 @@ mod tests {
         // Its endpoint disabled in Windows Sound, the other built-in output
         // becomes the reference (S174).
         unplug(&mut adapter, "builtin");
+        // Apply and Measure Again say why they refuse, so the results stay.
+        assert!(adapter.snapshot().calibrate_all.sheet.is_some());
         adapter.apply_calibrate_all();
         let state = adapter.snapshot().calibrate_all;
-        assert_eq!(state.sheet, None, "measured against a reference that went");
+        assert!(state.sheet.is_some_and(|sheet| !sheet.applied));
         assert_eq!(state.phase, AllPhase::Stale);
         assert_eq!(speaker_of(&adapter, &key("bluetooth")).delay_ms, Some(80.0));
+
+        adapter.measure_again(1);
+        assert!(matches!(
+            adapter.snapshot().calibrate_all.phase,
+            AllPhase::AgainFailed(_, Failure::NoReference)
+        ));
     }
 
     // covers: S238
@@ -15109,7 +15103,7 @@ mod tests {
         adapter.refresh_devices();
         adapter.apply_calibrate_all();
         let state = adapter.snapshot().calibrate_all;
-        assert_eq!(state.sheet, None, "measured against a reference that went");
+        assert!(state.sheet.is_some_and(|sheet| !sheet.applied));
         assert_eq!(state.phase, AllPhase::Stale);
         assert_eq!(speaker_of(&adapter, &key("bluetooth")).delay_ms, Some(80.0));
     }
@@ -15141,7 +15135,7 @@ mod tests {
         assert_eq!(adapter.audio.calibration_engine().reference, None);
         adapter.apply_calibrate_all();
         let state = adapter.snapshot().calibrate_all;
-        assert_eq!(state.sheet, None, "measured against a reference that went");
+        assert!(state.sheet.is_some_and(|sheet| !sheet.applied));
         assert_eq!(state.phase, AllPhase::Stale);
         assert_eq!(speaker_of(&adapter, &key("bluetooth")).delay_ms, Some(80.0));
     }
