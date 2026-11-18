@@ -32,7 +32,7 @@ none() { [ -z "$1" ]; }
 
 buttons=$(block "$strings" 'public pure function update-button\(')
 words=$(grep -o '@tr("[^"]*")' <<< "$buttons" | sed 's/^@tr("//; s/")$//' | sort)
-want=$(printf '%s\n' "Download and Install" "Not Now" "Skip This Version" "Cancel" \
+want=$(printf '%s\n' "Install Update" "Remind Me Later" "Skip This Version" "Cancel" \
   "Try Again" "Open Release Page" "Restart Now" | sort)
 check "update-button names the seven buttons of S308" same "$words" "$want"
 

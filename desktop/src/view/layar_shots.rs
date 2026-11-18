@@ -97,6 +97,7 @@ enum Shown {
     Settings,
     Guide,
     Remote,
+    About,
 }
 
 /// The window a row photographs, at the size it is taken.
@@ -294,6 +295,7 @@ impl Scene {
             Shown::Settings => leaked(self.app.settings()),
             Shown::Guide => leaked(self.app.help()),
             Shown::Remote => leaked(self.app.remote_window()),
+            Shown::About => leaked(self.app.about()),
         }
     }
 
@@ -318,6 +320,7 @@ impl Scene {
             Shown::Settings => ElementQuery::from_root(&self.app.settings()).find_all(),
             Shown::Guide => ElementQuery::from_root(&self.app.help()).find_all(),
             Shown::Remote => ElementQuery::from_root(&self.app.remote_window()).find_all(),
+            Shown::About => ElementQuery::from_root(&self.app.about()).find_all(),
         };
         let listed = elements_json(&elements, &shot, window.scale_factor());
         Ok((png(shot.width(), shot.height(), shot.as_bytes()), listed))
@@ -1070,6 +1073,8 @@ fn b04() -> Vec<Row> {
             s.main()
         }),
         row("B04", "MAIN-GEAR-MENU", |s| {
+            // As the Mac's release build, whose app menu has Check for Updates….
+            s.app.main.set_updater_available(true);
             click(&s.app.main, "Options")?;
             s.main()
         }),
@@ -1519,6 +1524,13 @@ fn running_remote(s: &Scene) -> Result<Win, String> {
 
 fn b11() -> Vec<Row> {
     vec![
+        row("B11", "ABOUT-PANEL", |s| {
+            let about = s.app.about();
+            about.set_version("0.9.3".into());
+            about.show().map_err(|error| error.to_string())?;
+            // A headless dialog has no size of its own.
+            Ok(Win(Shown::About, (360.0, 340.0)))
+        }),
         row("B11", "MAIN-SETTINGS", |s| s.settings()),
         row("B11", "SETTINGS-UPDATES", |s| {
             s.app.main.set_updater_available(true);

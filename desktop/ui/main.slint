@@ -286,14 +286,16 @@ component SourceMenu inherits Rectangle {
 }
 
 // The header's gear, as the Mac's: its Speakers and Windows sections, then
-// About and Exit, which a Windows app keeps in no app menu.
+// About, Check for Updates… and Exit, which a Windows app keeps in no app menu.
 component GearButton inherits IconButton {
+    in property <bool> updater-available;
     callback new-zone();
     callback refresh();
     callback remote();
     callback settings();
     callback guide();
     callback about();
+    callback check-for-updates();
     callback exit();
 
     property <int> menu-serial;
@@ -324,7 +326,7 @@ component GearButton inherits IconButton {
         width: max(270px + 2 * MenuRoom.margin, panel.preferred-width);
 
         panel := MenuPanel {
-            count: 7;
+            count: root.updater-available ? 8 : 7;
             close-requested(refocus) => {
                 menu.close();
                 if refocus {
@@ -418,8 +420,20 @@ component GearButton inherits IconButton {
                 }
             }
 
-            MenuRow {
+            if root.updater-available: MenuRow {
                 index: 6;
+                text: Strings.menu-check-for-updates;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.check-for-updates();
+                }
+            }
+
+            MenuRow {
+                index: root.updater-available ? 7 : 6;
                 text: Strings.menu-exit;
                 keys: "Ctrl+Q";
                 current <=> panel.current;
@@ -3509,6 +3523,10 @@ export component MainWindow inherits Window {
                         }
                         about => {
                             root.about-requested();
+                        }
+                        updater-available: root.updater-available;
+                        check-for-updates => {
+                            root.check-for-updates-requested();
                         }
                         exit => {
                             root.exit-requested();
