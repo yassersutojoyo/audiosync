@@ -4549,6 +4549,8 @@ export component SpeakerRow inherits Rectangle {
 
                                         fix-button := LinkButton {
                                             text: Strings.device-volume-fix(hint-box.hint);
+                                            // The Mac's primary text (DeviceVolumeViews.swift:34).
+                                            text-color: Tokens.text;
                                             label: Strings.device-volume-fix-label(root.item.name, hint-box.hint);
                                             changed keyboard-focused => {
                                                 root.fix-focused = self.keyboard-focused;
