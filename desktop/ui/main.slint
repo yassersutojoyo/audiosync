@@ -2638,19 +2638,20 @@ component NowPlayingCard inherits VerticalLayout {
             }
         }
 
-        // The Mac's centres, 38 px apart with Shuffle and Repeat and 54
-        // without; five 32 px buttons then pass the cover by a pixel a side.
-        // The Mac's row is 26 high (WindowRules.swift:62) 6 under the artist
-        // (MainWindow.swift:463); the 32 px buttons sit centred on it.
+        // The Mac's centres, 34 px apart with Shuffle and Repeat (Previous,
+        // Pause and Next at 91, 125 and 159 in its frames) and 50 without
+        // (WindowRules.swift:66). The Mac's row is 26 high (WindowRules.swift:62)
+        // 6 under the artist (MainWindow.swift:463); its centres sit at y 429,
+        // where the 32 px buttons land 2 px higher than centred on it.
         Rectangle {
             height: 26px + 6px;
 
             transport := HorizontalLayout {
                 x: (parent.width - self.width) / 2;
-                y: 3px;
+                y: 1px;
                 width: self.preferred-width;
                 height: 32px;
-                spacing: root.shuffle >= 0 || root.repeat >= 0 ? 6px : 22px;
+                spacing: root.shuffle >= 0 || root.repeat >= 0 ? 2px : 18px;
 
                 if root.shuffle >= 0: IconButton {
                     opacity: root.reveal;
