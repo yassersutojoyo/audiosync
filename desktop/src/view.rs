@@ -11360,6 +11360,44 @@ pub(crate) mod tests {
         }
     }
 
+    /// A row's delay and System values end 6 px before its options button,
+    /// the Mac row's spacing, with their 3 px hover fill reaching past them
+    /// (MainWindow.swift:2371, :2778, :2824).
+    #[test]
+    fn a_rows_values_end_six_px_before_its_options() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        let connected = app.main.get_connected();
+        let mut item = connected.row_data(0).expect("a connected speaker");
+        item.has_delay = true;
+        item.delay_ms = 10;
+        let (delay, system) = {
+            let strings = app.strings();
+            (
+                strings.invoke_show_delay_controls(strings.invoke_delay_of(item.name.clone())),
+                strings.get_system_volume_button(),
+            )
+        };
+        connected.set_row_data(0, item);
+        draw_frames();
+        for label in [delay.as_str(), system.as_str()] {
+            let (x, y, width, height) = slider_box(&app.main, label);
+            let options = ElementHandle::find_by_element_id(&app.main, "SpeakerRow::options")
+                .find(|o| {
+                    let middle = o.absolute_position().y + o.size().height / 2.0;
+                    y <= middle && middle <= y + height
+                })
+                .unwrap_or_else(|| panic!("{label}: the row's options"));
+            let value_end = x + width - 3.0;
+            assert!(
+                (options.absolute_position().x - value_end - 6.0).abs() < 0.5,
+                "{label}: value ends at {value_end}, options at {}",
+                options.absolute_position().x
+            );
+        }
+    }
+
     /// "System 13%" shows whole: its letters' tops are not cut off.
     #[test]
     fn the_system_value_shows_its_letters_whole() {
