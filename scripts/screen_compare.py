@@ -182,6 +182,7 @@ def self_test():
         "MAIN-IDLE-terang\tKitchen\tframe [20,100,200,22] vs [20,102,200,22]",
         "MAIN-IDLE-terang\tKitchen#2\tfg #1d1d1f vs #3a3a3c",
         "MAIN-IDLE-terang\tSpeakers\tonly in mac",
+        "MAIN-IDLE-terang\tStatus line\ttext Streaming to 2 speakers · AirPlay delay 1.8 s vs Streaming to 2 speakers",
         "MAIN-IDLE-terang\tStreaming to\tfont SF Pro 13 vs Segoe UI 13",
         "MAIN-IDLE-terang\tWindows Laptop\tonly in other",
         "MAIN-IDLE-terang\t−170\tonly in mac",
