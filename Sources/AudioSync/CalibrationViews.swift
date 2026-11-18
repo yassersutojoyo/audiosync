@@ -46,6 +46,7 @@ struct CalibrationControl: View {
                     Text(t.calibrationStep(step))
                         .font(.caption)
                         .foregroundStyle(Brand.secondaryText)
+                        .layarKey(t.calibrationStep(step))
                 }
                 // One button that turns into Cancel and back, so the keyboard
                 // focus stays on it while the run starts and ends.
@@ -56,6 +57,7 @@ struct CalibrationControl: View {
                 .disabled(reason != nil || settling)
                 .help(hint)
                 .accessibilityLabel(running ? t.calibrationCancelLabel(of: name) : t.calibrateLabel(of: name))
+                .layarKey(running ? t.calibrationCancelLabel(of: name) : t.calibrateLabel(of: name))
                 .accessibilityHint(hint)
             }
             // Outside the button, so a disabled button doesn't dim the reason.
@@ -71,6 +73,7 @@ struct CalibrationControl: View {
                     .font(.caption)
                     .foregroundStyle(isFailure(phase) ? Brand.errorText : Brand.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
+                    .layarKey(message)
             }
             if reason == nil, case .failed(.microphoneDenied) = phase {
                 Button(t.openMicrophoneSettings) { NSWorkspace.shared.open(PrivacyPane.microphone.url) }

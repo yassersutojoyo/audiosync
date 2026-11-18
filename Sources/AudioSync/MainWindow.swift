@@ -970,6 +970,7 @@ private struct PresetList: View {
                     .font(.caption)
                     .foregroundStyle(Brand.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
+                    .layarKey(t.presetsEmpty)
                     .padding(.leading, PresetListLayout.nameColumn)
                     .padding(.vertical, 6)
             }
@@ -1014,6 +1015,7 @@ private struct PresetList: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .layarKey(t.savePreset)
             .contentShape(.focusEffect, RoundedRectangle(cornerRadius: 6))
             .padding(.leading, PresetListLayout.nameColumn)
             .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(saveHover.isHovered ? 0.05 : 0)))
