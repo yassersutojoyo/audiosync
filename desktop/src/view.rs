@@ -11360,6 +11360,50 @@ pub(crate) mod tests {
         }
     }
 
+    /// A long name's line stops 6 px before the row's delay column, the Mac row's
+    /// spacing (MainWindow.swift:2371), however close the value sits to the
+    /// options after it.
+    #[test]
+    fn a_long_name_stops_six_px_before_the_delay_column() {
+        use i_slint_backend_testing::ElementHandle;
+        let long = "A speaker whose name is far too long for the row the window gives it";
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        let connected = app.main.get_connected();
+        let mut item = connected.row_data(0).expect("a connected speaker");
+        item.name = long.into();
+        connected.set_row_data(0, item);
+        draw_frames();
+        let name = ElementHandle::find_by_element_id(&app.main, "SpeakerRow::name-label")
+            .find(|n| n.accessible_label().is_some_and(|l| l == long))
+            .expect("the long name");
+        let options = ElementHandle::find_by_element_id(&app.main, "SpeakerRow::options")
+            .min_by(|a, b| {
+                let gap = |o: &ElementHandle| {
+                    (o.absolute_position().y - name.absolute_position().y).abs()
+                };
+                gap(a).total_cmp(&gap(b))
+            })
+            .expect("the row's options");
+        let column = options.absolute_position().x - 3.0 - 76.0;
+        let line = (name.absolute_position().y, name.size().height);
+        // Whatever the name line draws before the column: the name, its kind icon, its box.
+        let name_end = ElementHandle::find_by_element_type_name(&app.main, "SpeakerRow")
+            .find(|row| {
+                let (y, h) = (row.absolute_position().y, row.size().height);
+                y <= line.0 && line.0 + line.1 <= y + h
+            })
+            .expect("the long name's row")
+            .query_descendants()
+            .find_all()
+            .into_iter()
+            .filter(|e| (e.absolute_position().y - line.0).abs() < line.1)
+            .map(|e| e.absolute_position().x + e.size().width)
+            .filter(|end| *end < column + 0.5)
+            .fold(0.0_f32, f32::max);
+        assert_eq!(column - name_end, 6.0, "name line ends at {name_end}");
+    }
+
     /// A row's delay and System values end 6 px before its options button,
     /// the Mac row's spacing, with their 3 px hover fill reaching past them
     /// (MainWindow.swift:2371, :2778, :2824).
