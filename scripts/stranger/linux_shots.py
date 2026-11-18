@@ -96,12 +96,20 @@ def use(app, name, state):
     return True
 
 
+def extents(node):
+    """Elements without the Component interface (labels, some groups) have no box."""
+    try:
+        return node.get_extents(Atspi.CoordType.SCREEN)
+    except GLib.GError:
+        return None
+
+
 def shot(node, state):
     path = os.path.join(WORK, f"{state}-{THEME}.png")
     crop = []
     if node is not None:
-        box = node.get_extents(Atspi.CoordType.SCREEN)
-        if box.width > 0 and box.height > 0:
+        box = extents(node)
+        if box is not None and box.width > 0 and box.height > 0:
             crop = ["-crop", f"{box.width}x{box.height}+{max(box.x, 0)}+{max(box.y, 0)}", "+repage"]
     subprocess.run(["import", "-window", "root", *crop, path], check=True)
     print(f"shot: {os.path.basename(path)}")
@@ -110,8 +118,9 @@ def shot(node, state):
 def save_tree(app):
     with open(os.path.join(WORK, f"atspi-{THEME}.txt"), "w", encoding="utf-8") as out:
         for node, depth in walk(app):
-            box = node.get_extents(Atspi.CoordType.SCREEN)
-            out.write(f"{'  ' * depth}{node.get_role_name()} '{node.get_name()}' {box.x},{box.y} {box.width}x{box.height}\n")
+            box = extents(node)
+            where = f"{box.x},{box.y} {box.width}x{box.height}" if box is not None else "no-box"
+            out.write(f"{'  ' * depth}{node.get_role_name()} '{node.get_name()}' {where}\n")
 
 
 def open_tray():
