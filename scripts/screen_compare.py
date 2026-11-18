@@ -10,7 +10,8 @@ layar_shots test:
 
 Elements match by key (id or accessibility label); repeated keys are numbered
 top to bottom, left to right. A row is printed for each element whose frame
-moves more than 1 pt, whose font differs, or whose colour differs by more
+moves more than 1 pt (a shift every element under it in its column shares is
+printed once, where it starts), whose font differs, or whose colour differs by more
 than one step in a channel, for each element on one side only, and for each
 state on one side only, with the reason the other side's not-set-up.txt
 gives for it (`ID: reason` or `ID theme: reason` per line). A field that is null on either side is not compared.
@@ -27,6 +28,10 @@ import re
 import sys
 
 FRAME_SLACK = 1.0
+# The 21 pt line of the 17 pt wordmark, the tallest one-line element. Up to
+# this a width and height come from the platform's font or, for an icon
+# button, from the Mac's glyph against the other platform's hit area.
+ONE_LINE = 22
 # One step of 8-bit colour sampled from anti-aliased pixels: below this the
 # two renderers' rounding differs, not the colour.
 COLOUR_STEP = 8
@@ -104,9 +109,24 @@ def colour(text):
     return tuple(int(text[i : i + 2], 16) for i in (1, 3, 5))
 
 
-def changes(a, b):
+def moved(a, b, shifts):
+    """Whether b sits elsewhere than a: across by its leading edge or centre,
+    down by its centre less the shift of an element above it in its column
+    (`shifts`, filled in top to bottom), and in size above one line only."""
+    (ax, ay, aw, ah), (bx, by, bw, bh) = a["frame"], b["frame"]
+    down = by + bh / 2 - ay - ah / 2
+    above = [shift for (x, y, w, _), shift in shifts if y < ay and x < ax + aw and ax < x + w]
+    shifts.append((a["frame"], down))
+    if min(abs(bx - ax), abs(bx + bw / 2 - ax - aw / 2)) > FRAME_SLACK:
+        return True
+    if min(abs(down - shift) for shift in [0, *above]) > FRAME_SLACK:
+        return True
+    return min(ah, bh) > ONE_LINE and (abs(bw - aw) > FRAME_SLACK or abs(bh - ah) > FRAME_SLACK)
+
+
+def changes(a, b, frame_moved):
     found = []
-    if any(abs(x - y) > FRAME_SLACK for x, y in zip(a["frame"], b["frame"])):
+    if frame_moved:
         found.append(f'frame {fmt(a["frame"])} vs {fmt(b["frame"])}')
     fa, fb = a.get("font"), b.get("font")
     if fa and fb and (fa["name"] != fb["name"] or fa["size"] != fb["size"]):
@@ -133,13 +153,18 @@ def compare(left_dir, right_dir):
             rows.append(f"{state}\t-\t{missing(state, right_dir, left_dir)}")
             continue
         a, b = keyed(left[state]["elements"]), keyed(as_mac(right[state]))
+        shifts = []
+        frames = {
+            key: moved(a[key], b[key], shifts)
+            for key in sorted(set(a) & set(b), key=lambda k: (a[k]["frame"][1], a[k]["frame"][0]))
+        }
         for key in sorted(set(a) | set(b)):
             if key not in b:
                 rows.append(f"{state}\t{key}\tonly in {left_dir}")
             elif key not in a:
                 rows.append(f"{state}\t{key}\tonly in {right_dir}")
             else:
-                found = changes(a[key], b[key])
+                found = changes(a[key], b[key], frames[key])
                 if found:
                     rows.append(f"{state}\t{key}\t" + "; ".join(found))
     return rows
