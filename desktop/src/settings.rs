@@ -1346,6 +1346,9 @@ impl Settings {
             guide_window: self.guide_window.map(|place| WindowPlace {
                 x: place.x.clamp(-MAX_POSITION, MAX_POSITION),
                 y: place.y.clamp(-MAX_POSITION, MAX_POSITION),
+                size: place
+                    .size
+                    .filter(|(w, h)| w.is_finite() && h.is_finite() && *w > 0.0 && *h > 0.0),
             }),
             slim_window_applied: self.slim_window_applied,
             airplay_adjustment_ms: sanitize_airplay_adjustment_ms(self.airplay_adjustment_ms)
@@ -2113,7 +2116,11 @@ mod tests {
             presets_list_open: true,
             appearance: sample.appearance,
             window: sample.window,
-            guide_window: Some(WindowPlace { x: -1500, y: 120 }),
+            guide_window: Some(WindowPlace {
+                x: -1500,
+                y: 120,
+                size: Some((700.0, 500.0)),
+            }),
             slim_window_applied: true,
             airplay_adjustment_ms: 120.0,
             when_source_quits: WhenSourceQuits::SwitchToSystem.stored().to_owned(),
