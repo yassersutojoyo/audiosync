@@ -12,6 +12,12 @@ publish = false
 name = "audiosync"
 path = "src/main.rs"
 
+# The silent test player for the Now Playing card; `test = true` runs its
+# unit tests under `cargo test`.
+[[example]]
+name = "fake_player"
+test = true
+
 [features]
 # On a host without an audio backend (src/os/other.rs), the windows show
 # example speakers and nothing plays, for work on the UI. It does nothing on
