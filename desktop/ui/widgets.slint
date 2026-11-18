@@ -5878,10 +5878,10 @@ export component NoticeStack inherits VerticalLayout {
                         message-box := Rectangle {
                             property <bool> cut: root.capped && message.preferred-height > self.three-lines;
                             property <length> three-lines: 3 * line.preferred-height;
-                            // Segoe UI's 10 px line is 13.3 px and the Mac's caption 13
-                            // (MenuBar.swift:2800): a few lines come out a pixel over the Mac.
+                            // Each line is the Mac's 13 px caption line (MenuBar.swift:2800),
+                            // whatever the font's own line is (Segoe UI 13.3, DejaVu Sans 13).
                             // The flyout has no time line below, so there it would cut descenders.
-                            height: self.cut ? self.three-lines : message.preferred-height - (root.compact ? 0px : 1px);
+                            height: self.cut ? self.three-lines : root.compact ? message.preferred-height : round(message.preferred-height / line.preferred-height) * 13px;
 
                             // Any one line of text: its height.
                             line := Text {
