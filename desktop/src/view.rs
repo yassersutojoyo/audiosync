@@ -19765,6 +19765,82 @@ pub(crate) mod tests {
         assert!(app.backend.borrow().snapshot().running);
     }
 
+    /// "Before you start" lives only in the Calibrate All sheet, before a run
+    /// and without results (CalibrateAllViews.swift:108-109, 177-206); the
+    /// left column has none (CalibrateAllViews.swift:6-54). From the sheet's
+    /// Close the keyboard reaches the fix, which then hands the focus back.
+    // covers: S197, S198
+    #[test]
+    fn before_you_start_shows_in_the_calibrate_all_sheet_not_the_left_column() {
+        use crate::audio::backend::OutputKind;
+        use crate::audio::mock::VolumeWrite;
+        use i_slint_backend_testing::ElementHandle;
+        for appearance in [crate::Appearance::Light, crate::Appearance::Dark] {
+            let mut audio = crate::audio::mock::MockBackend::empty();
+            audio.connect_output_as("speakers", "Speakers", OutputKind::BuiltIn);
+            audio.connect_output_as("usb", "USB Speakers", OutputKind::UsbSpeakers);
+            audio.mute_output("speakers", true);
+            let record = audio.volume_record();
+            let mut adapter = crate::adapter::AudioAdapter::new(
+                audio,
+                || "09.41".to_owned(),
+                DebugLog::default(),
+            );
+            adapter.set_speaker_enabled("lc:speakers", true);
+            adapter.set_speaker_enabled("lc:usb", true);
+            adapter.set_running(true);
+            let app = app_over(adapter);
+            app.main.invoke_appearance_chosen(appearance);
+            app.main.show().expect("the main window shows headless");
+            draw_frames();
+            assert_eq!(app.main.get_calibrate_all_volume(), DeviceVolumeHint::Muted);
+            let before = app.strings().get_calibrate_before_start();
+            let in_sheet = || {
+                ElementHandle::find_by_element_id(&app.main, "CalibrateAllSheet::before-start")
+                    .next()
+            };
+            assert_eq!(
+                ElementHandle::find_by_accessible_label(&app.main, &before).count(),
+                0,
+                "{appearance:?}: no hint in the left column"
+            );
+            assert!(in_sheet().is_none(), "{appearance:?}: the sheet is closed");
+
+            // The mock has no microphone: the run stops at once and the sheet stays.
+            app.main.invoke_calibrate_all_requested();
+            app.poll();
+            draw_frames();
+            let hint = in_sheet().unwrap_or_else(|| panic!("{appearance:?}: hint in the sheet"));
+            assert_eq!(hint.accessible_label().as_deref(), Some(before.as_str()));
+            assert_eq!(
+                ElementHandle::find_by_accessible_label(&app.main, &before).count(),
+                1,
+                "{appearance:?}: only the sheet's"
+            );
+
+            let window = app.main.window();
+            tab(window, 1);
+            press(window, " ");
+            app.poll();
+            draw_frames();
+            assert_eq!(
+                record.writes(),
+                [VolumeWrite::Unmute {
+                    id: "speakers".to_owned()
+                }],
+                "{appearance:?}: Tab from Close reaches the fix"
+            );
+            assert!(in_sheet().is_none(), "{appearance:?}: fixed, the hint goes");
+            press(window, " ");
+            app.poll();
+            assert_eq!(
+                app.snapshot().calibrate_all.phase,
+                AllPhase::Idle,
+                "{appearance:?}: the focus went to Close"
+            );
+        }
+    }
+
     // covers: S197, S198
     #[test]
     fn calibrate_alls_volume_fix_unmutes_the_reference_and_keeps_the_focus() {
