@@ -398,6 +398,40 @@ fn a_horizontal_slider_is_listed_by_its_track() {
     assert_eq!(listed_frame(true, at, band), [290.0, 133.0, 32.0, 200.0]);
 }
 
+/// CAL-SHEET-RESULT: the AirPlay delay's summary under four results takes
+/// both lines it wraps to, inside the results list, as the Mac's does
+/// (CalibrateAllViews.swift:328-333).
+#[test]
+fn calibrate_alls_airplay_summary_shows_both_lines_in_the_results() {
+    let scene = Scene::new(ui_model::Appearance::Light);
+    calibrate_all(&scene, |state| {
+        state.calibrate_all.sheet = Some(results(SHEET_NAMES));
+    })
+    .expect("the example speakers");
+    settle(scene.app.main.window());
+    let list = ElementHandle::find_by_accessible_label(&scene.app.main, "Results")
+        .next()
+        .expect("the results list");
+    let summary = find(&scene.app.main, "AirPlay delay:").expect("the AirPlay summary");
+    let line = find(&scene.app.main, "Calibration finished")
+        .expect("the run's outcome, one line")
+        .size()
+        .height;
+    let (height, bottom) = (
+        summary.size().height,
+        summary.absolute_position().y + summary.size().height,
+    );
+    let end = list.absolute_position().y + list.size().height;
+    assert!(
+        height >= 1.8 * line,
+        "the summary is {height} high, one line {line}"
+    );
+    assert!(
+        bottom <= end,
+        "the summary ends at {bottom}, the list at {end}"
+    );
+}
+
 type Snapshot = slint::SharedPixelBuffer<slint::Rgba8Pixel>;
 
 /// The commonest pixel inside the frame as the background, and the one farthest
