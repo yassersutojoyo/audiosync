@@ -13804,6 +13804,55 @@ pub(crate) mod tests {
         }
     }
 
+    /// At 696 x 632 with a song and the presets list open, Save as Preset…,
+    /// Equalizer and Calibrate All show whole with nothing scrolled: as on the
+    /// Mac, only the hero above them scrolls (MainWindow.swift:254-282).
+    #[test]
+    fn the_rows_under_the_hero_stay_whole_in_a_short_window() {
+        use crate::now_playing_card::fake::{FakeControls, track};
+        use crate::now_playing_card::{CardArtwork, PlayModes, Repeat};
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        let fake = FakeControls::default();
+        app.set_media_controls(fake.controls());
+        app.main.show().expect("the main window shows");
+        app.poll();
+        let mut song = track("Spotify.exe", "Song", "Band", true);
+        song.artwork = Some(CardArtwork::new(8, [90u8, 40, 30, 255].repeat(64)));
+        song.modes = PlayModes {
+            shuffle: Some(false),
+            repeat: Some(Repeat::Off),
+        };
+        fake.read(Some(song));
+        app.poll();
+        hold_clock();
+        app.main.set_presets_open(true);
+        advance_clock(Duration::from_millis(400));
+        draw_frames_at(696, 632);
+        let column = element(&app, "MainWindow::left-column").expect("the left column");
+        let (top, bottom) = (
+            column.absolute_position().y,
+            column.absolute_position().y + column.size().height,
+        );
+        let strings = app.main.global::<Strings>();
+        // The test backend finds no element that its scroll view clips away whole.
+        for label in [
+            strings.get_save_preset(),
+            strings.get_equalizer(),
+            strings.get_calibrate_all(),
+        ] {
+            let row = ElementHandle::find_by_accessible_label(&app.main, &label).next();
+            let (y, end) = row.map_or((f32::NAN, f32::NAN), |row| {
+                let y = row.absolute_position().y;
+                (y, y + row.size().height)
+            });
+            assert!(
+                y >= top && end <= bottom,
+                "{label} at {y}..{end} in the column's {top}..{bottom}"
+            );
+        }
+    }
+
     /// Speaker rows in one list step 54 px from badge to badge, divider
     /// included, as the Mac's rows with a volume slider step 54 pt.
     #[test]
