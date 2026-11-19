@@ -80,8 +80,9 @@ pub mod volume;
 /// The crate version, which the sender names itself with (P5).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// The `User-Agent` value every request carries: `AudioSync/<version>` (P5,
-/// P22). The sender is this crate, so the version is the crate's.
+/// `AudioSync/<version>`, the `User-Agent` of AirPlay 1 requests and the
+/// DACP server's `DAAP-Server`; an AirPlay 2 session sends
+/// `AirPlay/950.7.1` instead (P5, P22). The version is this crate's.
 pub fn user_agent() -> String {
     format!("AudioSync/{VERSION}")
 }

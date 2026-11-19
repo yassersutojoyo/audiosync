@@ -1635,7 +1635,8 @@ impl Ap2Session {
             request.headers.push("Authorization", value);
             nonce = Some(auth.challenge.nonce.clone());
         }
-        // Some HomePods reject the initial /info with AudioSync's usual identifier.
+        // Every AirPlay 2 request carries it: a HomePod on 27.2.1 answers /info
+        // with 403 unless the User-Agent has the AirPlay/<version> form (P5, G11).
         request.headers.push("User-Agent", "AirPlay/950.7.1");
         request
             .headers
