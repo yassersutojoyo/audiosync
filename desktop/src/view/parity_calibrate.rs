@@ -235,7 +235,7 @@ fn the_calibrate_sheets_lines_and_warning_column_are_the_macs() {
         .expect("the sheet");
     let sheet = &main[start..];
     let sheet = &sheet[..sheet.find("\ncomponent ").unwrap_or(sheet.len())];
-    assert!(main.contains("component MacLines inherits Text {"));
+    assert!(main.contains("component MacLines inherits Rectangle {"));
     assert_eq!(sheet.matches("MacLines {\n").count(), 6, "{sheet}");
     assert_eq!(sheet.matches("line: 16px;").count(), 5);
     assert_eq!(sheet.matches("line: 13px;").count(), 1);
