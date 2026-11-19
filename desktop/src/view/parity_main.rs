@@ -846,3 +846,56 @@ fn the_source_menus_chevron_follows_the_name() {
     let name = between(&menu, "text: root.sources[root.index];", "}");
     assert!(!name.contains("horizontal-stretch: 1;"), "{name}");
 }
+
+/// A horizontal slider's track runs the whole box with the knob inside it, as
+/// the Mac's small Slider (MainWindow.swift:2461-2486, photos at 2x) and its
+/// MasterSlider (MenuBar.swift:3009-3012, WindowRules.swift:1597-1600): a
+/// row's slider sits flush under the name and ends 8 px before its value.
+// covers: S450
+#[test]
+fn a_sliders_track_runs_its_whole_box_as_on_the_mac() {
+    let widgets = include_str!("../../ui/widgets.slint").replace("\r\n", "\n");
+    let slider = component(&widgets, "LevelSlider");
+    assert!(slider.contains("piece == 0 ? 0px : root.span * root.ratio + root.knob;"));
+    assert!(slider.contains("piece == 0 ? root.span * root.ratio : root.span * (1 - root.ratio)"));
+    assert!(slider.contains(
+        "width: root.vertical ? root.thickness : root.span * root.ratio + root.knob / 2;"
+    ));
+    let row = component(&widgets, "SpeakerRow");
+    assert!(
+        !row.contains("x: -Fluent.slider-inset;"),
+        "no row slider moved left"
+    );
+    let master = component(&widgets, "MasterVolume");
+    assert!(
+        master.contains("padding-left: 8px;"),
+        "the track starts where it did"
+    );
+}
+
+/// The auto-connect bolt as large as the Mac's bolt.fill at .caption2
+/// (MainWindow.swift:2434-2436): 11.5 pt of ink in its 2x photos, which the
+/// drawn path (13/16 of its box) reaches at 14 px.
+// covers: S450
+#[test]
+fn the_auto_connect_bolt_is_the_macs_size() {
+    let widgets = include_str!("../../ui/widgets.slint").replace("\r\n", "\n");
+    let row = component(&widgets, "SpeakerRow");
+    let at = row.find("glyph: Glyphs.auto-connect;").expect("bolt");
+    let bolt = &row[row[..at].rfind("Rectangle {").unwrap()..at + 120];
+    assert!(bolt.contains("width: 14px;"), "{bolt}");
+    assert!(bolt.contains("font-size: 14px;"), "{bolt}");
+}
+
+/// A row with no delay field keeps no delay column, as the Mac's AirPlay rows
+/// (MainWindow.swift:2438-2445): only the Spacer's 50 px before the options
+/// stays (MAIN-ROW-PROBLEM at 2x), so a long note wraps where the Mac's does.
+// covers: S450
+#[test]
+fn a_row_without_a_delay_gives_its_note_the_delay_column() {
+    let widgets = include_str!("../../ui/widgets.slint").replace("\r\n", "\n");
+    let row = component(&widgets, "SpeakerRow");
+    assert!(row.contains(
+        "width: root.item.has-delay || root.item.system-volume >= 0 ? Fluent.delay-column + 3px : 50px;"
+    ));
+}

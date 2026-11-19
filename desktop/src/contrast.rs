@@ -2304,14 +2304,20 @@ fn a_speaker_rows_badge_stays_at_the_name_line() {
 }
 
 /// Both sliders of the reference's row start and end together: the Windows
-/// volume slider moves left by the style's inset as the speaker slider does
-/// (the Mac indents the panel to the slider, MainWindow.swift:2479), and the
+/// volume slider fills its line as the speaker slider does (the Mac indents
+/// the panel to the slider, MainWindow.swift:2479), and the
 /// speaker's value takes the panel's 34 px column (:2435, :2842).
 #[test]
 fn the_windows_volume_slider_lines_up_with_the_speaker_slider() {
     let widgets = include_str!("../ui/widgets.slint").replace("\r\n", "\n");
     let row = component_body(&widgets, "SpeakerRow");
-    assert_eq!(row.matches("x: -Fluent.slider-inset;").count(), 2);
+    for slider in [
+        "volume-slider := VolumeSlider {",
+        "system-slider := VolumeSlider {",
+    ] {
+        let body = &row[row.find(slider).expect(slider)..];
+        assert!(body[..body.find("height:").unwrap()].contains("width: parent.width;"));
+    }
     assert!(row.contains("value-width: 34px;"));
     assert!(component_body(&widgets, "VolumeSlider").contains("width: root.value-width;"));
 }
@@ -2346,7 +2352,7 @@ fn an_off_speakers_slider_is_dimmed_as_the_macs() {
         // An on speaker's fill is the ink the window tints its sliders
         // (MainWindow.swift:350-351): near white on dark, as the Mac's.
         "background: root.idle ? transparent : root.small ? (Tokens.dark ? #f4f4f4 : #000000f5) : Tokens.text;",
-        "width: root.vertical ? root.thickness : max(0px, piece == 0 ? root.span * root.ratio - root.knob / 2 : root.span * (1 - root.ratio) - root.knob / 2);",
+        "width: root.vertical ? root.thickness : max(0px, piece == 0 ? root.span * root.ratio : root.span * (1 - root.ratio));",
     ] {
         assert!(slider.contains(look), "{look}");
     }
