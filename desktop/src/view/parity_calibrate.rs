@@ -215,4 +215,8 @@ fn the_calibrate_sheets_cards_are_outlined_and_the_fix_button_compact() {
     let fix = &sheet[..sheet.find("volume-fix := SmallButton").expect("Set to 75%")];
     let wrapper = &fix[fix.rfind("VerticalLayout {").expect("its column")..];
     assert!(wrapper.contains("horizontal-stretch: 0;"), "{wrapper}");
+    assert!(
+        wrapper.contains("max-width: volume-fix.min-width;"),
+        "{wrapper}"
+    );
 }

@@ -2430,6 +2430,7 @@ component CalibrateAllSheet inherits FocusScope {
                                 VerticalLayout {
                                     alignment: center;
                                     horizontal-stretch: 0;
+                                    max-width: volume-fix.min-width;
 
                                     // Tinted as the Mac's (CalibrateAllViews.swift:236-242, the sheet's teal tint).
                                     volume-fix := SmallButton {
@@ -4030,8 +4031,8 @@ export component MainWindow inherits Window {
                         MasterVolume {
                             // Past the last digit's bearing, as on the Mac.
                             padding-right: 1px;
-                            // 8 px clear of the knob at 100.
-                            number-gap: 16px;
+                            // The Mac's 6 from the knob at 100 to the number (MainWindow.swift:545).
+                            number-gap: 14px;
                             button-size: 24px;
                             // The Mac's 18 (MasterMuteButton and MasterSlider, MenuBar.swift:2958, :2976).
                             row-height: 18px;

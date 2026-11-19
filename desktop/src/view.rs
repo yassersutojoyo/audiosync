@@ -16764,13 +16764,13 @@ pub(crate) mod tests {
         assert!((right_edge(&number) - right_edge(&chevron)).abs() < 0.5);
     }
 
-    /// The main window's master volume number, as in the Mac window: 8 px
-    /// clear of the knob at 100 (16 px after the track's end, the knob's
-    /// centre), its digits' ink ending on the chevron's, 3 px inside the
-    /// chevron glyph's box.
+    /// The main window's master volume number, as in the Mac window: 6 px
+    /// clear of the knob at 100 (14 px after the track's end, the knob's
+    /// centre; MainWindow.swift:545), its digits' ink ending on the chevron's,
+    /// 3 px inside the chevron glyph's box.
     // covers: S450
     #[test]
-    fn the_main_volume_number_sits_8_px_clear_of_the_knob_on_the_chevron_edge() {
+    fn the_main_volume_number_sits_6_px_clear_of_the_knob_on_the_chevron_edge() {
         use i_slint_backend_testing::ElementHandle;
         let app = app_over(MockBackend::new());
         app.main.show().expect("the main window shows");
@@ -16785,7 +16785,7 @@ pub(crate) mod tests {
         };
         let number = element("MasterVolume::number");
         let (_, end) = master_track(&element("MasterVolume::slider"));
-        assert!((number.absolute_position().x - end - 16.0).abs() < 0.5);
+        assert!((number.absolute_position().x - end - 14.0).abs() < 0.5);
         let chevron = element("EqualizerCard::chevron");
         assert!((right_edge(&number) + 3.0 - right_edge(&chevron)).abs() < 0.5);
     }
