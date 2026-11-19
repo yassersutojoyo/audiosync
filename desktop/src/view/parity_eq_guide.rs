@@ -62,6 +62,34 @@ fn every_curve_menu_item_is_reachable_inside_the_window() {
     );
 }
 
+// Mac EqualizerWindow.swift:159-160 is a native pop-up button filling its
+// 170 pt frame. The 2x EQ-WINDOW screen captures of 19 Nov measure it 21 pt
+// tall, white on light with the curve name in the text colour, and a 17 pt
+// brand-teal tile holding the chevron 2 pt inside its right edge.
+#[test]
+fn the_curve_menu_is_a_pop_up_button_with_a_teal_chevron_tile() {
+    let app = app_over(MockBackend::new());
+    app.show_equalizer();
+    let eq = app.equalizer();
+    let button = ElementHandle::find_by_accessible_label(&eq, "Curve")
+        .find(|element| element.accessible_role() == Some(AccessibleRole::Combobox))
+        .expect("the curve menu");
+    assert_eq!((button.size().width, button.size().height), (170.0, 21.0));
+
+    let source = EQUALIZER.replace("\r\n", "\n");
+    let menu = &source[source.find("component CurveMenu").unwrap()..];
+    let menu = &menu[..menu.find("menu := PopupWindow").unwrap()];
+    assert!(
+        menu.contains("background: Fluent.native-control;"),
+        "{menu}"
+    );
+    assert!(!menu.contains("Tokens.teal-text"), "{menu}");
+    let tile = &menu[menu.find("tile := Rectangle {").expect("the chevron tile")..];
+    assert!(tile.contains("width: 17px;"), "{tile}");
+    assert!(tile.contains("height: 17px;"), "{tile}");
+    assert!(tile.contains("background: Tokens.teal;"), "{tile}");
+}
+
 // Mac EqualizerWindow.swift:25 (fixed size, close only) and :179 (bands
 // 140 pt tall).
 #[test]
