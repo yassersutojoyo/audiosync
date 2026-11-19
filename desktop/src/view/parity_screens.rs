@@ -339,9 +339,9 @@ fn the_main_window_has_no_menu_row_and_a_gear_left_of_the_switch() {
         !title_row.contains("ContextMenuArea"),
         "no menus in the top row"
     );
-    // MainWindow.swift:318: the header 4 pt under the Mac's 28 pt title bar,
-    // 32 pt from the window top as the Mac's 19 Nov window photo measures it.
-    assert!(window.contains("padding-top: title-row.height;"));
+    // The MASTER-MUTED Mac photo has a shorter title bar (smaller window
+    // buttons); the other 21 main window photos put the header 3 pt lower.
+    assert!(window.contains("padding-top: title-row.height + 3px;"));
     let gear = window.find("gear := GearButton {").expect("the gear");
     assert!(gear < window.find("power := PowerSwitch {").unwrap());
     assert!(window[gear..].contains("glyph-size: 16px;"));
