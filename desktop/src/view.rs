@@ -8798,7 +8798,7 @@ pub(crate) mod tests {
             "open with no presets: {content} of {room}"
         );
         let main = include_str!("../ui/main.slint").replace("\r\n", "\n");
-        assert!(main.contains("padding-top: title-row.height;"));
+        assert!(main.contains("padding-top: title-row.height + 3px;"));
     }
 
     /// What he sees on opening the app: a song with its cover, This PC's two
