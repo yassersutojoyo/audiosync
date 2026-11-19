@@ -42,6 +42,17 @@ ignore = [
     # A dev-dependency that only generates the fake receiver's test key; ring
     # signs with it, and no shipped code runs RSA.
     { id = "RUSTSEC-2023-0071", reason = "rsa only makes a test key; Marvin needs RSA decryption; no patched rsa version exists" },
+    # heapless 0.8 comes only through flacenc 0.5.1, the latest release, which pins ^0.8;
+    # flacenc uses heapless::Vec of i32, f64 and u8 alone. Remove once it moves to >=0.9.4.
+    { id = "RUSTSEC-2026-0574", reason = "heapless 0.8 via flacenc, no patched version reachable (2026-11-19); FindMutView::pop is never called" },
+    { id = "RUSTSEC-2026-0575", reason = "heapless 0.8 via flacenc, no patched version reachable (2026-11-19); Spsc::peek is never called" },
+    { id = "RUSTSEC-2026-0576", reason = "heapless 0.8 via flacenc, no patched version reachable (2026-11-19); IndexMap::truncate is never called" },
+    { id = "RUSTSEC-2026-0577", reason = "heapless 0.8 via flacenc, no patched version reachable (2026-11-19); panicking Drop in Deque, HistoryBuf, IndexMap and vec::IntoIter is never called" },
+    { id = "RUSTSEC-2026-0578", reason = "heapless 0.8 via flacenc, no patched version reachable (2026-11-19); SortedLinkedList::zeroize is never called" },
+    { id = "RUSTSEC-2026-0579", reason = "heapless 0.8 via flacenc, no patched version reachable (2026-11-19); Deque::try_from is never called" },
+    { id = "RUSTSEC-2026-0580", reason = "heapless 0.8 via flacenc, no patched version reachable (2026-11-19); the pool allocators is never called" },
+    { id = "RUSTSEC-2026-0581", reason = "heapless 0.8 via flacenc, no patched version reachable (2026-11-19); Deque::make_contiguous is never called" },
+    { id = "RUSTSEC-2026-0582", reason = "heapless 0.8 via flacenc, no patched version reachable (2026-11-19); IndexMap::insert is never called" },
 ]
 
 [bans]
