@@ -249,30 +249,12 @@ struct MainView: View {
             header(t)
             NoticeStack(model: model)
             HStack(alignment: .top, spacing: BrandTokens.Spacing.columnGap) {
-                FadingScroll(onBlankTap: blankTap) {
-                    // One hero, then plain rows split by a hairline instead of a card each.
-                    VStack(alignment: .leading, spacing: 0) {
-                        hero(t)
-                        masterVolume(t).padding(.top, 16)
-                        Divider().padding(.top, MainColumns.separatorPadding.top)
-                            .padding(.bottom, MainColumns.separatorPadding.bottom)
-                        // Icons on the master volume icon's column; the hover fill reaches past it.
-                        VStack(alignment: .leading, spacing: QuickRow.gap) {
-                            PresetsRow(model: model)
-                            equalizerRow(t)
-                            CalibrateAllButton(model: model)
-                        }
-                        .padding(.horizontal, -MainColumns.rowInset)
-                    }
-                    .padding(.horizontal, MainColumns.rowInset)
-                }
-                // Wider by the rows' fill on each side, so the scroll view doesn't clip it.
-                .frame(width: MainColumns.left(window: windowWidth.points) + 2 * MainColumns.rowInset)
-                .padding(.horizontal, -MainColumns.rowInset)
+                leftColumn(t)
                 FadingScroll(onBlankTap: blankTap) {
                     let all = model.layout
                     let layout = model.zonelessLayout
                     let zoned = model.zonedLayout
+                    let rowIDs: [String] = all.thisMac.map(\.id) + all.connected.map(\.id) + model.zones.map(\.id)
                     ScrollViewReader { proxy in
                         VStack(alignment: .leading, spacing: BrandTokens.Spacing.sectionGap) {
                             if StreamingPolicy.showsNoSpeakerOnLine(
@@ -305,7 +287,7 @@ struct MainView: View {
                     // A row that comes or goes moves its neighbours on one ease-out; with
                     // Reduce Motion they move at once. An opening pane moves them itself.
                     .animation(MainMotion.rows(reduceMotion: reduceMotion),
-                               value: all.thisMac.map(\.id) + all.connected.map(\.id) + model.zones.map(\.id))
+                               value: rowIDs)
                     .padding(.bottom, 4)
                 }
                 // Slim by default; a wider window widens it up to 524 pt, its
@@ -396,6 +378,30 @@ struct MainView: View {
     }
 
     // MARK: Left column
+
+    private func leftColumn(_ t: UIStrings) -> some View {
+        // Wider by the rows' fill on each side, so the scroll view doesn't clip it.
+        let width: CGFloat = MainColumns.left(window: windowWidth.points) + 2 * MainColumns.rowInset
+        return FadingScroll(onBlankTap: blankTap) {
+            // One hero, then plain rows split by a hairline instead of a card each.
+            VStack(alignment: .leading, spacing: 0) {
+                hero(t)
+                masterVolume(t).padding(.top, 16)
+                Divider().padding(.top, MainColumns.separatorPadding.top)
+                    .padding(.bottom, MainColumns.separatorPadding.bottom)
+                // Icons on the master volume icon's column; the hover fill reaches past it.
+                VStack(alignment: .leading, spacing: QuickRow.gap) {
+                    PresetsRow(model: model)
+                    equalizerRow(t)
+                    CalibrateAllButton(model: model)
+                }
+                .padding(.horizontal, -MainColumns.rowInset)
+            }
+            .padding(.horizontal, MainColumns.rowInset)
+        }
+        .frame(width: width)
+        .padding(.horizontal, -MainColumns.rowInset)
+    }
 
     /// The hero: the source, then what plays, on a faint fill of its own.
     private func hero(_ t: UIStrings) -> some View {
