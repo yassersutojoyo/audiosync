@@ -144,22 +144,26 @@ pub fn mask(ys: &[f64], stroke: f64, pixels: &mut [u8], width: usize, height: us
     let height = height.min(MAX_ROWS);
     let step_width = width as f64 / STEPS as f64;
     let scale = height as f64 / VIEW_HEIGHT;
+    // Each segment's start, slope and the stroke's height across a column,
+    // which the slope stretches.
+    let segments: [(f64, f64, f64); STEPS] = std::array::from_fn(|step| {
+        let (from, to) = (ys[step] * scale, ys[step + 1] * scale);
+        let slope = (to - from) / step_width;
+        (from, slope, stroke / 2.0 * (1.0 + slope * slope).sqrt())
+    });
     let mut cover = [0.0_f64; MAX_ROWS];
     for column in 0..width {
         let (mut first, mut last) = (height, 0);
         for sub in 0..SUBCOLUMNS {
             let x = column as f64 + (sub as f64 + 0.5) / SUBCOLUMNS as f64;
-            let at = (x / step_width).min(STEPS as f64 - 1e-9);
-            let step = at as usize;
-            let (from, to) = (ys[step] * scale, ys[step + 1] * scale);
-            let y = from + (to - from) * (at - step as f64);
-            // The stroke's height across a column, where its slope stretches it.
-            let reach = stroke / 2.0 * (1.0 + ((to - from) / step_width).powi(2)).sqrt();
+            let step = ((x / step_width) as usize).min(STEPS - 1);
+            let (from, slope, reach) = segments[step];
+            let y = from + slope * (x - step as f64 * step_width);
             let (top, bottom) = ((y - reach).max(0.0), (y + reach).min(height as f64));
             let weight = ambient_breath::edge(x / width as f64) / SUBCOLUMNS as f64;
             let rows = top as usize..bottom.ceil() as usize;
             (first, last) = (first.min(rows.start), last.max(rows.end));
-            for (row, share) in cover.iter_mut().enumerate().take(rows.end).skip(rows.start) {
+            for (row, share) in rows.clone().zip(&mut cover[rows]) {
                 *share += weight * row_share(row, top, bottom);
             }
         }
