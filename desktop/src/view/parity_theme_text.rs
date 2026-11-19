@@ -10,13 +10,13 @@ fn strings() -> String {
 
 /// Rows take the Mac's 8 above and below (BrandTokens.swift:155, used at
 /// MainWindow.swift:2057 for the zone header); a speaker row gives back
-/// 3 px below so it keeps its 54 px step.
+/// 1 px above and 4 px below so it keeps the Mac's 52 px step.
 #[test]
 fn rows_pad_8_as_the_macs() {
     let widgets = widgets();
     assert!(widgets.contains("out property <length> row-padding-y: 8px;"));
     assert!(widgets.contains(
-        "padding-top: Fluent.row-padding-y;\n                padding-bottom: Fluent.row-padding-y - 3px;"
+        "padding-top: Fluent.row-padding-y - 1px;\n                padding-bottom: Fluent.row-padding-y - 4px;"
     ));
 }
 

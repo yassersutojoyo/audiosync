@@ -444,8 +444,8 @@ fn the_source_button_shows_the_chosen_apps_icon_and_presets_the_stack() {
     assert!(glyphs.contains(r#"out property <string> presets: "\u{E81E}";"#));
 }
 
-/// The header sits 5 px higher than the gap under the title row gave it, as
-/// the Mac's at 1:1 (gear top 43), and the columns start the Mac's 14 px
+/// The header sits 4 pt lower than a pixel into the title row, as the Mac's
+/// 2x photos measure it, and the columns start the Mac's 14 px
 /// windowGap under it (MenuBar.swift:2668, MainWindow.swift:330).
 // covers: S450
 #[test]
@@ -463,7 +463,7 @@ fn the_header_sits_as_high_as_the_macs_and_the_columns_stay() {
     };
     let gear = top("MainWindow::gear");
     let column = top("MainWindow::left-column");
-    assert_eq!((gear, column), (33.0, 81.0), "gear, then the left column");
+    assert_eq!((gear, column), (37.0, 85.0), "gear, then the left column");
 }
 
 /// A row or zone that comes or goes opens or shuts its room and fades with it
