@@ -22,6 +22,7 @@ use audiosync_core::calibrate_all::{
 use audiosync_core::eq::{EqSettings, UserCurve};
 use audiosync_core::policy::device_volume::Hint;
 use audiosync_core::policy::source_quit::WhenSourceQuits;
+use audiosync_core::policy::zones::Zones;
 use i_slint_backend_testing::{ElementHandle, ElementQuery};
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize};
@@ -153,7 +154,12 @@ impl Backend for Stage {
     fn set_auto_connect(&mut self, _id: &str, _on: bool) {}
     fn rename_speaker(&mut self, _id: &str, _name: &str) {}
     fn toggle_zone(&mut self, _id: &str) {}
-    fn new_zone(&mut self, _name: &str) -> Result<(), ZoneError> {
+    fn new_zone(&mut self, name: &str) -> Result<(), ZoneError> {
+        let mut state = self.0.borrow_mut();
+        let mut zones = Zones::from_stored(std::mem::take(&mut state.zones));
+        let id = format!("zone:new-{}", zones.list().len());
+        zones.new_zone(&id, name, |n| format!("Zone {n}"));
+        state.zones = zones.into_list();
         Ok(())
     }
     fn new_zone_with(&mut self, _speaker_id: &str, _name: &str) {}
