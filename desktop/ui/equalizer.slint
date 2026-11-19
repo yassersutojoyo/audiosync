@@ -239,13 +239,17 @@ component CurveMenu inherits Rectangle {
         menu.show();
     }
 
-    // The Mac's tinted menu button as its photo measures: 24 pt high, as wide
-    // as the curve name with 19 pt to the chevron, teal at 5% with no edge, as
-    // SmallButton's system look.
-    height: 24px;
-    width: shown-text.preferred-width + chevron.preferred-width + 41px;
-    border-radius: Tokens.radius-control;
-    background: Tokens.teal.with-alpha(touch.pressed ? (Tokens.dark ? 0.3 : 0.1) : 0.05);
+    // The Mac's pop-up button as its 2x screen captures measure it: 21 pt
+    // high across the 170 pt frame, an edge and soft shadow on light.
+    height: 21px;
+    width: 170px;
+    border-radius: 5px;
+    background: Fluent.native-control;
+    border-width: Tokens.dark ? 0px : 0.5px;
+    border-color: #00000026;
+    drop-shadow-blur: 1px;
+    drop-shadow-offset-y: 0.5px;
+    drop-shadow-color: Fluent.native-control-shadow;
     forward-focus: focus;
     accessible-role: combobox;
     accessible-label: Strings.equalizer-curve;
@@ -270,23 +274,34 @@ component CurveMenu inherits Rectangle {
             }
 
             HorizontalLayout {
-                padding-left: 11px;
-                padding-right: 11px;
-                spacing: 19px;
+                padding-left: 9px;
+                padding-right: 2px;
+                spacing: 4px;
 
-                shown-text := Text {
+                Text {
                     text: root.shown;
-                    color: Tokens.teal-text;
+                    color: Tokens.text;
                     overflow: elide;
                     horizontal-stretch: 1;
                     vertical-alignment: center;
                     accessible-role: none;
                 }
 
-                chevron := Glyph {
-                    glyph: Glyphs.chevron-down;
-                    font-size: 10px;
-                    color: Tokens.teal-text;
+                VerticalLayout {
+                    alignment: center;
+
+                    tile := Rectangle {
+                        width: 17px;
+                        height: 17px;
+                        border-radius: 4px;
+                        background: Tokens.teal;
+
+                        Glyph {
+                            glyph: Glyphs.chevron-down;
+                            font-size: 9px;
+                            color: #ffffff;
+                        }
+                    }
                 }
             }
         }
