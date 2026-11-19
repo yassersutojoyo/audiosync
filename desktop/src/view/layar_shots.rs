@@ -22,6 +22,7 @@ use audiosync_core::calibrate_all::{
 use audiosync_core::eq::{EqSettings, UserCurve};
 use audiosync_core::policy::device_volume::Hint;
 use audiosync_core::policy::source_quit::WhenSourceQuits;
+use audiosync_core::policy::zones::Zones;
 use i_slint_backend_testing::{ElementHandle, ElementQuery};
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize};
@@ -153,7 +154,12 @@ impl Backend for Stage {
     fn set_auto_connect(&mut self, _id: &str, _on: bool) {}
     fn rename_speaker(&mut self, _id: &str, _name: &str) {}
     fn toggle_zone(&mut self, _id: &str) {}
-    fn new_zone(&mut self, _name: &str) -> Result<(), ZoneError> {
+    fn new_zone(&mut self, name: &str) -> Result<(), ZoneError> {
+        let mut state = self.0.borrow_mut();
+        let mut zones = Zones::from_stored(std::mem::take(&mut state.zones));
+        let id = format!("zone:new-{}", zones.list().len());
+        zones.new_zone(&id, name, |n| format!("Zone {n}"));
+        state.zones = zones.into_list();
         Ok(())
     }
     fn new_zone_with(&mut self, _speaker_id: &str, _name: &str) {}
@@ -1328,6 +1334,11 @@ fn b07() -> Vec<Row> {
             s.app.start_rename("zone:upstairs", RenamePlace::Zone);
             s.main()
         }),
+        row("B07", "MAIN-ZONE-NEW", |s| {
+            s.load(MockBackend::zones_preview());
+            s.app.main.invoke_new_zone_requested();
+            s.main()
+        }),
         row("B07", "MAIN-ZONE-PLACEHOLDER", |s| {
             s.load(MockBackend::zones_preview());
             // Office, the empty zone, is built only once the list scrolls to it.
@@ -2040,5 +2051,41 @@ fn a_list_pushed_down_by_a_notice_scrolls_to_add_by_address() {
         bottom <= at.y + size.height,
         "Add by Address… ends at {bottom}, the list at {}",
         at.y + size.height
+    );
+}
+
+/// New Zone's header, with its name field, scrolls into view: on the Mac
+/// the focused field in the scroll view is brought into sight
+/// (AppDelegate+Zones.swift, `nameInPlace`).
+// covers: S245
+#[test]
+fn a_new_zones_header_scrolls_into_view_for_its_name() {
+    let scene = Scene::new(ui_model::Appearance::Light);
+    scene.load(MockBackend::zones_preview());
+    let window = scene.app.main.window();
+    scene.size(window, MAIN);
+    render(window);
+    let before: Vec<_> = scene
+        .app
+        .snapshot()
+        .zones
+        .into_iter()
+        .map(|zone| zone.id)
+        .collect();
+    scene.app.main.invoke_new_zone_requested();
+    settle(window);
+    let zone = scene
+        .app
+        .snapshot()
+        .zones
+        .into_iter()
+        .find(|zone| !before.contains(&zone.id))
+        .expect("a new zone");
+    let options = find(&scene.app.main, &format!("Options for {}", zone.name))
+        .expect("the new zone's header is built");
+    let bottom = options.absolute_position().y + options.size().height;
+    assert!(
+        bottom <= MAIN.1,
+        "the header ends at {bottom}, below the window"
     );
 }

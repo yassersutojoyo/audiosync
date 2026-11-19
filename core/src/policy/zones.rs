@@ -142,13 +142,26 @@ impl Zones {
         &self.list[self.list.len() - 1]
     }
 
-    /// Renames zone `id` (S150): a blank name keeps the old one. False when
-    /// no zone has that ID.
+    /// Renames zone `id` (S150): a blank name keeps the old one, and one
+    /// another zone has gets the next free number. False when no zone has
+    /// that ID.
     pub fn rename(&mut self, id: &str, typed: &str) -> bool {
-        let Some(zone) = self.list.iter_mut().find(|zone| zone.id == id) else {
+        let Some(index) = self.list.iter().position(|zone| zone.id == id) else {
             return false;
         };
-        zone.name = renamed_group(&zone.name, typed);
+        let name = renamed_group(&self.list[index].name, typed);
+        let taken = |candidate: &str| {
+            self.list
+                .iter()
+                .any(|zone| zone.id != id && zone.name == candidate)
+        };
+        let mut free = name.clone();
+        let mut n = 2;
+        while taken(&free) {
+            free = format!("{name} {n}");
+            n += 1;
+        }
+        self.list[index].name = free;
         true
     }
 

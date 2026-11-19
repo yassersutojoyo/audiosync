@@ -3285,8 +3285,8 @@ export component MainWindow inherits Window {
     // A section lists nothing because each of its speakers is in a zone.
     in property <[SpeakerItem]> this-pc-zoned;
     in property <[SpeakerItem]> connected-zoned;
-    // Go to Zone: the zone card that scrolls into view.
-    property <string> reveal-zone-id;
+    // Go to Zone and New Zone: the zone card that scrolls into view.
+    in-out property <string> reveal-zone-id;
     function go-to-zone(id: string) {
         root.focus-zone-part = RowPart.toggle;
         root.focus-zone-id = id;

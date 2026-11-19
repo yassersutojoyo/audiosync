@@ -5394,6 +5394,7 @@ impl App {
             typed.clear();
         }
         self.refresh();
+        self.main.set_reveal_zone_id(zone.id.as_str().into());
     }
 
     fn ask_save_curve(&self) {
@@ -17930,6 +17931,28 @@ pub(crate) mod tests {
             app.ui.borrow().rename.is_none(),
             "a deleted zone's field goes"
         );
+    }
+
+    /// A name another zone has gets the next free number, as on the Mac
+    /// (Zones.swift, `ZoneEdit.renaming`); a zone keeps its own name.
+    // covers: S150
+    #[test]
+    fn a_zone_renamed_to_another_zones_name_gets_the_next_free_number() {
+        let app = app_over(MockBackend::zones_preview());
+        let rename = |id: &str, typed: &str| {
+            app.main.invoke_zone_rename_requested(id.into());
+            app.main.invoke_zone_rename_edited(id.into(), typed.into());
+            app.main.invoke_zone_rename_committed(id.into());
+            app.snapshot()
+                .zones
+                .into_iter()
+                .find(|zone| zone.id == id)
+                .expect("the zone")
+                .name
+        };
+        assert_eq!(rename("zone:office", "Upstairs"), "Upstairs 2");
+        assert_eq!(rename("zone:living", " Upstairs "), "Upstairs 3");
+        assert_eq!(rename("zone:upstairs", "Upstairs"), "Upstairs");
     }
 
     // covers: S150
