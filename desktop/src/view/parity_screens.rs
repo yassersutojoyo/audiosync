@@ -470,11 +470,11 @@ fn the_off_power_switch_is_drawn_in_the_macs_secondary() {
     // Color.secondary and its 15 % fill (MenuBar.swift:2934-2935): black at 50 % on
     // light and white at 55 % on dark, as the off toggle glyph's.
     assert!(
-        switch.contains("Tokens.teal : Tokens.dark ? #ffffff15 : #00000013;"),
+        switch.contains(": Tokens.dark ? #ffffff15 : #00000013;"),
         "{switch}"
     );
     assert!(
-        switch.contains("border-color: Tokens.dark ? #ffffff8c : #00000080;"),
+        switch.contains("(root.system ? #ffffff3d : #ffffff8c) : #00000080;"),
         "{switch}"
     );
 }

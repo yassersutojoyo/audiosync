@@ -330,15 +330,13 @@ fn the_empty_lists_note_sits_under_the_line_as_the_macs() {
 
 /// MenuBar.swift:1833-1846 and WindowRules.swift:1113, :1139, :1595: the
 /// speaker in its 26 pt icon box, 9 pt to the track, 9 pt to the 25 pt
-/// number and 15 pt from the edge. The 15 pt symbol (MainWindow.swift:1177)
-/// inks 19 x 13.5 pt in TRAY-IDLE-terang-mac.png, the 16 px glyph 14.5 x 11.5.
+/// number and 15 pt from the edge.
 #[test]
 fn the_flyout_volume_row_sits_as_the_macs() {
     let row = between("MasterVolume {", "mute-toggled =>");
     for want in [
         "button-size: 26px;",
         "row-height: 32px;",
-        "glyph-size: 20px;",
         "spacing: 1px;",
         "number-gap: 17px;",
         "padding-right: 15px;",

@@ -68,12 +68,14 @@ component PresetPicker inherits Rectangle {
             }
 
             row := HorizontalLayout {
-                // On the column of the volume icon below, centred in its 32 px button.
-                padding-left: 8px;
-                padding-right: 6px;
+                // On the column of the volume icon below, centred in the Mac's 26 pt icon box with
+                // the label at its 35 pt text column, the chevron's edge on the volume number's
+                // (WindowRules.swift:1113-1116, :1139).
+                padding-left: 5px;
+                padding-right: 15px;
                 padding-top: 6px;
                 padding-bottom: 6px;
-                spacing: 8px;
+                spacing: 14px;
 
                 // The glyphs stay on the label's line when the name's line shows.
                 VerticalLayout {
@@ -1489,11 +1491,13 @@ export component TrayFlyout inherits Window {
                                     waves: root.master-volume-waves;
                                     // Brand.secondaryText in the panel (MenuBar.swift:2978).
                                     icon-color: Tokens.secondary-text;
-                                    // As far from the track as the speaker: half the 32 px
-                                    // button around its 16 px glyph, the spacing and half the knob.
-                                    number-gap: 20px;
-                                    // The number ends on the preset chevron's edge.
-                                    padding-right: 6px;
+                                    // The Mac's 26 pt icon box, 9 pt to the track and to the 25 pt number, 15 pt
+                                    // from the edge (MenuBar.swift:1833-1846, WindowRules.swift:1113, :1139).
+                                    button-size: 26px;
+                                    row-height: 32px;
+                                    spacing: 1px;
+                                    number-gap: 17px;
+                                    padding-right: 15px;
                                     mute-toggled => {
                                         root.master-mute-toggled();
                                     }
