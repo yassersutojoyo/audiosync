@@ -113,6 +113,22 @@ for theme in terang gelap; do
   fi
 done
 
+if [ "$group" = nowplaying ]; then
+  # The strand strip, dark, on femtovg (what a Linux desktop with a GPU gets; Mesa
+  # draws it here), for the Mac/Windows pair. A measurement: it never fails the job.
+  printf '{"version":3,"appearance":"dark","show_virtual_devices":false}\n' > "$XDG_DATA_HOME/audiosync/settings.json"
+  mkdir -p "$work/strands"
+  AUDIOSYNC_DEBUG=1 SLINT_BACKEND=winit-femtovg setsid audiosync > "$work/strands/app.out" 2>&1 &
+  app=$!
+  sleep 5
+  python3 -I "$here/linux_shots.py" "$work/strands" strands gelap "$app" || echo "strands: not taken"
+  kill -TERM -- "-$app" 2>/dev/null || true
+  sleep 3
+  kill -KILL -- "-$app" 2>/dev/null || true
+  log=$(find "$XDG_STATE_HOME" -name '*debug.log' -print -quit)
+  [ -z "$log" ] || mv "$log" "$work/strands/audiosync-debug.log"
+fi
+
 shots=$(find "$work" -maxdepth 1 -name '*.png' | wc -l)
 echo "$shots pictures, $(wc -l < "$work/not-set-up.txt") states not reached"
 # A state the runner can't set up is recorded, not failed; an app with no window fails.

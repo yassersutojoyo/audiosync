@@ -9,12 +9,15 @@ atspi-<theme>.txt holds the tree as AT-SPI saw it. The nowplaying group
 exits 1 when the Now Playing card, with the pointer over it, lacks Shuffle or
 Repeat drawn on, or its cover reads as one colour; the tray group when the
 tray panel reads as one colour; the updates group when Check for Updates…
-doesn't tell the .deb copy to install the newer package.
+doesn't tell the .deb copy to install the newer package. The strands group
+grabs the strip under the cover 800 times into strands.raw.
 
     linux_shots.py <work> <group> <theme> <pid>
 """
 
+import ctypes
 import os
+import struct
 import subprocess
 import sys
 import time
@@ -121,6 +124,48 @@ def shot(node, state, pad=0):
     print(f"shot: {os.path.basename(path)}")
 
 
+class XImage(ctypes.Structure):
+    """The head of Xlib's XImage, up to the fields read here."""
+    _fields_ = [("width", ctypes.c_int), ("height", ctypes.c_int), ("xoffset", ctypes.c_int),
+                ("format", ctypes.c_int), ("data", ctypes.c_void_p), ("byte_order", ctypes.c_int),
+                ("bitmap_unit", ctypes.c_int), ("bitmap_bit_order", ctypes.c_int), ("bitmap_pad", ctypes.c_int),
+                ("depth", ctypes.c_int), ("bytes_per_line", ctypes.c_int), ("bits_per_pixel", ctypes.c_int)]
+
+
+def strip(box, grabs=800, interval=0.0787):
+    """`grabs` BGRA grabs of the screen's `box` (w, h, x, y), paced as the Mac and Windows sets
+    (12.7 a second), in strands.raw: n, w, h as int32, then per grab its time in ms and its pixels.
+    Xlib's XGetImage, since an import process per grab could not keep the pace."""
+    width, height, x, y = box
+    x11 = ctypes.CDLL("libX11.so.6")
+    x11.XOpenDisplay.restype = ctypes.c_void_p
+    x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+    x11.XDefaultRootWindow.restype = ctypes.c_ulong
+    x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+    x11.XGetImage.restype = ctypes.POINTER(XImage)
+    x11.XGetImage.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_int, ctypes.c_uint,
+                              ctypes.c_uint, ctypes.c_ulong, ctypes.c_int]
+    x11.XFree.argtypes = [ctypes.c_void_p]
+    display = x11.XOpenDisplay(None)
+    root = x11.XDefaultRootWindow(display)
+    with open(os.path.join(WORK, "strands.raw"), "wb") as out:
+        out.write(struct.pack("<iii", grabs, width, height))
+        due = time.monotonic()
+        for _ in range(grabs):
+            due += interval
+            image = x11.XGetImage(display, root, x, y, width, height, 0xFFFFFFFFFFFFFFFF, 2)
+            taken = time.monotonic() * 1000
+            head = image.contents
+            data = ctypes.string_at(head.data, head.bytes_per_line * height)
+            out.write(struct.pack("<d", taken))
+            out.write(b"".join(data[r * head.bytes_per_line:r * head.bytes_per_line + width * 4]
+                               for r in range(height)))
+            x11.XFree(head.data)
+            x11.XFree(image)
+            time.sleep(max(0.0, due - time.monotonic()))
+    print(f"strands: {grabs} grabs of {width}x{height} at {x},{y} ({THEME})")
+
+
 def pixels(box, *measure):
     """What ImageMagick's `measure` reads from the screen's `box` (w, h, x, y)."""
     width, height, x, y = box
@@ -216,6 +261,18 @@ def run(app, main):
                 failed.append("update notice")
         else:
             failed.append("update notice")
+    elif GROUP == "strands":
+        card = find(app, "Now Playing", seconds=20)
+        if card is None:
+            skip("STRANDS", "no Now Playing card")
+            return
+        box = extents(card)
+        # The pointer off the card, as in the Mac and Windows sets.
+        subprocess.run(["xdotool", "mousemove", "1270", "790"], check=True)
+        time.sleep(3)
+        shot(card, "STRANDS-CARD", pad=16)
+        # The cover is the card's top square, 10 px in; the strip runs under its bottom edge.
+        strip((box.width + 32, 64, box.x - 16, box.y + box.width - 20))
     elif GROUP == "nowplaying":
         # mpris_player.py plays a patterned cover with Shuffle on and LoopStatus Playlist.
         buttons = {name: find(app, name, seconds=20) for name in ("Shuffle", "Repeat", "Previous Track")}

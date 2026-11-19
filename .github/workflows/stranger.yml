@@ -330,9 +330,13 @@ jobs:
       # As the stranger session, plus the accessibility bus, the AT-SPI
       # bindings, ImageMagick's import, xdotool and a tray host.
       - name: System packages and the installed package
+        env:
+          GROUP: ${{ matrix.screens }}
         run: |
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends pipewire pipewire-bin wireplumber pipewire-pulse             pulseaudio-utils dbus dbus-user-session xvfb libx11-xcb1 libxcursor1 libxkbcommon-x11-0 libxi6 libxrandr2             at-spi2-core python3-gi gir1.2-atspi-2.0 imagemagick xdotool stalonetray
+          # Mesa's software OpenGL, for the strand strip on femtovg.
+          [ "$GROUP" != nowplaying ] || sudo apt-get install -y --no-install-recommends libegl1 libgl1 libgl1-mesa-dri libglx-mesa0
           sudo apt-get install -y --no-install-recommends snixembed || echo "snixembed: not in the archive, the stand-in watcher hosts the tray"
           sudo apt-get install -y "./$(ls pkg/dist/AudioSync-*.deb)"
           chmod +x pkg/desktop/target/release/examples/sni_watcher_stub
@@ -352,6 +356,7 @@ jobs:
             stranger-shots/*.txt
             stranger-shots/*.log
             stranger-shots/*.out
+            stranger-shots/strands/*
           if-no-files-found: warn
           retention-days: 7
 
