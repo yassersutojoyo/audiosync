@@ -243,3 +243,56 @@ fn narrator_reads_a_notices_heading_before_its_text() {
     let strings = include_str!("../../ui/strings.slint");
     assert!(strings.contains("return @tr(\"{}. {}\", heading, message);"));
 }
+
+/// SettingsWindow.swift:184-186 is a native segmented control: on the Mac's
+/// 2x MAIN-SETTINGS photos a filled 24 pt track (#ebebeb light, #303030
+/// dark) with no edge, and a 1 x 14 pt divider between two segments that
+/// are not chosen (#b4b4b4 light, #646464 dark).
+#[test]
+fn the_appearance_control_is_a_filled_track_with_dividers() {
+    let settings = include_str!("../../ui/settings.slint").replace("\r\n", "\n");
+    let at = settings
+        .find("accessible-label: Strings.appearance;")
+        .expect("the track");
+    let track = &settings[settings[..at].rfind("Rectangle {").expect("track")..];
+    let track = &track[..track
+        .find("\n                        Divider { }")
+        .expect("end")];
+    assert!(
+        track.contains("background: Tokens.dark ? #303030 : #ebebeb;"),
+        "{track}"
+    );
+    assert!(!track.contains("border-width"), "{track}");
+    assert!(!track.contains("drop-shadow"), "{track}");
+    assert_eq!(track.matches("SegmentDivider {").count(), 2, "{track}");
+    let divider = component(&settings, "SegmentDivider");
+    assert!(divider.contains("height: 14px;"), "{divider}");
+    assert!(
+        divider.contains("background: Tokens.dark ? #646464 : #b4b4b4;"),
+        "{divider}"
+    );
+}
+
+/// EqualizerWindow.swift:251 and :261 set a band's gain and label in
+/// .caption2, which macOS draws at 10 pt medium; :168 makes the preamp's
+/// divider 170 pt, at the bottom of the bands.
+#[test]
+fn the_equalizer_band_text_is_medium_and_its_divider_170_tall() {
+    let eq = include_str!("../../ui/equalizer.slint").replace("\r\n", "\n");
+    let text = component(&eq, "BandText");
+    assert!(
+        text.contains("font-size: Tokens.font-size-caption2;"),
+        "{text}"
+    );
+    assert!(
+        text.contains("font-weight: Fluent.weight-medium;"),
+        "{text}"
+    );
+    let band = component(&eq, "Band");
+    assert_eq!(band.matches("BandText {").count(), 2, "{band}");
+    assert!(!band.contains("QuietText {"), "{band}");
+    let divider = &eq[eq.find("root.preamp-changed(value);").expect("preamp")..];
+    let divider = &divider[..divider.find("for gain[index]").expect("bands")];
+    assert!(divider.contains("height: 170px;"), "{divider}");
+    assert!(!divider.contains("padding-top: 8px;"), "{divider}");
+}
