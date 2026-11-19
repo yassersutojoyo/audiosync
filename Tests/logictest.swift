@@ -7988,7 +7988,7 @@ do {
           "left column: Presets, Equalizer and Calibrate All Speakers draw their icon in one slot, so their names start on one line",
           "laid out apart: \(apart)")
     let quickRow = part("MainWindow.swift", "struct QuickRow: ViewModifier", "\n}\n")
-    let column = part("MainWindow.swift", "hero(t)\n", "\n                }\n")
+    let column = part("MainWindow.swift", "hero(t)\n", "\n        }\n")
     let calibrate = rows[2].1
     let calibrateRow = calibrate.components(separatedBy: "if let off").first ?? ""
     let oneRowEach = rows.filter { $0.1.components(separatedBy: ".modifier(QuickRow())").count != 2 }.map(\.0)
@@ -8004,11 +8004,12 @@ do {
           "left column: Presets, Equalizer and Calibrate All Speakers share one row height and one gap, the Calibrate note below its row",
           "rows without exactly one QuickRow: \(oneRowEach)")
     let rowIcon = part("MainWindow.swift", "struct QuickRowIcon: View", "\n}\n")
-    let columnFrame = part("MainWindow.swift", "hero(t)\n", "let all = model.layout")
+    let columnFrame = part("MainWindow.swift", "private func leftColumn(", "\n    }\n")
     check(rowIcon.contains(".frame(width: QuickRowIcon.slot, alignment: .leading)") && rowIcon.contains("static let slot: CGFloat = 20")
-            && column.contains("}\n                        .padding(.horizontal, -MainColumns.rowInset)")
+            && column.contains("}\n                .padding(.horizontal, -MainColumns.rowInset)")
             && column.contains(".padding(.horizontal, MainColumns.rowInset)")
-            && columnFrame.contains(".frame(width: MainColumns.left(window: windowWidth.points) + 2 * MainColumns.rowInset)"),
+            && columnFrame.contains("let width: CGFloat = MainColumns.left(window: windowWidth.points) + 2 * MainColumns.rowInset")
+            && columnFrame.contains(".frame(width: width)"),
           "left column: the Presets, Equalizer and Calibrate icons start on the master volume icon's column, their fill reaching past it")
     check(MainColumns.separatorPadding.top == 11 && MainColumns.separatorPadding.bottom == 5
             && column.contains("Divider().padding(.top, MainColumns.separatorPadding.top)")
