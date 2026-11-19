@@ -327,3 +327,39 @@ fn the_empty_lists_note_sits_under_the_line_as_the_macs() {
     assert!(note.contains("padding-top: -4px;"), "{note}");
     assert!(note.contains("padding-bottom: 2px;"), "{note}");
 }
+
+/// MenuBar.swift:1833-1846 and WindowRules.swift:1113, :1139, :1595: the
+/// speaker in its 26 pt icon box, 9 pt to the track, 9 pt to the 25 pt
+/// number and 15 pt from the edge.
+#[test]
+fn the_flyout_volume_row_sits_as_the_macs() {
+    let row = between("MasterVolume {", "mute-toggled =>");
+    for want in [
+        "button-size: 26px;",
+        "row-height: 32px;",
+        "spacing: 1px;",
+        "number-gap: 17px;",
+        "padding-right: 15px;",
+    ] {
+        assert!(row.contains(want), "{want}\n{row}");
+    }
+}
+
+/// MenuBar.swift:2797-2834: the panel's notice is HStack(spacing: 8) { icon,
+/// text, Spacer(minLength: 0), dismiss }, which wraps the text in
+/// TRAY-NOTICE-*-mac.png after "streaming", a column of 150 pt.
+#[test]
+fn the_tray_notice_wraps_in_the_macs_column() {
+    let source = include_str!("../../ui/widgets.slint").replace("\r\n", "\n");
+    let stack = &source[source
+        .find("export component NoticeStack ")
+        .expect("NoticeStack")..];
+    assert!(
+        stack.contains("max-width: root.compact ? 150px : 100000px;"),
+        "the text column"
+    );
+    assert!(
+        stack.contains("if root.compact: Rectangle { }"),
+        "the spacer"
+    );
+}

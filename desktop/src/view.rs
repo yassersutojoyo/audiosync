@@ -16746,9 +16746,9 @@ pub(crate) mod tests {
         element.absolute_position().x + element.size().width
     }
 
-    /// The tray panel's master volume number, as in the Mac panel: as far
-    /// from the track as the speaker is, and ending on the preset chevron's
-    /// edge.
+    /// The tray panel's master volume number, as in the Mac panel: 9 pt
+    /// after the track's end, as the track is after the 26 pt icon box
+    /// (MenuBar.swift:1833-1846), and ending on the preset chevron's edge.
     // covers: S439
     #[test]
     fn the_flyout_volume_number_mirrors_the_speaker_gap_on_the_chevron_edge() {
@@ -16756,11 +16756,11 @@ pub(crate) mod tests {
         let number = flyout_element(&app, "MasterVolume::number");
         let speaker = flyout_element(&app, "MasterVolume::speaker");
         let (start, end) = master_track(&flyout_element(&app, "MasterVolume::slider"));
-        let speaker_gap = start - right_edge(&speaker);
-        let number_gap = number.absolute_position().x - end;
+        let box_gap = start - (speaker.absolute_position().x + speaker.size().width / 2.0 + 13.0);
+        let number_gap = number.absolute_position().x - (end + 8.0);
         assert!(
-            (speaker_gap - number_gap).abs() < 0.5,
-            "speaker {speaker_gap} from the track, number {number_gap}"
+            (box_gap - 9.0).abs() < 0.5 && (number_gap - 9.0).abs() < 0.5,
+            "track {box_gap} from the icon box, number {number_gap} from the track"
         );
         let chevron = flyout_element(&app, "PresetPicker::chevron");
         assert!((right_edge(&number) - right_edge(&chevron)).abs() < 0.5);

@@ -39,6 +39,7 @@ component SwitchRow inherits SettingsRow {
         alignment: center;
 
         switch := PowerSwitch {
+            system: true;
             text: root.text;
             checked: root.checked;
             toggled => {
@@ -500,7 +501,11 @@ export component SettingsWindow inherits Window {
                             VerticalLayout {
                                 alignment: center;
 
+                                // HouseButtonStyle() (SettingsWindow.swift:221, :229; HouseButtonStyle.swift:31-35).
                                 SmallButton {
+                                    height: 26px;
+                                    font-size: Tokens.font-size-body;
+                                    side-padding: 12px;
                                     text: Strings.menu-check-for-updates;
                                     clicked => {
                                         root.check-for-updates-requested();
@@ -519,7 +524,11 @@ export component SettingsWindow inherits Window {
                             VerticalLayout {
                                 alignment: center;
 
+                                // HouseButtonStyle() (SettingsWindow.swift:221, :229; HouseButtonStyle.swift:31-35).
                                 SmallButton {
+                                    height: 26px;
+                                    font-size: Tokens.font-size-body;
+                                    side-padding: 12px;
                                     text: Strings.menu-check-setup;
                                     clicked => {
                                         root.setup-requested();

@@ -468,11 +468,11 @@ fn the_off_power_switch_is_drawn_in_the_macs_secondary() {
     // Color.secondary and its 15 % fill (MenuBar.swift:2934-2935): black at 50 % on
     // light and white at 55 % on dark, as the off toggle glyph's.
     assert!(
-        switch.contains("Tokens.teal : Tokens.dark ? #ffffff15 : #00000013;"),
+        switch.contains(": Tokens.dark ? #ffffff15 : #00000013;"),
         "{switch}"
     );
     assert!(
-        switch.contains("border-color: Tokens.dark ? #ffffff8c : #00000080;"),
+        switch.contains("(root.system ? #ffffff3d : #ffffff8c) : #00000080;"),
         "{switch}"
     );
 }
@@ -491,4 +491,35 @@ fn the_panels_mute_button_is_drawn_in_the_secondary_text() {
         row[..row.find("mute-toggled").unwrap()].contains("icon-color: Tokens.secondary-text;"),
         "{row}"
     );
+}
+
+/// SettingsWindow.swift:355-360: the system switch, which MAIN-SETTINGS-*-mac.png
+/// draws 38 x 22 pt with a filled track and no ring: black at 10 % on light,
+/// white at 10 % with a white 24 % hairline and a #c6c6c6 knob on dark.
+/// SettingsWindow.swift:219-229: Check for Updates and Check Setup are
+/// HouseButtonStyle(), 13 pt, 26 pt high, padded 12 pt (HouseButtonStyle.swift:31-35).
+#[test]
+fn settings_switches_and_buttons_are_the_macs() {
+    let settings = include_str!("../../ui/settings.slint").replace("\r\n", "\n");
+    let row = &settings[settings.find("switch := PowerSwitch {").expect("switch")..];
+    assert!(row[..row.find("toggled =>").unwrap()].contains("system: true;"));
+    let widgets = include_str!("../../ui/widgets.slint").replace("\r\n", "\n");
+    let switch = component(&widgets, "PowerSwitch");
+    assert!(
+        switch.contains("root.system ? (Tokens.dark ? #ffffff1a : #0000001a)"),
+        "{switch}"
+    );
+    assert!(switch.contains("#c6c6c6"), "{switch}");
+    for text in ["Strings.menu-check-for-updates", "Strings.menu-check-setup"] {
+        let at = settings.find(&format!("text: {text};")).expect(text);
+        let start = settings[..at].rfind("SmallButton {").expect("its button");
+        let button = &settings[start..at];
+        for want in [
+            "height: 26px;",
+            "font-size: Tokens.font-size-body;",
+            "side-padding: 12px;",
+        ] {
+            assert!(button.contains(want), "{text}: {want}");
+        }
+    }
 }
