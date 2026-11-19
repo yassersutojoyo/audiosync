@@ -229,9 +229,10 @@ component CurveMenu inherits Rectangle {
     }
 
     // The Mac's tinted menu button as its photo measures: 24 pt high, as wide
-    // as the curve name, teal at 5% with no edge, as SmallButton's system look.
+    // as the curve name with 19 pt to the chevron, teal at 5% with no edge, as
+    // SmallButton's system look.
     height: 24px;
-    width: shown-text.preferred-width + chevron.preferred-width + 30px;
+    width: shown-text.preferred-width + chevron.preferred-width + 41px;
     border-radius: Tokens.radius-control;
     background: Tokens.teal.with-alpha(touch.pressed ? (Tokens.dark ? 0.3 : 0.1) : 0.05);
     forward-focus: focus;
@@ -260,7 +261,7 @@ component CurveMenu inherits Rectangle {
             HorizontalLayout {
                 padding-left: 11px;
                 padding-right: 11px;
-                spacing: 8px;
+                spacing: 19px;
 
                 shown-text := Text {
                     text: root.shown;
@@ -543,6 +544,7 @@ export component EqualizerWindow inherits Window {
                     power := ToggleSwitch {
                         text: Strings.equalizer-title;
                         headline: true;
+                        system-size: true;
                         checked: root.enabled;
                         accessible-label: Strings.equalizer-title;
                         toggled => {
@@ -659,6 +661,7 @@ export component EqualizerWindow inherits Window {
                     // One line, as the Mac's (EqualizerWindow.swift:179); a wrapped
                     // caption asks for its height at no width and grew the window 54 px.
                     wrap: no-wrap;
+                    overflow: elide;
                     vertical-alignment: center;
                     horizontal-stretch: 1;
                 }
