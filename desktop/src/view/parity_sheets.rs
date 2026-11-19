@@ -63,7 +63,7 @@ fn add_by_address_sits_under_the_title_row_with_a_22_pt_field() {
     );
 }
 
-// MainWindow.swift:3500-3516 and CalibrationViews.swift:53-56: 12 pt steps,
+// MainWindow.swift:3500-3516 and CalibrationViews.swift:53-56: 11 pt steps,
 // and Calibrate with Microphone the Mac's small grey push button.
 #[test]
 fn the_delay_panel_buttons_are_the_macs_small_ones() {
@@ -71,7 +71,7 @@ fn the_delay_panel_buttons_are_the_macs_small_ones() {
         .find("component DelayStep ")
         .map(|at| &WIDGETS[at..at + 2500])
         .expect("DelayStep");
-    assert!(step.contains("font-size: Tokens.font-size-callout;"));
+    assert!(step.contains("font-size: 11px;"));
     assert!(step.contains("min-width: label.preferred-width + 22px;"));
     let calibrate = WIDGETS
         .find("text: root.calibrating ? Strings.calibration-cancel")

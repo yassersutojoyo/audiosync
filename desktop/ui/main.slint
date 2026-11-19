@@ -128,15 +128,19 @@ component SourceMenu inherits Rectangle {
                     text: root.sources[root.index];
                     color: Tokens.text;
                     overflow: elide;
-                    horizontal-stretch: 1;
                     vertical-alignment: center;
                     accessible-role: none;
                 }
 
+                // Right after the name, as the Mac's borderless menu draws it (MenuBar.swift:2470-2484).
                 Glyph {
                     glyph: Glyphs.chevron-down;
                     font-size: 12px;
                     color: Tokens.text;
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
                 }
             }
         }
@@ -1536,6 +1540,10 @@ component PresetsCard inherits Rectangle {
                     HorizontalLayout {
                         padding-left: 8px;
                         padding-right: 8px;
+                        // The Mac's 6 pt around the text (MainWindow.swift:915), less what
+                        // Segoe's taller line adds, so a plain row stays 28 high.
+                        padding-top: (28px - label.preferred-height) / 2;
+                        padding-bottom: (28px - label.preferred-height) / 2;
                         spacing: 8px;
 
                         // The glyphs stay on the label's line when the name's line shows.
@@ -1861,6 +1869,9 @@ component EqualizerCard inherits Rectangle {
     HorizontalLayout {
         padding-left: 8px;
         padding-right: 8px;
+        // As the Presets row (MainWindow.swift:569).
+        padding-top: (28px - label.preferred-height) / 2;
+        padding-bottom: (28px - label.preferred-height) / 2;
         spacing: 8px;
 
         // The glyphs stay on the label's line when the curve's line shows.

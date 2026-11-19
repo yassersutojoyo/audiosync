@@ -517,6 +517,8 @@ component FlyoutRow inherits Rectangle {
         if root.device-volume != DeviceVolumeHint.none: Glyph {
             glyph: Glyphs.device-volume(root.device-volume);
             font-size: 12px;
+            // At the row's right edge, as the Mac's: no share of the spare width.
+            horizontal-stretch: 0;
             color: Tokens.secondary-text;
 
             // Narrator reads the hint from the row's description.
@@ -1029,7 +1031,7 @@ export component TrayFlyout inherits Window {
     // sizes the window to: Slint's own preferred height counts a wrapped
     // notice as one line. The parts sit at the top, so this holds at any
     // window height.
-    out property <length> fit-height: root.footer-bottom + 12px;
+    out property <length> fit-height: root.footer-bottom + 8px;
     // Each frame of a zone's fold changes it; the app then sizes the window
     // again, so no gap opens under the rows and nothing is cut.
     callback fit-height-changed();
@@ -1143,7 +1145,6 @@ export component TrayFlyout inherits Window {
                         HorizontalLayout {
                             padding-left: 6px;
                             padding-right: 6px;
-                            padding-top: 2px;
                             padding-bottom: 2px;
                             spacing: 9px;
 
@@ -1328,7 +1329,6 @@ export component TrayFlyout inherits Window {
                                                 height: 48px;
                                                 border-radius: 9px;
                                                 clip: true;
-                                                background: Tokens.text.with-alpha(0.06);
                                                 transform-scale: 1 - root.now-playing-look.old-shrink;
                                                 opacity: 1 - root.now-playing-look.old-fade;
 
@@ -1345,7 +1345,8 @@ export component TrayFlyout inherits Window {
                                                     height: parent.height;
                                                     glyph: root.source-is-input ? Glyphs.microphone : Glyphs.volume-high;
                                                     color: Tokens.secondary-text;
-                                                    font-size: 22px;
+                                                    // The Mac's symbol keeps its own size in a 22 pt frame (MenuBar.swift:2509-2522): 17 pt wide in its photos.
+                                                    font-size: 17px;
                                                 }
 
                                                 Rectangle {
@@ -1563,27 +1564,13 @@ export component TrayFlyout inherits Window {
                             index: 5;
                             revealed: root.revealed;
 
+                            // Text alone, no beating dot before it, as the Mac's note (MenuBar.swift:1857-1867).
                             none-note := HorizontalLayout {
                                 property <bool> both-none: root.airplay-none-found && root.cast-list == CastList.none-found;
                                 property <string> list-note: root.airplay-none-found ? (self.both-none ? Strings.network-none-found : Strings.airplay-none-found) : root.airplay-searching ? (root.cast-list == CastList.none-found || root.cast-list == CastList.failed ? Strings.looking-for-airplay-speakers : Strings.looking-for-speakers) : Strings.connected-none;
                                 property <string> cast-note: self.both-none || self.list-note == Strings.looking-for-speakers ? "" : Strings.cast-list(root.cast-list);
                                 property <string> text: root.this-pc.length == 0 && root.all-hidden ? Strings.flyout-all-hidden : root.this-pc.length == 0 && root.airplay-none-found ? Strings.no-speakers : self.cast-note == "" ? self.list-note : self.list-note == Strings.connected-none ? self.cast-note : self.list-note + " " + self.cast-note;
                                 spacing: 10px;
-
-                                // While it looks: a dot that beats once a second, still
-                                // with animation effects off.
-                                if none-note.text == Strings.looking-for-speakers || none-note.text == Strings.looking-for-airplay-speakers: Rectangle {
-                                    property <float> beat: Motion.on ? mod(animation-tick() / 1ms, 1000) / 1000 : 1;
-                                    width: 15px;
-
-                                    Rectangle {
-                                        width: 7px * (self.beat < 0.11 ? 1 + 0.6 * self.beat / 0.11 : self.beat < 0.22 ? 1.6 - 0.6 * (self.beat - 0.11) / 0.11 : 1);
-                                        height: self.width;
-                                        border-radius: self.width / 2;
-                                        background: Tokens.secondary-text;
-                                        property <float> beat: parent.beat;
-                                    }
-                                }
 
                                 SecondaryText {
                                     text: none-note.text;
@@ -1731,7 +1718,12 @@ export component TrayFlyout inherits Window {
                 }
             }
 
-            Divider { }
+            VerticalLayout {
+                // 8 under the rows, as the Mac's (MenuBar.swift:1765).
+                padding-top: -2px;
+
+                Divider { }
+            }
 
             footer := IntroPart {
                 index: 6;
@@ -1742,8 +1734,9 @@ export component TrayFlyout inherits Window {
                     // The words 17 px from the panel's edges, as on the Mac.
                     padding-left: -3px;
                     padding-right: -3px;
-                    // 2 px under the line: the stack's 10 less the Mac's 8 (MenuBar.swift:1770).
-                    padding-top: -8px;
+                    // Exit's text 11 pt under the line, as the Mac's 2x TRAY-IDLE-terang
+                    // photo measures it (line ends at 870, text from 892).
+                    padding-top: -9px;
 
                     FooterButton {
                         text: Strings.open-app;

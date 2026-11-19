@@ -6511,7 +6511,9 @@ pub fn speaker_item(
         kind: speaker_kind(speaker.kind),
         show_kind,
         state: row_state(state.speaker_state(speaker)),
-        plays: state.speaker_state(speaker) == SpeakerState::Playing
+        // On while streaming, as the Mac's row state (MenuBar.swift:505-507):
+        // a speaker that reconnects or waits still shows as playing.
+        plays: SpeakerState::new(speaker.enabled, state.running) == SpeakerState::Playing
             && speaker
                 .cast
                 .as_ref()
@@ -11041,9 +11043,10 @@ pub(crate) mod tests {
             .main
             .global::<crate::Strings>()
             .invoke_volume_of("Speakers".into());
+        // The track before the knob: the fill fades to the off track; the knob stays.
         let knob = || {
             let (left, top, width, height) = slider_box(&app.main, &label);
-            let x = left + 8.0 + (width - 16.0) * 0.6;
+            let x = left + 9.0 + (width - 18.0) * 0.3;
             pixels(app.main.window())(x, top + height / 2.0)[0]
         };
         let on = knob();
@@ -11056,7 +11059,7 @@ pub(crate) mod tests {
         draw_frames();
         let off = knob();
         assert!(
-            off < midway && midway < on,
+            on.min(off) < midway && midway < on.max(off),
             "{on}, then {midway}, then {off}"
         );
     }
@@ -16368,11 +16371,12 @@ pub(crate) mod tests {
         let size = window.size().to_logical(window.scale_factor());
         assert_eq!(size.height, height);
         let bottom = flyout.get_footer_bottom();
+        // The panel's 8 under the buttons (MenuBar.swift:1779).
         assert!(
-            bottom + 12.0 <= height,
+            bottom + 8.0 <= height,
             "buttons end at {bottom}, window {height} high (Slint asked for {preferred})"
         );
-        assert!(height <= bottom + 12.5, "no room left under the buttons");
+        assert!(height <= bottom + 8.5, "no room left under the buttons");
     }
 
     /// The hero's borderless source menu reads the chosen source, as the
@@ -16683,7 +16687,7 @@ pub(crate) mod tests {
         let exit = ElementHandle::find_by_accessible_label(&app.flyout, &strings.get_exit_app())
             .next()
             .expect("Exit");
-        // The stack's 10 less the buttons' 8 (MenuBar.swift:1770).
+        // Exit's text 11 pt under the line, as the Mac's 2x TRAY-IDLE-terang photo measures (870 to 892).
         assert_eq!(exit.absolute_position().y - last_line, 2.0);
     }
 
@@ -16982,7 +16986,8 @@ pub(crate) mod tests {
         let height = app.fit_flyout(room);
         assert_eq!(height, room);
         let bottom = flyout.get_footer_bottom();
-        assert!(bottom + 12.0 <= room, "buttons end at {bottom} in {room}");
+        // The panel's 8 under the buttons (MenuBar.swift:1779).
+        assert!(bottom + 8.0 <= room, "buttons end at {bottom} in {room}");
         assert_eq!(app.fit_flyout(1000.0), full, "the list gets its room back");
     }
 
@@ -17057,8 +17062,9 @@ pub(crate) mod tests {
         assert_eq!(app.fit_flyout(shorter), shorter);
         let grown = flyout.get_list_cut() + flyout.get_body_cut();
         assert!(grown > cuts.0 + cuts.1, "less room, a deeper cut");
+        // The panel's 8 under the buttons (MenuBar.swift:1779).
         assert!(
-            flyout.get_footer_bottom() + 12.0 <= shorter + 0.5,
+            flyout.get_footer_bottom() + 8.0 <= shorter + 0.5,
             "the buttons still show"
         );
         assert_eq!(app.fit_flyout(room), room);
@@ -17101,8 +17107,9 @@ pub(crate) mod tests {
         let height = app.fit_flyout(room);
         assert_eq!(height, room, "{case}");
         let bottom = flyout.get_footer_bottom();
+        // The panel's 8 under the buttons (MenuBar.swift:1779).
         assert!(
-            bottom + 12.0 <= room + 0.5,
+            bottom + 8.0 <= room + 0.5,
             "{case}: buttons end at {bottom} in {room}"
         );
         assert_eq!(app.fit_flyout(1000.0), full, "{case}: the room comes back");
@@ -19410,10 +19417,8 @@ pub(crate) mod tests {
         );
     }
 
-    /// At 125 % and 150 % the dark knob's top edge, clipped at 6 px (7.5 and
-    /// 9 device px), leaves no gap in its rim, no line across the knob and no
-    /// edge at the bottom, on or off, with or without the pointer; on light
-    /// no line crosses the knob either.
+    /// At 125 % and 150 % the row's 18 x 14 knob is one even fill, on or off,
+    /// with or without the pointer, in both themes: no line or seam crosses it.
     #[test]
     fn a_rows_knob_has_no_seam_at_fractional_scales() {
         use slint::language::ColorScheme;
@@ -19429,7 +19434,7 @@ pub(crate) mod tests {
                     .dispatch_event(WindowEvent::ScaleFactorChanged {
                         scale_factor: scale,
                     });
-                let (mut first, mut last, mut knob_top) = (0, 0, 0.0);
+                let (mut first, mut last) = (0, 0);
                 for scheme in [ColorScheme::Dark, ColorScheme::Light] {
                     app.main.global::<Palette>().set_color_scheme(scheme);
                     for hovered in [false, true] {
@@ -19459,55 +19464,26 @@ pub(crate) mod tests {
                                 .filter(|&x| at(x, probe) > row.saturating_add(8))
                                 .collect();
                             (first, last) = (inked[0], inked[inked.len() - 1]);
-                            // The renderer puts the knob on whole pixels, so its top
-                            // row is read from the shot, not from the layout.
-                            let column = (first + last + 1) / 2;
-                            knob_top = (((top - 2.0) * scale) as i32..)
-                                .find(|&y| at(column, y) > row.saturating_add(8))
-                                .expect("the knob's top")
-                                as f32;
+                            assert!(
+                                (last - first + 1) as f32 >= 12.0 * scale,
+                                "{name} {scale}x: the knob is 18 wide, {first}..{last}"
+                            );
                         }
-                        let centre = (first + last + 1) as f32 / 2.0;
-                        let columns = (centre - 8.0 * scale).floor() as i32
-                            ..(centre + 8.0 * scale).ceil() as i32;
-                        let clip_end = (knob_top + 6.0 * scale).floor() as i32;
+                        let centre = (first + last + 1) / 2;
+                        let fill = at(centre, (middle * scale) as i32);
                         let case = format!("{name} {scale}x {scheme:?} hovered {hovered}");
-                        let fill = at(centre as i32, (middle * scale) as i32 - 1);
-                        let inner = columns.start + 3..columns.end - 3;
-                        for y in clip_end - 1..=clip_end + 1 {
-                            let line: Vec<u8> = inner.clone().map(|x| at(x, y)).collect();
+                        // The upper middle of the 18 x 14 capsule, clear of its rounded rim;
+                        // under the pointer a tooltip may cover the lower half.
+                        let across = (5.0 * scale) as i32;
+                        let down = (3.0 * scale) as i32;
+                        let mid_y = (middle * scale) as i32;
+                        for y in mid_y - down..=mid_y {
+                            let line: Vec<u8> = (centre - across..=centre + across)
+                                .map(|x| at(x, y))
+                                .collect();
                             assert!(
                                 line.iter().all(|&g| g.abs_diff(fill) <= 2),
                                 "{case}: a line across the knob at {y}, fill {fill:02x}: {line:02x?}"
-                            );
-                        }
-                        if scheme == ColorScheme::Light {
-                            continue;
-                        }
-                        let centre_y = knob_top + 8.0 * scale;
-                        for y in knob_top as i32..(centre_y - 2.5 * scale) as i32 {
-                            let mirror = (2.0 * centre_y) as i32 - 1 - y;
-                            for x in columns.clone() {
-                                let (above, below) = (at(x, y), at(x, mirror));
-                                assert!(
-                                    above.saturating_add(2) >= below,
-                                    "{case}: a gap in the rim at {x},{y}: {above:02x} over {below:02x}"
-                                );
-                                if y >= clip_end {
-                                    assert!(
-                                        above <= below.saturating_add(12),
-                                        "{case}: the edge goes on past the clip at {x},{y}: {above:02x} over {below:02x}"
-                                    );
-                                }
-                            }
-                        }
-                        let bottom = (knob_top + 16.0 * scale) as i32 - 2;
-                        for y in bottom..bottom + 2 {
-                            let lightest =
-                                columns.clone().map(|x| at(x, y)).max().unwrap_or_default();
-                            assert!(
-                                lightest <= fill,
-                                "{case}: an edge at the bottom, {lightest:02x} at {y}"
                             );
                         }
                     }
@@ -19537,11 +19513,7 @@ pub(crate) mod tests {
                 let case = format!("{scheme:?}, hovered {hovered}");
                 if scheme == ColorScheme::Dark {
                     assert!(track >= row + 10, "{case}: track {track} on {row}");
-                    assert!(brightest >= row + 26, "{case}: knob {brightest} on {row}");
-                    assert!(
-                        brightest <= row + 28,
-                        "{case}: knob rim {brightest} on {row}"
-                    );
+                    assert!(brightest >= row + 150, "{case}: knob {brightest} on {row}");
                 } else {
                     assert!(track + 6 <= row, "{case}: track {track} on {row}");
                     if hovered {
@@ -25214,10 +25186,10 @@ pub(crate) mod tests {
         assert!(tip_after(position), "back once the pointer left");
     }
 
-    /// A speaker's volume has a 16 px knob, as the master volume's and as
-    /// measured on the Mac's window.
+    /// A speaker's volume has the Mac's 18 x 14 small knob (its 18 Nov
+    /// photos at 2x); the master volume a 16 px one.
     #[test]
-    fn speaker_volume_knobs_are_16_px_as_the_masters() {
+    fn speaker_volume_knobs_are_the_macs_small_knob() {
         let app = narrow_app(MockBackend::new());
         let row = element(&app, "SpeakerRow::volume-slider").expect("a speaker's volume");
         let knob = row
@@ -25225,7 +25197,7 @@ pub(crate) mod tests {
             .match_id("LevelSlider::thumb")
             .find_first()
             .expect("its knob");
-        assert_eq!(knob.size().width, 16.0);
+        assert_eq!((knob.size().width, knob.size().height), (18.0, 14.0));
         let master = element(&app, "MasterVolume::slider").expect("the master volume");
         let knob = master
             .query_descendants()

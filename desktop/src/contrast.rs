@@ -401,7 +401,7 @@ fn the_master_volume_draws_its_levels_waves_and_a_3_to_1_track() {
     assert!(master.contains("color: Tokens.text;"));
     let slider = component_body(&widgets, "LevelSlider");
     assert!(
-        slider.contains("property <brush> track-look: root.idle ? (Tokens.dark ? #ffffff0e : #00000008) : root.small ? (Tokens.dark ? #ffffff1b : #0000000e) : root.track;")
+        slider.contains("background: root.small ? (piece == 0 && root.idle ? (Tokens.dark ? #ffffff25 : #00000025) : (Tokens.dark ? #ffffff19 : #00000019)) : root.track;")
     );
     assert!(slider.contains("border-width: root.small && Tokens.dark ? 0px : 1px;"));
 }
@@ -709,6 +709,41 @@ fn delay_steps_are_grey_pills_and_fields_have_an_edge_in_light() {
         2,
         "both delay fields are raised"
     );
+}
+
+/// The calibration Cancel is the Mac's small push button
+/// (CalibrationViews.swift:53-56): the delay steps' faint grey, its text
+/// readable at rest and pressed on the window and on a card.
+#[test]
+fn the_calibration_cancel_keeps_its_text_readable() {
+    let widgets = include_str!("../ui/widgets.slint");
+    let button = component_body(widgets, "SmallButton");
+    assert!(button.contains(
+        "(root.grey ? Tokens.text : Tokens.teal).with-alpha(touch.pressed ? (Tokens.dark ? 0.3 : 0.1) : 0.05)"
+    ));
+    assert!(button.contains("color: root.dimmed ? Tokens.text.with-alpha(0.5)"));
+    let controls = component_body(widgets, "SyncControls");
+    let cancel = blocks(controls, "SmallButton");
+    assert!(
+        cancel
+            .iter()
+            .any(|b| b.contains("Strings.calibration-cancel") && b.contains("grey: true;")),
+        "Cancel is the small grey push button"
+    );
+    for (appearance, pressed) in [(Appearance::Light, 0.1), (Appearance::Dark, 0.3)] {
+        let text = srgb("text", appearance);
+        for under in ["background", "surface"] {
+            let below = srgb(under, appearance);
+            for alpha in [0.05, pressed] {
+                let fill = [0, 1, 2].map(|i| text[i] * alpha + below[i] * (1.0 - alpha));
+                let value = contrast(text, fill);
+                assert!(
+                    value >= MIN_TEXT_CONTRAST,
+                    "Cancel at {alpha} over {under} ({appearance:?}): {value:.2}:1"
+                );
+            }
+        }
+    }
 }
 
 /// A zone header's "2 of 3 on" is in the readable teal while a member is on,
@@ -2307,11 +2342,10 @@ fn an_off_speakers_slider_is_dimmed_as_the_macs() {
     );
     let slider = component_body(&widgets, "LevelSlider");
     for look in [
-        "root.idle ? (Tokens.dark ? #ffffff0e : #00000008)",
+        "piece == 0 && root.idle ? (Tokens.dark ? #ffffff25 : #00000025)",
         // An on speaker's fill is the ink the window tints its sliders
         // (MainWindow.swift:350-351): near white on dark, as the Mac's.
-        "background: root.idle ? transparent : root.small ? (Tokens.dark ? Tokens.text : #000000f5) : Tokens.text;",
-        "(Tokens.dark ? #ffffff22 : #ffffff90).mix(",
+        "background: root.idle ? transparent : root.small ? (Tokens.dark ? #f4f4f4 : #000000f5) : Tokens.text;",
         "width: root.vertical ? root.thickness : max(0px, piece == 0 ? root.span * root.ratio - root.knob / 2 : root.span * (1 - root.ratio) - root.knob / 2);",
     ] {
         assert!(slider.contains(look), "{look}");

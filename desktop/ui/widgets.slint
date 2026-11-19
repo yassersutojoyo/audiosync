@@ -6,7 +6,7 @@
 // focus ring while it has keyboard focus, acts on Space and Enter, and
 // carries an accessible role, label and (where it has one) value.
 
-import { Button, ComboBox, Spinner } from "std-widgets.slint";
+import { Button, ComboBox } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { Availability, CastState, DeviceVolumeHint, NoticeItem, RowPart, UpdateButton, RowState, SourceLook, SourceRowKind, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
@@ -97,8 +97,8 @@ export global Fluent {
     // A 1 px edge that sets a card off a light background.
     out property <brush> stroke: Tokens.dark ? Tokens.separator : #0000001a;
     // The main window: white on light, the Mac's system window color on dark
-    // as its photos show it (#2b2b29, MainWindow.swift:32-36).
-    out property <color> main-window: Tokens.dark ? #2b2b2b : #ffffff;
+    // as its photos of 18 Nov 22.24 show it (#1e1e1e, MainWindow.swift:32-36).
+    out property <color> main-window: Tokens.dark ? #1e1e1e : #ffffff;
     // The style's slider thumb and its edge, for a slider AudioSync draws itself.
     out property <color> thumb: Tokens.dark ? #454545 : #ffffff;
     out property <color> thumb-edge: Tokens.dark ? #ffffff17 : #00000029;
@@ -434,9 +434,9 @@ export global Glyphs {
     // ellipsis (the Mac's options glyph) and its transport glyphs are
     // outlines where the Mac's are filled, so these are drawn on Windows too;
     // its Presets, Equalizer, microphone and timer are filled where the Mac's
-    // are outlines, and its bolt is an outline where the Mac's is filled.
+    // are outlines, and its bolt and warning are outlines where the Mac's are filled.
     public pure function drawn-everywhere(glyph: string) -> bool {
-        return glyph == root.shuffle || glyph == root.repeat-all || glyph == root.repeat-one || glyph == root.more || glyph == root.previous || glyph == root.next || glyph == root.play || glyph == root.pause || glyph == root.volume-low || glyph == root.volume-mid || glyph == root.volume-high || glyph == root.volume-muted || glyph == root.presets || glyph == root.equalizer || glyph == root.microphone || glyph == root.timer || glyph == root.lock || glyph == root.auto-connect;
+        return glyph == root.shuffle || glyph == root.repeat-all || glyph == root.repeat-one || glyph == root.more || glyph == root.previous || glyph == root.next || glyph == root.play || glyph == root.pause || glyph == root.volume-low || glyph == root.volume-mid || glyph == root.volume-high || glyph == root.volume-muted || glyph == root.presets || glyph == root.equalizer || glyph == root.microphone || glyph == root.timer || glyph == root.lock || glyph == root.auto-connect || glyph == root.warning;
     }
 
     // Shuffle and Repeat are drawn on a 20-unit box with 2-unit strokes and
@@ -497,9 +497,6 @@ export global Glyphs {
         }
         if glyph == root.dismiss {
             return "M3.5 3.5 L12.5 12.5 M12.5 3.5 L3.5 12.5";
-        }
-        if glyph == root.warning {
-            return "M8 2 L14.5 13.5 H1.5 Z M8 6 V9.5";
         }
         if glyph == root.info {
             return "M8 1.5 A6.5 6.5 0 0 1 8 14.5 A6.5 6.5 0 0 1 8 1.5 Z M8 7.25 V11.5";
@@ -583,8 +580,9 @@ export global Glyphs {
         if glyph == root.auto-connect {
             return "M9.5 1.5 L3.5 9 H8 L6.5 14.5 L12.5 7 H8 Z";
         }
+        // The mark is wound against the triangle, so the nonzero fill cuts it out.
         if glyph == root.warning {
-            return "M8 10.75 A0.8 0.8 0 0 1 8 12.35 A0.8 0.8 0 0 1 8 10.75 Z";
+            return "M8 1.5 L15 14 H1 Z M7.25 5.5 V10 H8.75 V5.5 Z M8 11.15 A0.85 0.85 0 0 0 8 12.85 A0.85 0.85 0 0 0 8 11.15 Z";
         }
         if glyph == root.info {
             return "M8 4.15 A0.8 0.8 0 0 1 8 5.75 A0.8 0.8 0 0 1 8 4.15 Z";
@@ -1840,21 +1838,16 @@ export component LevelSlider inherits Rectangle {
     callback changed(float);
     callback released(float);
     property <bool> vertical: root.orientation == Orientation.vertical;
-    // A row's slider has the Mac's 16 px knob on a 4 px track too, as measured on its window.
-    property <length> knob: 16px;
+    // The knob along and across the track: a row's is the Mac's 18 x 14 small
+    // knob (its photos of 18 Nov at 2x), the others a 16 px disc; a 4 px track.
+    property <length> knob: root.small ? 18px : 16px;
+    property <length> knob-across: root.small ? 14px : 16px;
     property <length> thickness: 4px;
     property <length> span: (root.vertical ? root.height : root.width) - root.knob;
     property <float> ratio: root.maximum > root.minimum ? (root.value - root.minimum) / (root.maximum - root.minimum) : 0;
-    // The Mac's disabled small slider (a speaker that is off), measured on its
-    // window at 2x on 17 Nov: no fill, a see-through track and knob.
+    // The Mac's disabled small slider (a speaker that is off): no fill and a
+    // darker track before the knob.
     property <bool> idle: root.small && !root.enabled;
-    // 1 while idle, faded over the Mac row's 250 ms; the knob's own fill
-    // changes, as a second circle over it left a lighter rim.
-    property <float> dim: root.idle ? 1 : 0;
-    animate dim {
-        duration: Motion.on ? 250ms : 150ms;
-        easing: Motion.on ? ease-in-out : linear;
-    }
 
     min-width: root.vertical ? root.knob : 48px;
     // A row's knob reaches 1 px past its 14 px line, which keeps the rows' 54 px step.
@@ -1920,17 +1913,16 @@ export component LevelSlider inherits Rectangle {
         }
     }
 
-    // The Mac's small slider over its row, measured at 2x on a plain and a hovered row: see-through,
-    // so it keeps its contrast on the hover fill. Horizontal
-    // tracks stop at the knob, which an idle knob would show through.
-    property <brush> track-look: root.idle ? (Tokens.dark ? #ffffff0e : #00000008) : root.small ? (Tokens.dark ? #ffffff1b : #0000000e) : root.track;
+    // The Mac's small slider over its row, measured at 2x in its 18 Nov photos: ink at 10 % past
+    // the knob and 14.5 % before it on an off row, see-through so it keeps its contrast on the
+    // hover fill. Horizontal tracks stop at the knob.
     for piece in (root.vertical ? 1 : 2): Rectangle {
         x: root.vertical ? (root.width - self.width) / 2 : piece == 0 ? root.knob / 2 : root.span * root.ratio + root.knob;
         y: root.vertical ? root.knob / 2 : (root.height - self.height) / 2;
         width: root.vertical ? root.thickness : max(0px, piece == 0 ? root.span * root.ratio - root.knob / 2 : root.span * (1 - root.ratio) - root.knob / 2);
         height: root.vertical ? root.span : root.thickness;
         border-radius: root.thickness / 2;
-        background: root.track-look;
+        background: root.small ? (piece == 0 && root.idle ? (Tokens.dark ? #ffffff25 : #00000025) : (Tokens.dark ? #ffffff19 : #00000019)) : root.track;
         animate background {
             duration: Motion.on ? 250ms : 150ms;
             easing: Motion.on ? ease-in-out : linear;
@@ -1943,8 +1935,8 @@ export component LevelSlider inherits Rectangle {
         width: root.vertical ? root.thickness : root.span * root.ratio;
         height: root.vertical ? root.span * root.ratio : root.thickness;
         border-radius: root.thickness / 2;
-        // The window tints its sliders in ink (MainWindow.swift:350-351): near white on dark.
-        background: root.idle ? transparent : root.small ? (Tokens.dark ? Tokens.text : #000000f5) : Tokens.text;
+        // The window tints its sliders in ink (MainWindow.swift:350-351): #f4f4f4 on dark in its photos.
+        background: root.idle ? transparent : root.small ? (Tokens.dark ? #f4f4f4 : #000000f5) : Tokens.text;
         animate background {
             duration: Motion.on ? 250ms : 150ms;
             easing: Motion.on ? ease-in-out : linear;
@@ -1953,38 +1945,19 @@ export component LevelSlider inherits Rectangle {
 
     thumb := Rectangle {
         width: root.knob;
-        height: root.knob;
+        height: root.knob-across;
         x: root.vertical ? (root.width - self.width) / 2 : root.span * root.ratio;
         y: root.vertical ? root.span * (1 - root.ratio) : (root.height - self.height) / 2;
-        border-radius: self.width / 2;
-        // The Mac's small knob on dark is grey (#959595 on its window). Idle it
-        // is see-through like its track: white at 13 % on dark, 56 % on light.
-        background: !root.small ? #ffffff : (Tokens.dark ? #ffffff22 : #ffffff90).mix(Tokens.dark ? #959595 : touch.pressed ? #ebebeb : #ffffff, root.dim);
+        border-radius: self.height / 2;
+        // The Mac's small knob is #dddddd on dark, on an off row too (its 18 Nov photos).
+        background: !root.small ? #ffffff : Tokens.dark ? #dddddd : touch.pressed ? #ebebeb : #ffffff;
         // The Mac's small knob: on light a faint ring and a soft shadow keep it
-        // off a white window at 100; on dark the shadow and the top edge below.
+        // off a white window at 100; on dark a shadow alone.
         border-width: root.small && Tokens.dark ? 0px : 1px;
         border-color: root.small ? #0000001f : Tokens.secondary-text;
         drop-shadow-blur: root.small && !Tokens.dark ? 3px : 1.5px;
         drop-shadow-offset-y: root.small && !Tokens.dark ? 1px : 0.5px;
-        drop-shadow-color: (root.small && !Tokens.dark ? #00000033 : #0000004d).transparentize(root.dim);
-
-        // The Mac's small knob on dark has a light edge round its top only,
-        // #ad over its #95 fill and #54 over #46 idle (its dark photos, 18 Nov).
-        // Slint's software renderer draws a gradient border evenly all round.
-        if root.small && Tokens.dark: Rectangle {
-            y: 0;
-            height: 6px;
-            clip: true;
-
-            Rectangle {
-                y: 0;
-                width: root.knob;
-                height: root.knob;
-                border-radius: self.width / 2;
-                border-width: 1px;
-                border-color: #ffffff6e.mix(#ffffff1c, 1 - root.dim);
-            }
-        }
+        drop-shadow-color: root.small && !Tokens.dark ? #00000033 : #0000004d;
     }
 
     touch := TouchArea {
@@ -2570,7 +2543,7 @@ export component TextField inherits Rectangle {
 // is a number out of range. Drawn in the spacing around the field instead of
 // taking room, so the row is no taller than its buttons.
 // A delay step, as the Mac panel's small bordered button (MainWindow.swift:3500-3515):
-// 10 px digits on a faint grey pill with no border or shadow, #f4f4f4 on white and
+// 11 px digits on a faint grey pill with no border or shadow, #f4f4f4 on white and
 // #282828 on #1e1e1e in the Mac's 2x render. 22 high, the field's height, where
 // the Mac's is 20 beside a 22 field.
 component DelayStep inherits Rectangle {
@@ -2619,7 +2592,7 @@ component DelayStep inherits Rectangle {
         y: -Fluent.digit-lift;
         height: parent.height;
         text: Strings.delay-step(root.delta);
-        font-size: Tokens.font-size-callout;
+        font-size: 11px;
         color: Tokens.text;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -2629,6 +2602,36 @@ component DelayStep inherits Rectangle {
     FocusRing {
         visible-focus: focus.has-focus;
         border-radius: root.border-radius;
+    }
+}
+
+// The Mac's small spinner (ProgressView, CalibrationViews.swift:43-45): eight
+// grey spokes, the lit one going round once a second. Paths, as the software
+// renderer draws no rotation.
+component ProgressSpokes inherits Rectangle {
+    property <float> lit: Motion.on ? mod(floor(animation-tick() / 125ms), 8) : 0;
+    width: 16px;
+    height: 16px;
+    accessible-role: none;
+
+    for i in 8: Path {
+        width: 16px;
+        height: 16px;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        stroke: Tokens.secondary-text.with-alpha(1 - mod(root.lit - i + 8, 8) / 8 * 0.75);
+        stroke-width: 2px;
+        stroke-line-cap: round;
+
+        MoveTo {
+            x: 8 + 3.5 * sin(i * 45deg);
+            y: 8 - 3.5 * cos(i * 45deg);
+        }
+
+        LineTo {
+            x: 8 + 7 * sin(i * 45deg);
+            y: 8 - 7 * cos(i * 45deg);
+        }
     }
 }
 
@@ -2853,12 +2856,7 @@ export component SyncControls inherits VerticalLayout {
             if root.calibrating: VerticalLayout {
                 alignment: center;
 
-                Spinner {
-                    indeterminate: true;
-                    width: 16px;
-                    height: 16px;
-                    accessible-role: none;
-                }
+                ProgressSpokes { }
             }
 
             if root.calibrating: QuietText {
