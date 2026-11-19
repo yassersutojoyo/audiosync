@@ -1564,6 +1564,7 @@ export component TrayFlyout inherits Window {
                             index: 5;
                             revealed: root.revealed;
 
+                            // Text alone, no beating dot before it, as the Mac's note (MenuBar.swift:1857-1867).
                             none-note := HorizontalLayout {
                                 property <bool> both-none: root.airplay-none-found && root.cast-list == CastList.none-found;
                                 property <string> list-note: root.airplay-none-found ? (self.both-none ? Strings.network-none-found : Strings.airplay-none-found) : root.airplay-searching ? (root.cast-list == CastList.none-found || root.cast-list == CastList.failed ? Strings.looking-for-airplay-speakers : Strings.looking-for-speakers) : Strings.connected-none;
@@ -1733,8 +1734,9 @@ export component TrayFlyout inherits Window {
                     // The words 17 px from the panel's edges, as on the Mac.
                     padding-left: -3px;
                     padding-right: -3px;
-                    // 2 px under the line: the stack's 10 less the Mac's 8 (MenuBar.swift:1770).
-                    padding-top: -8px;
+                    // Exit's text 11 pt under the line, as the Mac's 2x TRAY-IDLE-terang
+                    // photo measures it (line ends at 870, text from 892).
+                    padding-top: -9px;
 
                     FooterButton {
                         text: Strings.open-app;

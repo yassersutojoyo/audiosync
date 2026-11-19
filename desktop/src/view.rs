@@ -16643,9 +16643,8 @@ pub(crate) mod tests {
         let exit = ElementHandle::find_by_accessible_label(&app.flyout, &strings.get_exit_app())
             .next()
             .expect("Exit");
-        // The stack's 10 less the buttons' 8, plus the 1 the line's -2 top padding
-        // cannot take from its 1 high frame (MenuBar.swift:1765, :1774).
-        assert_eq!(exit.absolute_position().y - last_line, 3.0);
+        // Exit's text 11 pt under the line, as the Mac's 2x TRAY-IDLE-terang photo measures (870 to 892).
+        assert_eq!(exit.absolute_position().y - last_line, 2.0);
     }
 
     fn flyout_element(app: &App, id: &str) -> i_slint_backend_testing::ElementHandle {
@@ -19372,6 +19371,81 @@ pub(crate) mod tests {
             rows[last].max(rows[last - 1]) <= fill,
             "no edge at the bottom {rows:02x?}"
         );
+    }
+
+    /// At 125 % and 150 % the row's 18 x 14 knob is one even fill, on or off,
+    /// with or without the pointer, in both themes: no line or seam crosses it.
+    #[test]
+    fn a_rows_knob_has_no_seam_at_fractional_scales() {
+        use slint::language::ColorScheme;
+        let app = narrow_app(MockBackend::new());
+        for name in ["Speakers", "Headphones"] {
+            let label = app
+                .main
+                .global::<crate::Strings>()
+                .invoke_volume_of(name.into());
+            for scale in [1.25f32, 1.5] {
+                app.main
+                    .window()
+                    .dispatch_event(WindowEvent::ScaleFactorChanged {
+                        scale_factor: scale,
+                    });
+                let (mut first, mut last) = (0, 0);
+                for scheme in [ColorScheme::Dark, ColorScheme::Light] {
+                    app.main.global::<Palette>().set_color_scheme(scheme);
+                    for hovered in [false, true] {
+                        draw_frames();
+                        let (left, top, width, height) = slider_box(&app.main, &label);
+                        let middle = top + height / 2.0;
+                        let window = app.main.window();
+                        let position = if hovered {
+                            slint::LogicalPosition::new((first + last) as f32 / 2.0 / scale, middle)
+                        } else {
+                            slint::LogicalPosition::new(2.0, 2.0)
+                        };
+                        window.dispatch_event(WindowEvent::PointerMoved { position });
+                        advance_clock(Duration::from_secs(1));
+                        draw_frames();
+                        let shot = window.take_snapshot().expect("drawn");
+                        let stride = shot.width() as usize;
+                        let at = |x: i32, y: i32| {
+                            shot.as_bytes()[(y as usize * stride + x as usize) * 4]
+                        };
+                        // 5 px above the track only the knob is drawn.
+                        let probe = ((middle - 5.0) * scale) as i32;
+                        if scheme == ColorScheme::Dark && !hovered {
+                            let row = at(((left - 4.0) * scale) as i32, probe);
+                            let inked: Vec<i32> = ((left * scale) as i32
+                                ..((left + width) * scale) as i32)
+                                .filter(|&x| at(x, probe) > row.saturating_add(8))
+                                .collect();
+                            (first, last) = (inked[0], inked[inked.len() - 1]);
+                            assert!(
+                                (last - first + 1) as f32 >= 12.0 * scale,
+                                "{name} {scale}x: the knob is 18 wide, {first}..{last}"
+                            );
+                        }
+                        let centre = (first + last + 1) / 2;
+                        let fill = at(centre, (middle * scale) as i32);
+                        let case = format!("{name} {scale}x {scheme:?} hovered {hovered}");
+                        // The upper middle of the 18 x 14 capsule, clear of its rounded rim;
+                        // under the pointer a tooltip may cover the lower half.
+                        let across = (5.0 * scale) as i32;
+                        let down = (3.0 * scale) as i32;
+                        let mid_y = (middle * scale) as i32;
+                        for y in mid_y - down..=mid_y {
+                            let line: Vec<u8> = (centre - across..=centre + across)
+                                .map(|x| at(x, y))
+                                .collect();
+                            assert!(
+                                line.iter().all(|&g| g.abs_diff(fill) <= 2),
+                                "{case}: a line across the knob at {y}, fill {fill:02x}: {line:02x?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// An off speaker's slider keeps the Mac's contrast on its row, plain or
