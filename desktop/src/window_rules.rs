@@ -236,6 +236,60 @@ impl AmbientMode {
     }
 }
 
+/// How much the Now Playing card's cover tint shows, `env`, 0 when still. It
+/// follows the meter level's rises above its own recent average, never the
+/// loudness, so a long flat note calms it and silence stills it about 12 s
+/// later (WindowRules.swift:109-137).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Tide {
+    env: f64,
+    drive: f64,
+    mean: f64,
+}
+
+impl Tide {
+    pub const ONSET: f64 = 0.35;
+    pub const RISE: f64 = 0.45;
+    pub const FALL: f64 = 1.6;
+    pub const TAIL: f64 = 3.0;
+    pub const AVERAGE: f64 = 1.4;
+    pub const STOP_AT: f64 = 0.02;
+    /// Drive per second of a level 1.0 above its average.
+    pub const GAIN: f64 = 40.0;
+    /// The cover's colour over the hero's fill at full `env` (AmbientArt.swift:167).
+    pub const TINT: f64 = 0.09;
+
+    pub fn env(&self) -> f64 {
+        self.env
+    }
+
+    /// The cover tint's opacity over the hero card.
+    pub fn tint(&self) -> f64 {
+        Self::TINT * self.env.min(1.0)
+    }
+
+    /// `level` is the meter's 0-to-1 reading, `None` when nothing is captured.
+    pub fn step(&mut self, level: Option<f64>, dt: f64) {
+        let now = level.unwrap_or(0.0);
+        self.drive = (self.drive * (-dt / Self::ONSET).exp()
+            + (now - self.mean).max(0.0) * Self::GAIN * dt)
+            .min(1.2);
+        self.mean += (now - self.mean) * (1.0 - (-dt / Self::AVERAGE).exp());
+        let playing = now > Self::STOP_AT;
+        let tau = if self.drive > self.env {
+            Self::RISE
+        } else if playing {
+            Self::FALL
+        } else {
+            Self::TAIL
+        };
+        self.env += (self.drive - self.env) * (1.0 - (-dt / tau).exp());
+        if self.env < if playing { 0.004 } else { Self::STOP_AT } {
+            self.env = 0.0;
+        }
+    }
+}
+
 pub type Rgb = [f64; 3];
 
 /// The art's calm motion, its colour against the hero card, and how often it draws.
@@ -642,6 +696,75 @@ mod tests {
         let start = fold_phase(0.1, true);
         assert_eq!((start.edge, start.fade), (1.0, 0.1));
         assert_eq!(fold_phase(0.0, true).edge, 0.0);
+    }
+
+    fn tide_run(seconds: f64, tide: &mut Tide, level: impl Fn(f64) -> Option<f64>) -> Vec<f64> {
+        (0..(seconds * 10.0).round() as usize)
+            .map(|tick| {
+                tide.step(level(tick as f64 / 10.0), 0.1);
+                tide.env()
+            })
+            .collect()
+    }
+
+    // The Mac's checks of `Tide` (Tests/logictest.swift:8070-8090).
+    #[test]
+    fn the_cover_tint_follows_the_sounds_rises_and_settles_once_it_stops() {
+        let mut silent = Tide::default();
+        assert!(
+            tide_run(5.0, &mut silent, |_| Some(0.0))
+                .iter()
+                .all(|&env| env == 0.0)
+        );
+        assert!(
+            tide_run(5.0, &mut silent, |_| None)
+                .iter()
+                .all(|&env| env == 0.0)
+        );
+        assert_eq!(silent.tint(), 0.0, "paused or off: no tint");
+
+        let mut flat = Tide::default();
+        let flat_run = tide_run(20.0, &mut flat, |_| Some(0.6));
+        let start = flat_run[..10].iter().copied().fold(0.0, f64::max);
+        assert!(start > 0.3, "a note starting moves it: {start}");
+        assert_eq!(
+            flat_run.last(),
+            Some(&0.0),
+            "the same note held flat calms it"
+        );
+
+        let mut song = Tide::default();
+        let song_run = tide_run(10.0, &mut song, |t| {
+            Some(if (t * 2.0) as i64 % 2 == 0 { 0.35 } else { 0.6 })
+        });
+        let moving = song_run[song_run.len() - 20..]
+            .iter()
+            .copied()
+            .fold(0.0, f64::max);
+        assert!(moving > 0.3, "changing sound keeps it moving: {moving}");
+        let tint = song.tint();
+        assert!(
+            tint > 0.0 && (tint - 0.09 * song.env().min(1.0)).abs() < 1e-12,
+            "{tint}"
+        );
+        let stop_run = tide_run(15.0, &mut song, |_| None);
+        assert!(
+            stop_run[30] > 0.0 && stop_run[140] == 0.0,
+            "{} {}",
+            stop_run[30],
+            stop_run[140]
+        );
+        assert!(stop_run.windows(2).all(|pair| pair[1] <= pair[0]));
+        assert_eq!(song.tint(), 0.0);
+    }
+
+    #[test]
+    fn the_cover_tint_tops_out_at_nine_percent() {
+        let past_full = Tide {
+            env: 1.2,
+            ..Tide::default()
+        };
+        assert_eq!(past_full.tint(), Tide::TINT);
     }
 
     fn mode_run(seconds: f64, mode: &mut AmbientMode, loudest: impl Fn(f64) -> f64) -> Vec<f64> {

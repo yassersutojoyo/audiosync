@@ -6,9 +6,10 @@
 
 use std::time::Duration;
 
+use audiosync_core::meter;
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
 
-use crate::window_rules::{AmbientMode, Rgb};
+use crate::window_rules::{AmbientMode, Rgb, Tide};
 use crate::window_rules::{ambient_bands, ambient_breath};
 
 /// The height of the box the strands are drawn in, stretched to the strip.
@@ -47,6 +48,9 @@ pub struct Driver {
     bands: [f64; 3],
     since_poll: f64,
     time: f64,
+    tide: Tide,
+    meter: f32,
+    since_peak: f64,
 }
 
 impl Driver {
@@ -74,6 +78,26 @@ impl Driver {
         }
         let loudest = self.bands.iter().copied().fold(0.0, f64::max);
         self.mode.step(loudest, elapsed);
+    }
+
+    /// Moves the cover tint's envelope on `dt` seconds; `peak` is the
+    /// capture's largest sample since its last read, `None` while nothing
+    /// is captured from apps or the system.
+    pub fn follow_sound(&mut self, dt: f64, peak: impl FnOnce() -> Option<f32>) {
+        let poll = f64::from(meter::METER_POLL_MS) / 1000.0;
+        self.since_peak += dt;
+        if self.since_peak + 1e-9 < poll {
+            return;
+        }
+        self.since_peak = 0.0;
+        let reading = peak();
+        self.meter = reading.map_or(0.0, |peak| meter::meter_level(self.meter, peak));
+        self.tide.step(reading.map(|_| f64::from(self.meter)), poll);
+    }
+
+    /// The cover tint's opacity over the hero card.
+    pub fn tint(&self) -> f64 {
+        self.tide.tint()
     }
 
     /// Time between frames, `None` when the art doesn't move.
@@ -269,6 +293,50 @@ mod tests {
             .iter()
             .map(|y| (y - 11.0).abs())
             .fold(0.0, f64::max)
+    }
+
+    fn sound(driver: &mut Driver, seconds: f64, peak: impl Fn(f64) -> Option<f32>) -> u32 {
+        let frame = 1.0 / 30.0;
+        let mut reads = 0;
+        for tick in 0..(seconds / frame).round() as u32 {
+            driver.follow_sound(frame, || {
+                reads += 1;
+                peak(f64::from(tick) * frame)
+            });
+        }
+        reads
+    }
+
+    // The Mac reads the peak every ASC_METER_POLL_MS into the meter, and the
+    // meter's level into `Tide` (AmbientArt.swift:49-58).
+    #[test]
+    fn the_cover_tint_reads_the_meter_ten_times_a_second_and_breathes_with_it() {
+        let mut driver = Driver::default();
+        let reads = sound(&mut driver, 2.0, |t| {
+            Some(if (t * 4.0) as i64 % 2 == 0 { 0.05 } else { 0.8 })
+        });
+        assert_eq!(reads, 20);
+        let tint = driver.tint();
+        assert!(tint > 0.0 && tint <= Tide::TINT, "{tint}");
+        assert!((tint - Tide::TINT * driver.tide.env().min(1.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn no_capture_or_a_reset_leaves_the_card_untinted() {
+        let mut driver = Driver::default();
+        sound(&mut driver, 3.0, |_| None);
+        assert_eq!(driver.tint(), 0.0, "streaming off or an input device");
+        sound(&mut driver, 2.0, |t| {
+            Some(if (t * 4.0) as i64 % 2 == 0 { 0.05 } else { 0.8 })
+        });
+        assert!(driver.tint() > 0.0);
+        sound(&mut driver, 15.0, |_| Some(0.0));
+        assert_eq!(driver.tint(), 0.0, "paused: gone within 15 s");
+        sound(&mut driver, 2.0, |t| {
+            Some(if (t * 4.0) as i64 % 2 == 0 { 0.05 } else { 0.8 })
+        });
+        driver.reset();
+        assert_eq!(driver.tint(), 0.0, "off screen");
     }
 
     #[test]
