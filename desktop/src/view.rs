@@ -19852,6 +19852,14 @@ pub(crate) mod tests {
             (-1..=1).all(|row| pixel(beside, zero + row as f32) == background),
             "the 0 dB tick stays under the knob"
         );
+        app.equalizer().invoke_gain_changed(0, 6.0);
+        draw_frames();
+        let pixel = pixels(leaked(app.equalizer()));
+        assert_ne!(
+            pixel(center + 4.0, zero + 0.5),
+            pixel(center + 4.0, zero + 8.0),
+            "the 0 dB tick shows beside the track with the knob away"
+        );
     }
 
     // covers: S453
@@ -20258,7 +20266,7 @@ pub(crate) mod tests {
         let window = leaked(app.equalizer());
         // From the bottom up, so the first hit is just above the track's
         // middle and no click reaches the switch or the picker above it.
-        let (x, y) = (40..400)
+        let (x, y) = (40..720)
             .rev()
             .step_by(20)
             .flat_map(|y| (0..1000).step_by(8).map(move |x| (x as f32, y as f32)))
@@ -20308,7 +20316,7 @@ pub(crate) mod tests {
         draw_frames();
         // From the bottom up, so the first hit is just above the track's
         // middle and no click reaches the switch or the picker above it.
-        let (x, y) = (40..400)
+        let (x, y) = (40..720)
             .rev()
             .step_by(20)
             .flat_map(|y| (0..1000).step_by(8).map(move |x| (x as f32, y as f32)))

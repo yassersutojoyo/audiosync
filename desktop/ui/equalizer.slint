@@ -28,9 +28,13 @@ component Band inherits VerticalLayout {
         slider.value = root.gain;
     }
 
+    // The Mac's 13 pt caption2 line (EqualizerWindow.swift:250, 12.5 pt from its
+    // middle to the track in the Mac's photo); Segoe UI's is 1 px taller, all leading.
     QuietText {
+        height: 13px;
         text: Strings.equalizer-gain(slider.value);
         horizontal-alignment: center;
+        vertical-alignment: bottom;
         wrap: no-wrap;
     }
 
@@ -183,8 +187,10 @@ component Band inherits VerticalLayout {
     }
 
     QuietText {
+        height: 13px;
         text: root.short-label;
         horizontal-alignment: center;
+        vertical-alignment: bottom;
         wrap: no-wrap;
     }
 }
@@ -650,6 +656,9 @@ export component EqualizerWindow inherits Window {
 
                 SecondaryText {
                     text: Strings.equalizer-caption(root.max-gain);
+                    // One line, as the Mac's (EqualizerWindow.swift:179); a wrapped
+                    // caption asks for its height at no width and grew the window 54 px.
+                    wrap: no-wrap;
                     vertical-alignment: center;
                     horizontal-stretch: 1;
                 }
