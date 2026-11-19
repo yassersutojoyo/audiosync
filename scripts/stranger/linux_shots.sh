@@ -127,6 +127,26 @@ if [ "$group" = nowplaying ]; then
   kill -KILL -- "-$app" 2>/dev/null || true
   log=$(find "$XDG_STATE_HOME" -name '*debug.log' -print -quit)
   [ -z "$log" ] || mv "$log" "$work/strands/audiosync-debug.log"
+
+  # The card's cover tint while a tone plays, captured from the system and streamed
+  # to a second null sink only. A measurement too: it never fails the job.
+  mkdir -p "$work/tint"
+  sink stranger-desk 'Desk Speaker' Audio/Sink 'FL FR'
+  python3 -I -c 'import math, struct, sys, wave
+w = wave.open(sys.argv[1], "wb"); w.setnchannels(2); w.setsampwidth(2); w.setframerate(48000)
+w.writeframes(b"".join(struct.pack("<hh", v, v) for v in (int(12000 * (0.6 + 0.4 * math.sin(math.pi * i / 24000))
+    * math.sin(2 * math.pi * 440 * i / 48000)) for i in range(48000 * 30))))' "$work/tint/tone.wav"
+  printf '{"version":3,"appearance":"dark","show_virtual_devices":true}\n' > "$XDG_DATA_HOME/audiosync/settings.json"
+  AUDIOSYNC_DEBUG=1 SLINT_BACKEND=winit-femtovg setsid audiosync > "$work/tint/app.out" 2>&1 &
+  app=$!
+  sleep 5
+  python3 -I "$here/linux_shots.py" "$work/tint" tint gelap "$app" || echo "tint: not taken"
+  kill -TERM -- "-$app" 2>/dev/null || true
+  sleep 3
+  kill -KILL -- "-$app" 2>/dev/null || true
+  log=$(find "$XDG_STATE_HOME" -name '*debug.log' -print -quit)
+  [ -z "$log" ] || mv "$log" "$work/tint/audiosync-debug.log"
+  grep 'cover tint' "$work/tint/audiosync-debug.log" || echo "tint: no cover tint line"
 fi
 
 shots=$(find "$work" -maxdepth 1 -name '*.png' | wc -l)

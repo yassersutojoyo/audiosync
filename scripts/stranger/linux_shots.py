@@ -10,7 +10,8 @@ exits 1 when the Now Playing card, with the pointer over it, lacks Shuffle or
 Repeat drawn on, or its cover reads as one colour; the tray group when the
 tray panel reads as one colour; the updates group when Check for Updates…
 doesn't tell the .deb copy to install the newer package. The strands group
-grabs the strip under the cover 800 times into strands.raw.
+grabs the strip under the cover 800 times into strands.raw; the tint group
+grabs the card before, while and after a tone plays into tint-*.raw.
 
     linux_shots.py <work> <group> <theme> <pid>
 """
@@ -132,9 +133,9 @@ class XImage(ctypes.Structure):
                 ("depth", ctypes.c_int), ("bytes_per_line", ctypes.c_int), ("bits_per_pixel", ctypes.c_int)]
 
 
-def strip(box, grabs=800, interval=0.0787):
+def strip(box, grabs=800, interval=0.0787, name="strands.raw"):
     """`grabs` BGRA grabs of the screen's `box` (w, h, x, y), paced as the Mac and Windows sets
-    (12.7 a second), in strands.raw: n, w, h as int32, then per grab its time in ms and its pixels.
+    (12.7 a second), in `name`: n, w, h as int32, then per grab its time in ms and its pixels.
     Xlib's XGetImage, since an import process per grab could not keep the pace."""
     width, height, x, y = box
     x11 = ctypes.CDLL("libX11.so.6")
@@ -148,7 +149,7 @@ def strip(box, grabs=800, interval=0.0787):
     x11.XFree.argtypes = [ctypes.c_void_p]
     display = x11.XOpenDisplay(None)
     root = x11.XDefaultRootWindow(display)
-    with open(os.path.join(WORK, "strands.raw"), "wb") as out:
+    with open(os.path.join(WORK, name), "wb") as out:
         out.write(struct.pack("<iii", grabs, width, height))
         due = time.monotonic()
         for _ in range(grabs):
@@ -163,7 +164,7 @@ def strip(box, grabs=800, interval=0.0787):
             x11.XFree(head.data)
             x11.XFree(image)
             time.sleep(max(0.0, due - time.monotonic()))
-    print(f"strands: {grabs} grabs of {width}x{height} at {x},{y} ({THEME})")
+    print(f"{name}: {grabs} grabs of {width}x{height} at {x},{y} ({THEME})")
 
 
 def pixels(box, *measure):
@@ -273,6 +274,25 @@ def run(app, main):
         shot(card, "STRANDS-CARD", pad=16)
         # The cover is the card's top square, 10 px in; the strip runs under its bottom edge.
         strip((box.width + 32, 64, box.x - 16, box.y + box.width - 20))
+    elif GROUP == "tint":
+        card = find(app, "Now Playing", seconds=20)
+        if card is None:
+            skip("TINT", "no Now Playing card")
+            return
+        box = extents(card)
+        subprocess.run(["xdotool", "mousemove", "1270", "790"], check=True)
+        # Streaming to the Desk Speaker null sink only; the tone plays to the default, Speakers.
+        if not (use(app, "Desk Speaker", "TINT") and use(app, "Streaming", "TINT")):
+            return
+        time.sleep(3)
+        card_box = (box.width, box.height, box.x, box.y)
+        strip(card_box, grabs=30, name="tint-before.raw")
+        tone = subprocess.Popen(["pw-play", "--target", "stranger-speakers", os.path.join(WORK, "tone.wav")])
+        strip(card_box, grabs=100, name="tint-during.raw")
+        tone.terminate()
+        tone.wait()
+        strip(card_box, grabs=30, name="tint-after.raw")
+        shot(card, "TINT-CARD")
     elif GROUP == "nowplaying":
         # mpris_player.py plays a patterned cover with Shuffle on and LoopStatus Playlist.
         buttons = {name: find(app, name, seconds=20) for name in ("Shuffle", "Repeat", "Previous Track")}

@@ -357,6 +357,7 @@ jobs:
             stranger-shots/*.log
             stranger-shots/*.out
             stranger-shots/strands/*
+            stranger-shots/tint/*
           if-no-files-found: warn
           retention-days: 7
 
