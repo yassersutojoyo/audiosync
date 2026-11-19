@@ -134,6 +134,56 @@ fn path(index: usize, spread: f64, idle: f64, time: f64, slot: f64) -> String {
     commands
 }
 
+/// Points a pixel is sampled at across; the coverage down a column is its area.
+const SUBCOLUMNS: usize = 16;
+const MAX_ROWS: usize = 256;
+
+/// Strand `ys` (heights in the 300 x 22 box, `STEPS` apart) `stroke` pixels
+/// wide, as a white premultiplied RGBA mask that fills `width` x `height`
+/// pixels and fades out over its outer `EDGE_FADE`, as the Mac's Canvas maps
+/// and strokes it (AmbientArt.swift:121-141). The round caps fall outside the
+/// strip, where the fade is 0.
+pub fn mask(ys: &[f64], stroke: f64, pixels: &mut [u8], width: usize, height: usize) {
+    pixels.fill(0);
+    let height = height.min(MAX_ROWS);
+    let step_width = width as f64 / STEPS as f64;
+    let scale = height as f64 / VIEW_HEIGHT;
+    let mut cover = [0.0_f64; MAX_ROWS];
+    for column in 0..width {
+        let (mut first, mut last) = (height, 0);
+        for sub in 0..SUBCOLUMNS {
+            let x = column as f64 + (sub as f64 + 0.5) / SUBCOLUMNS as f64;
+            let at = (x / step_width).min(STEPS as f64 - 1e-9);
+            let step = at as usize;
+            let (from, to) = (ys[step] * scale, ys[step + 1] * scale);
+            let y = from + (to - from) * (at - step as f64);
+            // The stroke's height across a column, where its slope stretches it.
+            let reach = stroke / 2.0 * (1.0 + ((to - from) / step_width).powi(2)).sqrt();
+            let (top, bottom) = ((y - reach).max(0.0), (y + reach).min(height as f64));
+            let weight = ambient_breath::edge(x / width as f64) / SUBCOLUMNS as f64;
+            for row in top as usize..bottom.ceil() as usize {
+                cover[row] += weight * row_share(row, top, bottom);
+                (first, last) = (first.min(row), last.max(row + 1));
+            }
+        }
+        for (row, share) in cover.iter_mut().enumerate().take(last).skip(first) {
+            let alpha = (share.min(1.0) * 255.0).round() as u8;
+            let at = (row * width + column) * 4;
+            pixels[at..at + 4].fill(alpha);
+            *share = 0.0;
+        }
+    }
+}
+
+/// How much of pixel row `row` the span `top..bottom` covers, sampled at
+/// four rows a pixel as Skia's anti-aliased path fill does.
+fn row_share(row: usize, top: f64, bottom: f64) -> f64 {
+    (0..4)
+        .filter(|k| (top..bottom).contains(&(row as f64 + (*k as f64 + 0.5) / 4.0)))
+        .count() as f64
+        / 4.0
+}
+
 /// A cover's top, middle and bottom thirds, averaged, from its premultiplied
 /// RGBA pixels `side` wide.
 pub fn cover_bands(rgba: &[u8], side: u32) -> [Rgb; 3] {
@@ -299,6 +349,88 @@ mod tests {
         run(&mut driver, 1.5, 1.0 / 60.0, Some([0.9; 3]));
         let reach = |density| reach(&driver.strands(&NO_COVER, density, WINDOW_SLOT, false)[0]);
         assert!(reach(FLYOUT_DENSITY) < reach(WINDOW_DENSITY));
+    }
+
+    fn masks(driver: &Driver, width: usize, height: usize) -> Vec<Vec<u8>> {
+        let strands = driver.strands(&NO_COVER, WINDOW_DENSITY, WINDOW_SLOT, false);
+        strands
+            .iter()
+            .map(|strand| {
+                let mut pixels = vec![0; width * height * 4];
+                let stroke = strand.width * height as f64 / WINDOW_SLOT;
+                mask(&ys(&strand.commands), stroke, &mut pixels, width, height);
+                pixels
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_strand_covers_each_pixel_by_its_area() {
+        let flat = [11.0; STEPS + 1];
+        let rows = [
+            (1, vec![(10, 0.8), (11, 0.8)]),
+            (2, vec![(20, 0.6), (21, 1.0), (22, 1.0), (23, 0.6)]),
+        ];
+        for (scale, rows) in rows {
+            let (width, height) = (182 * scale, 22 * scale);
+            let mut pixels = vec![0; width * height * 4];
+            let stroke = ambient_breath::STROKE * scale as f64;
+            mask(&flat, stroke, &mut pixels, width, height);
+            for row in 0..height {
+                let want = rows.iter().find(|(r, _)| *r == row).map_or(0.0, |r| r.1);
+                let got = f64::from(pixels[(row * width + width / 2) * 4 + 3]) / 255.0;
+                assert!((got - want).abs() < 0.01, "{scale}x row {row}: {got}");
+            }
+        }
+    }
+
+    /// Three seconds of the breath at 30 frames a second in the main window's
+    /// strip at 1x (182 x 22 pixels), over the middle 70% where nothing fades.
+    #[test]
+    fn the_breath_moves_by_its_area_without_quarter_steps() {
+        let (width, height) = (182, 22);
+        let middle = width * 15 / 100..width * 85 / 100;
+        let mut driver = Driver::default();
+        run(&mut driver, 2.0, 1.0 / 30.0, None);
+        let (mut quarters, mut partial) = (0, 0);
+        let mut frames: Vec<Vec<f64>> = Vec::new();
+        for _ in 0..90 {
+            run(&mut driver, 1.0 / 30.0, 1.0 / 30.0, None);
+            let masks = masks(&driver, width, height);
+            let mut frame = Vec::new();
+            for row in 0..height {
+                for column in middle.clone() {
+                    let at = (row * width + column) * 4 + 3;
+                    let alphas = masks.iter().map(|mask| f64::from(mask[at]) / 255.0);
+                    for alpha in alphas.clone().filter(|a| (0.03..0.97).contains(a)) {
+                        partial += 1;
+                        quarters += usize::from((alpha * 4.0 - (alpha * 4.0).round()).abs() < 0.02);
+                    }
+                    // The strands at their 0.8 opacity, as levels above the dark card.
+                    let under = alphas
+                        .map(|a| 1.0 - ambient_breath::OPACITY * a)
+                        .product::<f64>();
+                    frame.push((1.0 - under) * 164.0);
+                }
+            }
+            frames.push(frame);
+        }
+        let share = quarters as f64 / partial as f64;
+        assert!(
+            share < 0.1,
+            "{share:.2} of the edge pixels on a quarter step"
+        );
+        let mut jumps: Vec<f64> = frames
+            .windows(2)
+            .flat_map(|pair| pair[0].iter().zip(&pair[1]))
+            .filter(|(a, b)| **a > 8.0 || **b > 8.0)
+            .map(|(a, b)| (a - b).abs())
+            .collect();
+        jumps.sort_by(f64::total_cmp);
+        let p90 = jumps[jumps.len() * 9 / 10];
+        // Exact coverage gives 21.3 with a 4.125 pt swing, 16.8 with the Mac's 3 pt;
+        // four rows a pixel give 32.8.
+        assert!(p90 <= 21.3, "frame to frame p90 {p90:.1}");
     }
 
     #[test]

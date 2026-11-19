@@ -707,14 +707,14 @@ mod tests {
     }
 
     #[test]
-    fn ambient_rest_swings_37_and_a_half_percent_of_its_slot() {
+    fn ambient_rest_swings_three_points_each_way_in_any_slot() {
         use ambient_breath::*;
-        // WindowRules.swift:206: 8.25 pt in the main window's 22 pt slot, 6 pt in the panel's 16.
-        for (slot, swing) in [(22.0, 8.25), (16.0, 6.0)] {
+        // WindowRules.swift:205 and :216: 3 pt each way, the 22 pt box scaled to the slot.
+        for slot in [22.0, 16.0] {
             let reach = (0..400)
                 .map(|i| lift(1, 0.5, PERIOD * i as f64 / 400.0, 0.0, 1.0, slot) * slot / 22.0)
                 .fold(0.0, |a: f64, y| a.max(y.abs()));
-            assert!((2.0 * reach - swing).abs() < 0.01, "{slot} {reach}");
+            assert!((reach - 3.0).abs() < 0.01, "{slot} {reach}");
         }
     }
 
