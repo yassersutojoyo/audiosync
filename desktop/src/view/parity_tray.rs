@@ -290,14 +290,14 @@ fn a_waiting_speakers_ring_is_the_text_teal() {
     );
 }
 
-/// MenuBar.swift:1730 and :1803-1815: the panel's 14 pt padding puts the
+/// MenuBar.swift:1779 and :1803-1815: the panel's 14 pt padding puts the
 /// mark 14 pt from the edge, and the status under the wordmark is
 /// .subheadline (11 pt), 1 pt under it.
 #[test]
 fn the_flyout_header_sits_as_the_macs() {
     let header = between("header-part := IntroPart {", "brand := Rectangle {");
     assert!(header.contains("padding-left: -6px;"), "{header}");
-    let words = between("Wordmark {\n", "FocusRing {");
+    let words = between("brand-mark := BrandMark {", "FocusRing {");
     assert!(words.contains("spacing: 1px;"), "{words}");
     assert_eq!(
         words
@@ -308,7 +308,7 @@ fn the_flyout_header_sits_as_the_macs() {
     );
 }
 
-/// MenuBar.swift:1766-1771 and :2091: the footer row is padded -6 pt each
+/// MenuBar.swift:1766-1773 and :2091: the footer row is padded -6 pt each
 /// side and each button pads its text 6 pt, so the words sit on the
 /// panel's 14 pt edge.
 #[test]
@@ -318,7 +318,7 @@ fn the_flyout_footer_words_sit_on_the_panels_edge() {
     assert!(footer.contains("padding-right: -6px;"), "{footer}");
 }
 
-/// MenuBar.swift:1867 and WindowRules.swift:1137: the empty list's note
+/// MenuBar.swift:1868 and WindowRules.swift:1137: the empty list's note
 /// starts dividerToList (-3 pt) plus the 10 pt spacing under the line,
 /// padded 2 pt above and below.
 #[test]

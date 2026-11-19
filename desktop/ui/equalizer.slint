@@ -6,7 +6,26 @@
 import { Palette } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { FocusRing, Fluent, Glyph, Glyphs, MenuDivider, MenuPanel, MenuRepaint, MenuRoom, MenuRow, MenuState, NameField, LevelSlider, OverlayScrollView, QuietText, SecondaryText, SmallButton, TextField, ToggleSwitch } from "widgets.slint";
+import { FocusRing, Fluent, Glyph, Glyphs, MenuDivider, MenuPanel, MenuRepaint, MenuRoom, MenuRow, MenuState, NameField, LevelSlider, OverlayScrollView, SecondaryText, SmallButton, TextField, ToggleSwitch } from "widgets.slint";
+
+// A band's gain or label: the Mac's .caption2 (EqualizerWindow.swift:251, :261),
+// which macOS sets at 10 pt medium.
+component BandText inherits HorizontalLayout {
+    in property <string> text;
+
+    height: 13px;
+
+    Text {
+        text: root.text;
+        font-size: Tokens.font-size-caption2;
+        font-weight: Fluent.weight-medium;
+        color: Tokens.secondary-text;
+        horizontal-alignment: center;
+        vertical-alignment: bottom;
+        wrap: no-wrap;
+        accessible-role: none;
+    }
+}
 
 // One vertical gain slider with its value above and its label below.
 component Band inherits VerticalLayout {
@@ -30,12 +49,8 @@ component Band inherits VerticalLayout {
 
     // The Mac's 13 pt caption2 line (EqualizerWindow.swift:250, 12.5 pt from its
     // middle to the track in the Mac's photo); Segoe UI's is 1 px taller, all leading.
-    QuietText {
-        height: 13px;
+    BandText {
         text: Strings.equalizer-gain(slider.value);
-        horizontal-alignment: center;
-        vertical-alignment: bottom;
-        wrap: no-wrap;
     }
 
     // Left and Right move the band as Up and Down do, as on the Mac.
@@ -186,12 +201,8 @@ component Band inherits VerticalLayout {
         }
     }
 
-    QuietText {
-        height: 13px;
+    BandText {
         text: root.short-label;
-        horizontal-alignment: center;
-        vertical-alignment: bottom;
-        wrap: no-wrap;
     }
 }
 
@@ -631,11 +642,12 @@ export component EqualizerWindow inherits Window {
                     }
                 }
 
-                HorizontalLayout {
-                    padding-top: 8px;
-                    padding-bottom: 8px;
+                // The Mac's 170 pt divider at the bands' foot (EqualizerWindow.swift:164, :168).
+                VerticalLayout {
+                    alignment: end;
                     Rectangle {
                         width: 1px;
+                        height: 170px;
                         background: Fluent.stroke;
                     }
                 }

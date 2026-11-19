@@ -107,6 +107,21 @@ component SettingsBox inherits VerticalLayout {
     }
 }
 
+// The line between two Appearance segments that are not chosen, 1 x 14 px
+// as on the Mac's photos.
+component SegmentDivider inherits Rectangle {
+    in property <bool> shown;
+
+    width: 1px;
+
+    Rectangle {
+        width: 1px;
+        height: 14px;
+        background: Tokens.dark ? #646464 : #b4b4b4;
+        visible: root.shown;
+    }
+}
+
 // One choice of the Appearance control; Space or Enter picks it.
 component Segment inherits Rectangle {
     in property <string> text;
@@ -297,20 +312,15 @@ export component SettingsWindow inherits Window {
                             VerticalLayout {
                                 alignment: center;
 
+                                // The Mac's native segmented control (SettingsWindow.swift:184-186)
+                                // as its 2x MAIN-SETTINGS photos show it: a filled track, no edge.
                                 Rectangle {
                                     border-radius: 7px;
-                                    background: Tokens.dark ? Tokens.text.with-alpha(0.06) : Fluent.native-control;
-                                    border-width: Tokens.dark ? 0px : max(0.5px, 1phx);
-                                    border-color: Fluent.stroke;
-                                    drop-shadow-blur: 2px;
-                                    drop-shadow-offset-y: 0.5px;
-                                    drop-shadow-color: Fluent.native-control-shadow;
+                                    background: Tokens.dark ? #303030 : #ebebeb;
                                     accessible-role: groupbox;
                                     accessible-label: Strings.appearance;
 
                                     HorizontalLayout {
-                                        padding: 2px;
-                                        spacing: 2px;
 
                                         Segment {
                                             text: Strings.appearance-system;
@@ -320,12 +330,20 @@ export component SettingsWindow inherits Window {
                                             }
                                         }
 
+                                        SegmentDivider {
+                                            shown: root.appearance == Appearance.dark;
+                                        }
+
                                         Segment {
                                             text: Strings.appearance-light;
                                             chosen: root.appearance == Appearance.light;
                                             picked => {
                                                 root.appearance-chosen(Appearance.light);
                                             }
+                                        }
+
+                                        SegmentDivider {
+                                            shown: root.appearance == Appearance.system;
                                         }
 
                                         Segment {

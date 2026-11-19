@@ -306,7 +306,8 @@ component RowDisc inherits Rectangle {
     height: 26px;
     border-radius: self.width / 2;
     border-width: root.filled ? 0px : root.on && !root.connecting ? 2.5px : 1.5px;
-    border-color: root.on && !root.connecting ? Tokens.teal : Tokens.secondary-text;
+    // Brand.tealText, as the Mac's waiting ring (MenuBar.swift:2186).
+    border-color: root.on && !root.connecting ? Tokens.teal-text : Tokens.secondary-text;
 
     Rectangle {
         width: root.width * (Motion.on ? (0.6 + 0.4 * root.fill) : 1);
@@ -1100,8 +1101,8 @@ export component TrayFlyout inherits Window {
                 revealed: root.revealed;
 
                 HorizontalLayout {
-                    // The mark 16 px from the panel's edge, as on the Mac.
-                    padding-left: -4px;
+                    // The mark on the panel's 14 px edge, as on the Mac (MenuBar.swift:1779).
+                    padding-left: -6px;
                     spacing: 10px;
 
                     // The mark and name open the main window, the first stop for
@@ -1161,6 +1162,8 @@ export component TrayFlyout inherits Window {
                             VerticalLayout {
                                 alignment: center;
                                 horizontal-stretch: 1;
+                                // The Mac's 1 pt under the wordmark (MenuBar.swift:1808).
+                                spacing: 1px;
                                 Wordmark {
                                     size: 15px;
                                     dim: !root.running;
@@ -1170,12 +1173,15 @@ export component TrayFlyout inherits Window {
                                     min-height: status-a-text.preferred-height;
                                     status-a-text := QuietText {
                                         width: parent.width;
+                                        // .subheadline, as the Mac's status (MenuBar.swift:1813).
+                                        font-size: Tokens.font-size-subheadline;
                                         text: root.status-a;
                                         opacity: root.status-mix;
                                     }
 
                                     QuietText {
                                         width: parent.width;
+                                        font-size: Tokens.font-size-subheadline;
                                         text: root.status-b;
                                         opacity: 1 - root.status-mix;
                                     }
@@ -1571,6 +1577,10 @@ export component TrayFlyout inherits Window {
                                 property <string> cast-note: self.both-none || self.list-note == Strings.looking-for-speakers ? "" : Strings.cast-list(root.cast-list);
                                 property <string> text: root.this-pc.length == 0 && root.all-hidden ? Strings.flyout-all-hidden : root.this-pc.length == 0 && root.airplay-none-found ? Strings.no-speakers : self.cast-note == "" ? self.list-note : self.list-note == Strings.connected-none ? self.cast-note : self.list-note + " " + self.cast-note;
                                 spacing: 10px;
+                                // The Mac's 2 pt above and below (MenuBar.swift:1868), less the 6 px
+                                // that the divider's box adds over its dividerToList (WindowRules.swift:1137).
+                                padding-top: -4px;
+                                padding-bottom: 2px;
 
                                 SecondaryText {
                                     text: none-note.text;
@@ -1731,9 +1741,10 @@ export component TrayFlyout inherits Window {
 
                 HorizontalLayout {
                     alignment: space-between;
-                    // The words 17 px from the panel's edges, as on the Mac.
-                    padding-left: -3px;
-                    padding-right: -3px;
+                    // The words on the panel's 14 px edges: the Mac's -6 pt row
+                    // around 6 pt button padding (MenuBar.swift:1773, :2091).
+                    padding-left: -6px;
+                    padding-right: -6px;
                     // Exit's text 11 pt under the line, as the Mac's 2x TRAY-IDLE-terang
                     // photo measures it (line ends at 870, text from 892).
                     padding-top: -9px;
