@@ -13910,7 +13910,7 @@ pub(crate) mod tests {
         }
     }
 
-    /// At 696 x 632 with a song the whole left column scrolls as one, source
+    /// At 696 x 600 with a song (at 632 it fits, as the Mac's does) the whole left column scrolls as one, source
     /// down to Calibrate All: Presets moves up with the hero, nothing is pinned
     /// under it, and scrolled to the end Calibrate All shows whole.
     #[test]
@@ -13924,7 +13924,7 @@ pub(crate) mod tests {
         app.poll();
         fake.read(Some(track("Spotify.exe", "Song", "Band", true)));
         app.poll();
-        draw_frames_at(696, 632);
+        draw_frames_at(696, 600);
         let presets = || {
             element(&app, "MainWindow::presets-card")
                 .expect("Presets")
@@ -13939,7 +13939,7 @@ pub(crate) mod tests {
                 delta_x: 0.0,
                 delta_y: -3000.0,
             });
-        draw_frames_at(696, 632);
+        draw_frames_at(696, 600);
         let after = presets();
         assert!(after < before, "Presets stays at {before}, pinned: {after}");
         let column = element(&app, "MainWindow::left-column").expect("the left column");

@@ -2107,6 +2107,29 @@ component CalibrationCard inherits VerticalLayout {
     }
 }
 
+// SF's line height: Segoe UI's is 2 px taller at 13 px, all of it leading,
+// and grew each Calibrate card by that per line.
+// A Text clips at its own height, so the box is shorter and the Text spills.
+component MacLines inherits Rectangle {
+    in property <length> line;
+    in property <string> text <=> label.text;
+    in property <length> font-size <=> label.font-size;
+    in property <int> font-weight <=> label.font-weight;
+    in property <brush> text-color <=> label.color;
+    in property <TextWrap> wrap <=> label.wrap;
+    in property <TextOverflow> overflow <=> label.overflow;
+    min-width: label.min-width;
+    preferred-width: label.preferred-width;
+    height: round(label.preferred-height / self.line) * self.line;
+
+    label := Text {
+        y: (parent.height - self.height) / 2;
+        width: parent.width;
+        height: self.preferred-height;
+        accessible-role: none;
+    }
+}
+
 // A "Before you start" row's 26 px icon: tinted on a 15% disc, or solid
 // (CalibrateAllViews.swift:292-298).
 component CheckIcon inherits Rectangle {
@@ -2314,11 +2337,12 @@ component CalibrateAllSheet inherits FocusScope {
                 accessible-role: groupbox;
                 accessible-label: Strings.calibrate-before-start;
 
-                Text {
+                MacLines {
+                    line: 13px;
                     text: Strings.calibrate-before-start;
                     font-size: Tokens.font-size-caption;
                     font-weight: Fluent.weight-semibold;
-                    color: Tokens.secondary-text;
+                    text-color: Tokens.secondary-text;
                     accessible-role: none;
                 }
 
@@ -2337,30 +2361,39 @@ component CalibrateAllSheet inherits FocusScope {
                             padding-bottom: 10px;
                             spacing: 12px;
 
-                            CheckIcon {
-                                glyph: Glyphs.microphone;
-                                tint: Tokens.teal-text;
+                            // Centred, as in the Mac's HStack.
+                            VerticalLayout {
+                                alignment: center;
+
+                                CheckIcon {
+                                    glyph: Glyphs.microphone;
+                                    tint: Tokens.teal-text;
+                                }
                             }
 
+                            // The Spacer's 12 after the text (CalibrateAllViews.swift:191-202).
                             VerticalLayout {
+                                padding-right: 12px;
                                 spacing: 2px;
                                 alignment: center;
                                 horizontal-stretch: 1;
                                 accessible-role: text;
                                 accessible-label: Strings.calibrate-microphone-check + ", " + Strings.calibrate-microphone-check-detail;
 
-                                Text {
+                                MacLines {
+                                    line: 16px;
                                     text: Strings.calibrate-microphone-check;
                                     font-size: Tokens.font-size-body;
                                     font-weight: Fluent.weight-semibold;
-                                    color: Tokens.text;
+                                    text-color: Tokens.text;
                                     accessible-role: none;
                                 }
 
-                                Text {
+                                MacLines {
+                                    line: 16px;
                                     text: Strings.calibrate-microphone-check-detail;
                                     font-size: Tokens.font-size-body;
-                                    color: Tokens.secondary-text;
+                                    text-color: Tokens.secondary-text;
                                     wrap: word-wrap;
                                     accessible-role: none;
                                 }
@@ -2389,40 +2422,54 @@ component CalibrateAllSheet inherits FocusScope {
                                 padding-bottom: 10px;
                                 spacing: 12px;
 
-                                CheckIcon {
-                                    glyph: Glyphs.device-volume(root.volume);
-                                    tint: Tokens.warn;
-                                    solid: true;
+                                // Centred, as in the Mac's HStack.
+                                VerticalLayout {
+                                    alignment: center;
+
+                                    CheckIcon {
+                                        glyph: Glyphs.device-volume(root.volume);
+                                        tint: Tokens.warn;
+                                        solid: true;
+                                    }
                                 }
 
+                                // The Spacer's 12 before the button (CalibrateAllViews.swift:218-232).
                                 VerticalLayout {
+                                    padding-right: 12px;
                                     spacing: 2px;
                                     alignment: center;
                                     horizontal-stretch: 1;
                                     accessible-role: text;
                                     accessible-label: Strings.device-volume-hint-label(root.reference, root.volume, root.volume-percent) + ", " + Strings.calibrate-volume-detail(root.volume, root.reference);
 
-                                    Text {
+                                    MacLines {
+                                        line: 16px;
                                         text: Strings.device-volume-hint(root.volume, root.volume-percent);
                                         font-size: Tokens.font-size-body;
                                         font-weight: Fluent.weight-semibold;
-                                        color: Tokens.text;
+                                        text-color: Tokens.text;
                                         wrap: word-wrap;
                                         accessible-role: none;
                                     }
 
-                                    Text {
+                                    MacLines {
+                                        line: 16px;
                                         text: Strings.calibrate-volume-detail(root.volume, root.reference);
                                         font-size: Tokens.font-size-body;
-                                        color: Tokens.text;
+                                        text-color: Tokens.text;
                                         wrap: word-wrap;
                                         accessible-role: none;
                                     }
 
-                                    // The volume against the low line (CalibrateAllViews.swift:260-289).
-                                    if root.volume == DeviceVolumeHint.low || root.volume == DeviceVolumeHint.muted-low: VolumeMeter {
-                                        percent: root.volume-percent;
-                                        muted: root.volume == DeviceVolumeHint.muted-low;
+                                    // The volume against the low line (CalibrateAllViews.swift:260-289);
+                                    // in a row, so its 260 does not cap the text's width.
+                                    if root.volume == DeviceVolumeHint.low || root.volume == DeviceVolumeHint.muted-low: HorizontalLayout {
+                                        VolumeMeter {
+                                            percent: root.volume-percent;
+                                            muted: root.volume == DeviceVolumeHint.muted-low;
+                                        }
+
+                                        Rectangle { }
                                     }
                                 }
 
@@ -2541,13 +2588,13 @@ component CalibrateAllSheet inherits FocusScope {
                             HorizontalLayout {
                                 spacing: 6px;
 
-                                Text {
+                                MacLines {
+                                    line: 16px;
                                     text: row.name;
                                     font-size: Tokens.font-size-body;
                                     font-weight: Fluent.weight-semibold;
-                                    color: Tokens.text;
+                                    text-color: Tokens.text;
                                     overflow: elide;
-                                    vertical-alignment: center;
                                     accessible-role: none;
                                 }
 
@@ -4054,8 +4101,10 @@ export component MainWindow inherits Window {
                         }
                     }
 
+                    // With a song the Mac's photos lose the top padding (MAIN-PLAYING: 7 pt
+                    // under the row, 18 without one), though MainWindow.swift:257 pads alike.
                     VerticalLayout {
-                        padding-top: 11px;
+                        padding-top: root.now-playing-shown ? 0px : 11px;
                         padding-bottom: 5px;
 
                         Divider { }

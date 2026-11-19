@@ -921,3 +921,20 @@ fn the_source_button_draws_the_macs_semibold_name_and_small_glyph() {
     let label = between(&menu, "name-row := HorizontalLayout {", "Glyph {");
     assert!(label.contains("spacing: 4px;"), "{label}");
 }
+
+/// The Mac's photos with a song (MAIN-PLAYING, MAIN-NOWPLAYING-PAUSED,
+/// MAIN-VOLUME-ROWS) put the hairline 7 pt under the master volume's row, 11 pt
+/// higher than without one, though MainWindow.swift:256-258 pads it alike: the
+/// hero's song drops the separator's top padding (WindowRules.swift:74-75).
+#[test]
+fn with_a_song_the_hairline_meets_the_master_volume_as_on_the_mac() {
+    let window = component(include_str!("../../ui/main.slint"), "MainWindow");
+    let at = window.find("MasterVolume {").expect("Master Volume");
+    let after = &window[at..];
+    let hairline = &after[..after.find("Divider { }").expect("the hairline")];
+    let pad = &hairline[hairline.rfind("VerticalLayout {").expect("its padding")..];
+    assert!(
+        pad.contains("padding-top: root.now-playing-shown ? 0px : 11px;"),
+        "{pad}"
+    );
+}
