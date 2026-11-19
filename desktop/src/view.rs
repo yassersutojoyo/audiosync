@@ -1844,6 +1844,14 @@ impl App {
             if on_screen && still && !self.ambient_still_drawn.replace(true) {
                 self.draw_ambient(true);
             }
+            if on_screen && still && !self.tint_timer.running() {
+                let weak = weak.clone();
+                self.tint_timer.start(
+                    TimerMode::Repeated,
+                    Duration::from_millis(u64::from(meter::METER_POLL_MS)),
+                    move || with_app(&weak, App::tick_tint),
+                );
+            }
             return;
         };
         self.ambient_still_drawn.set(false);
@@ -1888,6 +1896,34 @@ impl App {
                 .try_borrow_mut()
                 .and_then(|mut backend| backend.sound_bands())
         });
+        self.follow_sound(dt);
+        if let Some(interval) = self.ambient.borrow().interval(true, false)
+            && interval != self.ambient_timer.interval()
+        {
+            self.ambient_timer.set_interval(interval);
+        }
+        self.draw_ambient(false);
+    }
+
+    /// One read of the sound for the cover tint while the art stands still.
+    fn tick_tint(&self) {
+        let still = !self.main.global::<Motion>().get_on();
+        let on_screen = self.ambient_on_screen();
+        if !on_screen || !still {
+            // With animations back on, the art's frames carry the tint on.
+            self.tint_timer.stop();
+            if !on_screen {
+                self.ambient.borrow_mut().reset();
+                self.draw_tint();
+            }
+            return;
+        }
+        self.follow_sound(f64::from(meter::METER_POLL_MS) / 1000.0);
+        self.draw_tint();
+    }
+
+    /// Moves the cover tint on `dt` seconds of the captured sound.
+    fn follow_sound(&self, dt: f64) {
         let was_tinted = self.ambient.borrow().tint() > 0.0;
         self.ambient.borrow_mut().follow_sound(dt, || {
             self.backend
@@ -1899,16 +1935,22 @@ impl App {
             self.log
                 .log(|| format!("ambient art: cover tint {tint:.3}"));
         }
-        if let Some(interval) = self.ambient.borrow().interval(true, false)
-            && interval != self.ambient_timer.interval()
-        {
-            self.ambient_timer.set_interval(interval);
-        }
-        self.draw_ambient(false);
     }
 
-    /// One read of the sound for the cover tint while the art stands still.
-    fn tick_tint(&self) {}
+    /// The cover tint alone into both cards' art, which keeps its strands.
+    fn draw_tint(&self) {
+        let tint = self.ambient.borrow().tint() as f32;
+        let mut look = self.main.get_now_playing_ambient();
+        if look.tint != tint {
+            look.tint = tint;
+            self.main.set_now_playing_ambient(look);
+        }
+        let mut look = self.flyout.get_now_playing_ambient();
+        if look.tint != tint {
+            look.tint = tint;
+            self.flyout.set_now_playing_ambient(look);
+        }
+    }
 
     /// Gives the art's strands to the windows that show them; the still line
     /// to both, since it is drawn once.
