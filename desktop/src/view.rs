@@ -8641,10 +8641,9 @@ pub(crate) mod tests {
     }
 
     /// At the default 696 x 680 with a song and its Shuffle and Repeat, the
-    /// left column fits with no scrolling, as on the Mac: no menu row above
-    /// the header, which sits 4 under the top row, and Several Apps in the
-    /// source menu. The open Presets list pushes the rows below it down and
-    /// the hero above them scrolls.
+    /// left column fits with no scrolling, its cards 12 px clear of the
+    /// bottom fade, as on the Mac: no menu row above the header, which sits
+    /// 4 under the top row, and Several Apps in the source menu.
     // covers: S450
     #[test]
     fn the_left_column_fits_the_default_window_with_a_song() {
@@ -8677,17 +8676,6 @@ pub(crate) mod tests {
         assert!(content > 400.0, "the card shows: {content}");
         assert!(content <= room, "{content} of {room}");
         assert_eq!(app.main.get_presets().row_count(), 0);
-        let presets = || {
-            i_slint_backend_testing::ElementHandle::find_by_element_id(
-                &app.main,
-                "MainWindow::presets-card",
-            )
-            .next()
-            .expect("Presets")
-            .size()
-            .height
-        };
-        let closed = presets();
         app.main.set_presets_open(true);
         for _ in 0..30 {
             std::thread::sleep(std::time::Duration::from_millis(20));
@@ -8698,21 +8686,13 @@ pub(crate) mod tests {
             .window()
             .set_size(slint::LogicalSize::new(696.0, 680.0));
         slint::platform::update_timers_and_animations();
-        let (content, room) = (
-            app.main.get_left_content_height(),
-            app.main.get_left_visible_height(),
-        );
+        let content = app.main.get_left_content_height();
         // As on the Mac, the open list says there is none yet over Save as
-        // Preset…, about 100 px (120 in Segoe UI's larger text), which the
-        // hero above the rows gives up and scrolls in.
+        // Preset…, about 100 px (120 in Segoe UI's larger text), and the
+        // column scrolls the rows below it.
         assert!(
             content > room && content <= room + 125.0,
-            "open: {content} of {room}"
-        );
-        let opened = presets() - closed;
-        assert!(
-            opened > 0.0 && opened <= 125.0,
-            "open with no presets: {opened} px"
+            "open with no presets: {content} of {room}"
         );
         let main = include_str!("../ui/main.slint").replace("\r\n", "\n");
         assert!(main.contains("padding-top: title-row.height + 3px;"));
@@ -13927,53 +13907,49 @@ pub(crate) mod tests {
         }
     }
 
-    /// At 696 x 632 with a song and the presets list open, Save as Preset…,
-    /// Equalizer and Calibrate All show whole with nothing scrolled: as on the
-    /// Mac, only the hero above them scrolls (MainWindow.swift:254-282).
+    /// At 696 x 632 with a song the whole left column scrolls as one, source
+    /// down to Calibrate All: Presets moves up with the hero, nothing is pinned
+    /// under it, and scrolled to the end Calibrate All shows whole.
     #[test]
-    fn the_rows_under_the_hero_stay_whole_in_a_short_window() {
+    fn the_whole_left_column_scrolls_to_calibrate_all_in_a_short_window() {
         use crate::now_playing_card::fake::{FakeControls, track};
-        use crate::now_playing_card::{CardArtwork, PlayModes, Repeat};
         use i_slint_backend_testing::ElementHandle;
         let app = app_over(MockBackend::new());
         let fake = FakeControls::default();
         app.set_media_controls(fake.controls());
         app.main.show().expect("the main window shows");
         app.poll();
-        let mut song = track("Spotify.exe", "Song", "Band", true);
-        song.artwork = Some(CardArtwork::new(8, [90u8, 40, 30, 255].repeat(64)));
-        song.modes = PlayModes {
-            shuffle: Some(false),
-            repeat: Some(Repeat::Off),
-        };
-        fake.read(Some(song));
+        fake.read(Some(track("Spotify.exe", "Song", "Band", true)));
         app.poll();
-        hold_clock();
-        app.main.set_presets_open(true);
-        advance_clock(Duration::from_millis(400));
         draw_frames_at(696, 632);
-        let column = element(&app, "MainWindow::left-column").expect("the left column");
-        let (top, bottom) = (
-            column.absolute_position().y,
-            column.absolute_position().y + column.size().height,
-        );
-        let strings = app.main.global::<Strings>();
-        // The test backend finds no element that its scroll view clips away whole.
-        for label in [
-            strings.get_save_preset(),
-            strings.get_equalizer(),
-            strings.get_calibrate_all(),
-        ] {
-            let row = ElementHandle::find_by_accessible_label(&app.main, &label).next();
-            let (y, end) = row.map_or((f32::NAN, f32::NAN), |row| {
-                let y = row.absolute_position().y;
-                (y, y + row.size().height)
+        let presets = || {
+            element(&app, "MainWindow::presets-card")
+                .expect("Presets")
+                .absolute_position()
+                .y
+        };
+        let before = presets();
+        app.main
+            .window()
+            .dispatch_event(WindowEvent::PointerScrolled {
+                position: slint::LogicalPosition::new(100.0, 300.0),
+                delta_x: 0.0,
+                delta_y: -3000.0,
             });
-            assert!(
-                y >= top && end <= bottom,
-                "{label} at {y}..{end} in the column's {top}..{bottom}"
-            );
-        }
+        draw_frames_at(696, 632);
+        let after = presets();
+        assert!(after < before, "Presets stays at {before}, pinned: {after}");
+        let column = element(&app, "MainWindow::left-column").expect("the left column");
+        let bottom = column.absolute_position().y + column.size().height;
+        let label = app.main.global::<Strings>().get_calibrate_all();
+        let row = ElementHandle::find_by_accessible_label(&app.main, &label)
+            .next()
+            .expect("Calibrate All");
+        let end = row.absolute_position().y + row.size().height;
+        assert!(
+            end <= bottom,
+            "Calibrate All ends {end}, the column {bottom}"
+        );
     }
 
     /// The AirPlay delay's note ends inside its pane at every window width,
@@ -14880,9 +14856,9 @@ pub(crate) mod tests {
         let has_line = |wanted: String| main.lines().any(|line| line.trim_end() == wanted);
         assert!(has_line(format!("    min-width: {min_width}px;")));
         assert!(has_line(format!("    min-height: {min_height}px;")));
-        // The left column's top scrolls when the column is taller than the
-        // window, so its hero never pushes the window past that height.
-        assert!(main.contains("left-scroll := FadeScrollView {"));
+        // The left column scrolls when it is taller than the window, so
+        // its cards never push the window past that height.
+        assert!(main.contains("left-column := FadeScrollView {"));
     }
 
     #[test]
@@ -16790,13 +16766,13 @@ pub(crate) mod tests {
         assert!((right_edge(&number) - right_edge(&chevron)).abs() < 0.5);
     }
 
-    /// The main window's master volume number, as in the Mac window: 8 px
-    /// clear of the knob at 100 (16 px after the track's end, the knob's
-    /// centre), its digits' ink ending on the chevron's, 3 px inside the
-    /// chevron glyph's box.
+    /// The main window's master volume number, as in the Mac window: 6 px
+    /// clear of the knob at 100 (14 px after the track's end, the knob's
+    /// centre; MainWindow.swift:545), its digits' ink ending on the chevron's,
+    /// 3 px inside the chevron glyph's box.
     // covers: S450
     #[test]
-    fn the_main_volume_number_sits_8_px_clear_of_the_knob_on_the_chevron_edge() {
+    fn the_main_volume_number_sits_6_px_clear_of_the_knob_on_the_chevron_edge() {
         use i_slint_backend_testing::ElementHandle;
         let app = app_over(MockBackend::new());
         app.main.show().expect("the main window shows");
@@ -16811,7 +16787,7 @@ pub(crate) mod tests {
         };
         let number = element("MasterVolume::number");
         let (_, end) = master_track(&element("MasterVolume::slider"));
-        assert!((number.absolute_position().x - end - 16.0).abs() < 0.5);
+        assert!((number.absolute_position().x - end - 14.0).abs() < 0.5);
         let chevron = element("EqualizerCard::chevron");
         assert!((right_edge(&number) + 3.0 - right_edge(&chevron)).abs() < 0.5);
     }

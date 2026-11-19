@@ -191,3 +191,32 @@ fn calibrate_all_opens_its_sheet_with_the_left_out_before_any_run() {
     draw_frames();
     assert!(sheet().is_none(), "Escape closes the sheet");
 }
+
+/// The sheet's cards are the Mac's controlBackgroundColor, the sheet's own colour, with
+/// a separatorColor edge (CalibrateAllViews.swift:210-212, :319-320, :407-408; its photos
+/// read #e6e6e6 on light and #343434 on dark), and Set to 75% keeps its own width (:233-243).
+// covers: S450
+#[test]
+fn the_calibrate_sheets_cards_are_outlined_and_the_fix_button_compact() {
+    let main = include_str!("../../ui/main.slint").replace("\r\n", "\n");
+    let start = main
+        .find("component CalibrateAllSheet ")
+        .expect("the sheet");
+    let sheet = &main[start..];
+    let sheet = &sheet[..sheet.find("\ncomponent ").unwrap_or(sheet.len())];
+    assert!(
+        !sheet.contains("background: Tokens.surface;"),
+        "no filled card"
+    );
+    assert_eq!(sheet.matches("background: root.card-fill;").count(), 3);
+    assert_eq!(sheet.matches("border-color: root.card-edge;").count(), 3);
+    assert!(sheet.contains("property <brush> card-fill: sheet.background;"));
+    assert!(sheet.contains("property <brush> card-edge: Tokens.dark ? #ffffff1a : #0000001a;"));
+    let fix = &sheet[..sheet.find("volume-fix := SmallButton").expect("Set to 75%")];
+    let wrapper = &fix[fix.rfind("VerticalLayout {").expect("its column")..];
+    assert!(wrapper.contains("horizontal-stretch: 0;"), "{wrapper}");
+    assert!(
+        wrapper.contains("max-width: volume-fix.min-width;"),
+        "{wrapper}"
+    );
+}
