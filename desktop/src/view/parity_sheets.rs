@@ -97,6 +97,30 @@ fn the_equalizer_has_the_macs_curve_chip_tick_and_knob() {
     assert!(!EQUALIZER.contains("Fluent.thumb"));
 }
 
+// The Mac's system switch (EqualizerWindow.swift:150) measures 54 x 24 pt on
+// its 2x photo (EQ-WINDOW), and its curve chip 106 pt for Loudness: 13 + 11 pt
+// beside the name and chevron, 19 pt between them.
+#[test]
+fn the_equalizer_switch_and_curve_chip_are_the_macs_size() {
+    let app = app_over(MockBackend::new());
+    app.show_equalizer();
+    let eq = app.equalizer();
+    let size = |id: &str| {
+        ElementHandle::find_by_element_id(&eq, id)
+            .next()
+            .unwrap_or_else(|| panic!("{id}"))
+            .size()
+    };
+    let track = size("ToggleSwitch::track");
+    assert_eq!((track.width, track.height), (54.0, 24.0));
+    let chip = size("CurveMenu::touch").width;
+    let around = chip - size("CurveMenu::shown-text").width - size("CurveMenu::chevron").width;
+    assert_eq!(around, 41.0);
+    assert!(EQUALIZER.contains("// One line, as the Mac's (EqualizerWindow.swift:179)"));
+    let at = EQUALIZER.find("text: Strings.equalizer-caption(").expect("the caption");
+    assert!(EQUALIZER[at..at + 400].contains("overflow: elide;"));
+}
+
 // EqualizerWindow.swift:145-187: 18 pt padding, 14 pt spacing and a band row
 // only as tall as its gain, 140 pt slider and label; the Mac's photo
 // (EQ-WINDOW, 584 px at 2x) is 292 pt high.
