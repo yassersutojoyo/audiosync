@@ -1275,6 +1275,9 @@ final class AutomationConsent {
 
     /// `queue`: a player's verdict changed.
     var onVerdict: ((String, Verdict) -> Void)?
+    /// The quiet repeat's clock and timer; a test replaces both so no real wait decides its result.
+    var quietUptime: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    var quietLater: (DispatchQueue, TimeInterval, @escaping () -> Void) -> Void = { $0.asyncAfter(deadline: .now() + $1, execute: $2) }
 
     private let queue: DispatchQueue
     private let send: (String, Bool, @escaping (Int) -> Void) -> Void
@@ -1348,13 +1351,13 @@ final class AutomationConsent {
     /// Only an allowed answer counts: -1744 means macOS still waits on the user, and a refusal is the waiting send's to report.
     private func sendQuietly(_ app: String) {
         // Uptime, as `asyncAfter` counts it, so the repeat below never finds itself early.
-        let sent = ProcessInfo.processInfo.systemUptime
+        let sent = quietUptime()
         guard !quietOut.contains(app), quietSent[app].map({ sent - $0 >= Self.quietEvery }) ?? true else { return }
         quietOut.insert(app)
         quietSent[app] = sent
         send(app, false) { [weak self] code in
             guard let self else { return }
-            let waited = ProcessInfo.processInfo.systemUptime - sent
+            let waited = self.quietUptime() - sent
             self.queue.async {
                 self.quietOut.remove(app)
                 DebugTrace.log(String(format: "Now Playing: the quiet send to %@ returned Apple event code %ld after %.1f s",
@@ -1364,7 +1367,7 @@ final class AutomationConsent {
                     return
                 }
                 // Readings stop while nothing shows or sends Now Playing, so the repeat can't wait for one.
-                self.queue.asyncAfter(deadline: .now() + Self.quietEvery) { [weak self] in
+                self.quietLater(self.queue, Self.quietEvery) { [weak self] in
                     guard let self, self.prompting.contains(app) else { return }
                     self.sendQuietly(app)
                 }

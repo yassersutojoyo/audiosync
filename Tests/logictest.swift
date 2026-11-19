@@ -2667,10 +2667,17 @@ do {
 do {
     // 2026-11-14 on the Mac: no reading came after the first, as when nothing shows Now Playing, and no quiet send followed.
     let h = ConsentHarness()
+    // The timer fires at once and moves a fake uptime on by its delay, so a busy Mac can't make it late.
+    var quietFakeUptime: TimeInterval = 1000
+    h.queue.sync {
+        h.consent.quietUptime = { quietFakeUptime }
+        h.consent.quietLater = { queue, delay, work in
+            quietFakeUptime += delay
+            queue.async(execute: work)
+        }
+    }
     _ = h.step(consentSpotify)
     h.answerQuiet(consentSpotify, -1744)
-    let quietRepeatDeadline = Date().addingTimeInterval(AutomationConsent.quietEvery + 2)
-    while h.quietCalls(consentSpotify) < 2 && Date() < quietRepeatDeadline { Thread.sleep(forTimeInterval: 0.1) }
     h.answerQuiet(consentSpotify, 0)
     check(h.quietCalls(consentSpotify) == 2 && h.verdicts == ["Spotify allowed"],
           "EC14 automation consent: the quiet send repeats every quietEvery while the waiting send is out, without a reading",
