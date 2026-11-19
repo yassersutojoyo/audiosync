@@ -269,3 +269,61 @@ fn the_flyout_is_as_tall_as_the_macs_panel() {
     let brand = &brand[..brand.find("brand-mark := BrandMark").expect("mark")];
     assert!(!brand.contains("padding-top: 2px;"), "{brand}");
 }
+
+/// The text of the flyout from `start` up to the first `end` after it.
+fn between(start: &str, end: &str) -> String {
+    let source = flyout();
+    let from = &source[source.find(start).unwrap_or_else(|| panic!("{start}"))..];
+    from[..from.find(end).unwrap_or_else(|| panic!("{end}"))].to_owned()
+}
+
+/// MenuBar.swift:2186: a speaker that is on and waits gets a 2.5 pt ring in
+/// Brand.tealText (mint on dark, deep teal on light), not the brand teal.
+#[test]
+fn a_waiting_speakers_ring_is_the_text_teal() {
+    let disc = component("RowDisc");
+    assert!(
+        disc.contains(
+            "border-color: root.on && !root.connecting ? Tokens.teal-text : Tokens.secondary-text;"
+        ),
+        "{disc}"
+    );
+}
+
+/// MenuBar.swift:1779 and :1803-1815: the panel's 14 pt padding puts the
+/// mark 14 pt from the edge, and the status under the wordmark is
+/// .subheadline (11 pt), 1 pt under it.
+#[test]
+fn the_flyout_header_sits_as_the_macs() {
+    let header = between("header-part := IntroPart {", "brand := Rectangle {");
+    assert!(header.contains("padding-left: -6px;"), "{header}");
+    let words = between("brand-mark := BrandMark {", "FocusRing {");
+    assert!(words.contains("spacing: 1px;"), "{words}");
+    assert_eq!(
+        words
+            .matches("font-size: Tokens.font-size-subheadline;")
+            .count(),
+        2,
+        "{words}"
+    );
+}
+
+/// MenuBar.swift:1766-1773 and :2091: the footer row is padded -6 pt each
+/// side and each button pads its text 6 pt, so the words sit on the
+/// panel's 14 pt edge.
+#[test]
+fn the_flyout_footer_words_sit_on_the_panels_edge() {
+    let footer = between("footer := IntroPart {", "FooterButton {");
+    assert!(footer.contains("padding-left: -6px;"), "{footer}");
+    assert!(footer.contains("padding-right: -6px;"), "{footer}");
+}
+
+/// MenuBar.swift:1868 and WindowRules.swift:1137: the empty list's note
+/// starts dividerToList (-3 pt) plus the 10 pt spacing under the line,
+/// padded 2 pt above and below.
+#[test]
+fn the_empty_lists_note_sits_under_the_line_as_the_macs() {
+    let note = between("none-note := HorizontalLayout {", "SecondaryText {");
+    assert!(note.contains("padding-top: -4px;"), "{note}");
+    assert!(note.contains("padding-bottom: 2px;"), "{note}");
+}

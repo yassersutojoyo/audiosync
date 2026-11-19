@@ -633,9 +633,9 @@ fn custom_controls_are_accessible_and_show_focus() {
     }
 }
 
-/// The light Appearance track looks like the Mac's AppKit control: white
-/// with a soft shadow in light, a grey fill in dark that keeps the text at
-/// 4.5:1 on the window and on a card.
+/// The Appearance track as the Mac draws it (SettingsWindow.swift:184-186):
+/// #ebebeb on the light 2x MAIN-SETTINGS photo, #565656 on the dark one, with
+/// no edge or shadow, and its text stays at 4.5:1 on it.
 #[test]
 fn the_appearance_track_looks_like_the_macs_native_control() {
     let settings = include_str!("../ui/settings.slint");
@@ -644,27 +644,13 @@ fn the_appearance_track_looks_like_the_macs_native_control() {
         .next()
         .and_then(|before| before.rsplit("Rectangle {").next())
         .expect("the Appearance track");
-    for needle in [
-        "Fluent.native-control",
-        "drop-shadow-color: Fluent.native-control-shadow",
-    ] {
-        assert!(track.contains(needle), "the Appearance track has {needle}");
-    }
-    let prefix = "out property <brush> native-control: Tokens.dark ? Tokens.text.with-alpha(";
-    let alpha: f64 = include_str!("../ui/widgets.slint")
-        .lines()
-        .find_map(|line| line.trim().strip_prefix(prefix))
-        .and_then(|rest| rest.split(')').next())
-        .and_then(|value| value.parse().ok())
-        .expect("Fluent.native-control is the text color over the window in dark");
-    let text = srgb("text", Appearance::Dark);
-    for under in ["surface", "settingsCard"] {
-        let below = srgb(under, Appearance::Dark);
-        let fill = [0, 1, 2].map(|i| text[i] * alpha + below[i] * (1.0 - alpha));
-        let value = contrast(text, fill);
+    assert!(track.contains("background: Tokens.dark ? #565656 : #ebebeb;"));
+    assert!(!track.contains("drop-shadow"), "{track}");
+    for (appearance, fill) in [(Appearance::Light, 0xeb), (Appearance::Dark, 0x56)] {
+        let value = contrast(srgb("text", appearance), [f64::from(fill) / 255.0; 3]);
         assert!(
             value >= MIN_TEXT_CONTRAST,
-            "text on the grey control over {under}: {value:.2}:1"
+            "text on the Appearance track: {value:.2}:1"
         );
     }
 }

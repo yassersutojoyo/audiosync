@@ -16572,13 +16572,13 @@ pub(crate) mod tests {
         assert_eq!(member, 27.0);
     }
 
-    /// The mark starts 16 px from the panel's edge and the footer's words
-    /// 17 px from either edge, as in the Mac panel.
+    /// The mark and the footer's words sit on the panel's 14 px edges, as in
+    /// the Mac panel (MenuBar.swift:1773, :1779).
     #[test]
     fn the_flyout_header_and_footer_use_the_mac_panel_insets() {
         let app = measured_flyout();
         let mark = flyout_element(&app, "TrayFlyout::brand-mark");
-        assert_eq!(mark.absolute_position().x, 16.0);
+        assert_eq!(mark.absolute_position().x, 14.0);
         let words: Vec<_> = i_slint_backend_testing::ElementHandle::find_by_element_id(
             &app.flyout,
             "FooterButton::words",
@@ -16586,10 +16586,10 @@ pub(crate) mod tests {
         .collect();
         let first = words.first().expect("Open AudioSync");
         let last = words.last().expect("Exit");
-        assert_eq!(first.absolute_position().x, 17.0);
+        assert_eq!(first.absolute_position().x, 14.0);
         assert_eq!(
             300.0 - (last.absolute_position().x + last.size().width),
-            17.0
+            14.0
         );
     }
 
