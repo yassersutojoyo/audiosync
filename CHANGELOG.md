@@ -61,6 +61,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- HomePods on software 27 play again over AirPlay 2. They turned AudioSync away before the first sound because of the name it sent with its requests. Thanks to [emosheeep](https://github.com/emosheeep) for the report and the fix.
 - On the Mac, every press of the streaming switch counts. Before, a press during the switch's motion was dropped, so quick presses could leave streaming the wrong way round.
 - On the Mac, pressing Caps Lock no longer quits AudioSync on macOS 27 while it controls the volume keys.
 - On the Mac, Now Playing reads Spotify 1.3.9, which left AudioSync's permission request unanswered.
