@@ -246,3 +246,24 @@ fn the_calibrate_sheets_lines_and_warning_column_are_the_macs() {
         "the meter sits in a row that can widen"
     );
 }
+
+/// A result card's kind tag and chip follow the name 6 pt after it, as the Mac's
+/// HStack(spacing: 6) (CalibrateAllViews.swift:358-372): the name takes no spare width.
+/// Apply is the sheet's default button in its teal tint, Brand.teal
+/// (MainWindow.swift:136, :339; CalibrateAllViews.swift:514-515).
+// covers: S450
+#[test]
+fn the_calibrate_cards_tag_follows_the_name_and_apply_is_brand_teal() {
+    let main = include_str!("../../ui/main.slint").replace("\r\n", "\n");
+    let start = main
+        .find("component CalibrateAllSheet ")
+        .expect("the sheet");
+    let sheet = &main[start..];
+    let sheet = &sheet[..sheet.find("\ncomponent ").unwrap_or(sheet.len())];
+    let card = &sheet[sheet.find("text: row.name;").expect("the card's name")..];
+    let name = &card[..card.find('}').expect("the name's end")];
+    assert!(name.contains("horizontal-stretch: 0;"), "{name}");
+    let apply = &sheet[sheet.find("apply-button := SmallButton").expect("Apply")..];
+    let apply = &apply[..apply.find("clicked =>").expect("Apply's body")];
+    assert!(apply.contains("primary-fill: Tokens.teal;"), "{apply}");
+}
