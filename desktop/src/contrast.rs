@@ -711,6 +711,41 @@ fn delay_steps_are_grey_pills_and_fields_have_an_edge_in_light() {
     );
 }
 
+/// The calibration Cancel is the Mac's small push button
+/// (CalibrationViews.swift:53-56): the delay steps' faint grey, its text
+/// readable at rest and pressed on the window and on a card.
+#[test]
+fn the_calibration_cancel_keeps_its_text_readable() {
+    let widgets = include_str!("../ui/widgets.slint");
+    let button = component_body(widgets, "SmallPushButton");
+    assert!(button.contains(
+        "background: Tokens.text.with-alpha(root.enabled && touch.pressed ? (Tokens.dark ? 0.3 : 0.1) : 0.05);"
+    ));
+    assert!(button.contains("color: root.enabled ? Tokens.text : Tokens.text.with-alpha(0.5);"));
+    let controls = component_body(widgets, "SyncControls");
+    let cancel = blocks(controls, "SmallPushButton");
+    assert!(
+        cancel
+            .iter()
+            .any(|b| b.contains("Strings.calibration-cancel")),
+        "Cancel is the small push button"
+    );
+    for (appearance, pressed) in [(Appearance::Light, 0.1), (Appearance::Dark, 0.3)] {
+        let text = srgb("text", appearance);
+        for under in ["background", "surface"] {
+            let below = srgb(under, appearance);
+            for alpha in [0.05, pressed] {
+                let fill = [0, 1, 2].map(|i| text[i] * alpha + below[i] * (1.0 - alpha));
+                let value = contrast(text, fill);
+                assert!(
+                    value >= MIN_TEXT_CONTRAST,
+                    "Cancel at {alpha} over {under} ({appearance:?}): {value:.2}:1"
+                );
+            }
+        }
+    }
+}
+
 /// A zone header's "2 of 3 on" is in the readable teal while a member is on,
 /// its waiting part and note grey, as the Mac's (MainWindow.swift:2042-2048);
 /// "tealText" keeps 4.5:1 through its pairs on the window, card and row.
@@ -1186,7 +1221,12 @@ fn accessible_names_start_with_the_visible_text() {
     ] {
         for (file, source) in UI_FILES {
             let small = blocks(source, "SmallButton");
-            for block in blocks(source, "Button").into_iter().chain(small) {
+            let push = blocks(source, "SmallPushButton");
+            for block in blocks(source, "Button")
+                .into_iter()
+                .chain(small)
+                .chain(push)
+            {
                 let lines: Vec<&str> = block.lines().map(str::trim).collect();
                 if !lines
                     .iter()

@@ -16327,11 +16327,12 @@ pub(crate) mod tests {
         let size = window.size().to_logical(window.scale_factor());
         assert_eq!(size.height, height);
         let bottom = flyout.get_footer_bottom();
+        // The panel's 8 under the buttons (MenuBar.swift:1779).
         assert!(
-            bottom + 12.0 <= height,
+            bottom + 8.0 <= height,
             "buttons end at {bottom}, window {height} high (Slint asked for {preferred})"
         );
-        assert!(height <= bottom + 12.5, "no room left under the buttons");
+        assert!(height <= bottom + 8.5, "no room left under the buttons");
     }
 
     /// The hero's borderless source menu reads the chosen source, as the
@@ -16642,8 +16643,9 @@ pub(crate) mod tests {
         let exit = ElementHandle::find_by_accessible_label(&app.flyout, &strings.get_exit_app())
             .next()
             .expect("Exit");
-        // The stack's 10 less the buttons' 8 (MenuBar.swift:1770).
-        assert_eq!(exit.absolute_position().y - last_line, 2.0);
+        // The stack's 10 less the buttons' 8, plus the 1 the line's -2 top padding
+        // cannot take from its 1 high frame (MenuBar.swift:1765, :1774).
+        assert_eq!(exit.absolute_position().y - last_line, 3.0);
     }
 
     fn flyout_element(app: &App, id: &str) -> i_slint_backend_testing::ElementHandle {
@@ -16941,7 +16943,8 @@ pub(crate) mod tests {
         let height = app.fit_flyout(room);
         assert_eq!(height, room);
         let bottom = flyout.get_footer_bottom();
-        assert!(bottom + 12.0 <= room, "buttons end at {bottom} in {room}");
+        // The panel's 8 under the buttons (MenuBar.swift:1779).
+        assert!(bottom + 8.0 <= room, "buttons end at {bottom} in {room}");
         assert_eq!(app.fit_flyout(1000.0), full, "the list gets its room back");
     }
 
@@ -17016,8 +17019,9 @@ pub(crate) mod tests {
         assert_eq!(app.fit_flyout(shorter), shorter);
         let grown = flyout.get_list_cut() + flyout.get_body_cut();
         assert!(grown > cuts.0 + cuts.1, "less room, a deeper cut");
+        // The panel's 8 under the buttons (MenuBar.swift:1779).
         assert!(
-            flyout.get_footer_bottom() + 12.0 <= shorter + 0.5,
+            flyout.get_footer_bottom() + 8.0 <= shorter + 0.5,
             "the buttons still show"
         );
         assert_eq!(app.fit_flyout(room), room);
@@ -17060,8 +17064,9 @@ pub(crate) mod tests {
         let height = app.fit_flyout(room);
         assert_eq!(height, room, "{case}");
         let bottom = flyout.get_footer_bottom();
+        // The panel's 8 under the buttons (MenuBar.swift:1779).
         assert!(
-            bottom + 12.0 <= room + 0.5,
+            bottom + 8.0 <= room + 0.5,
             "{case}: buttons end at {bottom} in {room}"
         );
         assert_eq!(app.fit_flyout(1000.0), full, "{case}: the room comes back");
