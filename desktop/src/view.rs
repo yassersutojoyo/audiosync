@@ -8729,7 +8729,7 @@ pub(crate) mod tests {
             "open with no presets: {content} of {room}"
         );
         let main = include_str!("../ui/main.slint").replace("\r\n", "\n");
-        assert!(main.contains("padding-top: title-row.height + 3px;"));
+        assert!(main.contains("padding-top: title-row.height;"));
     }
 
     /// What he sees on opening the app: a song with its cover, This PC's two
@@ -21518,7 +21518,7 @@ pub(crate) mod tests {
             "the sheet narrows with the window"
         );
         assert!(
-            sheet.contains("border-radius: Tokens.radius-card;"),
+            sheet.contains("border-radius: 16px;"),
             "it floats with four round corners"
         );
         let popup = &main[main.find("calibrate-sheet := PopupWindow").unwrap()..];

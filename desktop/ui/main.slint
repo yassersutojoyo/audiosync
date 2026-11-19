@@ -2298,15 +2298,15 @@ component CalibrateAllSheet inherits FocusScope {
     property <brush> card-fill: sheet.background;
     property <brush> card-edge: Tokens.dark ? #ffffff1a : #0000001a;
 
-    // The Mac's sheet: white on light, #1e1e1e on dark with an edge (its photos).
+    // AppKit's sheet (MainWindow.swift:337) as its CAL-SHEET photos measure it:
+    // white on light, #1e1e1e on dark, no edge, and a sigma 16 pt shadow.
     sheet := Rectangle {
         background: Tokens.dark ? #1e1e1e : #ffffff;
-        border-width: Tokens.dark ? 1px : 0px;
-        border-color: Fluent.stroke;
-        border-radius: Tokens.radius-card;
-        drop-shadow-blur: 16px;
-        drop-shadow-offset-y: 4px;
-        drop-shadow-color: #00000040;
+        border-width: 0px;
+        border-radius: 16px;
+        drop-shadow-blur: 32px;
+        drop-shadow-offset-y: 6px;
+        drop-shadow-color: Tokens.dark ? #00000080 : #00000038;
     }
 
     layout := VerticalLayout {
@@ -3736,8 +3736,8 @@ export component MainWindow inherits Window {
 
     VerticalLayout {
         padding: Fluent.window-margin;
-        // The header as high as the Mac's: its 2x photos put the mark 4 pt lower than 1 px into the top row.
-        padding-top: title-row.height + 3px;
+        // MainWindow.swift:318: 4 pt under the Mac's 28 pt title bar, 32 pt from the top.
+        padding-top: title-row.height;
         // The notices and the columns bring their gap above them, so a
         // notice opens and closes its gap with it.
         spacing: 0px;
