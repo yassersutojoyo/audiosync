@@ -1031,6 +1031,13 @@ fn outgoing_song(track: Option<&CardTrack>, covers: &RefCell<CoverImage>) -> Out
         title: track.title.as_str().into(),
         subtitle: track.subtitle().as_str().into(),
         has_artwork: track.artwork.is_some(),
+        tint: {
+            let [r, g, b] = track
+                .artwork
+                .as_ref()
+                .map_or(ambient::NO_COVER, |artwork| artwork.bands)[0];
+            slint::Color::from_rgb_f32(r as f32, g as f32, b as f32)
+        },
         artwork: track
             .artwork
             .as_ref()
@@ -1877,6 +1884,17 @@ impl App {
                 .try_borrow_mut()
                 .and_then(|mut backend| backend.sound_bands())
         });
+        let was_tinted = self.ambient.borrow().tint() > 0.0;
+        self.ambient.borrow_mut().follow_sound(dt, || {
+            self.backend
+                .try_borrow_mut()
+                .and_then(|mut backend| backend.sound_peak())
+        });
+        let tint = self.ambient.borrow().tint();
+        if was_tinted != (tint > 0.0) {
+            self.log
+                .log(|| format!("ambient art: cover tint {tint:.3}"));
+        }
         if let Some(interval) = self.ambient.borrow().interval(true, false)
             && interval != self.ambient_timer.interval()
         {
@@ -1956,6 +1974,8 @@ impl App {
             strands: ModelRc::from(rows.clone()),
             line_light: color(light),
             line_dark: color(dark),
+            tint: self.ambient.borrow().tint() as f32,
+            tint_color: color(cover[0]),
         }
     }
 
@@ -9418,6 +9438,44 @@ pub(crate) mod tests {
             f64::from(strip.size().height),
             ambient::WINDOW_SLOT,
             "the art is drawn the slot's full height, unsquashed"
+        );
+    }
+
+    #[test]
+    fn the_cover_tint_reaches_the_hero_card_while_apps_or_the_system_sound() {
+        use crate::window_rules::Tide;
+        let backend = MockBackend::new();
+        let peak = backend.sound_peak.clone();
+        let app = app_over(backend);
+        let weak = Rc::downgrade(&app);
+        app.main.global::<Motion>().set_on(true);
+        app.main.set_now_playing_shown(true);
+        app.main.show().expect("the main window shows");
+        app.follow_ambient(&weak);
+        let tick = |reading: Option<f32>| {
+            peak.set(reading);
+            let before = std::time::Instant::now().checked_sub(Duration::from_millis(100));
+            app.ambient_frame_at.set(before.expect("the clock runs"));
+            app.tick_ambient();
+        };
+        for _ in 0..10 {
+            tick(None);
+        }
+        assert_eq!(
+            app.main.get_now_playing_ambient().tint,
+            0.0,
+            "nothing captured"
+        );
+        for loud in [0.05, 0.8, 0.05, 0.8, 0.05, 0.8, 0.05, 0.8] {
+            tick(Some(loud));
+        }
+        let tint = app.main.get_now_playing_ambient().tint;
+        assert!(tint > 0.0 && f64::from(tint) <= Tide::TINT, "{tint}");
+        let grey = slint::Color::from_rgb_f32(0.5, 0.5, 0.5);
+        assert_eq!(
+            app.main.get_now_playing_ambient().tint_color,
+            grey,
+            "no cover: grey"
         );
     }
 

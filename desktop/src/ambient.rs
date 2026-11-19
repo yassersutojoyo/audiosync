@@ -6,6 +6,7 @@
 
 use std::time::Duration;
 
+use audiosync_core::meter;
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
 
 use crate::window_rules::{AmbientMode, Rgb, Tide};
@@ -82,7 +83,17 @@ impl Driver {
     /// Moves the cover tint's envelope on `dt` seconds; `peak` is the
     /// capture's largest sample since its last read, `None` while nothing
     /// is captured from apps or the system.
-    pub fn follow_sound(&mut self, _dt: f64, _peak: impl FnOnce() -> Option<f32>) {}
+    pub fn follow_sound(&mut self, dt: f64, peak: impl FnOnce() -> Option<f32>) {
+        let poll = f64::from(meter::METER_POLL_MS) / 1000.0;
+        self.since_peak += dt;
+        if self.since_peak + 1e-9 < poll {
+            return;
+        }
+        self.since_peak = 0.0;
+        let reading = peak();
+        self.meter = reading.map_or(0.0, |peak| meter::meter_level(self.meter, peak));
+        self.tide.step(reading.map(|_| f64::from(self.meter)), poll);
+    }
 
     /// The cover tint's opacity over the hero card.
     pub fn tint(&self) -> f64 {

@@ -930,6 +930,13 @@ pub trait AudioBackend {
         None
     }
 
+    /// While a session captures apps or the system, the largest sample
+    /// magnitude since the last call, for the Now Playing card's cover tint;
+    /// `None` for an input device and while stopped.
+    fn sound_peak(&mut self) -> Option<f32> {
+        None
+    }
+
     /// While a session runs, the peak of the captured signal's bass, mid and
     /// treble bands since the last call, for the ambient art; `None` while
     /// stopped. The capture splits bands only while this is called, from a

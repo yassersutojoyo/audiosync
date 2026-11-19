@@ -5020,6 +5020,14 @@ impl<D: Driver> AudioBackend for Controller<D> {
             .map(|session| session.ring.take_peak())
     }
 
+    // Not for an input device, whose peaks the level meter takes (AmbientMode.follows, WindowRules.swift:155).
+    fn sound_peak(&mut self) -> Option<f32> {
+        self.session
+            .as_ref()
+            .filter(|session| !matches!(session.source, SourceId::Input { .. }))
+            .map(|session| session.ring.take_peak())
+    }
+
     fn sound_bands(&mut self) -> Option<[f32; 3]> {
         self.session
             .as_ref()

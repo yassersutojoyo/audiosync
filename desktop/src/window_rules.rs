@@ -265,11 +265,29 @@ impl Tide {
 
     /// The cover tint's opacity over the hero card.
     pub fn tint(&self) -> f64 {
-        0.0
+        Self::TINT * self.env.min(1.0)
     }
 
     /// `level` is the meter's 0-to-1 reading, `None` when nothing is captured.
-    pub fn step(&mut self, _level: Option<f64>, _dt: f64) {}
+    pub fn step(&mut self, level: Option<f64>, dt: f64) {
+        let now = level.unwrap_or(0.0);
+        self.drive = (self.drive * (-dt / Self::ONSET).exp()
+            + (now - self.mean).max(0.0) * Self::GAIN * dt)
+            .min(1.2);
+        self.mean += (now - self.mean) * (1.0 - (-dt / Self::AVERAGE).exp());
+        let playing = now > Self::STOP_AT;
+        let tau = if self.drive > self.env {
+            Self::RISE
+        } else if playing {
+            Self::FALL
+        } else {
+            Self::TAIL
+        };
+        self.env += (self.drive - self.env) * (1.0 - (-dt / tau).exp());
+        if self.env < if playing { 0.004 } else { Self::STOP_AT } {
+            self.env = 0.0;
+        }
+    }
 }
 
 pub type Rgb = [f64; 3];
