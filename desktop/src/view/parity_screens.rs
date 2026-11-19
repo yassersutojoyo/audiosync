@@ -316,7 +316,7 @@ fn the_left_column_takes_the_macs_spacing() {
     assert_eq!(window.matches("- 28px;").count(), 2, "both covers");
     assert!(window.contains("padding-top: 16px;\n                        // The number ends"));
     assert!(window.contains(
-        "padding-right: 1px;\n                            // 8 px clear of the knob at 100.\n                            number-gap: 16px;"
+        "padding-right: 1px;\n                            // The Mac's 6 from the knob at 100 to the number (MainWindow.swift:545).\n                            number-gap: 14px;"
     ));
     assert!(window.contains(
         "padding-top: 11px;\n                        padding-bottom: 5px;\n\n                        Divider { }"
