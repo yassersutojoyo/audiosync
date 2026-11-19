@@ -8,7 +8,7 @@ mod common;
 use std::time::Duration;
 
 use audiosync_airplay::sdp::Codec;
-use audiosync_airplay::stream::{SpeakerId, StreamEvent};
+use audiosync_airplay::stream::{SpeakerId, StreamConfig, StreamEvent};
 use audiosync_airplay::volume::Volume;
 use common::rig::{Audio, Host, Rig, decode, host_frame, speaker};
 
@@ -205,6 +205,76 @@ fn a_driver_stall_longer_than_the_latency_restarts_the_timeline() {
         let stated = rig.clock.seconds_of(sync.time);
         assert!((stated - (rig.c(n) + rig.latency())).abs() < 1e-6);
     }
+}
+
+// covers: P143
+#[test]
+fn a_late_waking_driver_with_no_input_restarts_the_timeline_once() {
+    // The host stopped writing (streaming off, or a capture that delivers
+    // nothing) and the driver wakes every 250 ms, more than L late each time.
+    let mut rig = Rig::new(StreamConfig::default());
+    let mut host = Host::new(0.0);
+    host.stop_at = Some(200);
+    rig.host = Some(host);
+    rig.add(speaker(1, Codec::Alac));
+    rig.run_for(Duration::from_secs(3));
+    assert!(!restarted(&rig));
+    for _ in 0..8 {
+        let later = rig.now + Duration::from_millis(250);
+        rig.jump_to(later);
+        rig.answer_flushes();
+    }
+    let restarts = rig
+        .events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                StreamEvent::Timeline {
+                    restarted: true,
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(restarts, 1, "a hole with no audio restarts once");
+
+    // A long stall, still with no input: the late silence isn't all sent at
+    // once; the timeline restarts again instead.
+    let before = rig.sent.len();
+    let later = rig.now + Duration::from_secs(60);
+    rig.jump_to(later);
+    let burst = rig.sent[before..].len();
+    assert!(burst <= 2, "{burst} datagrams in one step");
+}
+
+// covers: P143
+#[test]
+fn holes_with_input_between_them_each_restart_the_timeline() {
+    let mut rig = Rig::new(StreamConfig::default());
+    rig.host = Some(Host::new(0.0));
+    rig.add(speaker(1, Codec::Alac));
+    rig.run_for(Duration::from_secs(2));
+    for _ in 0..2 {
+        let later = rig.now + Duration::from_millis(250);
+        rig.jump_to(later);
+        rig.answer_flushes();
+        rig.run_for(Duration::from_secs(1));
+    }
+    let restarts = rig
+        .events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                StreamEvent::Timeline {
+                    restarted: true,
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(restarts, 2);
 }
 
 fn restarted(rig: &Rig) -> bool {

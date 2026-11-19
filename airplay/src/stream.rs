@@ -66,6 +66,9 @@ pub const SEND_LEAD: Duration = Duration::from_millis(4);
 const STEP_FRAMES: u32 = 4_410;
 /// After a step up, this many seconds without a gap step back down (P200).
 const CLEAN_WINDOW: f64 = 60.0;
+/// With no input since the last hole's restart, a hole up to this many
+/// seconds is caught up with late silence; a longer one restarts (P143).
+const IDLE_HOLE_CEILING: f64 = 1.0;
 /// A packet whose samples all stay below this, -60 dBFS, is quiet (P200).
 const QUIET_PEAK: u16 = 33;
 /// A step waits for this many quiet packets before its own, about 207 ms
@@ -925,6 +928,9 @@ pub struct Stream {
     speakers: Vec<Speaker>,
     /// The host paused the stream (P213): packets are cut but not sent.
     paused: bool,
+    /// A hole restarted the timeline and no frame has arrived since: the
+    /// next hole waits for input, so an idle stream restarts once (P143).
+    hole_idle: bool,
     host_answers_latency: bool,
     next_speaker: u64,
     transmits: VecDeque<Transmit>,
@@ -974,6 +980,7 @@ impl Stream {
             silence_alac: Box::new(silence_alac),
             speakers: Vec::new(),
             paused: false,
+            hole_idle: false,
             host_answers_latency: config.host_answers_latency,
             next_speaker: 0,
             transmits: VecDeque::new(),
@@ -1175,8 +1182,11 @@ impl Stream {
         // over (P143).
         self.model.ensure(last_frame(self.next_cut));
         let overdue = t - (self.model.time(last_frame(self.next_cut)) + self.margin.value());
-        if overdue > f64::from(self.latency_frames) / NOMINAL_RATE {
+        if overdue > f64::from(self.latency_frames) / NOMINAL_RATE
+            && (!self.hole_idle || overdue > IDLE_HOLE_CEILING)
+        {
             self.restart_timeline(t);
+            self.hole_idle = true;
         }
         if let Some((at, frames)) = self.step_due
             && at <= t
@@ -1900,9 +1910,11 @@ impl Stream {
         let first_uncut = (self.next_cut * PACKET_FRAMES) as i64;
         let mut origin = self.origin;
         let mut resumed = false;
+        let mut arrived = false;
         let model = &mut self.model;
         let margin = &mut self.margin;
         self.input.drain_arrivals(|arrival| {
+            arrived = true;
             let at = arrival.nanos as f64 / 1e9;
             // Unless the stream already cut into those frames under the
             // old placement.
@@ -1933,6 +1945,7 @@ impl Stream {
             margin.observe(at, residual, block);
         });
         self.origin = origin;
+        self.hole_idle &= !arrived;
         if resumed {
             self.events.push_back(StreamEvent::Timeline {
                 latency: self.latency(),
