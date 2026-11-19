@@ -21,15 +21,20 @@ component Band inherits VerticalLayout {
     property <float> press-gain;
     property <bool> press-gain-set;
 
-    spacing: 8px;
+    // EqualizerWindow.swift:249.
+    spacing: 6px;
     // A drag replaces the slider's binding; keep it in step with the model.
     changed gain => {
         slider.value = root.gain;
     }
 
+    // The Mac's 13 pt caption2 line (EqualizerWindow.swift:250, 12.5 pt from its
+    // middle to the track in the Mac's photo); Segoe UI's is 1 px taller, all leading.
     QuietText {
+        height: 13px;
         text: Strings.equalizer-gain(slider.value);
         horizontal-alignment: center;
+        vertical-alignment: bottom;
         wrap: no-wrap;
     }
 
@@ -64,10 +69,10 @@ component Band inherits VerticalLayout {
             // The style's slider fills from -12 dB, so it only takes input; the track
             // is drawn here, filled from 0 dB with a 0 dB tick, as on the Mac.
             track := Rectangle {
-                // Where the style's slider centers its 20 px thumb.
-                property <length> thumb-y: 10px + (self.height - 20px) * (root.max-gain - slider.value) / (2 * root.max-gain);
+                // Where LevelSlider centers its 16 px knob, as the Mac's (EqualizerWindow.swift:318).
+                property <length> thumb-y: 8px + (self.height - 16px) * (root.max-gain - slider.value) / (2 * root.max-gain);
                 property <length> zero-y: round(self.height / 2 / 1px) * 1px;
-                width: 32px;
+                width: 26px;
                 height: 140px;
 
                 // Only these fade with the equalizer off; the focus ring keeps its contrast.
@@ -78,9 +83,8 @@ component Band inherits VerticalLayout {
 
                     Rectangle {
                         x: (parent.width - self.width) / 2;
-                        y: 10px;
                         width: 4px;
-                        height: parent.height - 20px;
+                        height: parent.height;
                         border-radius: 2px;
                         background: Palette.border;
                     }
@@ -94,32 +98,27 @@ component Band inherits VerticalLayout {
                         background: Tokens.teal;
                     }
 
+                    // The Mac's 12 pt zero tick and white 16 pt knob (EqualizerWindow.swift:330-341).
                     Rectangle {
-                        x: 0;
+                        x: (parent.width - self.width) / 2;
                         y: track.zero-y;
-                        width: parent.width;
+                        width: 12px;
                         height: 1px;
                         background: Tokens.text;
                     }
 
-                    // Fluent's thumb: its dot grows under the pointer and shrinks while the band has the focus.
                     Rectangle {
                         x: (parent.width - self.width) / 2;
-                        y: track.thumb-y - 10px;
-                        width: 20px;
-                        height: 20px;
-                        border-radius: 10px;
-                        background: Fluent.thumb;
+                        y: track.thumb-y - 8px;
+                        width: 16px;
+                        height: 16px;
+                        border-radius: 8px;
+                        background: #ffffff;
                         border-width: 1px;
-                        border-color: Fluent.thumb-edge;
-
-                        Rectangle {
-                            width: slider.has-focus ? 10px : hover.has-hover ? 14px : 12px;
-                            height: self.width;
-                            border-radius: self.width / 2;
-                            background: slider.has-focus ? Tokens.teal.with-alpha(0.8) : hover.has-hover ? Tokens.teal.with-alpha(0.9) : Tokens.teal;
-                            animate background, width { duration: 150ms; }
-                        }
+                        border-color: Palette.border;
+                        drop-shadow-blur: 1.5px;
+                        drop-shadow-offset-y: 0.5px;
+                        drop-shadow-color: #0000004d;
                     }
                 }
 
@@ -188,8 +187,10 @@ component Band inherits VerticalLayout {
     }
 
     QuietText {
+        height: 13px;
         text: root.short-label;
         horizontal-alignment: center;
+        vertical-alignment: bottom;
         wrap: no-wrap;
     }
 }
@@ -227,11 +228,13 @@ component CurveMenu inherits Rectangle {
         menu.show();
     }
 
-    min-height: 32px;
-    border-radius: Fluent.radius-control;
-    border-width: 1px;
-    border-color: Fluent.stroke;
-    background: touch.pressed ? Tokens.surface.mix(Tokens.text, 0.96) : touch.has-hover ? Tokens.surface.mix(Tokens.text, 0.98) : Tokens.surface;
+    // The Mac's tinted menu button as its photo measures: 24 pt high, as wide
+    // as the curve name with 19 pt to the chevron, teal at 5% with no edge, as
+    // SmallButton's system look.
+    height: 24px;
+    width: shown-text.preferred-width + chevron.preferred-width + 41px;
+    border-radius: Tokens.radius-control;
+    background: Tokens.teal.with-alpha(touch.pressed ? (Tokens.dark ? 0.3 : 0.1) : 0.05);
     forward-focus: focus;
     accessible-role: combobox;
     accessible-label: Strings.equalizer-curve;
@@ -258,21 +261,21 @@ component CurveMenu inherits Rectangle {
             HorizontalLayout {
                 padding-left: 11px;
                 padding-right: 11px;
-                spacing: 8px;
+                spacing: 19px;
 
-                Text {
+                shown-text := Text {
                     text: root.shown;
-                    color: Tokens.text;
+                    color: Tokens.teal-text;
                     overflow: elide;
                     horizontal-stretch: 1;
                     vertical-alignment: center;
                     accessible-role: none;
                 }
 
-                Glyph {
+                chevron := Glyph {
                     glyph: Glyphs.chevron-down;
                     font-size: 10px;
-                    color: Tokens.secondary-text;
+                    color: Tokens.teal-text;
                 }
             }
         }
@@ -449,10 +452,12 @@ export component EqualizerWindow inherits Window {
 
     title: Strings.equalizer-title;
     icon: @image-url("../res/audiosync-256.png");
-    background: Tokens.background;
+    // White on light, as the Mac's equalizer window (its photo).
+    background: Tokens.dark ? Tokens.background : #ffffff;
     min-width: 520px;
     max-width: 520px;
-    // Fixed in size, as on the Mac.
+    // Fixed in size, as on the Mac; the photo test reads it.
+    out property <length> fit-height: content.preferred-height;
     min-height: content.preferred-height;
     max-height: content.preferred-height;
     default-font-family: Fluent.font;
@@ -535,9 +540,11 @@ export component EqualizerWindow inherits Window {
 
                 VerticalLayout {
                     alignment: center;
+                    horizontal-stretch: 0;
                     power := ToggleSwitch {
                         text: Strings.equalizer-title;
                         headline: true;
+                        system-size: true;
                         checked: root.enabled;
                         accessible-label: Strings.equalizer-title;
                         toggled => {
@@ -576,24 +583,33 @@ export component EqualizerWindow inherits Window {
                     accessible-role: none;
                 }
 
-                if !root.naming-curve: presets := CurveMenu {
+                // Centred in the Mac's 170 pt frame (EqualizerWindow.swift:160).
+                if !root.naming-curve: HorizontalLayout {
                     width: 170px;
-                    names: root.preset-names;
-                    preset-count: root.preset-count;
-                    current: root.preset-index;
-                    saved-shown: root.saved-curve-shown;
-                    naming: root.name-dialog-open;
-                    selected(index) => {
-                        root.preset-selected(index);
-                    }
-                    save => {
-                        root.save-curve();
-                    }
-                    rename => {
-                        root.rename-curve();
-                    }
-                    delete => {
-                        root.delete-curve();
+                    alignment: center;
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        presets := CurveMenu {
+                            names: root.preset-names;
+                            preset-count: root.preset-count;
+                            current: root.preset-index;
+                            saved-shown: root.saved-curve-shown;
+                            naming: root.name-dialog-open;
+                            selected(index) => {
+                                root.preset-selected(index);
+                            }
+                            save => {
+                                root.save-curve();
+                            }
+                            rename => {
+                                root.rename-curve();
+                            }
+                            delete => {
+                                root.delete-curve();
+                            }
+                        }
                     }
                 }
             }
@@ -642,6 +658,10 @@ export component EqualizerWindow inherits Window {
 
                 SecondaryText {
                     text: Strings.equalizer-caption(root.max-gain);
+                    // One line, as the Mac's (EqualizerWindow.swift:179); a wrapped
+                    // caption asks for its height at no width and grew the window 54 px.
+                    wrap: no-wrap;
+                    overflow: elide;
                     vertical-alignment: center;
                     horizontal-stretch: 1;
                 }

@@ -2251,9 +2251,10 @@ component CalibrateAllSheet inherits FocusScope {
         accept
     }
 
+    // The Mac's sheet: white on light, #1e1e1e on dark with an edge (its photos).
     sheet := Rectangle {
-        background: Tokens.background;
-        border-width: 1px;
+        background: Tokens.dark ? #1e1e1e : #ffffff;
+        border-width: Tokens.dark ? 1px : 0px;
         border-color: Fluent.stroke;
         border-radius: Tokens.radius-card;
         drop-shadow-blur: 16px;
@@ -2406,6 +2407,10 @@ component CalibrateAllSheet inherits FocusScope {
 
                                     // Tinted as the Mac's (CalibrateAllViews.swift:236-242, the sheet's teal tint).
                                     volume-fix := SmallButton {
+                                        system: true;
+                                        height: 24px;
+                                        font-size: Tokens.font-size-body;
+                                        horizontal-stretch: 0;
                                         text: Strings.device-volume-fix(root.volume);
                                         accessible-label: Strings.device-volume-fix-label(root.reference, root.volume);
                                         changed has-focus => {
@@ -2591,8 +2596,11 @@ component CalibrateAllSheet inherits FocusScope {
                         if row.can-measure-again: VerticalLayout {
                             alignment: center;
 
-                            // The Mac's small tinted button (CalibrateAllViews.swift:396-398).
+                            // The Mac's small tinted button (CalibrateAllViews.swift:396-398): 20 pt, 11 pt text.
                             SmallButton {
+                                system: true;
+                                height: 20px;
+                                font-size: Tokens.font-size-subheadline;
                                 changed has-focus => {
                                     root.focus-changed(self.has-focus);
                                 }
@@ -2736,7 +2744,10 @@ component CalibrateAllSheet inherits FocusScope {
                 alignment: LayoutAlignment.end;
 
                 if root.running: HorizontalLayout {
-                    cancel-button := Button {
+                    cancel-button := SmallButton {
+                        system: true;
+                        height: 24px;
+                        font-size: Tokens.font-size-body;
                         text: Strings.calibration-cancel;
                         accessible-label: Strings.calibration-cancel;
                         changed has-focus => {
@@ -2779,7 +2790,10 @@ component CalibrateAllSheet inherits FocusScope {
                             }
                         }
 
-                        undo-button := Button {
+                        undo-button := SmallButton {
+                            system: true;
+                            height: 24px;
+                            font-size: Tokens.font-size-body;
                             changed has-focus => {
                                 root.focus-changed(self.has-focus);
                             }
@@ -2796,7 +2810,10 @@ component CalibrateAllSheet inherits FocusScope {
                     }
 
                     // As on the Mac, the first of the buttons (CalibrateAllViews.swift:470-472).
-                    if root.privacy: Button {
+                    if root.privacy: SmallButton {
+                        system: true;
+                        height: 24px;
+                        font-size: Tokens.font-size-body;
                         changed has-focus => {
                             root.focus-changed(self.has-focus);
                         }
@@ -2807,7 +2824,10 @@ component CalibrateAllSheet inherits FocusScope {
                         }
                     }
 
-                    close-button := Button {
+                    close-button := SmallButton {
+                        system: true;
+                        height: 24px;
+                        font-size: Tokens.font-size-body;
                         changed has-focus => {
                             root.focus-changed(self.has-focus);
                         }
@@ -2830,30 +2850,41 @@ component CalibrateAllSheet inherits FocusScope {
 
                     // A new run before any results or after ended ones, else Apply
                     // (CalibrateAllViews.swift:507-519).
-                    if !root.results-shown || root.ended: start-button := Button {
+                    if !root.results-shown || root.ended: start-button := SmallButton {
+                        primary: true;
+                        height: 24px;
+                        font-size: Tokens.font-size-body;
                         changed has-focus => {
                             root.focus-changed(self.has-focus);
                         }
                         text: root.zone != "" ? Strings.calibrate-zone : Strings.calibrate-all;
                         accessible-label: self.text;
-                        primary: true;
-                        enabled: root.can-run;
+                        dimmed: !root.can-run;
+                        accessible-enabled: root.can-run;
                         clicked => {
-                            root.start();
+                            if root.can-run {
+                                root.start();
+                            }
                         }
                     }
 
                     if root.results-shown && !root.ended && !root.applied: HorizontalLayout {
-                        apply-button := Button {
+                        apply-button := SmallButton {
+                            primary: true;
+                            height: 24px;
+                            font-size: Tokens.font-size-body;
                             changed has-focus => {
                                 root.focus-changed(self.has-focus);
                             }
                             text: Strings.calibrate-all-apply;
                             accessible-label: Strings.calibrate-all-apply;
-                            primary: true;
-                            enabled: root.can-apply;
+                            dimmed: !root.can-apply;
+                            accessible-enabled: root.can-apply;
                             accessible-description: Strings.calibrate-all-apply-help;
                             clicked => {
+                                if !root.can-apply {
+                                    return;
+                                }
                                 root.apply();
                                 if !root.can-undo {
                                     close-button.focus();
@@ -3631,8 +3662,8 @@ export component MainWindow inherits Window {
 
     VerticalLayout {
         padding: Fluent.window-margin;
-        // The header as high as the Mac's at 1:1, a pixel into the top row.
-        padding-top: title-row.height - 1px;
+        // The header as high as the Mac's: its 2x photos put the mark 4 pt lower than 1 px into the top row.
+        padding-top: title-row.height + 3px;
         // The notices and the columns bring their gap above them, so a
         // notice opens and closes its gap with it.
         spacing: 0px;
@@ -4599,17 +4630,14 @@ export component MainWindow inherits Window {
         height: root.height - title-row.height;
         close-policy: no-auto-close;
 
-        // Takes the clicks meant for the window under the sheet.
-        TouchArea {
-            Rectangle {
-                background: #00000033;
-            }
-        }
+        // Takes the clicks meant for the window under the sheet; as the
+        // Mac's sheet, it leaves the window undimmed.
+        TouchArea { }
 
         CalibrateAllSheet {
             x: (parent.width - self.width) / 2;
-            // A gap under the title row, so the sheet's top edge shows.
-            y: Fluent.window-margin / 2;
+            // Right under the title row, where the Mac's photos put its sheet.
+            y: 0;
             room: parent.height - Fluent.window-margin;
             room-width: parent.width;
             running: root.calibrate-all-running;
@@ -4686,16 +4714,13 @@ export component MainWindow inherits Window {
         height: root.height;
         close-policy: no-auto-close;
 
-        // Takes the clicks meant for the window under the sheet.
-        cast-scrim := TouchArea {
-            Rectangle {
-                background: Tokens.dark ? #00000066 : #00000030;
-            }
-        }
+        // Takes the clicks meant for the window under the sheet, undimmed as on the Mac.
+        cast-scrim := TouchArea { }
 
+        // Right under the title row, where the Mac's photos put its sheet.
         CastAddressSheet {
             x: (parent.width - self.width) / 2;
-            y: max(0px, (parent.height - self.height) / 2);
+            y: title-row.height;
         }
     }
 

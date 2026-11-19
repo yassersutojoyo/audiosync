@@ -83,6 +83,8 @@ mod parity_rest;
 #[cfg(test)]
 mod parity_screens;
 #[cfg(test)]
+mod parity_sheets;
+#[cfg(test)]
 mod parity_theme_text;
 #[cfg(test)]
 mod parity_tray;
@@ -8711,7 +8713,7 @@ pub(crate) mod tests {
             "open with no presets: {opened} px"
         );
         let main = include_str!("../ui/main.slint").replace("\r\n", "\n");
-        assert!(main.contains("padding-top: title-row.height - 1px;"));
+        assert!(main.contains("padding-top: title-row.height + 3px;"));
     }
 
     /// What he sees on opening the app: a song with its cover, This PC's two
@@ -13997,10 +13999,10 @@ pub(crate) mod tests {
         }
     }
 
-    /// Speaker rows in one list step 54 px from badge to badge, divider
-    /// included, as the Mac's rows with a volume slider step 54 pt.
+    /// Speaker rows in one list step 52 px from badge to badge, divider
+    /// included, as the Mac's rows with a volume slider step 52 pt (its 2x photos).
     #[test]
-    fn speaker_rows_step_54_px_as_on_the_mac() {
+    fn speaker_rows_step_52_px_as_on_the_mac() {
         let app = narrow_app(MockBackend::new());
         let tops: Vec<f32> = i_slint_backend_testing::ElementHandle::find_by_element_id(
             &app.main,
@@ -14012,7 +14014,7 @@ pub(crate) mod tests {
             .windows(2)
             .map(|pair| pair[1] - pair[0])
             .fold(f32::MAX, f32::min);
-        assert_eq!(pitch, 54.0, "badge tops {tops:?}");
+        assert_eq!(pitch, 52.0, "badge tops {tops:?}");
         assert!(
             tops.iter().all(|y| y.fract() == 0.0),
             "on whole pixels: {tops:?}"
@@ -14351,8 +14353,8 @@ pub(crate) mod tests {
         assert_eq!(rule.size().width, 1.0);
         assert_eq!(rule.absolute_position().x, header.absolute_position().x);
         assert_eq!(rule.absolute_position().y, top + height);
-        // Both rows and the line between them, as they step 54 px.
-        assert_eq!(rule.size().height, 54.0 + 53.0);
+        // Both rows and the line between them, as they step 52 px.
+        assert_eq!(rule.size().height, 52.0 + 51.0);
     }
 
     /// A long-named copy of the mock's Kitchen speaker.
@@ -19870,7 +19872,7 @@ pub(crate) mod tests {
 
     // covers: S453
     #[test]
-    fn a_flat_equalizer_band_is_empty_with_its_0_db_tick_showing() {
+    fn a_flat_equalizer_band_is_empty_with_its_0_db_tick_under_the_knob() {
         let app = app_over(MockBackend::new());
         app.equalizer()
             .show()
@@ -19887,9 +19889,18 @@ pub(crate) mod tests {
         let beside = center + width / 2.0 + 3.0;
         let zero = (y + height / 2.0).round();
         let background = pixel(beside, zero + 8.0);
+        // The Mac's 12 pt tick hides under its 16 pt knob at 0 dB (EqualizerWindow.swift:330-341).
         assert!(
-            (-1..=1).any(|row| pixel(beside, zero + row as f32) != background),
-            "the 0 dB tick shows beside the thumb"
+            (-1..=1).all(|row| pixel(beside, zero + row as f32) == background),
+            "the 0 dB tick stays under the knob"
+        );
+        app.equalizer().invoke_gain_changed(0, 6.0);
+        draw_frames();
+        let pixel = pixels(leaked(app.equalizer()));
+        assert_ne!(
+            pixel(center + 4.0, zero + 0.5),
+            pixel(center + 4.0, zero + 8.0),
+            "the 0 dB tick shows beside the track with the knob away"
         );
     }
 
@@ -20297,7 +20308,7 @@ pub(crate) mod tests {
         let window = leaked(app.equalizer());
         // From the bottom up, so the first hit is just above the track's
         // middle and no click reaches the switch or the picker above it.
-        let (x, y) = (40..400)
+        let (x, y) = (40..720)
             .rev()
             .step_by(20)
             .flat_map(|y| (0..1000).step_by(8).map(move |x| (x as f32, y as f32)))
@@ -20347,7 +20358,7 @@ pub(crate) mod tests {
         draw_frames();
         // From the bottom up, so the first hit is just above the track's
         // middle and no click reaches the switch or the picker above it.
-        let (x, y) = (40..400)
+        let (x, y) = (40..720)
             .rev()
             .step_by(20)
             .flat_map(|y| (0..1000).step_by(8).map(move |x| (x as f32, y as f32)))
@@ -21515,8 +21526,8 @@ pub(crate) mod tests {
         let popup = &main[main.find("calibrate-sheet := PopupWindow").unwrap()..];
         let popup = &popup[..popup.find("running: root.calibrate-all-running;").unwrap()];
         assert!(
-            popup.contains("y: Fluent.window-margin / 2;"),
-            "a gap above the sheet"
+            popup.contains("y: 0;"),
+            "right under the title row, as the Mac's sheet"
         );
     }
 

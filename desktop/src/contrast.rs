@@ -2443,9 +2443,9 @@ fn the_calibration_undo_button_is_labeled_as_on_the_mac() {
     assert!(strings.contains(r#"calibrate-all-undo-label: @tr("Undo the new delays");"#));
     let main = include_str!("../ui/main.slint");
     let start = main
-        .find("undo-button := Button {")
+        .find("undo-button := SmallButton {")
         .expect("the Undo button");
-    let button = &main[start..start + 400];
+    let button = &main[start..start + 600];
     assert!(button.contains("text: Strings.calibrate-all-undo;"));
     assert!(button.contains("accessible-label: Strings.calibrate-all-undo-label;"));
 }
