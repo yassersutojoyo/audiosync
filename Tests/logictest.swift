@@ -8178,7 +8178,7 @@ do {
                     pauseTime += AmbientBands.poll
                     if frame == 0 { firstIdle.append(AmbientBreath.idle(live: pauseMode.live, band: pauseBand)) }
                     let reach = artReach(time: pauseTime, live: pauseMode.live, band: pauseBand, slot: slot, density: density)
-                    // Half the resting swing's 3 pt reads as a flat line.
+                    // Under 1.5 pt the strands read as a flat line.
                     if reach < 1.5 { flatFrames.append("\(slot) pt from \(loud) frame \(frame): \(reach)") }
                 }
             }
@@ -8270,8 +8270,8 @@ do {
         let swayApart = [(0, 1), (0, 2), (1, 2)].map { pair in
             restTimes.map { abs(drawn(pair.0, 0.5, $0) - drawn(pair.1, 0.5, $0)) }.reduce(0, +) / Double(restTimes.count)
         }
-        check(swayPeaks.allSatisfy { (3...5.5).contains($0) } && swayApart.allSatisfy { $0 >= 3 },
-              "music art: at rest each strand sways 3 to 5.5 pt in a \(slot) pt slot, on average 3 pt from the others",
+        check(swayPeaks.allSatisfy { (3...(AmbientBreath.sway * slot + 2.5)).contains($0) } && swayApart.allSatisfy { $0 >= 3 },
+              "music art: at rest each strand sways from 3 pt to its swing plus 2.5 pt in a \(slot) pt slot, on average 3 pt from the others",
               "\(swayPeaks), \(swayApart)")
     }
     check(AmbientBreath.lift(strand: 1, x: 0.5, time: 1.3, spread: 0, idle: 0, slot: 16) == 0,

@@ -201,8 +201,9 @@ enum AmbientBreath {
         1 - live * min(1, max(0, band - swayKept) / (1 - swayKept))
     }
 
-    /// Points each way of the resting swing, in a slot of any height.
-    static let sway = 3.0
+    /// The resting swing's reach each way, as a share of the slot's height: 37.5% peak to peak,
+    /// the panel's 6 pt in 16 pt, and 8.25 pt in the main window's 22 pt (6 pt there read as "kurang tegas").
+    static let sway = 0.1875
     static let waves: [(amplitude: Double, length: Double, offset: Double)] =
         [(7, 92, 0), (5, 61, 1.7), (3.2, 137, 3.1)]
 
@@ -213,7 +214,7 @@ enum AmbientBreath {
         let angle = 2 * .pi * 300 * x / wave.length + time * 2 * (1 + Double(index) * 0.35) + wave.offset
         // A third of a cycle apart, so the resting strands read as three lines.
         let swing = sin(2 * .pi * time / period + Double(index) * 2 * .pi / 3 + .pi * x)
-        return wave.amplitude * spread * sin(angle) + Double(index - 1) * 2.2 * spread + idle * sway * 22 / slot * swing
+        return wave.amplitude * spread * sin(angle) + Double(index - 1) * 2.2 * spread + idle * sway * 22 * swing
     }
 
     /// Opacity of the breath's contrasting line and of the sound's cover-coloured
