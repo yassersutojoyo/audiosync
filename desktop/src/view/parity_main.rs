@@ -846,3 +846,25 @@ fn the_source_menus_chevron_follows_the_name() {
     let name = between(&menu, "text: root.sources[root.index];", "}");
     assert!(!name.contains("horizontal-stretch: 1;"), "{name}");
 }
+
+/// The window's source button is the Mac's borderless menu (MenuBar.swift:2469-2484):
+/// the name semibold, the speaker glyph 16 in the 20 pt icon frame (:2510, `large`),
+/// and the menu's indicator 4 after the name, as its photo measures it.
+// covers: S450
+#[test]
+fn the_source_button_draws_the_macs_semibold_name_and_small_glyph() {
+    let main = include_str!("../../ui/main.slint").replace("\r\n", "\n");
+    let menu = between(&main, "component SourceMenu ", "menu := PopupWindow");
+    let glyph = between(&menu, "icon.width == 0: Glyph {", "}");
+    assert!(
+        glyph.contains("width: 20px;") && glyph.contains("font-size: 16px;"),
+        "{glyph}"
+    );
+    let name = between(&menu, "text: root.sources[root.index];", "}");
+    assert!(
+        name.contains("font-weight: Fluent.weight-semibold;"),
+        "{name}"
+    );
+    let label = between(&menu, "name-row := HorizontalLayout {", "Glyph {");
+    assert!(label.contains("spacing: 4px;"), "{label}");
+}

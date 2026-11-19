@@ -303,8 +303,8 @@ fn the_left_column_takes_the_macs_spacing() {
         "padding-top: 3px;\n            padding-bottom: 3px;\n\n            AmbientArt {\n                height: 22px;"
     ));
     assert!(
-        card.contains("height: 26px + 6px;"),
-        "the transport's 26 high row 6 under the artist"
+        card.contains("height: 22px + 6px;"),
+        "the transport's row as high as the Mac's 22 pt Pause symbol, 6 under the artist"
     );
     assert!(
         card.contains("y: 1px;"),
