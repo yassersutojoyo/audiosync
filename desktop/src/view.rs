@@ -13974,6 +13974,51 @@ pub(crate) mod tests {
         }
     }
 
+    /// At 696 x 632 with a song the whole left column scrolls as one, source
+    /// down to Calibrate All: Presets moves up with the hero, nothing is pinned
+    /// under it, and scrolled to the end Calibrate All shows whole.
+    #[test]
+    fn the_whole_left_column_scrolls_to_calibrate_all_in_a_short_window() {
+        use crate::now_playing_card::fake::{FakeControls, track};
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        let fake = FakeControls::default();
+        app.set_media_controls(fake.controls());
+        app.main.show().expect("the main window shows");
+        app.poll();
+        fake.read(Some(track("Spotify.exe", "Song", "Band", true)));
+        app.poll();
+        draw_frames_at(696, 632);
+        let presets = || {
+            element(&app, "MainWindow::presets-card")
+                .expect("Presets")
+                .absolute_position()
+                .y
+        };
+        let before = presets();
+        app.main
+            .window()
+            .dispatch_event(WindowEvent::PointerScrolled {
+                position: slint::LogicalPosition::new(100.0, 300.0),
+                delta_x: 0.0,
+                delta_y: -3000.0,
+            });
+        draw_frames_at(696, 632);
+        let after = presets();
+        assert!(after < before, "Presets stays at {before}, pinned: {after}");
+        let column = element(&app, "MainWindow::left-column").expect("the left column");
+        let bottom = column.absolute_position().y + column.size().height;
+        let label = app.main.global::<Strings>().get_calibrate_all();
+        let row = ElementHandle::find_by_accessible_label(&app.main, &label)
+            .next()
+            .expect("Calibrate All");
+        let end = row.absolute_position().y + row.size().height;
+        assert!(
+            end <= bottom,
+            "Calibrate All ends {end}, the column {bottom}"
+        );
+    }
+
     /// The AirPlay delay's note ends inside its pane at every window width,
     /// at 100% and 150% scale: the pane counts each line the note wraps to,
     /// as the Mac's note sizes to its text (MainWindow.swift:3409-3412).
