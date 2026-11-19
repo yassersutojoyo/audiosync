@@ -3963,6 +3963,13 @@ export component MainWindow inherits Window {
                         background: Fluent.hero;
                         border-radius: Tokens.radius-card;
 
+                        // The cover's colour while the sound moves (MainWindow.swift:410-416),
+                        // the old cover's until the slide ends.
+                        if root.now-playing-shown: Rectangle {
+                            border-radius: Tokens.radius-card;
+                            background: (root.now-playing-look.sliding ? root.now-playing-outgoing.tint : root.now-playing-ambient.tint-color).with-alpha(root.now-playing-ambient.tint);
+                        }
+
                         hero-touch := TouchArea {
                             hero-content := VerticalLayout {
                                 padding: 14px;

@@ -1318,6 +1318,13 @@ export component TrayFlyout inherits Window {
                                 border-radius: Tokens.radius-card;
                                 background: Fluent.hero;
 
+                                // The cover's colour while the sound moves (MenuBar.swift:2361-2368),
+                                // the old cover's until the slide ends.
+                                if root.now-playing-shown: Rectangle {
+                                    border-radius: Tokens.radius-card;
+                                    background: (root.now-playing-look.sliding ? root.now-playing-outgoing.tint : root.now-playing-ambient.tint-color).with-alpha(root.now-playing-ambient.tint);
+                                }
+
                                 VerticalLayout {
                                     padding: 10px;
                                     spacing: 6px;

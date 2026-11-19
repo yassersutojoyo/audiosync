@@ -933,6 +933,9 @@ pub struct App {
     meter_level: Cell<f32>,
     /// Draws the Now Playing art's frames while it shows and moves.
     ambient_timer: Timer,
+    /// Moves the cover tint while the art stands still, as the Mac's tint
+    /// ignores the motion setting.
+    tint_timer: Timer,
     ambient: RefCell<AmbientDriver>,
     /// When the art's last frame was drawn.
     ambient_frame_at: Cell<std::time::Instant>,
@@ -1031,6 +1034,13 @@ fn outgoing_song(track: Option<&CardTrack>, covers: &RefCell<CoverImage>) -> Out
         title: track.title.as_str().into(),
         subtitle: track.subtitle().as_str().into(),
         has_artwork: track.artwork.is_some(),
+        tint: {
+            let [r, g, b] = track
+                .artwork
+                .as_ref()
+                .map_or(ambient::NO_COVER, |artwork| artwork.bands)[0];
+            slint::Color::from_rgb_f32(r as f32, g as f32, b as f32)
+        },
         artwork: track
             .artwork
             .as_ref()
@@ -1414,6 +1424,7 @@ impl App {
             meter_timer: Timer::default(),
             meter_level: Cell::new(0.0),
             ambient_timer: Timer::default(),
+            tint_timer: Timer::default(),
             ambient: RefCell::default(),
             ambient_frame_at: Cell::new(std::time::Instant::now()),
             ambient_cover: Cell::new(ambient::NO_COVER),
@@ -1833,6 +1844,14 @@ impl App {
             if on_screen && still && !self.ambient_still_drawn.replace(true) {
                 self.draw_ambient(true);
             }
+            if on_screen && still && !self.tint_timer.running() {
+                let weak = weak.clone();
+                self.tint_timer.start(
+                    TimerMode::Repeated,
+                    Duration::from_millis(u64::from(meter::METER_POLL_MS)),
+                    move || with_app(&weak, App::tick_tint),
+                );
+            }
             return;
         };
         self.ambient_still_drawn.set(false);
@@ -1877,12 +1896,60 @@ impl App {
                 .try_borrow_mut()
                 .and_then(|mut backend| backend.sound_bands())
         });
+        self.follow_sound(dt);
         if let Some(interval) = self.ambient.borrow().interval(true, false)
             && interval != self.ambient_timer.interval()
         {
             self.ambient_timer.set_interval(interval);
         }
         self.draw_ambient(false);
+    }
+
+    /// One read of the sound for the cover tint while the art stands still.
+    fn tick_tint(&self) {
+        let still = !self.main.global::<Motion>().get_on();
+        let on_screen = self.ambient_on_screen();
+        if !on_screen || !still {
+            // With animations back on, the art's frames carry the tint on.
+            self.tint_timer.stop();
+            if !on_screen {
+                self.ambient.borrow_mut().reset();
+                self.draw_tint();
+            }
+            return;
+        }
+        self.follow_sound(f64::from(meter::METER_POLL_MS) / 1000.0);
+        self.draw_tint();
+    }
+
+    /// Moves the cover tint on `dt` seconds of the captured sound.
+    fn follow_sound(&self, dt: f64) {
+        let was_tinted = self.ambient.borrow().tint() > 0.0;
+        self.ambient.borrow_mut().follow_sound(dt, || {
+            self.backend
+                .try_borrow_mut()
+                .and_then(|mut backend| backend.sound_peak())
+        });
+        let tint = self.ambient.borrow().tint();
+        if was_tinted != (tint > 0.0) {
+            self.log
+                .log(|| format!("ambient art: cover tint {tint:.3}"));
+        }
+    }
+
+    /// The cover tint alone into both cards' art, which keeps its strands.
+    fn draw_tint(&self) {
+        let tint = self.ambient.borrow().tint() as f32;
+        let mut look = self.main.get_now_playing_ambient();
+        if look.tint != tint {
+            look.tint = tint;
+            self.main.set_now_playing_ambient(look);
+        }
+        let mut look = self.flyout.get_now_playing_ambient();
+        if look.tint != tint {
+            look.tint = tint;
+            self.flyout.set_now_playing_ambient(look);
+        }
     }
 
     /// Gives the art's strands to the windows that show them; the still line
@@ -1956,6 +2023,8 @@ impl App {
             strands: ModelRc::from(rows.clone()),
             line_light: color(light),
             line_dark: color(dark),
+            tint: self.ambient.borrow().tint() as f32,
+            tint_color: color(cover[0]),
         }
     }
 
@@ -9419,6 +9488,79 @@ pub(crate) mod tests {
             ambient::WINDOW_SLOT,
             "the art is drawn the slot's full height, unsquashed"
         );
+    }
+
+    #[test]
+    fn the_cover_tint_reaches_the_hero_card_while_apps_or_the_system_sound() {
+        use crate::window_rules::Tide;
+        let backend = MockBackend::new();
+        let peak = backend.sound_peak.clone();
+        let app = app_over(backend);
+        let weak = Rc::downgrade(&app);
+        app.main.global::<Motion>().set_on(true);
+        app.main.set_now_playing_shown(true);
+        app.main.show().expect("the main window shows");
+        app.follow_ambient(&weak);
+        let tick = |reading: Option<f32>| {
+            peak.set(reading);
+            let before = std::time::Instant::now().checked_sub(Duration::from_millis(100));
+            app.ambient_frame_at.set(before.expect("the clock runs"));
+            app.tick_ambient();
+        };
+        for _ in 0..10 {
+            tick(None);
+        }
+        assert_eq!(
+            app.main.get_now_playing_ambient().tint,
+            0.0,
+            "nothing captured"
+        );
+        for loud in [0.05, 0.8, 0.05, 0.8, 0.05, 0.8, 0.05, 0.8] {
+            tick(Some(loud));
+        }
+        let tint = app.main.get_now_playing_ambient().tint;
+        assert!(tint > 0.0 && f64::from(tint) <= Tide::TINT, "{tint}");
+        let grey = slint::Color::from_rgb_f32(0.5, 0.5, 0.5);
+        assert_eq!(
+            app.main.get_now_playing_ambient().tint_color,
+            grey,
+            "no cover: grey"
+        );
+    }
+
+    // The Mac follows the sound whenever the card is on screen
+    // (AppDelegate+Windows.swift:79-87), and AmbientTint reads no motion setting
+    // (AmbientArt.swift:158-168).
+    #[test]
+    fn the_cover_tint_keeps_following_the_sound_with_animations_off() {
+        let backend = MockBackend::new();
+        let peak = backend.sound_peak.clone();
+        let app = app_over(backend);
+        let weak = Rc::downgrade(&app);
+        app.main.global::<Motion>().set_on(false);
+        app.main.set_now_playing_shown(true);
+        app.main.show().expect("the main window shows");
+        app.follow_ambient(&weak);
+        assert!(
+            !app.ambient_timer.running(),
+            "no frames with animations off"
+        );
+        assert!(app.tint_timer.running(), "the tint still reads the sound");
+        for loud in [0.05, 0.8, 0.05, 0.8, 0.05, 0.8, 0.05, 0.8] {
+            peak.set(Some(loud));
+            app.tick_tint();
+        }
+        assert!(app.main.get_now_playing_ambient().tint > 0.0);
+        assert_eq!(
+            app.main.get_now_playing_ambient().strands.row_count(),
+            1,
+            "still the one line"
+        );
+
+        app.main.window().set_minimized(true);
+        app.tick_tint();
+        assert!(!app.tint_timer.running(), "stopped off screen");
+        assert_eq!(app.ambient.borrow().tint(), 0.0);
     }
 
     #[test]
