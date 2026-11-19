@@ -52,14 +52,14 @@ use crate::ui_model::{
 use crate::volume_keys::{self, VolumeKey};
 use crate::window_rules::{Rgb, ambient_breath};
 use crate::{
-    AboutDialog, AirPlayProblem, AmbientLook, AmbientStrand, Availability, CalibrationRowItem,
-    CastList, CastProblem, CastSheet, CastState, DeviceVolumeHint, EqualizerWindow, Fold,
-    GuidePage, GuideStepItem, GuideWindow, HiddenItem, IconLook, KeyboardFocus, LeftOutItem,
-    MainControl, MainWindow, MixAppItem, Motion, NameField, NoticeItem, NoticeKind, OutgoingSong,
-    Palette, PasswordDialog, PinDialog, PinPhase, PresetItem, RowPart, RowState, ScreenReader,
-    SlideLook, SourceLook, SourceRowKind, SpeakerGroup, SpeakerItem, SpeakerKind, Strings, Tokens,
-    TrackMotion, TrayFlyout, UpdateButton, ZoneChoice, ZoneItem, ZoneNameDialog, ZoneTarget,
-    speaker_names,
+    AboutDialog, AirPlayProblem, AmbientLook, AmbientStrand, AmbientStrip, Availability,
+    CalibrationRowItem, CastList, CastProblem, CastSheet, CastState, DeviceVolumeHint,
+    EqualizerWindow, Fold, GuidePage, GuideStepItem, GuideWindow, HiddenItem, IconLook,
+    KeyboardFocus, LeftOutItem, MainControl, MainWindow, MixAppItem, Motion, NameField, NoticeItem,
+    NoticeKind, OutgoingSong, Palette, PasswordDialog, PinDialog, PinPhase, PresetItem, RowPart,
+    RowState, ScreenReader, SlideLook, SourceLook, SourceRowKind, SpeakerGroup, SpeakerItem,
+    SpeakerKind, Strings, Tokens, TrackMotion, TrayFlyout, UpdateButton, ZoneChoice, ZoneItem,
+    ZoneNameDialog, ZoneTarget, speaker_names,
 };
 
 mod engine;
@@ -941,6 +941,8 @@ pub struct App {
     /// The art's strands in the main window and the tray panel, kept from
     /// frame to frame so a frame changes their rows instead of rebuilding them.
     ambient_rows: [Rc<VecModel<AmbientStrand>>; 2],
+    /// The strands' masks in the main window and the tray panel.
+    ambient_masks: [RefCell<ambient::Masks>; 2],
     /// The image of the cover shown last.
     cover_image: RefCell<CoverImage>,
     /// The still line is drawn for the cover shown now.
@@ -1416,6 +1418,7 @@ impl App {
             ambient_frame_at: Cell::new(std::time::Instant::now()),
             ambient_cover: Cell::new(ambient::NO_COVER),
             ambient_rows: Default::default(),
+            ambient_masks: Default::default(),
             cover_image: RefCell::default(),
             ambient_still_drawn: Cell::new(false),
             login: RefCell::new(LaunchAtLogin::new(
@@ -1501,6 +1504,21 @@ impl App {
                 slide_look(app.panel_slide.borrow_mut().look(app.frame_time(tick)).0)
             })
         });
+        // A resized strip gets masks of its new size; the still line is not redrawn otherwise.
+        let redraw = |weak: Weak<App>| {
+            move || {
+                let weak = weak.clone();
+                Timer::single_shot(Duration::ZERO, move || {
+                    with_app(&weak, |app| app.draw_ambient(app.ambient_still_drawn.get()));
+                });
+            }
+        };
+        app.main
+            .global::<AmbientStrip>()
+            .on_resized(redraw(Rc::downgrade(&app)));
+        app.flyout
+            .global::<AmbientStrip>()
+            .on_resized(redraw(Rc::downgrade(&app)));
         let weak = Rc::downgrade(&app);
         app.poll_timer
             .start(TimerMode::Repeated, POLL_INTERVAL, move || {
@@ -1872,7 +1890,7 @@ impl App {
     fn draw_ambient(&self, still: bool) {
         if still || !matches!(self.main_window_shows(), MainWindowShows::Not) {
             self.main.set_now_playing_ambient(self.ambient_look(
-                &self.ambient_rows[0],
+                0,
                 ambient::WINDOW_DENSITY,
                 ambient::WINDOW_SLOT,
                 still,
@@ -1880,7 +1898,7 @@ impl App {
         }
         if still || self.flyout.window().is_visible() {
             self.flyout.set_now_playing_ambient(self.ambient_look(
-                &self.ambient_rows[1],
+                1,
                 ambient::FLYOUT_DENSITY,
                 ambient::FLYOUT_SLOT,
                 still,
@@ -1888,28 +1906,43 @@ impl App {
         }
     }
 
-    fn ambient_look(
-        &self,
-        rows: &Rc<VecModel<AmbientStrand>>,
-        density: f64,
-        slot: f64,
-        still: bool,
-    ) -> AmbientLook {
+    /// The art for the main window (`window` 0) or the tray panel (1).
+    fn ambient_look(&self, window: usize, density: f64, slot: f64, still: bool) -> AmbientLook {
+        let rows = &self.ambient_rows[window];
+        let (strip, scale) = if window == 0 {
+            let main = &self.main;
+            (
+                main.global::<AmbientStrip>().get_width(),
+                main.window().scale_factor(),
+            )
+        } else {
+            let flyout = &self.flyout;
+            (
+                flyout.global::<AmbientStrip>().get_width(),
+                flyout.window().scale_factor(),
+            )
+        };
+        let scale = f64::from(scale);
+        let pixels = |points: f64| (points * scale).round() as u32;
         let cover = self.ambient_cover.get();
         let (light, dark) = ambient::line_colors(&cover, still);
         let color = |[r, g, b]: Rgb| slint::Color::from_rgb_f32(r as f32, g as f32, b as f32);
-        let strands: Vec<AmbientStrand> = self
-            .ambient
-            .borrow()
-            .strands(&cover, density, slot, still)
+        let strands = self.ambient.borrow().strands(&cover, density, slot, still);
+        let masks = self.ambient_masks[window].borrow_mut().draw(
+            &strands,
+            pixels(f64::from(strip)),
+            pixels(slot),
+            scale,
+        );
+        let strands: Vec<AmbientStrand> = strands
             .into_iter()
-            .map(|strand| AmbientStrand {
-                commands: strand.commands.into(),
+            .zip(masks)
+            .map(|(strand, mask)| AmbientStrand {
+                mask,
                 breath: strand.breath as f32,
                 sound: strand.sound as f32,
                 tone_light: color(ambient_breath::tone(strand.tone, false)),
                 tone_dark: color(ambient_breath::tone(strand.tone, true)),
-                width: strand.width as f32,
             })
             .collect();
         if rows.row_count() == strands.len() {
@@ -8100,13 +8133,13 @@ pub(crate) mod tests {
         app.flyout.set_now_playing_subtitle("Artist".into());
         app.ambient.borrow_mut().advance(1.0, || None);
         app.main.set_now_playing_ambient(app.ambient_look(
-            &app.ambient_rows[0],
+            0,
             ambient::WINDOW_DENSITY,
             ambient::WINDOW_SLOT,
             false,
         ));
         app.flyout.set_now_playing_ambient(app.ambient_look(
-            &app.ambient_rows[1],
+            1,
             ambient::FLYOUT_DENSITY,
             ambient::FLYOUT_SLOT,
             false,
@@ -9298,8 +9331,8 @@ pub(crate) mod tests {
     }
 
     /// The strands' 300 x 22 box is the whole strip, as the Mac's Canvas maps
-    /// it (AmbientArt.swift:121, 129-132); Slint's Path fit takes the stroke's
-    /// width off that box and starts it half a stroke in.
+    /// it (AmbientArt.swift:121, 129-132): each mask is drawn at the strip's
+    /// pixel size and fills it.
     #[test]
     fn the_art_strands_span_the_whole_strip_as_on_the_mac() {
         use i_slint_backend_testing::ElementHandle;
@@ -9307,38 +9340,28 @@ pub(crate) mod tests {
         app.main.set_now_playing_shown(true);
         app.main.set_now_playing_title("Song".into());
         app.main.show().expect("the main window shows");
+        draw_frames();
         app.ambient.borrow_mut().advance(1.0, || None);
-        app.main.set_now_playing_ambient(app.ambient_look(
-            &app.ambient_rows[0],
-            ambient::WINDOW_DENSITY,
-            ambient::WINDOW_SLOT,
-            false,
-        ));
+        let look = app.ambient_look(0, ambient::WINDOW_DENSITY, ambient::WINDOW_SLOT, false);
+        app.main.set_now_playing_ambient(look.clone());
         draw_frames();
         let strip = ElementHandle::find_by_element_type_name(&app.main, "AmbientArt")
             .next()
             .expect("the strip shows");
         let (at, size) = (strip.absolute_position(), strip.size());
+        let scale = app.main.window().scale_factor();
+        let pixels = |points: f32| (points * scale).round() as u32;
+        let pixels = (pixels(size.width), pixels(size.height));
+        assert!(pixels.0 > 100, "{pixels:?}");
+        for strand in look.strands.iter() {
+            let mask = strand.mask.size();
+            assert_eq!((mask.width, mask.height), pixels);
+        }
         let lines: Vec<_> =
             ElementHandle::find_by_element_id(&app.main, "AmbientArt::line").collect();
         assert_eq!(lines.len(), 3, "one breath line a strand");
-        let stroke = ambient_breath::STROKE as f32;
         for line in lines {
-            let (from, path) = (line.absolute_position(), line.size());
-            let fitted = [
-                from.x + stroke / 2.0,
-                from.y + stroke / 2.0,
-                path.width - stroke,
-                path.height - stroke,
-            ];
-            let wanted = [at.x, at.y, size.width, size.height];
-            assert!(
-                fitted
-                    .iter()
-                    .zip(wanted)
-                    .all(|(got, want)| (got - want).abs() < 0.01),
-                "{fitted:?} {wanted:?}"
-            );
+            assert_eq!((line.absolute_position(), line.size()), (at, size));
         }
     }
 

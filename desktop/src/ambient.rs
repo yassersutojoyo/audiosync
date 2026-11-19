@@ -6,11 +6,12 @@
 
 use std::time::Duration;
 
+use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
+
 use crate::window_rules::{AmbientMode, Rgb};
 use crate::window_rules::{ambient_bands, ambient_breath};
 
-/// The strip's drawing space: the path's viewbox in `ambient.slint`.
-pub const VIEW_WIDTH: f64 = 300.0;
+/// The height of the box the strands are drawn in, stretched to the strip.
 pub const VIEW_HEIGHT: f64 = 22.0;
 /// How far the strands reach: the main window's hero, and the tray panel's smaller one.
 pub const WINDOW_DENSITY: f64 = 1.0;
@@ -26,11 +27,12 @@ const STEPS: usize = 60;
 /// picks up where it stopped instead of jumping (the Mac's `ArtClock.maxStep`).
 const MAX_STEP: f64 = 0.1;
 
-/// One strand as drawn: its path, the breath's line opacity over it, the
-/// sound's own strand in `tone` at `sound`, and the stroke's width.
+/// One strand as drawn: its heights in the box, `STEPS` apart, the breath's
+/// line opacity over it, the sound's own strand in `tone` at `sound`, and the
+/// stroke's width.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Strand {
-    pub commands: String,
+    pub ys: [f64; STEPS + 1],
     pub breath: f64,
     pub sound: f64,
     pub width: f64,
@@ -85,7 +87,7 @@ impl Driver {
     pub fn strands(&self, cover: &[Rgb; 3], density: f64, slot: f64, still: bool) -> Vec<Strand> {
         if still {
             return vec![Strand {
-                commands: path(1, 0.0, 0.0, 0.0, slot),
+                ys: path(1, 0.0, 0.0, 0.0, slot),
                 breath: 1.0,
                 sound: 0.0,
                 width: ambient_breath::STROKE,
@@ -99,7 +101,7 @@ impl Driver {
             .map(|index| {
                 let reach = ambient_breath::motion(self.bands[index].min(1.0), live, breath);
                 Strand {
-                    commands: path(index, reach * density, 1.0 - live, self.time, slot),
+                    ys: path(index, reach * density, 1.0 - live, self.time, slot),
                     breath: line,
                     sound,
                     width: ambient_breath::stroke(live),
@@ -119,19 +121,107 @@ pub fn line_colors(cover: &[Rgb; 3], still: bool) -> (Rgb, Rgb) {
     )
 }
 
-/// Strand `index` as SVG path commands, widest in the middle.
-fn path(index: usize, spread: f64, idle: f64, time: f64, slot: f64) -> String {
-    use std::fmt::Write;
-
-    let mut commands = String::with_capacity(STEPS * 14);
-    for step in 0..=STEPS {
+/// Strand `index`'s heights in the box, widest in the middle.
+fn path(index: usize, spread: f64, idle: f64, time: f64, slot: f64) -> [f64; STEPS + 1] {
+    std::array::from_fn(|step| {
         let x = step as f64 / STEPS as f64;
         let lift = ambient_breath::lift(index, x, time, spread, idle, slot);
-        let y = (11.0 + ambient_breath::taper(x) * lift).clamp(1.0, VIEW_HEIGHT - 1.0);
-        let verb = if step == 0 { 'M' } else { 'L' };
-        let _ = write!(commands, "{verb}{:.1} {y:.2} ", x * VIEW_WIDTH);
+        (11.0 + ambient_breath::taper(x) * lift).clamp(1.0, VIEW_HEIGHT - 1.0)
+    })
+}
+
+/// Points a pixel is sampled at across; the coverage down a column is its area.
+const SUBCOLUMNS: usize = 16;
+const MAX_ROWS: usize = 256;
+
+/// Strand `ys` (heights in the 300 x 22 box, `STEPS` apart) `stroke` pixels
+/// wide, as a white premultiplied RGBA mask that fills `width` x `height`
+/// pixels and fades out over its outer `EDGE_FADE`, as the Mac's Canvas maps
+/// and strokes it (AmbientArt.swift:121-141). The round caps fall outside the
+/// strip, where the fade is 0.
+pub fn mask(ys: &[f64], stroke: f64, pixels: &mut [u8], width: usize, height: usize) {
+    pixels.fill(0);
+    let height = height.min(MAX_ROWS);
+    let step_width = width as f64 / STEPS as f64;
+    let scale = height as f64 / VIEW_HEIGHT;
+    // Each segment's start, slope and the stroke's height across a column,
+    // which the slope stretches.
+    let segments: [(f64, f64, f64); STEPS] = std::array::from_fn(|step| {
+        let (from, to) = (ys[step] * scale, ys[step + 1] * scale);
+        let slope = (to - from) / step_width;
+        (from, slope, stroke / 2.0 * (1.0 + slope * slope).sqrt())
+    });
+    let mut cover = [0.0_f64; MAX_ROWS];
+    for column in 0..width {
+        let (mut first, mut last) = (height, 0);
+        for sub in 0..SUBCOLUMNS {
+            let x = column as f64 + (sub as f64 + 0.5) / SUBCOLUMNS as f64;
+            let step = ((x / step_width) as usize).min(STEPS - 1);
+            let (from, slope, reach) = segments[step];
+            let y = from + slope * (x - step as f64 * step_width);
+            let (top, bottom) = ((y - reach).max(0.0), (y + reach).min(height as f64));
+            let weight = ambient_breath::edge(x / width as f64) / SUBCOLUMNS as f64;
+            let rows = top as usize..bottom.ceil() as usize;
+            (first, last) = (first.min(rows.start), last.max(rows.end));
+            for (row, share) in rows.clone().zip(&mut cover[rows]) {
+                *share += weight * row_share(row, top, bottom);
+            }
+        }
+        for (row, share) in cover.iter_mut().enumerate().take(last).skip(first) {
+            let alpha = (share.min(1.0) * 255.0).round() as u8;
+            let at = (row * width + column) * 4;
+            pixels[at..at + 4].fill(alpha);
+            *share = 0.0;
+        }
     }
-    commands
+}
+
+/// A window's strand masks, two a strand: a frame draws into the ones the
+/// window let go of when it took the frame before, so no frame allocates.
+#[derive(Default)]
+pub struct Masks {
+    buffers: Vec<SharedPixelBuffer<Rgba8Pixel>>,
+    frame: usize,
+}
+
+impl Masks {
+    /// The masks of `strands` at `width` x `height` pixels, `scale` pixels a point.
+    pub fn draw(&mut self, strands: &[Strand], width: u32, height: u32, scale: f64) -> Vec<Image> {
+        self.frame ^= 1;
+        let mut images = Vec::with_capacity(strands.len());
+        for (index, strand) in strands.iter().enumerate() {
+            // Before layout the strip is 0 wide; Slint's software renderer
+            // panics stretching a 0-pixel image, an empty one it skips.
+            if width == 0 || height == 0 {
+                images.push(Image::default());
+                continue;
+            }
+            let at = index * 2 + self.frame;
+            if self.buffers.len() <= at {
+                self.buffers
+                    .resize_with(at + 1, || SharedPixelBuffer::new(0, 0));
+            }
+            let buffer = &mut self.buffers[at];
+            if (buffer.width(), buffer.height()) != (width, height) {
+                *buffer = SharedPixelBuffer::new(width, height);
+            }
+            let pixels = buffer.make_mut_bytes();
+            mask(
+                &strand.ys,
+                strand.width * scale,
+                pixels,
+                width as usize,
+                height as usize,
+            );
+            images.push(Image::from_rgba8_premultiplied(buffer.clone()));
+        }
+        images
+    }
+}
+
+/// How much of pixel row `row` the span `top..bottom` covers.
+fn row_share(row: usize, top: f64, bottom: f64) -> f64 {
+    (bottom.min(row as f64 + 1.0) - top.max(row as f64)).max(0.0)
 }
 
 /// A cover's top, middle and bottom thirds, averaged, from its premultiplied
@@ -173,17 +263,9 @@ mod tests {
         reads
     }
 
-    fn ys(commands: &str) -> Vec<f64> {
-        commands
-            .split_whitespace()
-            .skip(1)
-            .step_by(2)
-            .map(|y| y.parse().expect("a number"))
-            .collect()
-    }
-
     fn reach(strand: &Strand) -> f64 {
-        ys(&strand.commands)
+        strand
+            .ys
             .iter()
             .map(|y| (y - 11.0).abs())
             .fold(0.0, f64::max)
@@ -265,7 +347,7 @@ mod tests {
         assert_eq!(strands.len(), 1);
         assert_eq!((strands[0].breath, strands[0].sound), (1.0, 0.0));
         assert_eq!(strands[0].width, ambient_breath::STROKE);
-        assert!(ys(&strands[0].commands).iter().all(|y| *y == 11.0));
+        assert!(strands[0].ys.iter().all(|y| *y == 11.0));
     }
 
     #[test]
@@ -279,16 +361,14 @@ mod tests {
             for strand in &strands {
                 assert_eq!(strand.breath, ambient_breath::OPACITY);
                 assert_eq!((strand.sound, strand.width), (0.0, ambient_breath::STROKE));
-                let ys = ys(&strand.commands);
-                assert_eq!(ys.len(), STEPS + 1);
-                assert!(ys.iter().all(|y| (1.0..=21.0).contains(y)));
+                assert!(strand.ys.iter().all(|y| (1.0..=21.0).contains(y)));
                 widest = widest.max(reach(strand));
             }
         }
         assert!(widest > 2.0, "it sways: {widest}");
-        // The Mac's resting swing (WindowRules.swift:206) and the breath on top.
+        // The Mac's resting swing (WindowRules.swift:205) and the breath on top.
         assert!(
-            widest < ambient_breath::SWAY * 22.0 + 2.5,
+            widest < ambient_breath::SWAY + 2.5,
             "it stays calm: {widest}"
         );
     }
@@ -301,12 +381,104 @@ mod tests {
         assert!(reach(FLYOUT_DENSITY) < reach(WINDOW_DENSITY));
     }
 
+    fn masks(driver: &Driver, width: usize, height: usize) -> Vec<Vec<u8>> {
+        let strands = driver.strands(&NO_COVER, WINDOW_DENSITY, WINDOW_SLOT, false);
+        strands
+            .iter()
+            .map(|strand| {
+                let mut pixels = vec![0; width * height * 4];
+                let stroke = strand.width * height as f64 / WINDOW_SLOT;
+                mask(&strand.ys, stroke, &mut pixels, width, height);
+                pixels
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_strand_covers_each_pixel_by_its_area() {
+        let flat = [11.0; STEPS + 1];
+        let rows = [
+            (1, vec![(10, 0.8), (11, 0.8)]),
+            (2, vec![(20, 0.6), (21, 1.0), (22, 1.0), (23, 0.6)]),
+        ];
+        for (scale, rows) in rows {
+            let (width, height) = (182 * scale, 22 * scale);
+            let mut pixels = vec![0; width * height * 4];
+            let stroke = ambient_breath::STROKE * scale as f64;
+            mask(&flat, stroke, &mut pixels, width, height);
+            for row in 0..height {
+                let want = rows.iter().find(|(r, _)| *r == row).map_or(0.0, |r| r.1);
+                let got = f64::from(pixels[(row * width + width / 2) * 4 + 3]) / 255.0;
+                assert!((got - want).abs() < 0.01, "{scale}x row {row}: {got}");
+            }
+        }
+    }
+
+    /// Three seconds of the breath at 30 frames a second in the main window's
+    /// strip at 1x (182 x 22 pixels), over the middle 70% where nothing fades.
+    #[test]
+    fn the_breath_moves_by_its_area_without_quarter_steps() {
+        let (width, height) = (182, 22);
+        let middle = width * 15 / 100..width * 85 / 100;
+        let mut driver = Driver::default();
+        run(&mut driver, 2.0, 1.0 / 30.0, None);
+        let (mut quarters, mut partial) = (0, 0);
+        let mut frames: Vec<Vec<f64>> = Vec::new();
+        for _ in 0..90 {
+            run(&mut driver, 1.0 / 30.0, 1.0 / 30.0, None);
+            let masks = masks(&driver, width, height);
+            let mut frame = Vec::new();
+            for row in 0..height {
+                for column in middle.clone() {
+                    let at = (row * width + column) * 4 + 3;
+                    let alphas = masks.iter().map(|mask| f64::from(mask[at]) / 255.0);
+                    for alpha in alphas.clone().filter(|a| (0.03..0.97).contains(a)) {
+                        partial += 1;
+                        quarters += usize::from((alpha * 4.0 - (alpha * 4.0).round()).abs() < 0.02);
+                    }
+                    // The strands at their 0.8 opacity, as levels above the dark card.
+                    let under = alphas
+                        .map(|a| 1.0 - ambient_breath::OPACITY * a)
+                        .product::<f64>();
+                    frame.push((1.0 - under) * 164.0);
+                }
+            }
+            frames.push(frame);
+        }
+        let share = quarters as f64 / partial as f64;
+        assert!(
+            share < 0.1,
+            "{share:.2} of the edge pixels on a quarter step"
+        );
+        let mut jumps: Vec<f64> = frames
+            .windows(2)
+            .flat_map(|pair| pair[0].iter().zip(&pair[1]))
+            .filter(|(a, b)| **a > 8.0 || **b > 8.0)
+            .map(|(a, b)| (a - b).abs())
+            .collect();
+        jumps.sort_by(f64::total_cmp);
+        let p90 = jumps[jumps.len() * 9 / 10];
+        // Exact coverage gives 21.3 with a 4.125 pt swing, 16.8 with the Mac's 3 pt;
+        // four rows a pixel give 32.8.
+        assert!(p90 <= 21.3, "frame to frame p90 {p90:.1}");
+    }
+
     #[test]
     fn the_strip_fades_the_strands_ends_as_the_rules_say() {
-        let slint = include_str!("../ui/ambient.slint");
-        let fade = ambient_breath::EDGE_FADE * 100.0;
-        assert!(slint.contains(&format!(" {fade:.0}%")));
-        assert!(slint.contains(&format!(" {:.0}%", 100.0 - fade)));
+        let (width, height) = (200, 22);
+        let mut pixels = vec![0; width * height * 4];
+        mask(
+            &[11.0; STEPS + 1],
+            ambient_breath::STROKE,
+            &mut pixels,
+            width,
+            height,
+        );
+        let alpha = |column: usize| pixels[(10 * width + column) * 4 + 3];
+        // Full from 9% in, half way at 4.75%, none at the edges.
+        assert_eq!((alpha(18), alpha(181)), (alpha(100), alpha(100)));
+        assert!((100..=110).contains(&alpha(9)), "{}", alpha(9));
+        assert!(alpha(0) <= 6 && alpha(width - 1) <= 6);
     }
 
     #[test]
