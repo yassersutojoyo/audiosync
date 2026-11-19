@@ -2089,3 +2089,18 @@ fn a_new_zones_header_scrolls_into_view_for_its_name() {
         "the header ends at {bottom}, below the window"
     );
 }
+
+/// MAIN-PLAYING: a window on Slint's software renderer, the fallback where
+/// no GPU draws, shows the Now Playing strands under a playing song.
+#[test]
+fn the_software_renderer_draws_the_strands_of_a_playing_song() {
+    let scene = Scene::new(ui_model::Appearance::Dark);
+    scene.play(track(true, true));
+    settle(scene.app.main.window());
+    scene
+        .app
+        .main
+        .window()
+        .take_snapshot()
+        .expect("the software renderer draws it");
+}
