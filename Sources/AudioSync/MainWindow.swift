@@ -229,7 +229,6 @@ struct MainView: View {
     @StateObject private var sheetRoom = SheetRoom()
     @StateObject private var zoneDisclosure = ZoneDisclosure()
     @StateObject private var windowWidth = WindowWidth()
-    @StateObject private var leftTop = LeftColumnTop()
     @StateObject private var heroHover = HoverState()
     @StateObject private var slide = TrackSlideState()
     @Environment(\.displayScale) private var displayScale
@@ -250,22 +249,11 @@ struct MainView: View {
             header(t)
             NoticeStack(model: model)
             HStack(alignment: .top, spacing: BrandTokens.Spacing.columnGap) {
-                // One hero, then plain rows split by a hairline instead of a card each. The rows
-                // stay right under the hero; in a short window the hero scrolls above them instead.
-                VStack(alignment: .leading, spacing: 0) {
-                    FadingScroll(onBlankTap: blankTap) {
-                        VStack(alignment: .leading, spacing: 0) {
-                            hero(t)
-                            masterVolume(t).padding(.top, 16)
-                        }
-                        .padding(.horizontal, MainColumns.rowInset)
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { leftTop.height = $0 }
-                    }
-                    // Rounded up: the scroll view snaps to whole points and would scroll by a fraction.
-                    .frame(minHeight: 0, maxHeight: leftTop.height.map { $0.rounded(.up) } ?? .infinity)
-                    // Above the spacer, so the hero takes the room before any gap opens under the rows.
-                    .layoutPriority(1)
+                FadingScroll(onBlankTap: blankTap) {
+                    // One hero, then plain rows split by a hairline instead of a card each.
                     VStack(alignment: .leading, spacing: 0) {
+                        hero(t)
+                        masterVolume(t).padding(.top, 16)
                         Divider().padding(.top, MainColumns.separatorPadding.top)
                             .padding(.bottom, MainColumns.separatorPadding.bottom)
                         // Icons on the master volume icon's column; the hover fill reaches past it.
@@ -277,9 +265,6 @@ struct MainView: View {
                         .padding(.horizontal, -MainColumns.rowInset)
                     }
                     .padding(.horizontal, MainColumns.rowInset)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .layoutPriority(1)
-                    Spacer(minLength: 0)
                 }
                 // Wider by the rows' fill on each side, so the scroll view doesn't clip it.
                 .frame(width: MainColumns.left(window: windowWidth.points) + 2 * MainColumns.rowInset)
@@ -767,11 +752,6 @@ private struct LocalNetworkHintView: View {
 /// The main window's width, which sets its left column's (`MainColumns`).
 private final class WindowWidth: ObservableObject {
     @Published var points: CGFloat = 0
-}
-
-/// The height of the left column's hero and master volume, nil until laid out.
-private final class LeftColumnTop: ObservableObject {
-    @Published var height: CGFloat?
 }
 
 /// A title or name on one line. One too long for it scrolls to its end and
