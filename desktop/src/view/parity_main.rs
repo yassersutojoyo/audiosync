@@ -858,11 +858,19 @@ fn a_sliders_track_runs_its_whole_box_as_on_the_mac() {
     let slider = component(&widgets, "LevelSlider");
     assert!(slider.contains("piece == 0 ? 0px : root.span * root.ratio + root.knob;"));
     assert!(slider.contains("piece == 0 ? root.span * root.ratio : root.span * (1 - root.ratio)"));
-    assert!(slider.contains("width: root.vertical ? root.thickness : root.span * root.ratio + root.knob / 2;"));
+    assert!(slider.contains(
+        "width: root.vertical ? root.thickness : root.span * root.ratio + root.knob / 2;"
+    ));
     let row = component(&widgets, "SpeakerRow");
-    assert!(!row.contains("x: -Fluent.slider-inset;"), "no row slider moved left");
+    assert!(
+        !row.contains("x: -Fluent.slider-inset;"),
+        "no row slider moved left"
+    );
     let master = component(&widgets, "MasterVolume");
-    assert!(master.contains("padding-left: 8px;"), "the track starts where it did");
+    assert!(
+        master.contains("padding-left: 8px;"),
+        "the track starts where it did"
+    );
 }
 
 /// The auto-connect bolt as large as the Mac's bolt.fill at .caption2

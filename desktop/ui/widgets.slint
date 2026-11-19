@@ -71,8 +71,6 @@ export global Fluent {
     out property <length> left-column-narrow: 210px;
     out property <length> left-column-wide: 280px;
     out property <length> speaker-list-full: 524px;
-    // How far inside its box a LevelSlider's track starts: half its 16 px knob.
-    out property <length> slider-inset: 8px;
     // Subtle fills under the pointer, over any card or row.
     out property <brush> hover: Tokens.text.with-alpha(0.06);
     out property <brush> pressed: Tokens.text.with-alpha(0.035);
@@ -1915,11 +1913,12 @@ export component LevelSlider inherits Rectangle {
 
     // The Mac's small slider over its row, measured at 2x in its 18 Nov photos: ink at 10 % past
     // the knob and 14.5 % before it on an off row, see-through so it keeps its contrast on the
-    // hover fill. Horizontal tracks stop at the knob.
+    // hover fill. Horizontal tracks stop at the knob and run the whole box with the knob
+    // inside it, as the Mac's (MainWindow.swift:2461-2486, MenuBar.swift:3009-3012).
     for piece in (root.vertical ? 1 : 2): Rectangle {
-        x: root.vertical ? (root.width - self.width) / 2 : piece == 0 ? root.knob / 2 : root.span * root.ratio + root.knob;
+        x: root.vertical ? (root.width - self.width) / 2 : piece == 0 ? 0px : root.span * root.ratio + root.knob;
         y: root.vertical ? root.knob / 2 : (root.height - self.height) / 2;
-        width: root.vertical ? root.thickness : max(0px, piece == 0 ? root.span * root.ratio - root.knob / 2 : root.span * (1 - root.ratio) - root.knob / 2);
+        width: root.vertical ? root.thickness : max(0px, piece == 0 ? root.span * root.ratio : root.span * (1 - root.ratio));
         height: root.vertical ? root.span : root.thickness;
         border-radius: root.thickness / 2;
         background: root.small ? (piece == 0 && root.idle ? (Tokens.dark ? #ffffff25 : #00000025) : (Tokens.dark ? #ffffff19 : #00000019)) : root.track;
@@ -1930,9 +1929,9 @@ export component LevelSlider inherits Rectangle {
     }
 
     Rectangle {
-        x: root.vertical ? (root.width - self.width) / 2 : root.knob / 2;
+        x: root.vertical ? (root.width - self.width) / 2 : 0px;
         y: root.vertical ? root.knob / 2 + root.span * (1 - root.ratio) : (root.height - self.height) / 2;
-        width: root.vertical ? root.thickness : root.span * root.ratio;
+        width: root.vertical ? root.thickness : root.span * root.ratio + root.knob / 2;
         height: root.vertical ? root.span * root.ratio : root.thickness;
         border-radius: root.thickness / 2;
         // The window tints its sliders in ink (MainWindow.swift:350-351): #f4f4f4 on dark in its photos.
@@ -2243,7 +2242,7 @@ export component MasterVolume inherits HorizontalLayout {
     in property <float> volume;
     // 0 while muted, else 1 to 3.
     in property <int> waves;
-    // From the track's end to the number.
+    // From the knob's centre at 100 to the number.
     in property <length> number-gap: 6px;
     // The mute button's side: 24 in the main window, as the Mac's.
     in property <length> button-size: 32px;
@@ -2279,7 +2278,9 @@ export component MasterVolume inherits HorizontalLayout {
     }
 
     HorizontalLayout {
-        // The track ends half a knob inside the slider.
+        // The knob stops half its 16 px inside the track, which starts where its
+        // centre did before the track ran the whole box (MenuBar.swift:3009-3012).
+        padding-left: 8px;
         spacing: root.number-gap - 8px;
 
         slider := VolumeSlider {
@@ -4123,8 +4124,10 @@ export component SpeakerRow inherits Rectangle {
                                         }
                                     }
 
+                                    // The Mac's bolt.fill at .caption2 (MainWindow.swift:2434-2436): 11.5 pt
+                                    // of ink in its 2x photos, 13/16 of the drawn box.
                                     if root.item.auto-connect: Rectangle {
-                                        width: Tokens.font-size-caption + 2px;
+                                        width: 14px;
                                         accessible-role: image;
                                         accessible-label: Strings.auto-connect;
 
@@ -4132,7 +4135,7 @@ export component SpeakerRow inherits Rectangle {
                                             width: 100%;
                                             height: 100%;
                                             glyph: Glyphs.auto-connect;
-                                            font-size: Tokens.font-size-caption;
+                                            font-size: 14px;
                                             color: Tokens.teal-text;
                                         }
 
@@ -4196,8 +4199,11 @@ export component SpeakerRow inherits Rectangle {
                             // 3 px, so the hover fill is no wider than the value.
                             // 3 px wider on the left, so the name stops the Mac's 6 px
                             // before the column (MainWindow.swift:2371).
+                            // A row with neither keeps only the 50 px the Mac's Spacer
+                            // leaves its AirPlay rows (MainWindow.swift:2438-2445,
+                            // MAIN-ROW-PROBLEM at 2x), so a long note wraps where its does.
                             VerticalLayout {
-                                width: Fluent.delay-column + 3px;
+                                width: root.item.has-delay || root.item.system-volume >= 0 ? Fluent.delay-column + 3px : 50px;
                                 alignment: center;
                                 cross-axis-alignment: end;
 
@@ -4456,15 +4462,14 @@ export component SpeakerRow inherits Rectangle {
                             spacing: 2px;
                             padding-bottom: 2px;
 
-                            // Moved left by the slider's own inset, so its track
-                            // starts under the name, as on the Mac.
+                            // Its track starts under the name and ends 8 px before
+                            // the value, as on the Mac (MainWindow.swift:2461-2486).
                             Rectangle {
                                 min-height: volume-slider.min-height;
 
                                 volume-slider := VolumeSlider {
                                     small: true;
-                                    x: -Fluent.slider-inset;
-                                    width: parent.width + Fluent.slider-inset;
+                                    width: parent.width;
                                     height: parent.height;
                                     // The Windows volume panel's column, so both sliders end together.
                                     value-width: 34px;
@@ -4657,15 +4662,14 @@ export component SpeakerRow inherits Rectangle {
                             accessible-role: none;
                         }
 
-                        // Moved left as the speaker slider, so both tracks start together.
+                        // As the speaker slider, so both tracks start together.
                         Rectangle {
                             min-height: system-slider.min-height;
 
                             system-slider := VolumeSlider {
                                 small: true;
                                 percent: true;
-                                x: -Fluent.slider-inset;
-                                width: parent.width + Fluent.slider-inset;
+                                width: parent.width;
                                 height: parent.height;
                                 volume: max(root.item.system-volume, 0);
                                 label: Strings.system-volume-slider(root.item.name);

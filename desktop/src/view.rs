@@ -11654,6 +11654,8 @@ pub(crate) mod tests {
         let connected = app.main.get_connected();
         let mut item = connected.row_data(0).expect("a connected speaker");
         item.name = long.into();
+        // A row without a delay has no column, as the Mac's AirPlay rows.
+        item.has_delay = true;
         connected.set_row_data(0, item);
         draw_frames();
         let name = ElementHandle::find_by_element_id(&app.main, "SpeakerRow::name-label")
@@ -16756,12 +16758,12 @@ pub(crate) mod tests {
         assert_eq!(row.size().width, 20.0);
     }
 
-    /// Where the master volume's track starts and ends: between the knob's
-    /// centres at either end of the slider.
+    /// Where the master volume's track starts and where the knob's centre
+    /// stops at 100, the end each caller's number-gap counts from.
     fn master_track(slider: &i_slint_backend_testing::ElementHandle) -> (f32, f32) {
         let knob = 16.0;
         let x = slider.absolute_position().x;
-        (x + knob / 2.0, x + slider.size().width - knob / 2.0)
+        (x, x + slider.size().width - knob / 2.0)
     }
 
     fn right_edge(element: &i_slint_backend_testing::ElementHandle) -> f32 {
@@ -19353,7 +19355,8 @@ pub(crate) mod tests {
     }
 
     /// The grey a row slider shows at `x` on its track's centre line, the
-    /// row's own grey 6 px above the slider, and the brightest grey on the
+    /// row's own grey 6 px above the slider's start (clear of the name's
+    /// descenders), and the brightest grey on the
     /// knob's line, with the pointer off or on the row.
     fn row_slider_greys(app: &App, label: &str, x: f32, hovered: bool) -> (u8, u8, u8) {
         let (left, top, width, height) = slider_box(&app.main, label);
@@ -19374,7 +19377,7 @@ pub(crate) mod tests {
             .unwrap_or_default();
         (
             at(left + x, middle)[0],
-            at(left + 30.0, top - 6.0)[0],
+            at(left + 2.0, top - 6.0)[0],
             brightest,
         )
     }
@@ -19525,8 +19528,7 @@ pub(crate) mod tests {
     }
 
     /// A row's volume track starts where its name does, as the Mac's slider
-    /// under the name (MainWindow.swift:2433); the track starts half the
-    /// 16 px knob inside the slider.
+    /// under the name (MainWindow.swift:2433); the track runs the whole slider.
     #[test]
     fn a_rows_volume_track_starts_under_its_name() {
         use i_slint_backend_testing::ElementHandle;
@@ -19540,7 +19542,7 @@ pub(crate) mod tests {
             .filter(|n| n.absolute_position().y < y)
             .max_by(|a, b| a.absolute_position().y.total_cmp(&b.absolute_position().y))
             .expect("the row's name");
-        let track = x + 16.0 / 2.0;
+        let track = x;
         assert!(
             (track - name.absolute_position().x).abs() < 0.5,
             "track at {track}, name at {}",
