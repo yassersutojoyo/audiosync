@@ -274,10 +274,11 @@ fn the_appearance_control_is_a_filled_track_with_dividers() {
 }
 
 /// EqualizerWindow.swift:251 and :261 set a band's gain and label in
-/// .caption2, which macOS draws at 10 pt medium; :168 makes the preamp's
-/// divider 170 pt, at the bottom of the bands.
+/// .caption2, which macOS draws at 10 pt medium; Segoe sets 560 as its
+/// regular, so the semibold face carries the Mac's ink (EQ-WINDOW photos).
+/// :168 makes the preamp's divider 170 pt, at the bottom of the bands.
 #[test]
-fn the_equalizer_band_text_is_medium_and_its_divider_170_tall() {
+fn the_equalizer_band_text_is_semibold_and_its_divider_170_tall() {
     let eq = include_str!("../../ui/equalizer.slint").replace("\r\n", "\n");
     let text = component(&eq, "BandText");
     assert!(
@@ -285,7 +286,7 @@ fn the_equalizer_band_text_is_medium_and_its_divider_170_tall() {
         "{text}"
     );
     assert!(
-        text.contains("font-weight: Fluent.weight-medium;"),
+        text.contains("font-weight: Fluent.weight-semibold;"),
         "{text}"
     );
     let band = component(&eq, "Band");

@@ -268,6 +268,8 @@ fn the_flyout_is_as_tall_as_the_macs_panel() {
     let brand = &source[source.find("brand := Rectangle {").expect("brand")..];
     let brand = &brand[..brand.find("brand-mark := BrandMark").expect("mark")];
     assert!(!brand.contains("padding-top: 2px;"), "{brand}");
+    // MenuBar.swift:1801-1822: nothing under the brand either.
+    assert!(!brand.contains("padding-bottom: 2px;"), "{brand}");
 }
 
 /// The text of the flyout from `start` up to the first `end` after it.
@@ -324,7 +326,9 @@ fn the_flyout_footer_words_sit_on_the_panels_edge() {
 #[test]
 fn the_empty_lists_note_sits_under_the_line_as_the_macs() {
     let note = between("none-note := HorizontalLayout {", "SecondaryText {");
-    assert!(note.contains("padding-top: -4px;"), "{note}");
+    // Less 1 px: Segoe's 11 px line sets its letters 1 px lower than SF's
+    // (TRAY-EMPTY photos, 25 vs 23 px at 2x under the line).
+    assert!(note.contains("padding-top: -5px;"), "{note}");
     assert!(note.contains("padding-bottom: 2px;"), "{note}");
 }
 

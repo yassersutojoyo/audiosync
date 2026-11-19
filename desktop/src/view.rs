@@ -11334,6 +11334,8 @@ pub(crate) mod tests {
         let button = find("System volume");
         assert_eq!(button.accessible_value().as_deref(), Some("13%"));
         button.invoke_accessible_default_action();
+        // On Linux the first frame can go to relaying out the window, so the pane is built on the next.
+        draw_frames();
         draw_frames();
         let slider = find(
             &app.main

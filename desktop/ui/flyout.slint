@@ -1148,7 +1148,6 @@ export component TrayFlyout inherits Window {
                         HorizontalLayout {
                             padding-left: 6px;
                             padding-right: 6px;
-                            padding-bottom: 2px;
                             spacing: 9px;
 
                             VerticalLayout {
@@ -1582,8 +1581,9 @@ export component TrayFlyout inherits Window {
                                 property <string> text: root.this-pc.length == 0 && root.all-hidden ? Strings.flyout-all-hidden : root.this-pc.length == 0 && root.airplay-none-found ? Strings.no-speakers : self.cast-note == "" ? self.list-note : self.list-note == Strings.connected-none ? self.cast-note : self.list-note + " " + self.cast-note;
                                 spacing: 10px;
                                 // The Mac's 2 pt above and below (MenuBar.swift:1868), less the 6 px
-                                // that the divider's box adds over its dividerToList (WindowRules.swift:1137).
-                                padding-top: -4px;
+                                // that the divider's box adds over its dividerToList (WindowRules.swift:1137),
+                                // less 1 px: Segoe's 11 px line sets its letters 1 px lower than SF's.
+                                padding-top: -5px;
                                 padding-bottom: 2px;
 
                                 SecondaryText {

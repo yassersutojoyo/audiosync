@@ -70,6 +70,19 @@ fn the_tray_rows_device_volume_glyph_shows_the_hint_on_hover() {
     );
 }
 
+/// MenuBar.swift:2809 and :2874 set a notice's text in .caption; Segoe's
+/// regular at 10 px carries about 70% of the Mac's ink (TRAY-NOTICE photos),
+/// its semibold about what the Mac's has.
+#[test]
+fn a_notices_message_is_set_semibold() {
+    let stack = component(include_str!("../../ui/widgets.slint"), "NoticeStack");
+    let message = between(&stack, "message := Text {", "}");
+    assert!(
+        message.contains("font-weight: Fluent.weight-semibold;"),
+        "{message}"
+    );
+}
+
 #[test]
 fn dismiss_all_comes_and_goes_on_the_notices_own_motion() {
     let stack = component(include_str!("../../ui/widgets.slint"), "NoticeStack");

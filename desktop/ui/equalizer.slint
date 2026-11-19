@@ -9,7 +9,7 @@ import { Strings } from "strings.slint";
 import { FocusRing, Fluent, Glyph, Glyphs, MenuDivider, MenuPanel, MenuRepaint, MenuRoom, MenuRow, MenuState, NameField, LevelSlider, OverlayScrollView, SecondaryText, SmallButton, TextField, ToggleSwitch } from "widgets.slint";
 
 // A band's gain or label: the Mac's .caption2 (EqualizerWindow.swift:251, :261),
-// which macOS sets at 10 pt medium.
+// which macOS sets at 10 pt medium; Segoe draws 560 as its regular, so semibold.
 component BandText inherits HorizontalLayout {
     in property <string> text;
 
@@ -18,7 +18,7 @@ component BandText inherits HorizontalLayout {
     Text {
         text: root.text;
         font-size: Tokens.font-size-caption2;
-        font-weight: Fluent.weight-medium;
+        font-weight: Fluent.weight-semibold;
         color: Tokens.secondary-text;
         horizontal-alignment: center;
         vertical-alignment: bottom;
