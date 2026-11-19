@@ -1635,7 +1635,8 @@ impl Ap2Session {
             request.headers.push("Authorization", value);
             nonce = Some(auth.challenge.nonce.clone());
         }
-        request.headers.push("User-Agent", crate::user_agent());
+        // Some HomePods reject the initial /info with AudioSync's usual identifier.
+        request.headers.push("User-Agent", "AirPlay/950.7.1");
         request
             .headers
             .push("Client-Instance", self.ids.client_instance_hex());
