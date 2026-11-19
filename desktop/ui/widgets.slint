@@ -5980,6 +5980,9 @@ export component NoticeStack inherits VerticalLayout {
                                 text: notice.message;
                                 color: Tokens.text;
                                 font-size: Tokens.font-size-caption;
+                                // The Mac's .caption (MenuBar.swift:2809): Segoe's regular at
+                                // 10 px carries about 70% of its ink, the semibold about all.
+                                font-weight: Fluent.weight-semibold;
                                 wrap: word-wrap;
                                 overflow: elide;
                                 accessible-role: none;
