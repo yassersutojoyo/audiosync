@@ -633,9 +633,9 @@ fn custom_controls_are_accessible_and_show_focus() {
     }
 }
 
-/// The Appearance track is the Mac's filled segmented control
-/// (SettingsWindow.swift:184-186, its 2x photos): #ebebeb light, #303030
-/// dark, with no edge or shadow, and its text stays at 4.5:1 on it.
+/// The Appearance track as the Mac draws it (SettingsWindow.swift:184-186):
+/// #ebebeb on the light 2x MAIN-SETTINGS photo, #565656 on the dark one, with
+/// no edge or shadow, and its text stays at 4.5:1 on it.
 #[test]
 fn the_appearance_track_looks_like_the_macs_native_control() {
     let settings = include_str!("../ui/settings.slint");
@@ -644,9 +644,9 @@ fn the_appearance_track_looks_like_the_macs_native_control() {
         .next()
         .and_then(|before| before.rsplit("Rectangle {").next())
         .expect("the Appearance track");
-    assert!(track.contains("background: Tokens.dark ? #303030 : #ebebeb;"));
+    assert!(track.contains("background: Tokens.dark ? #565656 : #ebebeb;"));
     assert!(!track.contains("drop-shadow"), "{track}");
-    for (appearance, fill) in [(Appearance::Light, 0xeb), (Appearance::Dark, 0x30)] {
+    for (appearance, fill) in [(Appearance::Light, 0xeb), (Appearance::Dark, 0x56)] {
         let value = contrast(srgb("text", appearance), [f64::from(fill) / 255.0; 3]);
         assert!(
             value >= MIN_TEXT_CONTRAST,

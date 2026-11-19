@@ -245,9 +245,9 @@ fn narrator_reads_a_notices_heading_before_its_text() {
 }
 
 /// SettingsWindow.swift:184-186 is a native segmented control: on the Mac's
-/// 2x MAIN-SETTINGS photos a filled 24 pt track (#ebebeb light, #303030
+/// 2x MAIN-SETTINGS photos a filled 24 pt track (#ebebeb light, #565656
 /// dark) with no edge, and a 1 x 14 pt divider between two segments that
-/// are not chosen (#b4b4b4 light, #646464 dark).
+/// are not chosen (#b4b4b4 light, #494949 dark).
 #[test]
 fn the_appearance_control_is_a_filled_track_with_dividers() {
     let settings = include_str!("../../ui/settings.slint").replace("\r\n", "\n");
@@ -259,7 +259,7 @@ fn the_appearance_control_is_a_filled_track_with_dividers() {
         .find("\n                        Divider { }")
         .expect("end")];
     assert!(
-        track.contains("background: Tokens.dark ? #303030 : #ebebeb;"),
+        track.contains("background: Tokens.dark ? #565656 : #ebebeb;"),
         "{track}"
     );
     assert!(!track.contains("border-width"), "{track}");
@@ -268,7 +268,7 @@ fn the_appearance_control_is_a_filled_track_with_dividers() {
     let divider = component(&settings, "SegmentDivider");
     assert!(divider.contains("height: 14px;"), "{divider}");
     assert!(
-        divider.contains("background: Tokens.dark ? #646464 : #b4b4b4;"),
+        divider.contains("background: Tokens.dark ? #494949 : #b4b4b4;"),
         "{divider}"
     );
 }
