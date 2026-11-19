@@ -42,6 +42,28 @@ fn the_calibrate_all_sheet_sits_under_the_title_row_with_mac_sized_buttons() {
     assert_eq!(height(&app, "CalibrateAllSheet::start-button"), 24.0);
 }
 
+// MainWindow.swift:337 shows Calibrate All in AppKit's sheet, which draws the
+// card itself; the values are measured from CAL-SHEET-*-mac.png at 2x: corners
+// 16 pt, no edge, a shadow of sigma 16 pt and 6 pt down at 22% black on light
+// and 50% on dark.
+#[test]
+fn the_calibrate_all_sheet_is_the_macs_card() {
+    let main = MAIN.replace("\r\n", "\n");
+    let sheet = main
+        .find("    sheet := Rectangle {")
+        .map(|at| &main[at..at + main[at..].find("\n    }\n").unwrap()])
+        .expect("the sheet");
+    for line in [
+        "border-width: 0px;",
+        "border-radius: 16px;",
+        "drop-shadow-blur: 32px;",
+        "drop-shadow-offset-y: 6px;",
+        "drop-shadow-color: Tokens.dark ? #00000080 : #00000038;",
+    ] {
+        assert!(sheet.contains(line), "{line}");
+    }
+}
+
 // CastAddressSheet.swift:30-35, HouseButtonStyle.swift:58: the sheet under
 // the title row, its field 22 pt high.
 #[test]
