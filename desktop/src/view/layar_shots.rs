@@ -2073,3 +2073,39 @@ fn a_list_pushed_down_by_a_notice_scrolls_to_add_by_address() {
         at.y + size.height
     );
 }
+
+/// New Zone's header, with its name field, scrolls into view: on the Mac
+/// the focused field in the scroll view is brought into sight
+/// (AppDelegate+Zones.swift, `nameInPlace`).
+// covers: S245
+#[test]
+fn a_new_zones_header_scrolls_into_view_for_its_name() {
+    let scene = Scene::new(ui_model::Appearance::Light);
+    scene.load(MockBackend::zones_preview());
+    let window = scene.app.main.window();
+    scene.size(window, MAIN);
+    render(window);
+    let before: Vec<_> = scene
+        .app
+        .snapshot()
+        .zones
+        .into_iter()
+        .map(|zone| zone.id)
+        .collect();
+    scene.app.main.invoke_new_zone_requested();
+    settle(window);
+    let zone = scene
+        .app
+        .snapshot()
+        .zones
+        .into_iter()
+        .find(|zone| !before.contains(&zone.id))
+        .expect("a new zone");
+    let options = find(&scene.app.main, &format!("Options for {}", zone.name))
+        .expect("the new zone's header is built");
+    let bottom = options.absolute_position().y + options.size().height;
+    assert!(
+        bottom <= MAIN.1,
+        "the header ends at {bottom}, below the window"
+    );
+}
