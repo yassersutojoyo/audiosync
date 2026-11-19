@@ -933,6 +933,9 @@ pub struct App {
     meter_level: Cell<f32>,
     /// Draws the Now Playing art's frames while it shows and moves.
     ambient_timer: Timer,
+    /// Moves the cover tint while the art stands still, as the Mac's tint
+    /// ignores the motion setting.
+    tint_timer: Timer,
     ambient: RefCell<AmbientDriver>,
     /// When the art's last frame was drawn.
     ambient_frame_at: Cell<std::time::Instant>,
@@ -1421,6 +1424,7 @@ impl App {
             meter_timer: Timer::default(),
             meter_level: Cell::new(0.0),
             ambient_timer: Timer::default(),
+            tint_timer: Timer::default(),
             ambient: RefCell::default(),
             ambient_frame_at: Cell::new(std::time::Instant::now()),
             ambient_cover: Cell::new(ambient::NO_COVER),
@@ -1902,6 +1906,9 @@ impl App {
         }
         self.draw_ambient(false);
     }
+
+    /// One read of the sound for the cover tint while the art stands still.
+    fn tick_tint(&self) {}
 
     /// Gives the art's strands to the windows that show them; the still line
     /// to both, since it is drawn once.
@@ -9477,6 +9484,41 @@ pub(crate) mod tests {
             grey,
             "no cover: grey"
         );
+    }
+
+    // The Mac follows the sound whenever the card is on screen
+    // (AppDelegate+Windows.swift:79-87), and AmbientTint reads no motion setting
+    // (AmbientArt.swift:158-168).
+    #[test]
+    fn the_cover_tint_keeps_following_the_sound_with_animations_off() {
+        let backend = MockBackend::new();
+        let peak = backend.sound_peak.clone();
+        let app = app_over(backend);
+        let weak = Rc::downgrade(&app);
+        app.main.global::<Motion>().set_on(false);
+        app.main.set_now_playing_shown(true);
+        app.main.show().expect("the main window shows");
+        app.follow_ambient(&weak);
+        assert!(
+            !app.ambient_timer.running(),
+            "no frames with animations off"
+        );
+        assert!(app.tint_timer.running(), "the tint still reads the sound");
+        for loud in [0.05, 0.8, 0.05, 0.8, 0.05, 0.8, 0.05, 0.8] {
+            peak.set(Some(loud));
+            app.tick_tint();
+        }
+        assert!(app.main.get_now_playing_ambient().tint > 0.0);
+        assert_eq!(
+            app.main.get_now_playing_ambient().strands.row_count(),
+            1,
+            "still the one line"
+        );
+
+        app.main.window().set_minimized(true);
+        app.tick_tint();
+        assert!(!app.tint_timer.running(), "stopped off screen");
+        assert_eq!(app.ambient.borrow().tint(), 0.0);
     }
 
     #[test]
