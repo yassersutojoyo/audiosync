@@ -220,3 +220,29 @@ fn the_calibrate_sheets_cards_are_outlined_and_the_fix_button_compact() {
         "{wrapper}"
     );
 }
+
+/// The sheet's body lines take SF's 16 pt line, not Segoe UI's 2 px taller one:
+/// the Mac's microphone row is 10 + 16 + 2 + 16 + 10 (CAL-SHEET photos), each
+/// result card 2 pt shorter than Windows' was. The meter's 260 (:262) no longer
+/// caps the warning's column, and the Spacer before Set to 75% keeps the
+/// HStack's 12 after the text (CalibrateAllViews.swift:191-202, :218-232).
+// covers: S450
+#[test]
+fn the_calibrate_sheets_lines_and_warning_column_are_the_macs() {
+    let main = include_str!("../../ui/main.slint").replace("\r\n", "\n");
+    let start = main
+        .find("component CalibrateAllSheet ")
+        .expect("the sheet");
+    let sheet = &main[start..];
+    let sheet = &sheet[..sheet.find("\ncomponent ").unwrap_or(sheet.len())];
+    assert!(main.contains("component MacLines inherits Text {"));
+    assert_eq!(sheet.matches("MacLines {\n").count(), 6, "{sheet}");
+    assert_eq!(sheet.matches("line: 16px;").count(), 5);
+    assert_eq!(sheet.matches("line: 13px;").count(), 1);
+    assert_eq!(sheet.matches("padding-right: 12px;\n").count(), 7);
+    let meter = &sheet[..sheet.find("VolumeMeter {").expect("the meter")];
+    assert!(
+        meter.ends_with("HorizontalLayout {\n                                        "),
+        "the meter sits in a row that can widen"
+    );
+}
