@@ -6,11 +6,12 @@
 
 use std::time::Duration;
 
+use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
+
 use crate::window_rules::{AmbientMode, Rgb};
 use crate::window_rules::{ambient_bands, ambient_breath};
 
-/// The strip's drawing space: the path's viewbox in `ambient.slint`.
-pub const VIEW_WIDTH: f64 = 300.0;
+/// The height of the box the strands are drawn in, stretched to the strip.
 pub const VIEW_HEIGHT: f64 = 22.0;
 /// How far the strands reach: the main window's hero, and the tray panel's smaller one.
 pub const WINDOW_DENSITY: f64 = 1.0;
@@ -26,11 +27,12 @@ const STEPS: usize = 60;
 /// picks up where it stopped instead of jumping (the Mac's `ArtClock.maxStep`).
 const MAX_STEP: f64 = 0.1;
 
-/// One strand as drawn: its path, the breath's line opacity over it, the
-/// sound's own strand in `tone` at `sound`, and the stroke's width.
+/// One strand as drawn: its heights in the box, `STEPS` apart, the breath's
+/// line opacity over it, the sound's own strand in `tone` at `sound`, and the
+/// stroke's width.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Strand {
-    pub commands: String,
+    pub ys: [f64; STEPS + 1],
     pub breath: f64,
     pub sound: f64,
     pub width: f64,
@@ -85,7 +87,7 @@ impl Driver {
     pub fn strands(&self, cover: &[Rgb; 3], density: f64, slot: f64, still: bool) -> Vec<Strand> {
         if still {
             return vec![Strand {
-                commands: path(1, 0.0, 0.0, 0.0, slot),
+                ys: path(1, 0.0, 0.0, 0.0, slot),
                 breath: 1.0,
                 sound: 0.0,
                 width: ambient_breath::STROKE,
@@ -99,7 +101,7 @@ impl Driver {
             .map(|index| {
                 let reach = ambient_breath::motion(self.bands[index].min(1.0), live, breath);
                 Strand {
-                    commands: path(index, reach * density, 1.0 - live, self.time, slot),
+                    ys: path(index, reach * density, 1.0 - live, self.time, slot),
                     breath: line,
                     sound,
                     width: ambient_breath::stroke(live),
@@ -119,19 +121,13 @@ pub fn line_colors(cover: &[Rgb; 3], still: bool) -> (Rgb, Rgb) {
     )
 }
 
-/// Strand `index` as SVG path commands, widest in the middle.
-fn path(index: usize, spread: f64, idle: f64, time: f64, slot: f64) -> String {
-    use std::fmt::Write;
-
-    let mut commands = String::with_capacity(STEPS * 14);
-    for step in 0..=STEPS {
+/// Strand `index`'s heights in the box, widest in the middle.
+fn path(index: usize, spread: f64, idle: f64, time: f64, slot: f64) -> [f64; STEPS + 1] {
+    std::array::from_fn(|step| {
         let x = step as f64 / STEPS as f64;
         let lift = ambient_breath::lift(index, x, time, spread, idle, slot);
-        let y = (11.0 + ambient_breath::taper(x) * lift).clamp(1.0, VIEW_HEIGHT - 1.0);
-        let verb = if step == 0 { 'M' } else { 'L' };
-        let _ = write!(commands, "{verb}{:.1} {y:.2} ", x * VIEW_WIDTH);
-    }
-    commands
+        (11.0 + ambient_breath::taper(x) * lift).clamp(1.0, VIEW_HEIGHT - 1.0)
+    })
 }
 
 /// Points a pixel is sampled at across; the coverage down a column is its area.
@@ -161,9 +157,10 @@ pub fn mask(ys: &[f64], stroke: f64, pixels: &mut [u8], width: usize, height: us
             let reach = stroke / 2.0 * (1.0 + ((to - from) / step_width).powi(2)).sqrt();
             let (top, bottom) = ((y - reach).max(0.0), (y + reach).min(height as f64));
             let weight = ambient_breath::edge(x / width as f64) / SUBCOLUMNS as f64;
-            for row in top as usize..bottom.ceil() as usize {
-                cover[row] += weight * row_share(row, top, bottom);
-                (first, last) = (first.min(row), last.max(row + 1));
+            let rows = top as usize..bottom.ceil() as usize;
+            (first, last) = (first.min(rows.start), last.max(rows.end));
+            for (row, share) in cover.iter_mut().enumerate().take(rows.end).skip(rows.start) {
+                *share += weight * row_share(row, top, bottom);
             }
         }
         for (row, share) in cover.iter_mut().enumerate().take(last).skip(first) {
@@ -175,13 +172,46 @@ pub fn mask(ys: &[f64], stroke: f64, pixels: &mut [u8], width: usize, height: us
     }
 }
 
-/// How much of pixel row `row` the span `top..bottom` covers, sampled at
-/// four rows a pixel as Skia's anti-aliased path fill does.
+/// A window's strand masks, two a strand: a frame draws into the ones the
+/// window let go of when it took the frame before, so no frame allocates.
+#[derive(Default)]
+pub struct Masks {
+    buffers: Vec<SharedPixelBuffer<Rgba8Pixel>>,
+    frame: usize,
+}
+
+impl Masks {
+    /// The masks of `strands` at `width` x `height` pixels, `scale` pixels a point.
+    pub fn draw(&mut self, strands: &[Strand], width: u32, height: u32, scale: f64) -> Vec<Image> {
+        self.frame ^= 1;
+        let mut images = Vec::with_capacity(strands.len());
+        for (index, strand) in strands.iter().enumerate() {
+            let at = index * 2 + self.frame;
+            if self.buffers.len() <= at {
+                self.buffers
+                    .resize_with(at + 1, || SharedPixelBuffer::new(0, 0));
+            }
+            let buffer = &mut self.buffers[at];
+            if (buffer.width(), buffer.height()) != (width, height) {
+                *buffer = SharedPixelBuffer::new(width, height);
+            }
+            let pixels = buffer.make_mut_bytes();
+            mask(
+                &strand.ys,
+                strand.width * scale,
+                pixels,
+                width as usize,
+                height as usize,
+            );
+            images.push(Image::from_rgba8_premultiplied(buffer.clone()));
+        }
+        images
+    }
+}
+
+/// How much of pixel row `row` the span `top..bottom` covers.
 fn row_share(row: usize, top: f64, bottom: f64) -> f64 {
-    (0..4)
-        .filter(|k| (top..bottom).contains(&(row as f64 + (*k as f64 + 0.5) / 4.0)))
-        .count() as f64
-        / 4.0
+    (bottom.min(row as f64 + 1.0) - top.max(row as f64)).max(0.0)
 }
 
 /// A cover's top, middle and bottom thirds, averaged, from its premultiplied
@@ -223,17 +253,9 @@ mod tests {
         reads
     }
 
-    fn ys(commands: &str) -> Vec<f64> {
-        commands
-            .split_whitespace()
-            .skip(1)
-            .step_by(2)
-            .map(|y| y.parse().expect("a number"))
-            .collect()
-    }
-
     fn reach(strand: &Strand) -> f64 {
-        ys(&strand.commands)
+        strand
+            .ys
             .iter()
             .map(|y| (y - 11.0).abs())
             .fold(0.0, f64::max)
@@ -315,7 +337,7 @@ mod tests {
         assert_eq!(strands.len(), 1);
         assert_eq!((strands[0].breath, strands[0].sound), (1.0, 0.0));
         assert_eq!(strands[0].width, ambient_breath::STROKE);
-        assert!(ys(&strands[0].commands).iter().all(|y| *y == 11.0));
+        assert!(strands[0].ys.iter().all(|y| *y == 11.0));
     }
 
     #[test]
@@ -329,16 +351,14 @@ mod tests {
             for strand in &strands {
                 assert_eq!(strand.breath, ambient_breath::OPACITY);
                 assert_eq!((strand.sound, strand.width), (0.0, ambient_breath::STROKE));
-                let ys = ys(&strand.commands);
-                assert_eq!(ys.len(), STEPS + 1);
-                assert!(ys.iter().all(|y| (1.0..=21.0).contains(y)));
+                assert!(strand.ys.iter().all(|y| (1.0..=21.0).contains(y)));
                 widest = widest.max(reach(strand));
             }
         }
         assert!(widest > 2.0, "it sways: {widest}");
-        // The Mac's resting swing (WindowRules.swift:206) and the breath on top.
+        // The Mac's resting swing (WindowRules.swift:205) and the breath on top.
         assert!(
-            widest < ambient_breath::SWAY * 22.0 + 2.5,
+            widest < ambient_breath::SWAY + 2.5,
             "it stays calm: {widest}"
         );
     }
@@ -358,7 +378,7 @@ mod tests {
             .map(|strand| {
                 let mut pixels = vec![0; width * height * 4];
                 let stroke = strand.width * height as f64 / WINDOW_SLOT;
-                mask(&ys(&strand.commands), stroke, &mut pixels, width, height);
+                mask(&strand.ys, stroke, &mut pixels, width, height);
                 pixels
             })
             .collect()
@@ -435,10 +455,20 @@ mod tests {
 
     #[test]
     fn the_strip_fades_the_strands_ends_as_the_rules_say() {
-        let slint = include_str!("../ui/ambient.slint");
-        let fade = ambient_breath::EDGE_FADE * 100.0;
-        assert!(slint.contains(&format!(" {fade:.0}%")));
-        assert!(slint.contains(&format!(" {:.0}%", 100.0 - fade)));
+        let (width, height) = (200, 22);
+        let mut pixels = vec![0; width * height * 4];
+        mask(
+            &[11.0; STEPS + 1],
+            ambient_breath::STROKE,
+            &mut pixels,
+            width,
+            height,
+        );
+        let alpha = |column: usize| pixels[(10 * width + column) * 4 + 3];
+        // Full from 9% in, half way at 4.75%, none at the edges.
+        assert_eq!((alpha(18), alpha(181)), (alpha(100), alpha(100)));
+        assert!((100..=110).contains(&alpha(9)), "{}", alpha(9));
+        assert!(alpha(0) <= 6 && alpha(width - 1) <= 6);
     }
 
     #[test]
