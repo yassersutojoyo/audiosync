@@ -649,7 +649,7 @@ let layarRows: [(id: String, draw: (Look) -> (NSWindow, NSView))] = [
     ("MAIN-REPEAT-ONE", { layarMain(layarModel { $0.nowPlaying = layarTrack(repeatMode: .one) }, look: $0) }),
     ("MAIN-INPUT-LEVEL", { layarMain(layarModel { $0.sourceID = "line-in" }, look: $0) }),
     ("MAIN-LIVEINPUT-NOTE", { layarMain(layarModel { $0.sourceID = "line-in" }, look: $0) }),
-    ("MAIN-MASTER-MUTED", { layarMain(layarModel { $0.toggleMasterMute() }, look: $0) }),
+    ("MAIN-MASTER-MUTED", { layarMain(layarModel { $0.toggleMasterMute(); $0.master = 0 }, look: $0) }),
     ("MAIN-NETWORK-DIVIDERS", { layarMain(layarModel { $0.nowPlaying = layarTrack() }, look: $0) }),
     ("MAIN-LOCALNET-HINT", { layarMain(layarModel {
         $0.airplay = []
@@ -744,7 +744,7 @@ let layarRows: [(id: String, draw: (Look) -> (NSWindow, NSView))] = [
     ("TRAY-TRANSPORT", { layarPanel(layarModel { $0.nowPlaying = layarTrack(shuffle: true, repeatMode: .all) },
                                     look: $0) }),
     ("TRAY-AMBIENT-REST", { layarPanel(layarModel { $0.nowPlaying = layarTrack(playing: false) }, look: $0) }),
-    ("TRAY-MASTER-MUTED", { layarPanel(layarModel { $0.toggleMasterMute() }, look: $0) }),
+    ("TRAY-MASTER-MUTED", { layarPanel(layarModel { $0.toggleMasterMute(); $0.master = 0 }, look: $0) }),
     ("TRAY-NOTICE", { layarPanel(layarModel {
         $0.notices.post($0.text.sourceTerminated(name: "Music Player"), subject: Notice.source)
     }, look: $0) }),
