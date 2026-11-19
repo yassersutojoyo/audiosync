@@ -244,31 +244,56 @@ fn narrator_reads_a_notices_heading_before_its_text() {
     assert!(strings.contains("return @tr(\"{}. {}\", heading, message);"));
 }
 
-/// SettingsWindow.swift:184-186 is a native segmented control: on the Mac's
-/// 2x MAIN-SETTINGS photos a filled 24 pt track (#ebebeb light, #565656
-/// dark) with no edge, and a 1 x 14 pt divider between two segments that
-/// are not chosen (#b4b4b4 light, #494949 dark).
+/// SettingsWindow.swift:184-186 is a native segmented control. The Mac's
+/// 2x MAIN-SETTINGS screen captures of 19 Nov show a 21 pt track, white
+/// with a faint edge on light and #565656 on dark, three segments as wide
+/// as the widest, the chosen one brand teal with white regular text, and a
+/// 12 x 1 pt divider between two segments that are not chosen (#e5e5e5
+/// light, #494949 dark).
 #[test]
-fn the_appearance_control_is_a_filled_track_with_dividers() {
-    let settings = include_str!("../../ui/settings.slint").replace("\r\n", "\n");
-    let at = settings
+fn the_appearance_control_is_a_white_track_with_a_teal_choice() {
+    use i_slint_backend_testing::{AccessibleRole, ElementHandle};
+
+    let app = super::tests::app_over(crate::ui_model::MockBackend::new());
+    app.show_settings();
+    let settings = app.settings();
+    let sizes: Vec<_> = ["Match System", "Light", "Dark"]
+        .iter()
+        .map(|label| {
+            ElementHandle::find_by_accessible_label(&settings, label)
+                .find(|element| element.accessible_role() == Some(AccessibleRole::Button))
+                .unwrap_or_else(|| panic!("{label}"))
+                .size()
+        })
+        .collect();
+    for size in &sizes {
+        assert_eq!(size.width, sizes[0].width, "{sizes:?}");
+        assert_eq!(size.height, 21.0, "{sizes:?}");
+    }
+
+    let source = include_str!("../../ui/settings.slint").replace("\r\n", "\n");
+    let at = source
         .find("accessible-label: Strings.appearance;")
         .expect("the track");
-    let track = &settings[settings[..at].rfind("Rectangle {").expect("track")..];
+    let track = &source[source[..at].rfind("Rectangle {").expect("track")..];
     let track = &track[..track
         .find("\n                        Divider { }")
         .expect("end")];
     assert!(
-        track.contains("background: Tokens.dark ? #565656 : #ebebeb;"),
+        track.contains("background: Tokens.dark ? #565656 : #ffffff;"),
         "{track}"
     );
-    assert!(!track.contains("border-width"), "{track}");
-    assert!(!track.contains("drop-shadow"), "{track}");
     assert_eq!(track.matches("SegmentDivider {").count(), 2, "{track}");
-    let divider = component(&settings, "SegmentDivider");
-    assert!(divider.contains("height: 14px;"), "{divider}");
+    let segment = component(&source, "Segment");
     assert!(
-        divider.contains("background: Tokens.dark ? #494949 : #b4b4b4;"),
+        segment.contains("background: root.chosen ? Tokens.teal :"),
+        "{segment}"
+    );
+    assert!(!segment.contains("weight-semibold"), "{segment}");
+    let divider = component(&source, "SegmentDivider");
+    assert!(divider.contains("height: 12px;"), "{divider}");
+    assert!(
+        divider.contains("background: Tokens.dark ? #494949 : #e5e5e5;"),
         "{divider}"
     );
 }

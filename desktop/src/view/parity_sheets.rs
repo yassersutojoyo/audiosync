@@ -80,8 +80,8 @@ fn the_delay_panel_buttons_are_the_macs_small_ones() {
     assert!(calibrate.contains("SmallButton {") && calibrate.contains("height: 20px;"));
 }
 
-// EqualizerWindow.swift:160, 318-341: a content-wide 24 pt curve chip, a
-// 12 pt zero tick and a plain white 16 pt knob.
+// EqualizerWindow.swift:160, 318-341: a 170 x 21 pt curve menu, a 12 pt
+// zero tick and a plain white 16 pt knob.
 #[test]
 fn the_equalizer_has_the_macs_curve_chip_tick_and_knob() {
     let app = app_over(MockBackend::new());
@@ -90,18 +90,16 @@ fn the_equalizer_has_the_macs_curve_chip_tick_and_knob() {
     let curve = ElementHandle::find_by_accessible_label(&eq, "Curve")
         .find(|element| element.accessible_role() == Some(AccessibleRole::Combobox))
         .expect("the curve menu");
-    assert_eq!(curve.size().height, 24.0);
-    assert!(curve.size().width < 170.0, "as wide as the curve name");
+    assert_eq!((curve.size().width, curve.size().height), (170.0, 21.0));
     assert!(EQUALIZER.contains("width: 12px;\n                        height: 1px;"));
     assert!(EQUALIZER.contains("width: 16px;\n                        height: 16px;"));
     assert!(!EQUALIZER.contains("Fluent.thumb"));
 }
 
 // The Mac's system switch (EqualizerWindow.swift:150) measures 54 x 24 pt on
-// its 2x photo (EQ-WINDOW), and its curve chip 106 pt for Loudness: 13 + 11 pt
-// beside the name and chevron, 19 pt between them.
+// its 2x photo (EQ-WINDOW).
 #[test]
-fn the_equalizer_switch_and_curve_chip_are_the_macs_size() {
+fn the_equalizer_switch_is_the_macs_size() {
     let app = app_over(MockBackend::new());
     app.show_equalizer();
     let eq = app.equalizer();
@@ -113,9 +111,6 @@ fn the_equalizer_switch_and_curve_chip_are_the_macs_size() {
     };
     let track = size("ToggleSwitch::track");
     assert_eq!((track.width, track.height), (54.0, 24.0));
-    let chip = size("CurveMenu::touch").width;
-    let around = chip - size("CurveMenu::shown-text").width - size("CurveMenu::chevron").width;
-    assert_eq!(around, 41.0);
     assert!(EQUALIZER.contains("// One line, as the Mac's (EqualizerWindow.swift:179)"));
     let at = EQUALIZER
         .find("text: Strings.equalizer-caption(")
