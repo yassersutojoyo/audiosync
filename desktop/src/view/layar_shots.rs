@@ -1365,6 +1365,11 @@ fn b07() -> Vec<Row> {
             s.app.start_rename("zone:upstairs", RenamePlace::Zone);
             s.main()
         }),
+        row("B07", "MAIN-ZONE-NEW", |s| {
+            s.load(MockBackend::zones_preview());
+            s.app.main.invoke_new_zone_requested();
+            s.main()
+        }),
         row("B07", "MAIN-ZONE-PLACEHOLDER", |s| {
             s.load(MockBackend::zones_preview());
             // Office, the empty zone, is built only once the list scrolls to it.

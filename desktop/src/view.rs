@@ -5394,6 +5394,7 @@ impl App {
             typed.clear();
         }
         self.refresh();
+        self.main.set_reveal_zone_id(zone.id.as_str().into());
     }
 
     fn ask_save_curve(&self) {
