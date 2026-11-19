@@ -3736,8 +3736,8 @@ export component MainWindow inherits Window {
 
     VerticalLayout {
         padding: Fluent.window-margin;
-        // MainWindow.swift:318: 4 pt under the Mac's 28 pt title bar, 32 pt from the top.
-        padding-top: title-row.height;
+        // The header as high as the Mac's: 21 of its 23 main window 2x photos put the mark 4 pt lower than 1 px into the top row.
+        padding-top: title-row.height + 3px;
         // The notices and the columns bring their gap above them, so a
         // notice opens and closes its gap with it.
         spacing: 0px;
