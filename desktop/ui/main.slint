@@ -2591,6 +2591,7 @@ component CalibrateAllSheet inherits FocusScope {
                                 MacLines {
                                     line: 16px;
                                     text: row.name;
+                                    horizontal-stretch: 0;
                                     font-size: Tokens.font-size-body;
                                     font-weight: Fluent.weight-semibold;
                                     text-color: Tokens.text;
@@ -2945,6 +2946,7 @@ component CalibrateAllSheet inherits FocusScope {
                     if root.results-shown && !root.ended && !root.applied: HorizontalLayout {
                         apply-button := SmallButton {
                             primary: true;
+                            primary-fill: Tokens.teal;
                             height: 24px;
                             font-size: Tokens.font-size-body;
                             changed has-focus => {
