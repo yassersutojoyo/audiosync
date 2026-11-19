@@ -190,6 +190,12 @@ impl Masks {
         self.frame ^= 1;
         let mut images = Vec::with_capacity(strands.len());
         for (index, strand) in strands.iter().enumerate() {
+            // Before layout the strip is 0 wide; Slint's software renderer
+            // panics stretching a 0-pixel image, an empty one it skips.
+            if width == 0 || height == 0 {
+                images.push(Image::default());
+                continue;
+            }
             let at = index * 2 + self.frame;
             if self.buffers.len() <= at {
                 self.buffers
