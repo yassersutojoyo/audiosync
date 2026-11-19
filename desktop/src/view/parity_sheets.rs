@@ -117,7 +117,9 @@ fn the_equalizer_switch_and_curve_chip_are_the_macs_size() {
     let around = chip - size("CurveMenu::shown-text").width - size("CurveMenu::chevron").width;
     assert_eq!(around, 41.0);
     assert!(EQUALIZER.contains("// One line, as the Mac's (EqualizerWindow.swift:179)"));
-    let at = EQUALIZER.find("text: Strings.equalizer-caption(").expect("the caption");
+    let at = EQUALIZER
+        .find("text: Strings.equalizer-caption(")
+        .expect("the caption");
     assert!(EQUALIZER[at..at + 400].contains("overflow: elide;"));
 }
 
