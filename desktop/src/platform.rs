@@ -865,6 +865,78 @@ pub fn set_cloaked(_window: &slint::Window, _cloaked: bool) {
     note_cloaked(_window, _cloaked);
 }
 
+#[cfg(test)]
+thread_local! {
+    static ICONED: std::cell::RefCell<Vec<usize>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Whether `set_app_icon` ran for `window`, for headless tests.
+#[cfg(test)]
+pub fn has_app_icon(window: &slint::Window) -> bool {
+    let id = std::ptr::from_ref(window) as usize;
+    ICONED.with(|iconed| iconed.borrow().contains(&id))
+}
+
+#[cfg(test)]
+fn note_app_icon(window: &slint::Window) {
+    let id = std::ptr::from_ref(window) as usize;
+    ICONED.with(|iconed| iconed.borrow_mut().push(id));
+}
+
+/// Gives a window the app icon (resource 1, the tile Explorer shows) in its
+/// title bar and on the taskbar while it lacks either. Slint sets a window's
+/// icon only once and never the big one, and Settings or Web Remote opened
+/// after the About box ended with none.
+#[cfg(windows)]
+pub fn set_app_icon(window: &slint::Window) {
+    #[cfg(test)]
+    note_app_icon(window);
+    use slint::winit_030::WinitWindowAccessor;
+    use slint::winit_030::winit::dpi::PhysicalSize;
+    use slint::winit_030::winit::platform::windows::{IconExtWindows, WindowExtWindows};
+    use slint::winit_030::winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use slint::winit_030::winit::window::Icon;
+    use windows::Win32::Foundation::{HWND, WPARAM};
+    use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        ICON_BIG, ICON_SMALL, SM_CXSMICON, SendMessageW, WM_GETICON,
+    };
+
+    window.with_winit_window(|window| {
+        let Ok(handle) = window.window_handle() else {
+            return;
+        };
+        let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+            return;
+        };
+        let hwnd = HWND(handle.hwnd.get() as *mut core::ffi::c_void);
+        // SAFETY: `hwnd` is this thread's live window; WM_GETICON only reads.
+        let has = |kind: u32| unsafe {
+            SendMessageW(hwnd, WM_GETICON, Some(WPARAM(kind as usize)), None).0 != 0
+        };
+        if has(ICON_SMALL) && has(ICON_BIG) {
+            return;
+        }
+        // SAFETY: plain queries on this thread's live window.
+        let small = unsafe { GetSystemMetricsForDpi(SM_CXSMICON, GetDpiForWindow(hwnd)) };
+        let small = u32::try_from(small)
+            .ok()
+            .map(|side| PhysicalSize::new(side, side));
+        if let Ok(icon) = Icon::from_resource(1, small) {
+            window.set_window_icon(Some(icon));
+        }
+        if let Ok(icon) = Icon::from_resource(1, None) {
+            window.set_taskbar_icon(Some(icon));
+        }
+    });
+}
+
+#[cfg(not(windows))]
+pub fn set_app_icon(_window: &slint::Window) {
+    #[cfg(test)]
+    note_app_icon(_window);
+}
+
 /// Whether a WM_SETTINGCHANGE names `area` "ImmersiveColorSet", the one
 /// Windows sends when it switches between light and dark.
 #[cfg(any(windows, test))]

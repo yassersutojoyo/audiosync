@@ -2597,6 +2597,7 @@ impl App {
         self.theme_frame(window);
         if frame == Frame::Titled {
             crate::backdrop::set_dark(window, self.shows_dark());
+            crate::platform::set_app_icon(window);
         }
         crate::platform::follow_color_set(window);
         // Before the event loop runs there is no native window yet; the
@@ -11308,6 +11309,25 @@ pub(crate) mod tests {
     /// Each time Settings opens, the second time too, it stays off the screen
     /// until it drew its content hidden, then fades in once: Windows otherwise
     /// shows the frame it kept from the last opening, or a black one.
+    /// Settings and Web Remote opened after the About box had no icon in the
+    /// title bar (WM_GETICON 0) though their .slint sets one, and no window had
+    /// a big (taskbar) icon. Every titled window takes the app icon with its
+    /// frame, on each focus.
+    #[test]
+    fn every_titled_window_takes_the_app_icon_with_its_frame() {
+        let app = app_over(MockBackend::new());
+        let windows = [
+            (app.main.window(), "main window"),
+            (leaked(app.settings()), "Settings"),
+            (leaked(app.remote_window()), "Web Remote"),
+            (leaked(app.about()), "about dialog"),
+        ];
+        for (window, name) in windows {
+            app.apply_frame(window, name, crate::backdrop::Frame::Titled);
+            assert!(crate::platform::has_app_icon(window), "{name}");
+        }
+    }
+
     #[test]
     fn settings_stays_off_the_screen_until_its_first_hidden_frame_on_every_open() {
         use i_slint_backend_testing::ElementHandle;
