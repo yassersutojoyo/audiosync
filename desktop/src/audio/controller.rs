@@ -6784,6 +6784,25 @@ mod tests {
         assert!(backend.routing.last_check > Some(checked));
     }
 
+    // covers: VC36
+    #[test]
+    fn the_double_audio_report_clears_once_an_added_silent_output_takes_over() {
+        let mut backend = backend();
+        let (_, fake, _) = with_switch(&mut backend);
+        for candidate in &mut fake.0.borrow_mut().endpoints {
+            candidate.vb_cable = candidate.id == switch_fakes::CABLE;
+        }
+        backend.connect_output_as(TV, "TV", OutputKind::Hdmi);
+        backend.set_default_output(TV);
+        backend.list_outputs().unwrap();
+        backend.silent_output_installing(true);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(heard_twice(&backend.poll()), [[TV]]);
+        backend.silent_output_installing(false);
+        backend.silent_output_added();
+        assert_eq!(heard_twice(&backend.poll()), [Vec::<String>::new()]);
+    }
+
     // covers: VC45
     #[test]
     fn vb_cable_is_no_speaker_and_no_source_while_it_is_the_silent_endpoint() {
