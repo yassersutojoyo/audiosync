@@ -25,8 +25,39 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/main-window-light.png" width="360" alt="AudioSync main window on a Mac in the light theme: the song playing with its art, the audio source, and the speakers, each with a round on/off icon and a volume slider">
-  <img src="docs/images/main-window-dark.png" width="360" alt="AudioSync main window on a Mac in the dark theme: the song playing with its art, the audio source, and the speakers, each with a round on/off icon and a volume slider">
+  <b>macOS</b><br>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/main-window-dark.png">
+    <img src="docs/images/main-window-light.png" width="280" alt="AudioSync main window on a Mac: the song playing with its art, the audio source, master volume, and the speakers, each with an on/off icon and a volume slider">
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/menu-bar-panel-dark.png">
+    <img src="docs/images/menu-bar-panel-light.png" width="160" alt="The AudioSync menu bar panel on a Mac: the song playing, master volume, and the speakers, each shown as on or off">
+  </picture>
+</p>
+
+<p align="center">
+  <b>Windows</b><br>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/main-window-windows-dark.png">
+    <img src="docs/images/main-window-windows-light.png" width="307" alt="AudioSync main window on Windows: the song playing with its art, the audio source, master volume, and the speakers, each with an on/off icon and a volume slider">
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/tray-panel-windows-dark.png">
+    <img src="docs/images/tray-panel-windows-light.png" width="181" alt="The AudioSync tray panel on Windows: the song playing, master volume, and the speakers, each shown as on or off">
+  </picture>
+</p>
+
+<p align="center">
+  <b>Linux</b><br>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/main-window-linux-dark.png">
+    <img src="docs/images/main-window-linux-light.png" width="307" alt="AudioSync main window on Linux: the song playing with its art, the audio source, master volume, and the speakers, each with an on/off icon and a volume slider">
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/tray-panel-linux-dark.png">
+    <img src="docs/images/tray-panel-linux-light.png" width="181" alt="The AudioSync tray panel on Linux: the song playing, master volume, and the speakers, each shown as on or off">
+  </picture>
 </p>
 
 AirPlay speakers play a little late and local speakers don't, so the same song on both turns into an echo. AudioSync grabs your computer's audio once, sends it to the network speakers and holds each local speaker back by its own delay, so everything plays together. It's the same app on macOS, Windows and Linux, and all three run the same Rust core for the audio, the sync and the AirPlay and Google Cast senders.
