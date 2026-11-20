@@ -44,7 +44,7 @@ AirPlay speakers play a little late and local speakers don't, so the same song o
 |---|---|---|---|
 | macOS | macOS 15 or later, Apple silicon | The menu bar, plus a main window | By itself |
 | Windows | Windows 11, x64 or ARM64 | A window, plus a tray icon | By itself |
-| Linux | x86_64 or aarch64, glibc 2.39 or later, PipeWire | A window, plus a tray icon when your desktop has a tray | The AppImage by itself, a `.deb` by hand |
+| Linux | x86_64 or aarch64, glibc 2.39 or later, PipeWire | A window, plus a tray icon when your desktop has a tray | The AppImage by itself, a `.deb` or `.rpm` by hand |
 
 ## Install
 
@@ -55,12 +55,14 @@ AirPlay speakers play a little late and local speakers don't, so the same song o
 
 ### Windows
 - From PowerShell, no admin and no SmartScreen: `irm https://github.com/yassersutojoyo/audiosync/releases/latest/download/install.ps1 | iex`
+- Or run the installer from the [latest release](https://github.com/yassersutojoyo/audiosync/releases/latest), `AudioSync-Setup.exe` for x64 or `AudioSync-Setup-arm64.exe` for ARM64. It installs for everyone on the PC (one admin prompt) or only for you, and adds a Start menu shortcut. If SmartScreen asks, click More info, then Run anyway.
 - Or get the x64 or ARM64 zip from the [latest release](https://github.com/yassersutojoyo/audiosync/releases/latest), unzip it into its own folder and run `audiosync.exe`. If SmartScreen asks, click More info, then Run anyway.
 
 ### Linux
 - From a terminal, no sudo: `curl -fsSL https://github.com/yassersutojoyo/audiosync/releases/latest/download/install-linux.sh | bash`
 - Or get the AppImage for your machine from the [latest release](https://github.com/yassersutojoyo/audiosync/releases/latest), make it executable and run it.
 - Or on Debian or Ubuntu, the `.deb`: `sudo apt install ./AudioSync-<version>-amd64.deb` (or `arm64`).
+- Or on Fedora, the `.rpm` (x86_64): `sudo dnf install ./AudioSync-<version>-x86_64.rpm`.
 
 Each install script checks the download against the release's SHA-256 checksums; run it again to update. To build it yourself, see [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
@@ -74,7 +76,7 @@ Each install script checks the download against the release's SHA-256 checksums;
 - HomePods: in Allow Speaker & TV Access, pick “Anyone on the Same Network” on a network you trust.
 - On the Mac, leave the sound output on a local device, not a HomePod. The window doesn't open at login; click the Dock icon.
 - On Linux, hear the source twice with no output to spare? [desktop/README.md](desktop/README.md#linux-a-silent-output) shows how to add a silent one.
-- The rest is in Help > AudioSync Guide.
+- The rest is in the AudioSync Guide, under Help on the Mac and in the gear menu on Windows and Linux.
 
 ## Good to know
 

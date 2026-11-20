@@ -2,81 +2,101 @@
 
 User-visible changes in each version. Loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/). Downloads are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page.
 
-## [0.9.3] - 2026-11-15
+## [0.9.3] - 2026-11-20
+
+### Pending, lands before release
+
+- On the Mac, Windows and Linux, network speakers get device icons for their kind.
+- On the Mac, Windows and Linux, Next always slides the new cover in from the right, the old cover keeps its clipped fade during the slide, and a Previous that restarts the song doesn't slide.
+- On Windows, every window uses the app icon tile.
 
 ### Added
 
-- On Windows, there's an installer, `AudioSync-Setup.exe` for x64 and `AudioSync-Setup-arm64.exe` for Arm, next to the zips. It installs for everyone on the PC by default, or only for you, with a Start menu shortcut and an uninstall entry in Settings > Apps, and a page before the install says what AudioSync sends and what stays on the PC. An install for everyone updates from Install Update after one administrator prompt per update.
-- On Linux, there's an `.rpm` for Fedora on x86_64.
-- On the Mac, a new Settings switch, Resume Playback After Sleep, off by default. Turn it on and the song that was playing when your Mac went to sleep plays again after it wakes, once your speakers are back. It stays paused if you pressed play or pause, picked another song, or the speakers took longer than 30 seconds.
-- On Windows and Linux, File > Resume Playback After Sleep does the same, off by default: when your PC wakes, the song that was playing continues once your speakers are back.
+- On the Mac, Windows and Linux, a new Settings switch, Resume Playback After Sleep, off by default. Turn it on and the song that was playing when your computer went to sleep plays again after it wakes, once your speakers are back. It stays paused if you pressed play or pause, picked another song, or the speakers took longer than 30 seconds.
+- On the Mac, Windows and Linux, the speaker rows show AudioSync's own device icons, in the round on/off icon and as small badges after the name.
 - On the Mac, the built-in speakers' row shows a System value where other local rows show their delay. It opens a panel with the macOS volume slider and follows changes you make in macOS.
 - On the Mac, a new Settings switch, Hide Dock Icon When Window Closes, off by default: turned on, AudioSync leaves the Dock when its last window closes and keeps running in the menu bar. Opening a window brings the icon back.
+- On Windows, there's an installer, `AudioSync-Setup.exe` for x64 and `AudioSync-Setup-arm64.exe` for Arm, next to the zips. It installs for everyone on the PC by default, or only for you, with a Start menu shortcut and an uninstall entry in Settings > Apps, and a page before the install says what AudioSync sends and what stays on the PC. An install for everyone updates from Install Update after one administrator prompt per update.
+- On Windows, the This PC row shows the Windows volume as System and its level where other rows show their delay, with a panel whose slider sets it, as the Mac's built-in speakers' row does.
+- On Windows, the source menu lists running apps that have a window, each with its own icon, so you can pick an app before it plays, as on the Mac. Input devices sit under their own heading.
+- On Linux, there's an `.rpm` for Fedora on x86_64.
 
 ### Changed
 
-- Volume keys now move the volume 3 points per press instead of about 6 on the Mac and 2 on Windows.
-- On the Mac, AudioSync remembers the macOS volume each local output last played at through it, sets it again before the output's first audio, and puts back the level it found when the output stops or AudioSync quits. A level you set in macOS in between wins and becomes the remembered one.
-- On the Mac, the preset and the equalizer curve you picked show on a grey second line under Presets and Equalizer, in the main window and the menu bar panel. The Edited mark and the dots for the preset in use are gone.
-- On the Mac, the Presets row in the main window folds open into a list: one click recalls a preset, each row's options button renames, updates or deletes it, and Save as Preset is the last row.
-- On Windows and Linux, the Presets row in the main window folds open into a list too, as on the Mac: one click, Enter or Space recalls a preset, each row says how many speakers the preset holds and its master volume, its … button renames, updates or deletes it, Save as Preset is the last row, and Escape folds it shut. Past five presets the list scrolls, and it stays open or folded after a restart.
-- On Windows, each preset's … button in that list stays visible while Narrator or another screen reader runs, as the Mac shows it with VoiceOver on.
-- On the Mac, a new zone and a saved equalizer curve are named in place instead of in an alert.
-- On the Mac, Check for Updates, Check Setup, Open Settings, Unhide, Open Local Network Settings and Add by Address share one teal-tinted button look.
-- On the Mac, the menu bar panel got a pass: folding a zone no longer shakes the panel, Open AudioSync is back next to Quit, Add by Address is in the main window only, the source name lines up with the title and artist, the volume slider is shorter and shows its number, and the gaps between rows are even.
-- On the Mac, the main window's left column lines up: Presets, Equalizer and Calibrate start on the volume icon's column, Add by Address is a plain row like its neighbours, and the zone label reads In a zone, with its two rules on one line.
-- On the Mac, a long title, artist or curve name scrolls with a softer fade at its edges, and a long Equalizer curve name scrolls again instead of ending in "…".
-- On the Mac, a notice opening or closing in the main window eases the columns along with it, the Waiting for audio notice included. Before, they jumped in one frame. An opening notice moves a little quicker than a closing one and fades in as its room opens. A notice that is closing no longer takes clicks or VoiceOver.
-- On the Mac, zones and the delay panes fold open and shut in one quarter-second motion, in the main window and the menu bar panel, with the rows below following along.
-- On the Mac, Now Playing reads the player every quarter second while the card or the menu bar panel shows a track, so a play/pause key shows sooner, and drops a track that's gone after about 4 seconds of empty readings.
-- On the Mac, the strands under the cover art follow bass, mid and treble, and rest as a slow breath when no sound drives them, so a quiet or paused song no longer leaves an empty gap under the cover. With Reduce Motion they hold one still line.
-- On Windows and Linux, the header matches the Mac's: the real mark, which breathes while no network speaker has been found, the wordmark in the sync teal and the Mac's speaker badges. Focus rings show only after you press Tab.
-- On Windows and Linux, the strands under the cover art follow the sound while streaming, as on the Mac.
-- On Windows and Linux, zones, Several Apps and the AirPlay delay fold open and shut over a quarter second, Escape folds Several Apps, and long names fade at their edges.
-- On Windows and Linux, the tray panel's top block is laid out like the Mac panel's: the cover or the source's icon beside the source menu, with the song under it.
-- On Linux, clicking the tray icon opens the tray panel by the pointer, as on Windows. Where the desktop only shows the tray menu, Open AudioSync stays in it.
-- On Windows and Linux, the main window draws its own top row, with the menus, the window buttons and the drag area, in place of the system frame and menu bar. Alt, F10 and the menu shortcut letters still work, and switching windows with Alt+Tab leaves the menus shut.
-- On Windows and Linux, the app's text is set in Inter, built into the app, so it looks the same on every PC.
-- On Windows and Linux, the tray panel's rows line up with the Mac panel's: the preset icon sits on the volume icon's column, Open AudioSync is back next to Exit, and Add by Address is in the main window only.
-- On the Mac, a click anywhere on the menu bar panel's Presets row opens its menu.
-- On the Mac, the master volume row matches the rows around it, in the main window and the menu bar panel: the speaker icon sits in the other rows' icon spot, the slider is drawn to match the app, and the number lines up with the chevrons.
-- On Windows and Linux, switches, sliders and scroll bars look and work like the Mac's: clicking a switch's label flips it, the arrow keys, Page Up, Page Down, Home and End move a slider, and scroll bars show only while you scroll or point at the edge. The text uses the Mac's text sizes.
-- On the Mac, the equalizer's Reset button, Add by Address and the Web Remote settings use the same buttons and fields as the rest of the app, with the brand color around a focused field. Forget All Remote Devices is red.
-- On Windows and Linux, the speaker list's note, Looking for speakers included, is set in smaller text with a little more room around it, as in the Mac window.
-- On Windows and Linux, the preset and the equalizer curve you picked show on a grey second line under Presets and Equalizer, as on the Mac, and the Presets rows keep naming the preset you used last until you delete it.
-- On the Mac, the line between zones runs from the zone name to its options button and hides beside the zone under the pointer, whose highlight sits a little inside the card.
-- On Windows and Linux, the master volume row has the Mac's look: the speaker, the drawn slider and the number on the right edge, in the window and the tray panel.
-- On Windows and Linux, Next keeps the old song and cover up while the new cover loads.
-- On Windows and Linux, a notice fades in as its room opens, as on the Mac.
-- On the Mac, when a player says it played or paused, Now Playing shows the change sooner still.
 - On the Mac, Windows and Linux, the master volume speaker shows one, two or three waves as the level goes up.
-- On the Mac, the next Spotify song from the same album shows its cover at once.
-- On the Mac, with shuffle off, Apple Music's next few playlist covers load ahead, so Next shows the cover at once.
-- On the Mac, Next and Previous in Now Playing slide the new cover in from the side while the old one shrinks and fades in place, in the main window, where the cover crosses the speaker list on its way in, and in the menu bar panel. The old cover starts shrinking as soon as you press, and the title and artist follow. The keyboard's media keys do the same while Volume Keys Control AudioSync is on. A cover that comes late fades in, and with Reduce Motion on the songs simply cross-fade.
-- On the Mac, the Play/Pause button in the main window turns from play to pause and back with a quick shrink and grow instead of swapping in one frame, whether you click it, press a media key or the player changes on its own. With Reduce Motion on it swaps at once.
-- On Windows and Linux, Next and Previous in Now Playing slide the new cover in from the side while the old one shrinks and fades in place, in the main window, where the cover crosses the speaker list on its way in, and in the tray panel. The old cover starts shrinking as soon as you press, and if the song doesn't change it eases back after a moment. A cover that comes late fades in, and with animations turned off in the system settings the songs simply cross-fade.
-- On Windows and Linux, the Play/Pause button in the main window turns from play to pause and back with a quick shrink and grow, whether you click it, press a media key or the player changes on its own. With animations turned off in the system settings it swaps at once.
-- On Windows and Linux, speaker and zone rows are spaced like the Mac's, and small controls in a row keep a 24 px click area.
-- On Windows and Linux, the main window's section titles are small grey capitals, a zone's speakers hang from a thin line under the zone instead of sitting in a tinted box, and a zone's header lights up only under the pointer, as on the Mac.
+- On the Mac and Windows, each volume key press moves the master volume by 3.
+- On the Mac, Windows and Linux, Next and Previous in Now Playing slide the new cover in from the side while the old one shrinks and fades in place, in the main window, where the cover crosses the speaker list on its way in, and in the menu bar or tray panel. The old cover starts shrinking as soon as you press, and if the song doesn't change it eases back after a moment. A cover that comes late fades in, and with Reduce Motion on the Mac, or animations turned off in Windows or Linux, the songs simply cross-fade. On the Mac, the keyboard's media keys do the same while Volume Keys Control AudioSync is on.
+- On the Mac, Windows and Linux, after Next or Previous the card waits for the new cover, for 4 seconds at most, before the new song slides in, and slides at once when the cover can't be fetched.
+- On the Mac, Windows and Linux, the Play/Pause button in the main window turns from play to pause and back with a quick shrink and grow instead of swapping in one frame, whether you click it, press a media key or the player changes on its own. With Reduce Motion on the Mac, or animations turned off in Windows or Linux, it swaps at once.
+- On the Mac, Windows and Linux, the Presets row in the main window folds open into a list: one click recalls a preset, each row's options button renames, updates or deletes it, and Save as Preset is the last row. On Windows and Linux, Enter or Space recalls a preset too, each row says how many speakers the preset holds and its master volume, Escape folds the list shut, past five presets it scrolls, and it stays open or folded after a restart.
+- On Windows, each preset's … button in that list stays visible while Narrator or another screen reader runs, as the Mac shows it with VoiceOver on.
+- On the Mac, Windows and Linux, the preset and the equalizer curve you picked show on a grey second line under Presets and Equalizer, in the main window and the menu bar or tray panel. On the Mac, the Edited mark and the dots for the preset in use are gone. On Windows and Linux, the Presets rows keep naming the preset you used last until you delete it.
+- On the Mac, a new zone and a saved equalizer curve are named in place instead of in an alert. On Windows and Linux, so are a new zone, a saved preset and a saved equalizer curve.
+- On the Mac, Windows and Linux, the strands under the cover art follow the sound while streaming. On the Mac, they follow bass, mid and treble, and rest as a slow breath when no sound drives them, so a quiet or paused song no longer leaves an empty gap under the cover. With Reduce Motion they hold one still line.
+- On the Mac, Windows and Linux, a notice fades in as its room opens. On the Mac, a notice opening or closing in the main window eases the columns along with it, the Waiting for audio notice included. Before, they jumped in one frame. An opening notice moves a little quicker than a closing one, and a notice that is closing no longer takes clicks or VoiceOver.
+- On the Mac, AudioSync remembers the macOS volume each local output last played at through it, sets it again before the output's first audio, and puts back the level it found when the output stops or AudioSync quits. A level you set in macOS in between wins and becomes the remembered one.
+- On the Mac, Check for Updates, Check Setup, Open Settings, Unhide, Open Local Network Settings and Add by Address share one teal-tinted button look.
+- On the Mac, the equalizer's Reset button, Add by Address and the Web Remote settings use the same buttons and fields as the rest of the app, with the brand color around a focused field. Forget All Remote Devices is red.
+- On the Mac, the menu bar panel got a pass: folding a zone no longer shakes the panel, Open AudioSync is back next to Quit, Add by Address is in the main window only, the source name lines up with the title and artist, the volume slider is shorter and shows its number, and the gaps between rows are even. A click anywhere on its Presets row opens its menu.
+- On the Mac, the main window's left column lines up: Presets, Equalizer and Calibrate start on the volume icon's column, Add by Address is a plain row like its neighbours, and the zone label reads In a zone, with its two rules on one line.
+- On the Mac, the speaker rows put both kinds of volume slider on one column, and the badge stays beside the name when a hint line makes a row taller.
+- On the Mac, the master volume row matches the rows around it, in the main window and the menu bar panel: the speaker icon sits in the other rows' icon spot, the slider is drawn to match the app, and the number lines up with the chevrons.
+- On the Mac, the line between zones runs from the zone name to its options button and hides beside the zone under the pointer, whose highlight sits a little inside the card.
+- On the Mac, a long title, artist or curve name scrolls with a softer fade at its edges, and a long Equalizer curve name scrolls again instead of ending in "…".
+- On the Mac, zones and the delay panes fold open and shut in one quarter-second motion, in the main window and the menu bar panel, with the rows below following along.
+- On the Mac, Now Playing reads the player every quarter second while the card or the menu bar panel shows a track, so a play/pause key shows sooner, and drops a track that's gone after about 4 seconds of empty readings. When a player says it played or paused, Now Playing shows the change sooner still.
+- On the Mac, the next Spotify song from the same album shows its cover at once, and with shuffle off, Apple Music's next few playlist covers load ahead, so Next shows the cover at once.
+- On the Mac, Delete Zone asks first, with Cancel as the default button.
+- On the Mac, scrolling over the master volume slider moves it by the volume keys' step.
+- On the Mac, a click on the master volume slider or an equalizer band lets the arrow keys move it, and their focus ring shows only when you move around with the keyboard.
+- On Windows and Linux, the main window draws its own top row, with the window buttons and the drag area, in place of the system frame and menu bar. The menus move into a gear menu next to the streaming switch, as on the Mac, and Alt or F10 puts the focus on it. It holds the Mac's items plus About and Check for Updates. Settings… opens a Settings window with the Mac's General, Speakers and Updates boxes and Check Setup.
+- On Windows and Linux, every menu follows the app's light or dark theme, opens one at a time, stays inside the window and closes on a second click of its button.
+- On Windows and Linux, Calibrate All runs and shows its results in a sheet over the main window, as on the Mac, with Undo and Apply only when they apply.
+- On Windows and Linux, Add by Address opens as a sheet over the main window, as on the Mac.
+- On Windows and Linux, notices look like the Mac's: an orange box for a warning and a teal one for information, each with its icon, and an AirPlay speaker's name as the heading.
+- On Windows and Linux, the header matches the Mac's: the real mark, which breathes while no network speaker has been found, the wordmark in the sync teal and the Mac's speaker badges. Focus rings show only after you press Tab.
+- On Windows and Linux, the tray panel's top block is laid out like the Mac panel's: the cover or the source's icon beside the source menu, with the song under it. Its rows line up with the Mac panel's: the preset icon sits on the volume icon's column, Open AudioSync is back next to Exit, and Add by Address is in the main window only.
+- On Windows and Linux, switches, sliders and scroll bars look and work like the Mac's: clicking a switch's label flips it, the arrow keys, Page Up, Page Down, Home and End move a slider, and scroll bars show only while you scroll or point at the edge. The text uses the Mac's text sizes.
+- On Windows and Linux, the master volume row has the Mac's look: the speaker, the drawn slider and the number on the right edge, in the window and the tray panel.
+- On Windows and Linux, the main window's section titles are small grey capitals, a zone's speakers hang from a thin line under the zone instead of sitting in a tinted box, and a zone's header lights up only under the pointer, as on the Mac. Speaker and zone rows are spaced like the Mac's, and small controls in a row keep a 24 px click area.
+- On Windows and Linux, the speaker list's note, Looking for speakers included, is set in smaller text with a little more room around it, as in the Mac window.
+- On Windows and Linux, zones, Several Apps and the AirPlay delay fold open and shut over a quarter second, Escape folds Several Apps, and long names fade at their edges.
+- On Windows, the app's text is set in Segoe UI Variable, Windows' own font, as the Mac uses its own, and drawn sharper than before. On Linux, it's set in Inter, built into the app, so it looks the same on every PC.
+- On Windows, the app icon is a teal tile with the white AudioSync mark, in the taskbar, Alt+Tab and the title bar.
+- On Windows, the title bar and the tray icon's menu turn dark or light with the app's appearance.
+- On Windows, AudioSync remembers the Windows volume each local output last played at, sets it again when you switch the output on and puts back the level it found when the output stops, as on the Mac.
+- On Windows, Settings fades in as it opens, as the Mac's does.
+- On Windows, Narrator's Increment and Decrement move a speaker's or the master volume by a tenth, as VoiceOver does on the Mac.
+- On Linux, clicking the tray icon opens the tray panel by the pointer, as on Windows. Where the desktop only shows the tray menu, Open AudioSync stays in it.
 
 ### Fixed
 
+- On Windows and Linux, the Master Volume divider sits the same distance below the row as on the Mac, without the gap above it.
 - HomePods on software 27 play again over AirPlay 2. They turned AudioSync away before the first sound because of the name it sent with its requests. Thanks to [emosheeep](https://github.com/emosheeep) for the report and the fix.
-- On the Mac, every press of the streaming switch counts. Before, a press during the switch's motion was dropped, so quick presses could leave streaming the wrong way round.
-- On the Mac, pressing Caps Lock no longer quits AudioSync on macOS 27 while it controls the volume keys.
-- On the Mac, Now Playing reads Spotify 1.3.9, which left AudioSync's permission request unanswered.
-- On the Mac, the Settings window opens at its full height again. Before, it could open with only its title bar showing.
+- When the captured sound stalls for a moment, AirPlay speakers fill the gap with silence instead of restarting their stream, and a gap longer than a second restarts it once instead of over and over.
 - A Cast speaker that reports itself idle for a moment while it starts a stream no longer makes the stream fail; AudioSync keeps waiting for it to start playing.
-- On the Mac, Now Playing reads Spotify again when AudioSync is allowed to but the macOS permission check never answers.
-- On the Mac, Now Playing keeps a playing track when its player looks quit for a moment, instead of dropping the artwork.
+- On the Mac, every press of the streaming switch counts. Before, a press during the switch's motion was dropped, so quick presses could leave streaming the wrong way round.
+- On the Mac, switching streaming on or off no longer freezes the app while the speakers start or stop, and turning it on no longer holds up the app while the capture opens, after a wake too.
+- On the Mac, a Bluetooth speaker that drops and comes back while streaming plays in time with the others again, without switching it off and on.
+- On the Mac, pressing Caps Lock no longer quits AudioSync on macOS 27 while it controls the volume keys.
+- On the Mac, Now Playing reads Spotify 1.3.9, which left AudioSync's permission request unanswered, and reads Spotify again when AudioSync is allowed to but the macOS permission check never answers.
+- On the Mac, Now Playing keeps a playing track when its player looks quit for a moment, instead of dropping the artwork, and keeps a paused Spotify track instead of dropping it as if Spotify had quit.
+- On the Mac, a Music song change no longer shows another song's cover.
+- On the Mac, opening the main window or the menu bar panel no longer puts a focus ring on the master volume slider.
 - On the Mac, the strands under the cover art move from the moment you pause, instead of lying flat first.
-- On the Mac, switching streaming on or off no longer freezes the app while the speakers start or stop.
+- On the Mac, the Settings window opens at its full height again, in one smooth motion. Before, it could open with only its title bar showing, and its switches and pickers shook against the text as it appeared.
+- On the Mac, the cover, title and artist slide smoothly on Next and Previous, within one album too. Before, the slide skipped frames while the new song loaded. A Spotify Next fetches the new cover once and sends it to AirPlay and Cast speakers after the slide ends, so the slide has less work competing with it.
+- On Windows, with All System Audio, the PC's default output no longer plays the sound a second time. While AudioSync streams, it moves Windows' default output to a silent output when there is one and puts it back when you stop, change the source or quit; with none to use, the default output gets no copy from AudioSync.
+- On Windows, with an app as the source, that app alone is moved to a silent output while it streams and put back when you stop, so it no longer plays twice and the other apps keep playing where they were.
+- On Windows, the Now Playing card no longer hides and comes back when a player drops its media session for a moment.
+- On Windows, the focus ring stays hidden after Alt+Tab, a second click on the source menu's button closes it, and the tray panel shows every speaker on a tall screen.
+- On Windows, reopening Settings or the tray panel no longer flashes what it showed the last time.
+- On Windows, the status line under the streaming switch shows a long speaker name cut short instead of clipping the bottoms of its letters.
+- On Windows, a new song no longer shows the last song's cover while the player is still sending the old one.
+- On Windows, the uninstaller stops a running AudioSync before it removes its files, so a silent uninstall no longer leaves it running.
+- On Windows and Linux, the Now Playing cover is decoded at its own size, up to 640 px a side, away from the window's thread, so it looks sharper and a song change has less to do.
+- On Windows and Linux, Rename in a speaker's menu or the Curve menu opens the name field with the focus in it.
 - On Windows and Linux, folding a zone no longer shakes the bottom edge of the tray panel.
-- On the Mac, turning streaming on no longer holds up the app while the capture opens, after a wake too.
-- On the Mac, the Settings window opens in one smooth motion. Before, its switches and pickers shook against the text as it appeared.
-- On the Mac, the cover, title and artist slide smoothly on Next and Previous. Before, the slide skipped frames while the new song loaded.
-- On the Mac, Next and Previous within one album no longer skip a frame as the new cover slides in.
-- On the Mac, a Spotify Next fetches the new cover once and sends it to AirPlay and Cast speakers after the slide ends, so the slide has less work competing with it.
 
 ## [0.9.2] - 2026-11-08
 
