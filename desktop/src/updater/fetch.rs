@@ -7,6 +7,7 @@ pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// The whole appcast, and for a download the longest wait for a byte.
 pub const APPCAST_TIMEOUT: Duration = Duration::from_secs(30);
 pub const STALL_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(any(windows, test))]
 pub const PINNED_TIMEOUT: Duration = Duration::from_secs(60);
 pub const MAX_APPCAST: usize = 1024 * 1024;
 pub const MAX_REDIRECTS: usize = 5;

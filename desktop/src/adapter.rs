@@ -2270,7 +2270,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// Lets the double-audio notice offer to add a silent output through
     /// `platform` (docs/WINDOWS_SILENT_OUTPUT_SPEC.md).
     #[cfg_attr(
-        all(not(windows), not(test)),
+        not(windows),
         expect(dead_code, reason = "only Windows adds a silent output")
     )]
     pub fn set_silent_output(&mut self, platform: Arc<dyn SilentPlatform>) {
