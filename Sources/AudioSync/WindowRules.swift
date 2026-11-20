@@ -373,10 +373,22 @@ enum TrackSlide {
         old.bundleID == new.bundleID && (old.title, old.artist, old.album) != (new.title, new.artist, new.album)
     }
 
-    /// A change with no press: Previous when the new song is the one played before the old one.
-    static func guessed(_ new: NowPlayingMonitor.Track, playedBefore: NowPlayingMonitor.Track?) -> Direction {
+    enum Change: Equatable { case none, stop, slide, keep }
+
+    /// What a change of the shown track does: another player ends the slide, the same song pausing or getting
+    /// its cover changes nothing, and another song slides in, unless a slide runs: then that slide keeps its side
+    /// and start, so the player's second reading of a song or a quick second skip doesn't slide in twice.
+    static func change(from old: NowPlayingMonitor.Track?, to new: NowPlayingMonitor.Track?, sliding: Bool) -> Change {
+        guard let old, let new, isSkip(old, new) else { return old?.bundleID != new?.bundleID ? .stop : .none }
+        return sliding ? .keep : .slide
+    }
+
+    /// A change with no press: back to the song played before the old one goes the other way from
+    /// the `last` change, so Previous then Next back comes from the right; any other song is Next.
+    static func guessed(_ new: NowPlayingMonitor.Track, playedBefore: NowPlayingMonitor.Track?,
+                        last: Direction = .next) -> Direction {
         guard let before = playedBefore, before.bundleID == new.bundleID, !isSkip(before, new) else { return .next }
-        return .previous
+        return last == .next ? .previous : .next
     }
 
     /// How long the next song has waited for its cover (`ArtHold`): from a

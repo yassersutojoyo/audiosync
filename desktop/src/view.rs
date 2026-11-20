@@ -925,6 +925,11 @@ pub struct App {
     /// With the debug log on: what moves, for how long, and the main
     /// window's frame times since it started.
     frame_trace: RefCell<Option<(&'static str, Duration, Vec<std::time::Instant>)>>,
+    /// With the debug log on: what started the main window's slide, and
+    /// the frame clock's time of it and of each frame drawn of it since.
+    /// The rendering notifier above may not run, so these come from the
+    /// slide's own frames.
+    slide_frames: RefCell<Option<(&'static str, Vec<std::time::Instant>)>>,
     /// Moves a microphone calibration on while one holds the outputs.
     calibration_timer: Timer,
     /// Moves the input level meter while an input device is captured.
@@ -1420,6 +1425,7 @@ impl App {
             motion_epoch: std::time::Instant::now(),
             slide_timer: Timer::default(),
             frame_trace: RefCell::default(),
+            slide_frames: RefCell::default(),
             calibration_timer: Timer::default(),
             meter_timer: Timer::default(),
             meter_level: Cell::new(0.0),
@@ -1506,7 +1512,13 @@ impl App {
         let weak = Rc::downgrade(&app);
         app.main.global::<TrackMotion>().on_slide(move |tick| {
             weak.upgrade().map_or_else(SlideLook::default, |app| {
-                slide_look(app.window_slide.borrow_mut().look(app.frame_time(tick)).0)
+                let at = app.frame_time(tick);
+                if let Some((_, frames)) = app.slide_frames.borrow_mut().as_mut()
+                    && frames.last().is_some_and(|last| at > *last)
+                {
+                    frames.push(at);
+                }
+                slide_look(app.window_slide.borrow_mut().look(at).0)
             })
         });
         let weak = Rc::downgrade(&app);
@@ -2193,6 +2205,35 @@ impl App {
         });
     }
 
+    /// With the debug log on, times the frames of the main window's slide
+    /// that `what` starts at `now`, after logging the one before.
+    fn time_slide(&self, what: &'static str, now: std::time::Instant) {
+        if self.log.enabled() {
+            self.log_slide_frames();
+            *self.slide_frames.borrow_mut() = Some((what, vec![now]));
+        }
+    }
+
+    /// Logs the timed slide's frames: a late first frame is a slide that
+    /// shows only its end, a long gap a choppy one.
+    fn log_slide_frames(&self) {
+        let Some((what, frames)) = self.slide_frames.borrow_mut().take() else {
+            return;
+        };
+        let gaps: Vec<u128> = frames
+            .windows(2)
+            .map(|pair| pair[1].duration_since(pair[0]).as_millis())
+            .collect();
+        self.log.log(|| {
+            format!(
+                "now playing card: the slide after the {what} drew {} frames, the first {} ms after it, the longest gap {} ms",
+                gaps.len(),
+                gaps.first().copied().unwrap_or_default(),
+                gaps.iter().skip(1).max().copied().unwrap_or_default()
+            )
+        });
+    }
+
     /// Starts or ends the Now Playing cards' slide for a change of song; a
     /// card that is hidden, or with the system's animations off, swaps at once.
     fn slide_change(&self, old: Option<&CardTrack>, new: Option<&CardTrack>) {
@@ -2204,6 +2245,7 @@ impl App {
             .change(old, new, window_shows, still, now)
         {
             self.trace_frames("song change", Duration::from_millis(700));
+            self.time_slide("song change", now);
             self.main
                 .set_now_playing_outgoing(outgoing_song(old, &self.cover_image));
         }
@@ -2247,6 +2289,9 @@ impl App {
         self.main.set_now_playing_slide(slide_look(window));
         self.flyout.set_now_playing_slide(slide_look(panel));
         self.main.set_now_playing_moving(window_moving);
+        if !window_moving {
+            self.log_slide_frames();
+        }
         self.flyout.set_now_playing_moving(panel_moving);
         window_moving || panel_moving
     }
@@ -2322,6 +2367,7 @@ impl App {
             let (window_shows, panel_shows, still) = self.slides_shown();
             if direction.is_some() {
                 self.trace_frames("track button press", Duration::from_millis(600));
+                self.time_slide("track button press", now);
             }
             self.window_slide
                 .borrow_mut()
@@ -19814,9 +19860,12 @@ pub(crate) mod tests {
         )
     }
 
+    /// He scrolled the column so the cover sat under its faded top edge,
+    /// and the new cover came in whole, then cut and faded once it landed
+    /// (maintainer 2026-11-20 11.03).
     // covers: S463
     #[test]
-    fn the_next_cover_crosses_the_window_whole_level_with_its_box_in_a_scrolled_column() {
+    fn the_next_cover_keeps_the_columns_cut_and_fade_in_a_scrolled_column() {
         let app = app_over(MockBackend::new());
         hold_clock();
         let window = app.main.window();
@@ -19827,9 +19876,16 @@ pub(crate) mod tests {
             artwork: red_cover(),
             ..OutgoingSong::default()
         });
-        draw_frames();
+        draw_frames_at(1000, 480);
         // The box partly under the column's top edge, the old cover in it red.
-        scroll(window, 150.0, 400.0, -120.0);
+        // Not `scroll`, which draws at 720 px, where the column fits again.
+        let position = slint::LogicalPosition::new(150.0, 300.0);
+        window.dispatch_event(WindowEvent::PointerMoved { position });
+        window.dispatch_event(WindowEvent::PointerScrolled {
+            position,
+            delta_x: 0.0,
+            delta_y: -120.0,
+        });
         let slide = |side: f32, slid: f32| {
             app.main.set_now_playing_slide(SlideLook {
                 sliding: true,
@@ -19837,25 +19893,23 @@ pub(crate) mod tests {
                 slid,
                 ..SlideLook::default()
             });
-            draw_frames();
+            draw_frames_at(1000, 480);
             red_bounds(window)
         };
         let old = slide(1.0, 0.0);
-        // As on the Mac only the window clips the new cover, so it shows
-        // whole where the column hides the top of the box.
         let (_, box_top, _, _) = slider_box(&app.main, "Now Playing");
-        assert!(box_top < old.1, "the column hides the box's top");
-        // The cover sits 2 px under the box's top, as the Mac's.
-        let whole = (old.0, box_top + 2.0, old.2, old.3);
+        assert!(box_top + 2.0 < old.1, "the column hides the cover's top");
         app.main.set_now_playing_outgoing(OutgoingSong::default());
         app.main.set_now_playing_has_artwork(true);
         app.main.set_now_playing_artwork(red_cover());
+        // Only the unfaded red counts, so a top level with the old one's is
+        // the same cut and fade.
         for (side, slid) in [(1.0, 0.25), (-1.0, 0.5), (1.0, 0.75)] {
             let (_, top, _, bottom) = slide(side, slid);
             assert_eq!(
                 (top, bottom),
-                (whole.1, whole.3),
-                "level with the whole box ({side}, {slid})"
+                (old.1, old.3),
+                "cut and faded as the old cover ({side}, {slid})"
             );
         }
         assert!(
@@ -19863,7 +19917,7 @@ pub(crate) mod tests {
             "Next's cover crosses the speaker list"
         );
         assert!(slide(-1.0, 0.5).0 < old.0, "Previous's comes from the left");
-        assert_eq!(slide(1.0, 1.0), whole, "it lands on the whole box");
+        assert_eq!(slide(1.0, 1.0), old, "it lands on the old cover's look");
     }
 
     // covers: S463

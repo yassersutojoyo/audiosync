@@ -144,6 +144,8 @@ pub struct TrackSlide {
     place: Place,
     pressed: Option<(Direction, Instant)>,
     played_before: Option<CardTrack>,
+    /// The last change's side: back to the song before goes the other way.
+    last: Direction,
     wait: Option<Instant>,
     /// An ignored wait easing back: since when, from where, and its breath.
     settle: Option<(Instant, f64, f64)>,
@@ -158,6 +160,7 @@ impl TrackSlide {
             place,
             pressed: None,
             played_before: None,
+            last: Direction::Next,
             wait: None,
             settle: None,
             slide: None,
@@ -266,11 +269,22 @@ impl TrackSlide {
             .take()
             .filter(|(_, at)| now.saturating_duration_since(*at) <= PRESS_WINDOW)
             .map(|(direction, _)| direction);
+        // A second reading of the song sliding in, or a quick second skip,
+        // lands in the running slide rather than sliding in again.
+        self.expire(now);
+        if on_screen && self.slide.is_some() {
+            return false;
+        }
         let guess = match &self.played_before {
-            Some(before) if same_song(before, new) => Direction::Previous,
+            Some(before) if same_song(before, new) => match self.last {
+                Direction::Next => Direction::Previous,
+                Direction::Previous => Direction::Next,
+            },
             _ => Direction::Next,
         };
+        let direction = pressed.unwrap_or(guess);
         self.played_before = Some(old.clone());
+        self.last = direction;
         if !on_screen {
             self.stop();
             return false;
@@ -282,7 +296,7 @@ impl TrackSlide {
         self.settle = None;
         self.slide = Some(Slide {
             start: now,
-            direction: pressed.unwrap_or(guess),
+            direction,
             fades: still,
             reached,
             breath,
@@ -601,6 +615,50 @@ mod tests {
             1.0,
             "a press over 5 s old no longer counts"
         );
+    }
+
+    /// Windows debug log 2026-11-20 03:54: Previous on the card, then Next
+    /// in Spotify back to the song the Previous left.
+    // covers: S463
+    #[test]
+    fn next_back_to_the_song_a_previous_left_slides_from_the_right() {
+        let a = track("Spotify.exe", "A", "Band", true);
+        let b = track("Spotify.exe", "B", "Band", true);
+        let start = Instant::now();
+        let mut slide = TrackSlide::new(Place::Window);
+        assert!(slide.change(Some(&a), Some(&b), true, false, start));
+        slide.press(Some(Direction::Previous), true, false, at(start, 1.0));
+        assert!(slide.change(Some(&b), Some(&a), true, false, at(start, 1.5)));
+        assert_eq!(slide.look(at(start, 1.5)).0.side, -1.0);
+        assert!(slide.change(Some(&a), Some(&b), true, false, at(start, 12.0)));
+        assert_eq!(slide.look(at(start, 12.0)).0.side, 1.0, "Next");
+        assert!(slide.change(Some(&b), Some(&a), true, false, at(start, 14.0)));
+        assert_eq!(slide.look(at(start, 14.0)).0.side, -1.0, "Previous");
+        assert!(slide.change(Some(&a), Some(&b), true, false, at(start, 16.0)));
+        assert_eq!(slide.look(at(start, 16.0)).0.side, 1.0, "Next again");
+    }
+
+    /// Mac debug log 2026-11-20 08:04: the player gave the new song twice,
+    /// 0.2 s apart, and the second reading restarted the slide as Next.
+    // covers: S463
+    #[test]
+    fn a_second_reading_of_the_song_sliding_in_keeps_the_slide() {
+        let a = track("Spotify.exe", "A", "Band", true);
+        let b = track("Spotify.exe", "B", "Band", true);
+        let b_again = track("Spotify.exe", "B (Remastered)", "Band", true);
+        for direction in [Direction::Previous, Direction::Next] {
+            let start = Instant::now();
+            let mut slide = TrackSlide::new(Place::Window);
+            slide.press(Some(direction), true, false, start);
+            assert!(slide.change(Some(&a), Some(&b), true, false, at(start, 1.0)));
+            let before = slide.look(at(start, 1.2)).0;
+            assert!(!slide.change(Some(&b), Some(&b_again), true, false, at(start, 1.2)));
+            let after = slide.look(at(start, 1.2)).0;
+            assert_eq!(
+                after, before,
+                "the same slide, not a new one ({direction:?})"
+            );
+        }
     }
 
     // covers: S463
