@@ -632,6 +632,29 @@ mod tests {
         assert_eq!(slide.look(at(start, 16.0)).0.side, 1.0, "Next again");
     }
 
+    /// Mac debug log 2026-11-20 08:04: the player gave the new song twice,
+    /// 0.2 s apart, and the second reading restarted the slide as Next.
+    // covers: S463
+    #[test]
+    fn a_second_reading_of_the_song_sliding_in_keeps_the_slide() {
+        let a = track("Spotify.exe", "A", "Band", true);
+        let b = track("Spotify.exe", "B", "Band", true);
+        let b_again = track("Spotify.exe", "B (Remastered)", "Band", true);
+        for direction in [Direction::Previous, Direction::Next] {
+            let start = Instant::now();
+            let mut slide = TrackSlide::new(Place::Window);
+            slide.press(Some(direction), true, false, start);
+            assert!(slide.change(Some(&a), Some(&b), true, false, at(start, 1.0)));
+            let before = slide.look(at(start, 1.2)).0;
+            assert!(!slide.change(Some(&b), Some(&b_again), true, false, at(start, 1.2)));
+            let after = slide.look(at(start, 1.2)).0;
+            assert_eq!(
+                after, before,
+                "the same slide, not a new one ({direction:?})"
+            );
+        }
+    }
+
     // covers: S463
     #[test]
     fn a_cover_that_comes_mid_slide_fades_in_over_0_25_s() {

@@ -19566,6 +19566,12 @@ do {
             && TrackSlide.guessed(one, playedBefore: onePaused, last: .next) == .previous
             && TrackSlide.guessed(one, playedBefore: two, last: .previous) == .next,
           "track slide: back to the song a Previous left slides as Next, so Previous then Next comes from the right")
+    check(TrackSlide.change(from: one, to: two, sliding: false) == .slide
+            && TrackSlide.change(from: one, to: two, sliding: true) == .keep
+            && TrackSlide.change(from: one, to: onePaused, sliding: true) == .none
+            && TrackSlide.change(from: one, to: spotifyOne, sliding: true) == .stop
+            && TrackSlide.change(from: nil, to: one, sliding: false) == .stop,
+          "track slide: a second reading or a quick second skip while a slide runs keeps that slide, its side and start")
     let cover = NSImage(size: NSSize(width: 1, height: 1))
     var shown = two
     shown.artwork = cover
