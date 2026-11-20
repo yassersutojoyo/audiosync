@@ -9,8 +9,10 @@
 #   red (VC51): the PC and the receiver both hold the click train;
 #   green (VC52): VB-CABLE added by the click path (the notice's button, then
 #     the vendor's Install Driver through UI Automation) or, when that window
-#     can't be driven, the unattended path (pnputil and devcon); Scream then
-#     stays below -60 dBFS and the receiver holds the train once;
+#     can't be driven, the unattended path (pnputil and devcon); the player
+#     is then restarted, Scream holds the train once, in sync with the
+#     receiver and with nothing at the red copy's offset, and the receiver
+#     holds it once; a take with the first player still running is recorded;
 #   removal (VC53): logged, never failed.
 # The leg that produced the result goes into the job summary.
 #
@@ -284,8 +286,12 @@ $receiver = Start-Process -FilePath cmd.exe -PassThru -WindowStyle Hidden -Argum
 # One click train long enough for the whole job, played once, so no loop seam breaks the cycle.
 $clicks = Join-Path $Work 'clicks.wav'
 python -I (Join-Path $here 'heard.py') clicks $clicks --seconds 1800 --rate 16000
-$player = Start-Process -FilePath powershell.exe -PassThru -WindowStyle Hidden -ArgumentList '-NoProfile', '-Command', `
-  "(New-Object Media.SoundPlayer '$clicks').PlaySync()"
+# Media.SoundPlayer plays through waveOut (MME) on the device that is the default when it opens.
+function Start-Player {
+  Start-Process -FilePath powershell.exe -PassThru -WindowStyle Hidden -ArgumentList '-NoProfile', '-Command', `
+    "(New-Object Media.SoundPlayer '$clicks').PlaySync()"
+}
+$player = Start-Player
 
 $log = Join-Path $env:TEMP 'audiosync-debug.log'
 $env:AUDIOSYNC_DEBUG = '1'
@@ -385,6 +391,11 @@ Save-Devices 'with VB-CABLE'
 $moved = Wait-For { [Endpoints]::Default(0, 0) -ne $beforeOutput } 60
 Note "defaults with the app streaming: $(Get-Defaults) (moved: $moved)"
 Start-Sleep -Seconds 4
+$kept = Test-Heard 'kept'
+# A player opened before the cable keeps its device, as any app may (VC52).
+Stop-Process -Id $player.Id -Force -ErrorAction SilentlyContinue
+$player = Start-Player
+Start-Sleep -Seconds 4
 $green = Test-Heard 'green'
 
 # VC45: the cable is never a speaker row.
@@ -422,7 +433,7 @@ if (Test-Path $log) { Copy-Item $log (Join-Path $Work 'audiosync-debug.log') }
 
 $heard = Join-Path $here 'heard.py'
 $window = Join-Path $here 'scream_window.py'
-foreach ($phase in 'red', 'green') {
+foreach ($phase in 'red', 'kept', 'green') {
   python -I $window cut "$Work\receiver.wav" "$Work\receiver.stamps" (Join-Path $Work "scream-$phase.window") (Join-Path $Work "receiver-$phase") |
     Tee-Object -FilePath "$Work/result.txt" -Append
 }
@@ -430,13 +441,18 @@ $redOut = python -I $heard check --label red --receiver "$Work\receiver-red.wav"
 $redOk = $LASTEXITCODE -eq 0
 $redOut | Tee-Object -FilePath "$Work/result.txt" -Append
 Check 'VC51 red' $redOk 'the click train heard on the PC and on the receiver: heard twice'
-$greenOut = python -I $heard check --label green --receiver "$Work\receiver-green.wav" "$Work\receiver-green.stamps" --sink "$Work\receiver-green.wav" "$Work\receiver-green.stamps" 2>&1
+$redAt = [regex]::Match(($redOut -join "`n"), 'offset: receiver (-?\d+) ms').Groups[1].Value
+# Record only: whether the player opened before the install followed the default to the cable.
+$keptOut = python -I $heard check --label kept --receiver "$Work\receiver-kept.wav" "$Work\receiver-kept.stamps" --sink "$kept.wav" "$kept.stamps" --absent-ms $redAt 2>&1
+$keptOut | Tee-Object -FilePath "$Work/result.txt" -Append
+$followed = if ($keptOut -match 'early: PASS') { 'yes' } elseif ($keptOut -match 'early: FAIL') { 'no, it kept the device it opened on' } else { 'not measured' }
+Note "test player: Media.SoundPlayer (waveOut, MME); followed the default move: $followed"
+"Test player: Media.SoundPlayer (waveOut, MME); followed the default move: $followed" | Out-File -Append -Encoding utf8 $summary
+# 50 ms is S50's dead band, how far apart two outputs may sit before a correction.
+$greenOut = python -I $heard check --label green --max-offset-ms 50 --receiver "$Work\receiver-green.wav" "$Work\receiver-green.stamps" --sink "$green.wav" "$green.stamps" --absent-ms $redAt 2>&1
 $greenOnce = $LASTEXITCODE -eq 0
 $greenOut | Tee-Object -FilePath "$Work/result.txt" -Append
-$quietOut = python -I $window quiet "$green.wav" -60
-$quiet = $LASTEXITCODE -eq 0
-$quietOut | Tee-Object -FilePath "$Work/result.txt" -Append
-Check 'VC52 green' ($greenOnce -and $quiet) "with VB-CABLE added by the $leg leg: the receiver holds the train once and the PC stays below -60 dBFS"
+Check 'VC52 green' $greenOnce "with VB-CABLE added by the $leg leg and the player restarted: the PC holds the train once, within 50 ms of the receiver and nothing $redAt ms early, and the receiver holds it once"
 "Leg that produced the result: **$leg**$(if ($why) { " (click path not taken: $why)" })" | Out-File -Append -Encoding utf8 $summary
 
 if ($script:failed) { throw "$($script:failed.Count) check(s) failed:`n$($script:failed -join "`n")" }

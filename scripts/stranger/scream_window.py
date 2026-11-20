@@ -9,15 +9,10 @@
   scream_window.py cut <wav> <stamps> <window> <prefix>
       The chunks of a heard.py recording stamped inside <window>, as
       <prefix>.wav and <prefix>.stamps.
-  scream_window.py quiet <wav> <dbfs>
-      Exits 1 unless every sample is below <dbfs> (an empty file passes:
-      Scream sends nothing while nothing plays).
 
 Standard library only.
 """
 
-import array
-import math
 import socket
 import sys
 import time
@@ -97,19 +92,6 @@ def cut(wav_path, stamps_path, window_path, prefix):
     print(f"{prefix}: {frames} frames inside the window")
 
 
-def quiet(wav_path, dbfs):
-    with wave.open(wav_path, "rb") as source:
-        samples = array.array("h", source.readframes(source.getnframes()))
-    if sys.byteorder == "big":
-        samples.byteswap()
-    peak = max((abs(s) for s in samples), default=0)
-    level = 20 * math.log10(peak / 32768) if peak else float("-inf")
-    ok = level < dbfs
-    print(f"{wav_path}: peak {level:.1f} dBFS over {len(samples) // 2} frames, "
-          f"{'PASS' if ok else 'FAIL'} against {dbfs:.0f} dBFS")
-    return 0 if ok else 1
-
-
 def main(argv):
     if argv[:1] == ["record"] and len(argv) == 4:
         record(int(argv[1]), float(argv[2]), argv[3])
@@ -117,8 +99,6 @@ def main(argv):
     if argv[:1] == ["cut"] and len(argv) == 5:
         cut(*argv[1:])
         return 0
-    if argv[:1] == ["quiet"] and len(argv) == 3:
-        return quiet(argv[1], float(argv[2]))
     print(__doc__, file=sys.stderr)
     return 2
 
