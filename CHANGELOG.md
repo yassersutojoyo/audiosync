@@ -6,12 +6,11 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Pending, lands before release
 
-- On the Mac, Windows and Linux, network speakers get device icons for their kind.
-- On the Mac, Windows and Linux, Next always slides the new cover in from the right, the old cover keeps its clipped fade during the slide, and a Previous that restarts the song doesn't slide.
 - On Windows, every window uses the app icon tile.
 
 ### Added
 
+- On the Mac, Windows and Linux, a network speaker's row shows what kind of device it is: a TV, a streaming box, a smart speaker, or a soundbar or receiver. A speaker in a zone keeps its icon while it is out of view.
 - On the Mac, Windows and Linux, a new Settings switch, Resume Playback After Sleep, off by default. Turn it on and the song that was playing when your computer went to sleep plays again after it wakes, once your speakers are back. It stays paused if you pressed play or pause, picked another song, or the speakers took longer than 30 seconds.
 - On the Mac, Windows and Linux, the speaker rows show AudioSync's own device icons, in the round on/off icon and as small badges after the name.
 - On the Mac, the built-in speakers' row shows a System value where other local rows show their delay. It opens a panel with the macOS volume slider and follows changes you make in macOS.
@@ -71,6 +70,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- On the Mac, Windows and Linux, Next right after Previous slides the new cover in from the right again, and a second song change or a quick second Next during a slide joins that slide instead of sliding a cover in twice. On Windows and Linux, the incoming cover stays inside the left column while the speaker list is scrolled.
 - On Windows and Linux, the Master Volume divider sits the same distance below the row as on the Mac, without the gap above it.
 - HomePods on software 27 play again over AirPlay 2. They turned AudioSync away before the first sound because of the name it sent with its requests. Thanks to [emosheeep](https://github.com/emosheeep) for the report and the fix.
 - When the captured sound stalls for a moment, AirPlay speakers fill the gap with silence instead of restarting their stream, and a gap longer than a second restarts it once instead of over and over.
