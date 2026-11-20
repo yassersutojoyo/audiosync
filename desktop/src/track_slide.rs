@@ -603,6 +603,27 @@ mod tests {
         );
     }
 
+    /// Windows debug log 2026-11-20 03:54: Previous on the card, then Next
+    /// in Spotify back to the song the Previous left.
+    // covers: S463
+    #[test]
+    fn next_back_to_the_song_a_previous_left_slides_from_the_right() {
+        let a = track("Spotify.exe", "A", "Band", true);
+        let b = track("Spotify.exe", "B", "Band", true);
+        let start = Instant::now();
+        let mut slide = TrackSlide::new(Place::Window);
+        assert!(slide.change(Some(&a), Some(&b), true, false, start));
+        slide.press(Some(Direction::Previous), true, false, at(start, 1.0));
+        assert!(slide.change(Some(&b), Some(&a), true, false, at(start, 1.5)));
+        assert_eq!(slide.look(at(start, 1.5)).0.side, -1.0);
+        assert!(slide.change(Some(&a), Some(&b), true, false, at(start, 12.0)));
+        assert_eq!(slide.look(at(start, 12.0)).0.side, 1.0, "Next");
+        assert!(slide.change(Some(&b), Some(&a), true, false, at(start, 14.0)));
+        assert_eq!(slide.look(at(start, 14.0)).0.side, -1.0, "Previous");
+        assert!(slide.change(Some(&a), Some(&b), true, false, at(start, 16.0)));
+        assert_eq!(slide.look(at(start, 16.0)).0.side, 1.0, "Next again");
+    }
+
     // covers: S463
     #[test]
     fn a_cover_that_comes_mid_slide_fades_in_over_0_25_s() {
