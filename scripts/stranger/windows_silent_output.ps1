@@ -338,6 +338,7 @@ function Get-Names([int] $ProcessId) {
     }) | Where-Object { $_ } | Select-Object -Unique
 }
 function Use($Element) { $Element.GetCurrentPattern($Invoke).Invoke() }
+Add-Type -Namespace '' -Name Click -MemberDefinition '[DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);'
 # VC70: the one Windows dialog a user may meet after UAC; pressed as a user would, and logged.
 function Approve-Dialog {
   $c = New-Object System.Windows.Automation.PropertyCondition($A::NameProperty, 'Windows Security')
@@ -362,11 +363,15 @@ if (Wait-For { ($script:button = Find-In $app.Id '^Add Silent Output') } 60) {
   Use $script:button
   Note 'click path: Add Silent Output invoked'
   Wait-For { ($script:setup = Get-Process -Name 'VBCABLE_Setup*' -ErrorAction SilentlyContinue | Select-Object -First 1) } 120 | Out-Null
-  if ($script:setup -and (Wait-For { ($script:install = Find-In $script:setup.Id 'Install Driver') } 60)) {
-    try { Use $script:install; $leg = 'click path (Install Driver through UI Automation)' }
-    catch { $why = "Install Driver refused Invoke: $($_.Exception.Message)" }
+  # The vendor paints Install Driver itself, so UI Automation sees no button: its window
+  # takes a left click in client (580,320)-(880,380) as the press (Pack46 setup, studied with Ghidra).
+  if ($script:setup -and (Wait-For { $script:setup.Refresh(); $script:setup.MainWindowHandle -ne [IntPtr]::Zero } 60)) {
+    $at = [IntPtr]((350 -shl 16) -bor 730)
+    [void][Click]::PostMessage($script:setup.MainWindowHandle, 0x201, [IntPtr]1, $at)
+    [void][Click]::PostMessage($script:setup.MainWindowHandle, 0x202, [IntPtr]::Zero, $at)
+    $leg = "click path (Install Driver pressed by a left click posted to the vendor's window)"
   } else {
-    $why = if ($script:setup) { "the vendor's window had no Install Driver: $((Get-Names $script:setup.Id) -join ' | ')" } else { "the vendor's setup did not start within 120 s" }
+    $why = if ($script:setup) { "the vendor's window did not show within 60 s" } else { "the vendor's setup did not start within 120 s" }
   }
 } else {
   $why = 'the notice showed no Add Silent Output within 60 s'
