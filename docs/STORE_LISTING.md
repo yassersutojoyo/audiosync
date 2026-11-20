@@ -47,7 +47,7 @@ What you can set:
 - Calibrate with Microphone sets a local speaker's delay for you, and Calibrate All Speakers does every speaker that's on, one after the other.
 - Web Remote lets a phone on your home network turn speakers on and off and set volumes and delays. It's plain HTTP, so keep it to your home network.
 
-AudioSync sits in the notification area and can start when you sign in, once you turn that on. The app you capture keeps playing on its own output too: AudioSync tells you when that happens and shows how to send it to an output you don't listen to, or to mute that output yourself.
+AudioSync sits in the notification area and can start when you sign in, once you turn that on. Windows keeps playing the source on the PC too. While AudioSync streams, it moves that sound to a virtual output nobody hears, when the PC has one, and moves it back afterwards. Without one, the speaker the source already plays on gets no copy from AudioSync.
 
 AudioSync is free and open source under GPL-3.0-or-later. The source code and issue tracker are on GitHub.
 ```

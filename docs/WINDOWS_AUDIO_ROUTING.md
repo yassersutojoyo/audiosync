@@ -1,6 +1,6 @@
 # Windows audio routing
 
-Research notes for the Windows 11 version of AudioSync (`desktop/`). Process loopback capture is built, hardware test 1 has been run (results below) and double audio is detected and warned about ([Detection](#detection)), with a guide on the notice for fixing the routing by hand; the other hardware tests aren't done yet. The question: how to hear a captured app only through AudioSync's delayed, synced outputs, and not also directly from the PC.
+Research notes for the Windows 11 version of AudioSync (`desktop/`). The question they answer: how to hear a captured app only through AudioSync's delayed, synced outputs, and not also directly from the PC. While it streams, the app now moves the sound to a silent virtual output itself and puts it back afterwards. For All System Audio it moves the Windows default ([Moving the default output while streaming](#moving-the-default-output-while-streaming)); for one app it moves only that app's output ([Moving one app's output](#moving-one-apps-output)). Where nothing can be moved (no virtual output, several apps, an app that picks its own device), a speaker the source already plays on gets no copy from AudioSync ([rule 8](#rules)). The double-audio notice ([Detection](#detection)) shows only when there's no virtual output or the default couldn't be moved. The options and tests below are the research that led there; hardware tests 1 and 2 have been run (results below).
 
 ## The problem
 
@@ -10,7 +10,7 @@ On Windows, the matching tool is the Application Loopback API: [`ActivateAudioIn
 
 - It captures the render streams of one process and its children, or of everything except that process tree ([`PROCESS_LOOPBACK_MODE`](https://learn.microsoft.com/en-us/windows/win32/api/audioclientactivationparams/ne-audioclientactivationparams-process_loopback_mode)). It needs Windows 10 build 20348 or later, so every Windows 11 release qualifies.
 - The capture isn't tied to an audio endpoint, and a process with no render streams yields silence ([Application Loopback sample](https://learn.microsoft.com/en-us/samples/microsoft/windows-classic-samples/applicationloopbackaudio-sample/)).
-- There's no option to mute the source. The app keeps playing on its own endpoint, undelayed, next to AudioSync's delayed copies: double audio.
+- There's no option to mute the source. Left alone, the app keeps playing on its own endpoint, undelayed, next to AudioSync's delayed copies: double audio. That's why AudioSync moves the sound away while it streams, as described above.
 
 Two documented facts matter for every option below:
 
@@ -75,7 +75,7 @@ Build first: process loopback capture with only documented APIs, plus detect-and
 
 Defer: the undocumented policy interface (an opt-in experiment at most, only after the maintainer approves the clean-room source and with crash-safe restore), our own driver (EV certificate, signing pipeline, kernel risk), and bundling VB-CABLE (linking to it as an optional download in the setup guide is enough for now).
 
-Update, 16 November 2026: the maintainer approved the undocumented default-endpoint call for whole-system mode, with the interface facts sourced as below. [Moving the default output while streaming](#moving-the-default-output-while-streaming) describes it. Per-app routing (option 1) stays deferred.
+Update, 16 November 2026: the maintainer approved the undocumented default-endpoint call for whole-system mode, with the interface facts sourced as below. [Moving the default output while streaming](#moving-the-default-output-while-streaming) describes it. Per-app routing (option 1) was built later, for one app only; see [Moving one app's output](#moving-one-apps-output).
 
 ## Hardware tests on a Windows 11 PC
 
