@@ -87,9 +87,7 @@ use super::capture::{
 use super::cast::{CastLink, CastSpeakers, CastTrack};
 use super::cast_address::CastAddress;
 use super::clock_probe::{ClockQueue, describe_clock_queue};
-use super::default_output::{
-    DefaultEndpoints, DefaultSwitch, Record, RecordStore, silent_endpoint,
-};
+use super::default_output::{DefaultEndpoints, DefaultSwitch, Record, RecordStore};
 use super::local_volume::{LocalVolumeMemory, LocalVolumes};
 use super::now_playing::{
     Follow, Mix, POLL_INTERVAL, SharedLabels, TrackInfo, TrackReader, TrackSource,
@@ -1435,7 +1433,7 @@ impl<D: Driver> Controller<D> {
             .default_output
             .as_mut()
             .and_then(|(endpoints, _)| endpoints.endpoints().ok())
-            .and_then(|listed| silent_endpoint(&listed, &chosen).map(str::to_owned));
+            .and_then(|listed| self.default_switch.silent(&listed, &chosen));
         let recorded = self
             .app_redirect
             .record()
@@ -4736,7 +4734,7 @@ impl<D: Driver> Controller<D> {
         self.default_switch.holds_out_default()
             || endpoints
                 .endpoints()
-                .is_ok_and(|listed| silent_endpoint(&listed, &chosen).is_none())
+                .is_ok_and(|listed| self.default_switch.silent(&listed, &chosen).is_none())
     }
 
     /// Keeps the endpoints of [`RoutingState::at_start`] one idle check from
@@ -5607,8 +5605,12 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.default_output.as_mut().is_some_and(|(endpoints, _)| {
             endpoints
                 .endpoints()
-                .is_ok_and(|listed| silent_endpoint(&listed, &chosen).is_none())
+                .is_ok_and(|listed| self.default_switch.silent(&listed, &chosen).is_none())
         })
+    }
+
+    fn silent_output_installing(&mut self, installing: bool) {
+        self.default_switch.hold_out_cable(installing);
     }
 
     fn silent_output_added(&mut self) {

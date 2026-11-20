@@ -327,6 +327,11 @@ impl SilentInstall {
         self.installed
     }
 
+    /// Whether an install runs.
+    pub fn running(&self) -> bool {
+        self.worker.is_some()
+    }
+
     pub fn forget_installed(&mut self) {
         self.installed = false;
     }

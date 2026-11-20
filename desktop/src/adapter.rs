@@ -2290,6 +2290,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
         for line in polled.lines {
             self.log.log(|| line);
         }
+        if polled.changed {
+            self.audio
+                .silent_output_installing(self.silent_output.running());
+        }
         if polled.added {
             self.list_devices();
             self.audio.silent_output_added();
@@ -5990,6 +5994,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     fn add_silent_output(&mut self) {
         let missing = self.audio.silent_output_missing();
         if self.silent_output.start(missing) {
+            self.audio.silent_output_installing(true);
             self.log
                 .log(|| "the user asked to add the silent output (VB-CABLE)".to_owned());
             self.show_silent_output();

@@ -89,6 +89,9 @@ enum State {
 pub struct DefaultSwitch {
     state: State,
     on_disk: Option<Record>,
+    /// AudioSync is installing VB-CABLE, whose endpoints Windows may make
+    /// the default until the install sets them back (VC41).
+    installing: bool,
 }
 
 /// The silent endpoint among `endpoints`: a virtual one that isn't among
@@ -130,6 +133,22 @@ impl DefaultSwitch {
     #[cfg(test)]
     pub fn switched(&self) -> bool {
         matches!(self.state, State::Switched(_))
+    }
+
+    /// Leaves VB-CABLE out of [`Self::silent`] while AudioSync installs it.
+    pub fn hold_out_cable(&mut self, installing: bool) {
+        self.installing = installing;
+    }
+
+    /// The silent endpoint as [`silent_endpoint`] picks it, VB-CABLE left
+    /// out while AudioSync installs it (VC41).
+    pub fn silent(&self, endpoints: &[Candidate], chosen: &[&str]) -> Option<String> {
+        let kept: Vec<Candidate> = endpoints
+            .iter()
+            .filter(|candidate| !(self.installing && candidate.vb_cable))
+            .cloned()
+            .collect();
+        silent_endpoint(&kept, chosen).map(str::to_owned)
     }
 
     /// After a silent endpoint was added: a stream that holds the default out
@@ -201,7 +220,7 @@ impl DefaultSwitch {
         let listed = endpoints
             .endpoints()
             .map_err(|error| not_moved(format!("the endpoints couldn't be listed: {error}")))?;
-        let Some(silent) = silent_endpoint(&listed, chosen).map(str::to_owned) else {
+        let Some(silent) = self.silent(&listed, chosen) else {
             return Err(not_moved("no silent endpoint".to_owned()));
         };
         let mut previous = Vec::new();
