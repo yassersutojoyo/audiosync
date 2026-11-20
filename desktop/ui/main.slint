@@ -4110,10 +4110,9 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    // With a song the Mac's photos lose the top padding (MAIN-PLAYING: 7 pt
-                    // under the row, 18 without one), though MainWindow.swift:257 pads alike.
+                    // Alike with or without a song (MainWindow.swift:390-391, WindowRules.swift:74-75).
                     VerticalLayout {
-                        padding-top: root.now-playing-shown ? 0px : 11px;
+                        padding-top: 11px;
                         padding-bottom: 5px;
 
                         Divider { }

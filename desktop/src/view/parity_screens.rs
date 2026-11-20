@@ -319,7 +319,7 @@ fn the_left_column_takes_the_macs_spacing() {
         "padding-right: 1px;\n                            // The Mac's 6 from the knob at 100 to the number (MainWindow.swift:545).\n                            number-gap: 14px;"
     ));
     assert!(window.contains(
-        "padding-top: root.now-playing-shown ? 0px : 11px;\n                        padding-bottom: 5px;\n\n                        Divider { }"
+        "padding-top: 11px;\n                        padding-bottom: 5px;\n\n                        Divider { }"
     ));
     assert!(window.contains(
         "VerticalLayout {\n                        spacing: 6px;\n                        padding-left: -8px;\n                        padding-right: -8px;\n\n                        presets-card := PresetsCard {"

@@ -14075,6 +14075,37 @@ pub(crate) mod tests {
         }
     }
 
+    /// With a song the master volume keeps the room above the hairline it has
+    /// without one: MainWindow.swift:389-391 pads it by WindowRules.swift:74-75
+    /// (11 over, 5 under) whatever the hero shows, 17 px from the slider to Presets.
+    #[test]
+    fn a_song_keeps_the_hairline_clear_of_the_master_volume() {
+        use crate::now_playing_card::fake::{FakeControls, track};
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        let fake = FakeControls::default();
+        app.set_media_controls(fake.controls());
+        app.main.show().expect("the main window shows");
+        app.poll();
+        let gap = || {
+            draw_frames_at(712, 900);
+            let slider = ElementHandle::find_by_accessible_label(&app.main, "Master volume")
+                .next()
+                .expect("the master volume");
+            let presets = element(&app, "MainWindow::presets-card").expect("Presets");
+            presets.absolute_position().y - (slider.absolute_position().y + slider.size().height)
+        };
+        let idle = gap();
+        fake.read(Some(track("Spotify.exe", "Song", "Band", true)));
+        app.poll();
+        let playing = gap();
+        assert_eq!(
+            (idle, playing),
+            (17.0, 17.0),
+            "slider to Presets, idle and playing"
+        );
+    }
+
     /// At 696 x 600 with a song (at 632 it fits, as the Mac's does) the whole left column scrolls as one, source
     /// down to Calibrate All: Presets moves up with the hero, nothing is pinned
     /// under it, and scrolled to the end Calibrate All shows whole.
