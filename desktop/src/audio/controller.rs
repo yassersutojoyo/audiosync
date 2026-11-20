@@ -858,6 +858,8 @@ struct RoutingState {
     /// What was last reported: empty while the source is heard only through
     /// AudioSync.
     reported: Vec<DirectPath>,
+    /// Whether the last report sent named an output.
+    told: bool,
     /// The last error of the check: an error that repeats is logged once.
     error: Option<BackendError>,
 }
@@ -4703,7 +4705,8 @@ impl<D: Driver> Controller<D> {
             ),
         };
         let answer = routing::check(&captured, &endpoints, &rendered, &self.routing.played_on);
-        if answer.paths != self.routing.reported {
+        let changed = answer.paths != self.routing.reported;
+        if changed {
             self.log.log(|| {
                 describe_routing(
                     &answer.paths,
@@ -4715,12 +4718,21 @@ impl<D: Driver> Controller<D> {
                 )
             });
             self.routing.reported.clone_from(&answer.paths);
-            // Where the source can be moved to a silent endpoint (Windows),
-            // AudioSync handles double audio itself and asks for no change.
-            if self.double_audio_left_to_user() {
+        }
+        // Where the source can be moved to a silent endpoint (Windows),
+        // AudioSync handles double audio itself and asks for no change, so
+        // a report made before one existed is taken back.
+        if changed || self.routing.told {
+            let left = self.double_audio_left_to_user();
+            if left && changed {
+                self.routing.told = !answer.paths.is_empty();
                 self.pending.push(BackendEvent::HeardTwice {
                     paths: answer.paths,
                 });
+            } else if !left && self.routing.told {
+                self.routing.told = false;
+                self.pending
+                    .push(BackendEvent::HeardTwice { paths: Vec::new() });
             }
         }
         self.routing.played_on = answer.played_on;
