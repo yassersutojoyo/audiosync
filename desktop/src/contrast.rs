@@ -971,7 +971,7 @@ fn every_icon_has_a_drawing_off_windows() {
 #[test]
 fn keyboard_shortcuts_are_declared() {
     let main = include_str!("../ui/main.slint");
-    for keys in ["\"Ctrl+N\";", "\"F5\";", "\"Ctrl+,\";", "\"Ctrl+Q\";"] {
+    for keys in ["\"Ctrl+N\";", "\"F5\";", "\"Ctrl+,\";", "\"F1\";"] {
         assert!(main.contains(keys), "the gear's menu shows {keys}");
     }
     for (file, source) in UI_FILES {

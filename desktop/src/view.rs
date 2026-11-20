@@ -23917,87 +23917,63 @@ pub(crate) mod tests {
         assert!(source.contains("glyph: root.is-input ? Glyphs.microphone"));
     }
 
-    /// The gear's menu, as the Mac's Speakers and Window menus
-    /// (MainMenu.swift:41-63): Speakers (Turn Streaming On or Off, Refresh
-    /// Devices, Add by Address…, New Zone, Hidden Speakers, Apply Typed
-    /// Delay), Window (Equalizer, Presets, Web Remote, Settings, the Guide),
-    /// then About, Check for Updates… (MainMenu.swift:14) and Exit (S449).
+    /// The gear's menu, as the Mac's gear (MainWindow.swift:3155-3167):
+    /// Speakers (New Zone, Refresh Devices) and Windows (Web Remote,
+    /// Settings, the Guide), then About and Check for Updates… with the
+    /// updater; Exit is in the tray icon's menu (S449).
     // covers: S449
     #[test]
-    fn the_gear_menu_holds_the_old_menus_items_in_the_macs_order() {
+    fn the_gear_menu_holds_the_macs_gear_items_in_its_order() {
         let source = include_str!("../ui/main.slint").replace("\r\n", "\n");
         let gear = &source[source.find("component GearButton").expect("the gear")..];
         let gear = &gear[..gear.find("\n}\n").unwrap()];
-        let mut at = 0;
-        for title in [
-            "text: Strings.menu-speakers;",
-            "text: root.running ? Strings.menu-turn-streaming-off : Strings.menu-turn-streaming-on;",
-            "text: Strings.refresh-devices;\n                keys: \"F5\";",
-            "text: Strings.cast-add-address;\n                enabled: root.can-add-address;",
-            "text: Strings.new-zone;\n                keys: \"Ctrl+N\";",
-            "text: Strings.hidden-speakers;\n                submenu: true;",
-            "text: Strings.no-hidden-speakers;",
-            "text: Strings.hidden-speaker-entry(",
-            "text: Strings.menu-apply-delay;\n                keys: \"Ctrl+S\";\n                enabled: root.delay-typing;",
-            "text: Strings.menu-window;",
-            "text: Strings.equalizer;\n                keys: \"Ctrl+E\";",
-            "text: Strings.presets;\n                submenu: true;",
-            "keys: index < 9 ? \"Ctrl+\" + (index + 1) : \"\";",
-            "text: Strings.no-presets;",
-            "text: Strings.save-preset;",
-            "text: Strings.menu-remote;",
-            "text: Strings.settings-menu;\n                keys: \"Ctrl+,\";",
-            "text: Strings.help-title;\n                keys: \"F1\";",
-            "MenuDivider { }",
-            "text: Strings.menu-about;",
-            "if root.updater-available: MenuRow {",
-            "text: Strings.menu-exit;\n                keys: \"Ctrl+Q\";",
-        ] {
-            at += gear[at..]
-                .find(title)
-                .unwrap_or_else(|| panic!("{title} after the item before it"));
-        }
+        let items: Vec<&str> = gear
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("text: "))
+            .collect();
+        assert_eq!(
+            items,
+            [
+                "Strings.menu-speakers;",
+                "Strings.new-zone;",
+                "Strings.refresh-devices;",
+                "Strings.menu-window;",
+                "Strings.menu-remote;",
+                "Strings.settings-menu;",
+                "Strings.help-title;",
+                "Strings.menu-about;",
+                "Strings.menu-check-for-updates;",
+            ]
+        );
+        assert!(gear.contains("if root.updater-available: MenuRow {"));
+        let app = app_over(MockBackend::new());
+        assert_eq!(app.strings().get_menu_window(), "Windows");
         let header = &source[source.find("gear := GearButton {").unwrap()..];
         let header: String = header[..header.find("power := PowerSwitch").unwrap()]
             .split_whitespace()
             .collect();
         for (item, callback) in [
-            ("streaming", "power-toggled(!root.running)"),
             ("refresh", "refresh-devices()"),
-            ("add-address", "cast-add-address-requested()"),
             ("new-zone", "new-zone-requested()"),
-            ("unhide(id)", "speaker-unhide-requested(id)"),
-            ("apply-delay", "delay-apply-requested()"),
-            ("equalizer", "equalizer-requested()"),
-            ("preset(id)", "preset-recall-requested(id)"),
-            ("save-preset", "save-preset-requested()"),
             ("remote", "remote-requested()"),
             ("settings", "settings-requested()"),
             ("guide", "help-requested()"),
             ("about", "about-requested()"),
             ("check-for-updates", "check-for-updates-requested()"),
-            ("exit", "exit-requested()"),
         ] {
             assert!(
                 header.contains(&format!("{item}=>{{root.{callback};}}")),
                 "{item} calls {callback}"
             );
         }
-        for bound in [
-            "running:root.running;",
-            "can-add-address:root.cast-by-address;",
-            "delay-typing:root.delay-typing;",
-            "hidden:root.hidden-speakers;",
-            "presets:root.presets;",
-            "updater-available:root.updater-available;",
-        ] {
-            assert!(header.contains(bound), "the gear gets {bound}");
-        }
+        assert!(
+            header.contains("updater-available:root.updater-available;"),
+            "the gear knows the updater"
+        );
+        assert!(!header.contains("exit=>"), "no Exit in the gear");
         assert!(!source.contains("MenuName"), "no menu row");
         assert!(
-            gear.contains(
-                "count: 13 + root.hidden-rows + root.preset-rows + (root.updater-available ? 1 : 0);"
-            ),
+            gear.contains("count: 6 + (root.updater-available ? 1 : 0);"),
             "the keys reach every row"
         );
     }
@@ -24543,21 +24519,25 @@ pub(crate) mod tests {
                 .find(|e| e.accessible_role() == Some(AccessibleRole::Button))
                 .expect("the button")
         };
-        let exit = strings.get_menu_exit();
+        let remote = strings.get_menu_remote();
         let gear = button(&strings.get_more_options());
         let source = button("Audio Source");
         let sources_closed = count("Web Browser");
         gear.invoke_accessible_default_action();
         draw_frames();
-        assert_eq!(count(&exit), 1, "Invoke opens the gear's menu");
+        assert_eq!(count(&remote), 1, "Invoke opens the gear's menu");
         gear.invoke_accessible_default_action();
         draw_frames();
-        assert_eq!(count(&exit), 0, "a second Invoke closes it");
+        assert_eq!(count(&remote), 0, "a second Invoke closes it");
         gear.invoke_accessible_default_action();
         draw_frames();
         source.invoke_accessible_default_action();
         draw_frames();
-        assert_eq!(count(&exit), 0, "opening the source menu closed the gear's");
+        assert_eq!(
+            count(&remote),
+            0,
+            "opening the source menu closed the gear's"
+        );
         assert!(
             count("Web Browser") > sources_closed,
             "the source menu shows"
@@ -24565,7 +24545,7 @@ pub(crate) mod tests {
         press(app.main.window(), Key::Escape);
         assert_eq!(count("Web Browser"), sources_closed, "it has the keys");
         for (name, opener) in [("gear", &gear), ("source", &source)] {
-            let shown = || count(&exit) + count("Web Browser") > sources_closed;
+            let shown = || count(&remote) + count("Web Browser") > sources_closed;
             for _ in 0..2 {
                 opener.invoke_accessible_default_action();
                 draw_frames();
