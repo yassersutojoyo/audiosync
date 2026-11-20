@@ -6789,10 +6789,10 @@ fn missing_item(strings: &Strings<'_>, state: &AppState, zone_id: &str, id: &str
         name,
         kind: speaker_kind(kind),
         product: absent.map_or(ProductKind::Unknown, |member| product_kind(member.product)),
-        show_kind: !kind.is_this_pc(),
         state: RowState::Off,
         availability: Availability::Open,
         volume_step: 1.0,
+        system_volume: -1,
         zone_id: zone_id.into(),
         zone_movable: true,
         missing: true,
@@ -17549,6 +17549,32 @@ pub(crate) mod tests {
             .invoke_speaker_remove_from_zone_requested("airplay:theater:4C2D".into());
         let living = app.models.zones.row_data(0).unwrap();
         assert_eq!((living.members.row_count(), living.total), (4, 4));
+    }
+
+    /// A zone member that isn't found shows its dimmed badge, its name and
+    /// "Not found" under it, as the Mac's ZoneMemberPlaceholder
+    /// (MainWindow.swift:2266-2287): no slider, volume, System tag or kind icon.
+    #[test]
+    fn a_zone_member_not_found_shows_only_its_name_and_not_found_as_on_the_mac() {
+        let app = app_over(MockBackend::zones_preview());
+        app.main.show().expect("the main window shows");
+        draw_frames_at(696, 632);
+        draw_frames_at(696, 632);
+        let theater = zone_member_row(&app, "airplay:theater:4C2D");
+        assert!(theater.missing);
+        assert!(
+            theater.system_volume < 0,
+            "System {}%",
+            theater.system_volume
+        );
+        assert!(!theater.show_kind, "a kind icon after the name");
+        let label = app.strings().invoke_volume_of("Home Theater".into());
+        let sliders: Vec<f32> =
+            i_slint_backend_testing::ElementHandle::find_by_accessible_label(&app.main, &label)
+                .map(|slider| slider.size().height)
+                .filter(|height| *height > 0.0)
+                .collect();
+        assert!(sliders.is_empty(), "a slider {sliders:?} px tall");
     }
 
     // covers: S246 (a Cast member a zone click left off says why), S247 (a

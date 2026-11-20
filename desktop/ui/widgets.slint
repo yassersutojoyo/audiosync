@@ -4105,7 +4105,7 @@ export component SpeakerRow inherits Rectangle {
                                     // An AirPlay speaker's note can be long; it ends in "…"
                                     // rather than run into the delay column (Narrator reads
                                     // the whole note from the toggle).
-                                    if root.note != "": note-box := Rectangle {
+                                    if root.note != "" && !root.item.missing: note-box := Rectangle {
                                         // The Mac's AvailabilityNote leads with its lock or warning, 3 pt before the text (MenuBar.swift:2311-2318).
                                         property <length> lead: root.availability-note != "" && root.note == Strings.speaker-caption(Strings.row-note(root.item.state, root.item.name), root.availability-note) ? Tokens.font-size-caption + 3px : 0px;
                                         horizontal-stretch: 1;
@@ -4236,6 +4236,12 @@ export component SpeakerRow inherits Rectangle {
                                             }
                                         }
                                     }
+                                }
+
+                                // A zone member not found says so under its name, as the
+                                // Mac's ZoneMemberPlaceholder (MainWindow.swift:2280-2284).
+                                if root.item.missing: SecondaryText {
+                                    text: root.note;
                                 }
                             }
 
@@ -4509,8 +4515,10 @@ export component SpeakerRow inherits Rectangle {
 
                             // Its track starts under the name and ends 8 px before
                             // the value, as on the Mac (MainWindow.swift:2461-2486).
+                            // A member not found has no slider, as the Mac's ZoneMemberPlaceholder.
                             Rectangle {
-                                min-height: volume-slider.min-height;
+                                visible: !root.item.missing;
+                                min-height: root.item.missing ? 0px : volume-slider.min-height;
 
                                 volume-slider := VolumeSlider {
                                     small: true;
