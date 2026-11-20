@@ -303,7 +303,7 @@ Start-Sleep -Seconds 6
 
 function Test-Heard([string] $Phase) {
   $prefix = Join-Path $Work "scream-$Phase"
-  python -I (Join-Path $here 'scream_window.py') record 4010 40 $prefix | Tee-Object -FilePath "$Work/result.txt" -Append
+  python -I (Join-Path $here 'scream_window.py') record 4010 40 $prefix | Tee-Object -FilePath "$Work/result.txt" -Append | Out-Host
   $prefix
 }
 
