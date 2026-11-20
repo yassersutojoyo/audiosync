@@ -309,6 +309,16 @@ crate's license isn't allowed by `desktop/deny.toml`, or when a crate's source
 points to a license file the package doesn't ship and the script doesn't
 supply.
 
+VB-CABLE, the virtual audio cable by VB-Audio (Vincent Burel), isn't part of
+AudioSync and isn't in any release file. On an x64 PC with no virtual output,
+the double-audio notice offers to add it: only when you click, AudioSync
+downloads the VB-CABLE package from VB-Audio's server, checks it against a
+pinned SHA-256 and opens VB-Audio's own installer, unmodified, where you
+install it. The origin of VB-CABLE : www.vb-cable.com. VB-CABLE is a
+donationware, all participations are welcome. Use in a company or institution
+needs licences bought from VB-Audio; see its
+[licensing page](https://vb-audio.com/Services/licensing.htm).
+
 ## Linux app, AppImage and .deb
 
 The Linux build of `desktop/` shows its tray icon as a StatusNotifier item
