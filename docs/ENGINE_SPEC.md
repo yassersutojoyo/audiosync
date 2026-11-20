@@ -5604,6 +5604,7 @@ S231 has no Windows test: Windows reads no device latency.
 | the_build_before_windows_11_is_refused (`desktop/src/os_version.rs`) | S389 |
 | the_first_windows_11_build_runs (`desktop/src/os_version.rs`) | S389 |
 | windows_11_24h2_runs (`desktop/src/os_version.rs`) | S389 |
+| windows_server_2022_is_refused_without_the_ci_proof_feature (`desktop/src/os_version.rs`) | S389 |
 | windows_7_is_refused (`desktop/src/os_version.rs`) | S389 |
 | an_older_major_version_is_refused_whatever_its_build (`desktop/src/os_version.rs`) | S389 |
 | a_later_major_version_runs (`desktop/src/os_version.rs`) | S389 |
