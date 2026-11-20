@@ -1,10 +1,10 @@
 # Contributing
 
-Issues, reports of device combinations that work (or don't), and pull requests are all welcome. AudioSync is a small side project, so please be patient with replies.
+I take small fixes for a specific device: a pull request that gets AudioSync working on hardware where it fails, sent with a report of what the hardware was (your Mac or PC, the speakers or receivers) and what happened. Features and the app's direction come from me, so I don't take pull requests that add features. [Open an issue](https://github.com/yassersutojoyo/audiosync/issues) with the idea instead. AudioSync is a small side project, so please be patient with replies.
 
 [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) covers building, testing and the layout of the code. The short version: `./setup.sh` once, then `./build.sh` and `Tests/run-tests.sh`.
 
-## Before you open a PR
+## What CI checks
 
 Every push and pull request runs the quick checks on Linux: `shellcheck` on every shell script in `scripts/shellcheck-files.txt`, `scripts/privacy_check.py` (no home-directory paths from a Mac or a Windows PC, LAN hostnames or private IP addresses in tracked files; its forbidden-names guard is described in `docs/DEVELOPMENT.md`), `scripts/text_check.py` (no em dashes in the public docs), and `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test` and `cargo deny check licenses` in `core/`, `airplay/`, `cast/`, `remote/` and `desktop/`, and it builds and checks the Linux AppImage and `.deb`. When a change touches `Sources/`, `Tests/`, `Package.swift` or `build.sh`, CI also builds the Rust audio core and the app on macOS (`scripts/build_core.sh`, then `swift build -c release`), checks that the core is linked, runs `Tests/run-tests.sh`, runs `git diff --check` over the whole tree, compiles the Python scripts, checks that the generated brand SVGs, `BrandMark.swift`, the Guide art and the design-token outputs of `scripts/brand/tokens.py` (`BrandTokens.swift`, the Windows app's `tokens.slint` and `tokens.rs`, and the site's CSS variables) are up to date and that the icon scripts reproduce the committed icons. The rest (the whole app with `./build.sh --no-install` and its bundle check, the Windows app's build and tests on Windows, and the Rust tests on macOS and Windows) runs on `main` and on the branches changes go through on their way there, so if you change the bundle, run `./build.sh --no-install` and `Tests/check-app-bundle.sh` yourself. Please make sure those pass. `Tests/run-tests.sh` runs the same shellcheck check, so install shellcheck 0.11.0 first (`brew install shellcheck`, or `scripts/shellcheck.sh --install <dir>`; see `docs/DEVELOPMENT.md`). If you touch the audio path, also run `Tests/run-tests.sh --hardware` locally.
 
@@ -18,15 +18,15 @@ Every push and pull request runs the quick checks on Linux: `shellcheck` on ever
 
 ## Scope
 
-AudioSync tries to stay focused: capture one source, play it in sync on local, AirPlay and Google Cast speakers, with AudioSync's own AirPlay and Cast senders built in. Big new dependencies or features outside that are unlikely to be merged, so open an issue first if you're planning one.
+AudioSync tries to stay focused: capture one source, play it in sync on local, AirPlay and Google Cast speakers, with AudioSync's own AirPlay and Cast senders built in. Feature ideas outside that are welcome as issues, but they may not make it in.
 
-A new dependency needs a license that fits and an entry in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). Please don't copy code from other projects into AudioSync.
+Every dependency needs a license that fits and an entry in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), and no code is copied from other projects into AudioSync.
 
 ## Contributor terms
 
-The short version: you keep the copyright on what you send, and AudioSync stays GPL-3.0-or-later in public. You also let me, the maintainer, use your contribution under other licenses, which keeps the door open for a paid edition later. If that doesn't sit right with you, open an issue instead of a pull request and we can talk it through.
+Every pull request I merge comes under these terms. To agree, put this line in your pull request description: "I agree to the contributor terms in CONTRIBUTING.md". I check for it before merging.
 
-To agree, put this line in your pull request description: "I agree to the contributor terms in CONTRIBUTING.md". I check for it before merging. No sign-off lines or separate forms are needed.
+By contributing, you agree that I may also use merged contributions under other licenses, paid editions included (point 3). If you're not fine with that, please open an issue instead of a pull request.
 
 1. A "contribution" is anything you submit to this repository to be included in AudioSync: code, tests, docs, artwork, translations and so on. The "maintainer" is Yasser Sutojoyo Kusumo, or a person or organization the maintainer transfers the project to in writing.
 2. You keep the copyright in your contribution. These terms don't transfer ownership of anything.
@@ -38,4 +38,4 @@ To agree, put this line in your pull request description: "I agree to the contri
 8. Apart from what you confirm in points 6 and 7, your contribution comes as is, without any warranty, and you aren't expected to support it.
 9. The maintainer may update these terms. A new version only applies to contributions submitted after it is published here; earlier contributions stay under the version that applied when they were made.
 
-This isn't legal advice, and I'm not a lawyer. If your situation is unusual, for example your employer has rules about open-source work, please check before you submit.
+This isn't legal advice, and I'm not a lawyer.
