@@ -88,10 +88,11 @@ fn a_notices_actions_and_dismiss_all_are_links_in_the_text_color() {
         "text: Strings.notice-retry;",
         "text: Strings.notice-open-privacy;",
         "text: Strings.dismiss-all-notices;",
+        "text: Strings.silent-output-credit;",
     ] {
         assert!(element_of(&stack, text).ends_with("LinkButton {"), "{text}");
     }
-    assert_eq!(stack.matches("text-color: Tokens.text;").count(), 4);
+    assert_eq!(stack.matches("text-color: Tokens.text;").count(), 5);
     let link = component(include_str!("../../ui/widgets.slint"), "LinkButton");
     assert!(link.contains("in property <color> text-color: Tokens.teal-text;"));
     assert!(link.contains("color: root.text-color;"));

@@ -791,7 +791,12 @@ pub enum NoticeMessage {
         mute: Vec<String>,
         shared: Vec<String>,
         default_output: Option<String>,
+        /// The offer to add a silent output, and how far it got.
+        silent_output: SilentOutput,
     },
+    /// The silent output was added and the source is heard only through
+    /// AudioSync now.
+    SilentOutputAdded,
     /// Windows refused the Run value, so Launch at Sign-In stays off.
     LaunchAtLoginFailed,
     /// Windows refused to remove the Run value, so Launch at Sign-In stays on.
@@ -841,6 +846,7 @@ impl NoticeMessage {
             Self::SourceSwitched { started: true, .. }
                 | Self::WaitingForAudio { .. }
                 | Self::GroupsBecameZones
+                | Self::SilentOutputAdded
                 | Self::Update(
                     UpdaterNotice::Available { .. }
                         | UpdaterNotice::Checking
@@ -850,6 +856,37 @@ impl NoticeMessage {
                 )
         )
     }
+}
+
+/// What the double-audio notice says about a silent output
+/// (docs/WINDOWS_SILENT_OUTPUT_SPEC.md).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SilentOutput {
+    /// Nothing: the notice is as it was before the offer existed.
+    #[default]
+    None,
+    /// The Add Silent Output button, with the line of the last failure.
+    Offered {
+        failed: Option<SilentFailure>,
+    },
+    Downloading,
+    /// The setup was launched: the UAC prompt, then VB-Audio's window.
+    Waiting,
+    /// The cable is installed but its endpoints aren't active, or the
+    /// source still plays out loud: a restart finishes it.
+    Restart,
+    /// An ARM64 PC, where AudioSync doesn't install it yet.
+    NotOnArm64,
+}
+
+/// Why adding the silent output failed (VC35).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SilentFailure {
+    Refused,
+    Download,
+    Mismatch,
+    Installer,
+    Restart,
 }
 
 /// Why a preset's member stayed off at recall (spec S252, S265).
@@ -1843,6 +1880,10 @@ pub trait Backend {
     /// Retry on the notice that AirPlay stopped: starts a new AirPlay
     /// sender, and the speakers that were on come back once it lists them.
     fn retry_airplay(&mut self) {}
+
+    /// The double-audio notice's Add Silent Output: downloads VB-CABLE and
+    /// opens its setup (docs/WINDOWS_SILENT_OUTPUT_SPEC.md).
+    fn add_silent_output(&mut self) {}
 
     /// Calibrate with Microphone on local speaker `id`'s row.
     fn start_calibration(&mut self, _id: &str) {}

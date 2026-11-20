@@ -1186,6 +1186,16 @@ pub trait AudioBackend {
     /// `AirPlayStopped` again.
     fn retry_airplay(&mut self);
 
+    /// Whether the double-audio notice shows because no silent endpoint
+    /// exists, so it may offer to add one (VC21).
+    fn silent_output_missing(&mut self) -> bool {
+        false
+    }
+
+    /// A silent output was just added and listed: a held-out default moves
+    /// to it and the routing is checked at the next poll (VC36).
+    fn silent_output_added(&mut self) {}
+
     /// The Google Cast speakers on the network, by name, with their
     /// settings; empty while there is no Cast sender.
     fn cast_speakers(&self) -> Vec<CastInfo> {

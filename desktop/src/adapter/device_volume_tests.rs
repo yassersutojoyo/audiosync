@@ -425,6 +425,7 @@ fn headphones_show_no_device_volume_hint_and_speakers_still_do() {
     let in_ears = || crate::audio::outputs::DeviceTraits {
         form_factor: Some(crate::audio::outputs::form_factor::HEADPHONES),
         enumerator: Some("USB".to_owned()),
+        vb_cable: false,
     };
     let mut audio = MockBackend::empty();
     audio.connect_output_as(SPEAKERS, "Speakers", OutputKind::BuiltIn);

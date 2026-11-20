@@ -4870,6 +4870,8 @@ impl<D: Driver> AudioBackend for Controller<D> {
         let mut outputs: Vec<OutputInfo> = self
             .present
             .iter()
+            // VB-CABLE stays a silent endpoint but is no speaker to pick (VC45).
+            .filter(|endpoint| !endpoint.traits.vb_cable)
             .map(|endpoint| {
                 let settings = self.policy.settings(&endpoint.id);
                 OutputInfo {
@@ -5598,6 +5600,22 @@ impl<D: Driver> AudioBackend for Controller<D> {
         } else {
             self.input_pairs.insert(endpoint_id.to_owned(), pair);
         }
+    }
+
+    fn silent_output_missing(&mut self) -> bool {
+        let chosen = self.policy.enabled_ids();
+        self.default_output.as_mut().is_some_and(|(endpoints, _)| {
+            endpoints
+                .endpoints()
+                .is_ok_and(|listed| silent_endpoint(&listed, &chosen).is_none())
+        })
+    }
+
+    fn silent_output_added(&mut self) {
+        // A whole-system stream that started without a silent endpoint
+        // holds the default out; it moves now (VC36).
+        self.default_switch.try_again();
+        self.routing.last_check = None;
     }
 
     fn retry_airplay(&mut self) {
@@ -12499,6 +12517,7 @@ mod tests {
                     enumerator: Some(enumerator.to_owned()),
                     display_port: false,
                     channels: None,
+                    vb_cable: false,
                 }),
             });
         }
@@ -12611,6 +12630,7 @@ mod tests {
                 enumerator: Some("BTHHFENUM".to_owned()),
                 display_port: false,
                 channels: None,
+                vb_cable: false,
             }),
         });
         backend.enumerate_endpoint(EndpointReading {

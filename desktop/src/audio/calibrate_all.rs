@@ -2687,6 +2687,7 @@ pub(crate) mod tests {
                 traits: DeviceTraits {
                     form_factor: Some(form_factor),
                     enumerator: Some(enumerator.to_owned()),
+                    vb_cable: false,
                 },
             },
         );

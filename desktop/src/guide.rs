@@ -134,6 +134,7 @@ pub fn guide(message: &NoticeMessage) -> Option<Guide> {
         mute,
         shared,
         default_output,
+        ..
     } = message
     else {
         return None;
@@ -207,12 +208,14 @@ pub fn preview(kind: &str) -> Option<NoticeMessage> {
             mute: names(&["TV", "Monitor"]),
             shared: Vec::new(),
             default_output: None,
+            silent_output: crate::ui_model::SilentOutput::None,
         }),
         "system" => Some(NoticeMessage::HeardTwice {
             source: None,
             mute: names(&["TV"]),
             shared: names(&["Speakers"]),
             default_output: Some("Speakers".to_owned()),
+            silent_output: crate::ui_model::SilentOutput::None,
         }),
         _ => None,
     }
@@ -237,6 +240,7 @@ mod tests {
             mute: names(mute),
             shared: names(shared),
             default_output: default_output.map(str::to_owned),
+            silent_output: crate::ui_model::SilentOutput::None,
         }
     }
 
@@ -295,6 +299,7 @@ mod tests {
             mute: names(&["TV"]),
             shared: Vec::new(),
             default_output: None,
+            silent_output: crate::ui_model::SilentOutput::None,
         };
         assert_eq!(
             steps(&message),

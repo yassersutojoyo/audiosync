@@ -64,6 +64,15 @@ pub fn backend<D: Driver + 'static>(
         ),
     );
     adapter.set_cast_file(cast_file, cast_unread);
+    #[cfg(windows)]
+    adapter.set_silent_output(std::sync::Arc::new(audio::wasapi::VbCablePlatform {
+        user_agent: crate::updater::fetch::user_agent(
+            "Windows",
+            env!("CARGO_PKG_VERSION"),
+            std::env::consts::ARCH,
+        ),
+        data_folder: data_folder::folder(),
+    }));
     Box::new(adapter)
 }
 

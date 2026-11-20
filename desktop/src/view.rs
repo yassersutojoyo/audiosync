@@ -4145,6 +4145,12 @@ impl App {
         let w = weak.clone();
         main.on_notice_privacy_requested(move |_| with_app(&w, App::open_microphone_privacy));
         let w = weak.clone();
+        main.on_notice_silent_output_requested(move || {
+            with_app(&w, |app| app.update(|b| b.add_silent_output()))
+        });
+        let w = weak.clone();
+        main.on_notice_vendor_page_requested(move || with_app(&w, App::open_vendor_page));
+        let w = weak.clone();
         main.on_notice_focus_changed(move |id, focused| {
             with_app(&w, |app| {
                 note_focus(&mut app.main_focus.borrow_mut().notice, id, focused);
@@ -4270,6 +4276,12 @@ impl App {
         });
         let w = weak.clone();
         flyout.on_notice_privacy_requested(move |_| with_app(&w, App::open_microphone_privacy));
+        let w = weak.clone();
+        flyout.on_notice_silent_output_requested(move || {
+            with_app(&w, |app| app.update(|b| b.add_silent_output()))
+        });
+        let w = weak.clone();
+        flyout.on_notice_vendor_page_requested(move || with_app(&w, App::open_vendor_page));
         let w = weak.clone();
         flyout.on_network_settings_requested(move || with_app(&w, App::open_network_settings));
         let w = weak.clone();
@@ -4573,6 +4585,15 @@ impl App {
     /// calibration that asks.
     fn open_microphone_privacy(&self) {
         let uri = SettingsPage::MicrophonePrivacy.uri();
+        if !crate::platform::open_settings(uri) {
+            self.log
+                .log(|| format!("notice: the shell did not open {uri}"));
+        }
+    }
+
+    /// Opens VB-CABLE's page for the double-audio notice's credit (VC22).
+    fn open_vendor_page(&self) {
+        let uri = crate::audio::silent_output::VENDOR_PAGE;
         if !crate::platform::open_settings(uri) {
             self.log
                 .log(|| format!("notice: the shell did not open {uri}"));
@@ -7523,6 +7544,16 @@ fn calibration_failure(strings: &Strings<'_>, reference: &str, failure: Failure)
 }
 
 pub fn notice_item(strings: &Strings<'_>, notice: &ui_model::Notice) -> NoticeItem {
+    use ui_model::SilentOutput as S;
+    let silent = match &notice.message {
+        NoticeMessage::HeardTwice { silent_output, .. } => Some(*silent_output),
+        _ => None,
+    };
+    // The button takes Show How's place (VC22).
+    let has_silent_output = matches!(
+        silent,
+        Some(S::Offered { .. } | S::Downloading | S::Waiting)
+    );
     NoticeItem {
         id: i32::try_from(notice.id).unwrap_or(i32::MAX),
         message: notice_text(strings, &notice.message),
@@ -7536,8 +7567,10 @@ pub fn notice_item(strings: &Strings<'_>, notice: &ui_model::Notice) -> NoticeIt
             _ => SharedString::new(),
         },
         time: notice.time.as_str().into(),
-        has_guide: guide::guide(&notice.message).is_some(),
+        has_guide: guide::guide(&notice.message).is_some() && !has_silent_output,
         has_retry: notice.message == NoticeMessage::AirPlayStopped,
+        has_silent_output,
+        silent_busy: matches!(silent, Some(S::Downloading | S::Waiting)),
         has_privacy: matches!(notice.message, NoticeMessage::MicrophoneBlocked { .. }),
         update_buttons: update_buttons(&notice.message),
         info: notice.message.reports_a_change(),
@@ -7800,20 +7833,56 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
             source,
             mute,
             shared,
+            silent_output,
             ..
         } => {
             let mute = joined(strings, mute);
             let shared = joined(strings, shared);
-            match source {
+            let today = match source {
                 Some(source) => strings.invoke_notice_heard_twice_app(
                     source_name(strings, source),
                     mute,
                     shared,
                 ),
                 None => strings.invoke_notice_heard_twice_system(mute, shared),
-            }
+            };
+            silent_output_text(strings, today, *silent_output)
         }
+        NoticeMessage::SilentOutputAdded => strings.get_silent_output_added(),
     }
+}
+
+/// The double-audio notice with its silent-output offer: the offer's text in
+/// place of today's while the button shows, and one line for where the
+/// install got to (docs/WINDOWS_SILENT_OUTPUT_SPEC.md, VC22-VC38).
+fn silent_output_text(
+    strings: &Strings<'_>,
+    today: SharedString,
+    shown: ui_model::SilentOutput,
+) -> SharedString {
+    use ui_model::{SilentFailure as F, SilentOutput as S};
+    let offer = strings.get_silent_output_offer();
+    let (text, line) = match shown {
+        S::None => return today,
+        S::Offered { failed: None } => return offer,
+        S::Offered {
+            failed: Some(failure),
+        } => (
+            offer,
+            match failure {
+                F::Refused => strings.get_silent_output_refused(),
+                F::Download => strings.get_silent_output_download_failed(),
+                F::Mismatch => strings.get_silent_output_mismatch(),
+                F::Installer => strings.get_silent_output_installer_failed(),
+                F::Restart => strings.get_silent_output_restart(),
+            },
+        ),
+        S::Downloading => (offer, strings.get_silent_output_downloading()),
+        S::Waiting => (offer, strings.get_silent_output_waiting()),
+        S::Restart => (today, strings.get_silent_output_restart()),
+        S::NotOnArm64 => (today, strings.get_silent_output_not_on_arm64()),
+    };
+    format!("{text}\n{line}").into()
 }
 
 /// A recalled member AudioSync never learned a name for reads "Unknown device".
@@ -7960,6 +8029,7 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         } => (NoticeKind::PresetsNothingChanged, ""),
         NoticeMessage::PresetLeftOff { .. } => (NoticeKind::PresetsLeftOff, ""),
         NoticeMessage::HeardTwice { .. } => (NoticeKind::HeardTwice, ""),
+        NoticeMessage::SilentOutputAdded => (NoticeKind::SilentOutputAdded, ""),
     };
     strings.invoke_notice_title(kind, name.into())
 }
@@ -21202,6 +21272,7 @@ pub(crate) mod tests {
                 mute: vec!["TV".into()],
                 shared: Vec::new(),
                 default_output: None,
+                silent_output: crate::ui_model::SilentOutput::None,
             },
         );
         let named = strings.invoke_source_all_except("Spotify and Chrome".into());
@@ -21504,6 +21575,7 @@ pub(crate) mod tests {
                 mute: vec!["Speakers".into()],
                 shared: vec!["Headphones".into()],
                 default_output: None,
+                silent_output: crate::ui_model::SilentOutput::None,
             }),
             "Dismiss: double audio"
         );

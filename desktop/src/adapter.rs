@@ -62,6 +62,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use audiosync_airplay::discovery::shown_text;
 use audiosync_core::channels::InputPair;
@@ -100,6 +101,7 @@ use crate::audio::calibration::{self, CalibrationRun, Failure, MicrophoneId};
 use crate::audio::capture::{WHOLE_SYSTEM_NAME, describe_pair};
 use crate::audio::outputs::{MicKind, unnumbered};
 use crate::audio::routing::{DirectPath, DirectReason};
+use crate::audio::silent_output::{Platform as SilentPlatform, SilentInstall};
 use crate::data_folder;
 use crate::debug_log::DebugLog;
 use crate::settings::{
@@ -112,9 +114,9 @@ use crate::ui_model::{
     self, AbsentMember, AllPhase, AllProgress, AppState, Availability, Backend, CalibrateAllState,
     CalibrationState, CastAddressCheck, CastAddressError, CastGroup, CastList, CastMembers,
     CastRow, CastState, HiddenSpeaker, InTarget, LeftOutRow, MixApp, Notice, NoticeMessage,
-    PasswordPrompt, PinPhase, PinPrompt, PresetError, PresetLeftOff, SheetRow, SheetState, Source,
-    SourceKind, SourceName, Speaker, SpeakerKind, SwitchName, ViewSettings, Waiting, ZoneError,
-    ZoneSheet,
+    PasswordPrompt, PinPhase, PinPrompt, PresetError, PresetLeftOff, SheetRow, SheetState,
+    SilentOutput, Source, SourceKind, SourceName, Speaker, SpeakerKind, SwitchName, ViewSettings,
+    Waiting, ZoneError, ZoneSheet,
 };
 
 /// The source list is read again every this many polls, about every three
@@ -609,6 +611,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The outputs named in a double-audio notice the user dismissed, by
     /// source UI ID, until that app quits.
     heard_twice_dismissed: BTreeMap<String, BTreeSet<String>>,
+    /// The double-audio notice's offer to add a silent output, and its
+    /// install while one runs.
+    silent_output: SilentInstall,
     equalizer: EqSettings,
     /// The equalizer curves the user saved (spec S270).
     equalizer_curves: Vec<UserCurve>,
@@ -818,6 +823,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             next_notice: 1,
             heard_twice: None,
             heard_twice_dismissed: BTreeMap::new(),
+            silent_output: SilentInstall::default(),
             equalizer: EqSettings::default(),
             equalizer_curves: Vec::new(),
             polls: 0,
@@ -2259,6 +2265,49 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .log(|| format!("Cast: the speaker list's note is now {shows:?}"));
         }
         shows != shown
+    }
+
+    /// Lets the double-audio notice offer to add a silent output through
+    /// `platform` (docs/WINDOWS_SILENT_OUTPUT_SPEC.md).
+    #[cfg_attr(
+        all(not(windows), not(test)),
+        expect(dead_code, reason = "only Windows adds a silent output")
+    )]
+    pub fn set_silent_output(&mut self, platform: Arc<dyn SilentPlatform>) {
+        self.silent_output = SilentInstall::new(platform);
+    }
+
+    /// The silent-output offer the double-audio notice shows now.
+    fn silent_output_shown(&mut self) -> SilentOutput {
+        let missing = self.audio.silent_output_missing();
+        self.silent_output.shown(missing)
+    }
+
+    /// Takes in what a running install reported, and lists the devices and
+    /// checks the routing again once it added the cable (VC36).
+    fn follow_silent_output(&mut self) -> bool {
+        let polled = self.silent_output.poll();
+        for line in polled.lines {
+            self.log.log(|| line);
+        }
+        if polled.added {
+            self.list_devices();
+            self.audio.silent_output_added();
+        }
+        if polled.changed {
+            self.show_silent_output();
+        }
+        polled.changed
+    }
+
+    /// Puts the silent-output offer as it is now into the double-audio notice.
+    fn show_silent_output(&mut self) {
+        let shown = self.silent_output_shown();
+        if let Some(posted) = self.notices.get_mut(&NoticeSubject::DoubleAudio)
+            && let NoticeMessage::HeardTwice { silent_output, .. } = &mut posted.message
+        {
+            *silent_output = shown;
+        }
     }
 
     /// Keeps the Cast speakers' offsets and formats in `path` from now on.
@@ -4735,6 +4784,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
                         .to_owned()
                 });
             }
+            if self.silent_output.installed() && !dismissed {
+                self.silent_output.forget_installed();
+                self.post(NoticeSubject::DoubleAudio, NoticeMessage::SilentOutputAdded);
+            }
             if dismissed {
                 self.log.log(|| {
                     format!(
@@ -4764,6 +4817,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .iter()
                 .find(|path| path.reason == DirectReason::DefaultEndpoint)
                 .map(shown),
+            silent_output: self.silent_output_shown(),
         };
         let showing = self.heard_twice.as_ref() == Some(&subject)
             && self.notices.get(&NoticeSubject::DoubleAudio).is_some();
@@ -5936,6 +5990,15 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     /// The speakers that were on come back as they do after a launch: the
     /// backend kept their settings, and the auto-connect ones switch on as
     /// the new sender lists them.
+    fn add_silent_output(&mut self) {
+        let missing = self.audio.silent_output_missing();
+        if self.silent_output.start(missing) {
+            self.log
+                .log(|| "the user asked to add the silent output (VB-CABLE)".to_owned());
+            self.show_silent_output();
+        }
+    }
+
     fn retry_airplay(&mut self) {
         self.log
             .log(|| "the user asked to start AirPlay again (Retry)".to_owned());
@@ -6061,6 +6124,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         changed |= self.follow_calibration_context();
         changed |= self.follow_calibrate_all(false);
         changed |= self.follow_preset_notice();
+        changed |= self.follow_silent_output();
         changed |= self.persist();
         changed
     }
@@ -9420,6 +9484,7 @@ mod tests {
             mute: names(mute),
             shared: names(shared),
             default_output: None,
+            silent_output: crate::ui_model::SilentOutput::None,
         }
     }
 
@@ -9495,6 +9560,7 @@ mod tests {
             mute: vec!["TV".to_owned()],
             shared: vec![],
             default_output: Some("TV".to_owned()),
+            silent_output: crate::ui_model::SilentOutput::None,
         };
         assert_eq!(heard_twice(&adapter), [expected]);
     }
@@ -9599,6 +9665,7 @@ mod tests {
             mute: vec!["TV".to_owned()],
             shared: vec!["Speakers".to_owned()],
             default_output: Some("Speakers".to_owned()),
+            silent_output: crate::ui_model::SilentOutput::None,
         };
         assert_eq!(heard_twice(&adapter), [expected]);
     }
@@ -15765,6 +15832,7 @@ mod tests {
             crate::audio::outputs::DeviceTraits {
                 form_factor: Some(3),
                 enumerator: Some("BTHENUM".to_owned()),
+                vb_cable: false,
             },
         );
         let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());

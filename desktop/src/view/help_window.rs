@@ -158,6 +158,7 @@ mod tests {
             mute: vec!["TV".to_owned()],
             shared: Vec::new(),
             default_output: None,
+            silent_output: crate::ui_model::SilentOutput::None,
         }
     }
 

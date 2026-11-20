@@ -130,6 +130,14 @@ impl DefaultSwitch {
         matches!(self.state, State::Switched(_))
     }
 
+    /// After a silent endpoint was added: a stream that holds the default out
+    /// engages again at its next check.
+    pub fn try_again(&mut self) {
+        if self.state == State::Fallback {
+            self.state = State::Off;
+        }
+    }
+
     /// Whether a whole-system stream has been handled since it started.
     pub fn engaged(&self) -> bool {
         self.state != State::Off

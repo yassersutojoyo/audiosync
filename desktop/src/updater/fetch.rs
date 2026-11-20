@@ -7,6 +7,7 @@ pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// The whole appcast, and for a download the longest wait for a byte.
 pub const APPCAST_TIMEOUT: Duration = Duration::from_secs(30);
 pub const STALL_TIMEOUT: Duration = Duration::from_secs(30);
+pub const PINNED_TIMEOUT: Duration = Duration::from_secs(60);
 pub const MAX_APPCAST: usize = 1024 * 1024;
 pub const MAX_REDIRECTS: usize = 5;
 
@@ -14,6 +15,8 @@ pub const MAX_REDIRECTS: usize = 5;
 pub enum Kind {
     Appcast,
     Download,
+    /// A pinned file: within 60 s in all, and no redirect.
+    Pinned,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -144,7 +147,7 @@ fn time_left(
 ) -> Result<Option<Duration>, FetchError> {
     let left = deadline.map(|deadline| deadline.saturating_duration_since(now()));
     if left.is_some_and(|left| left.is_zero()) {
-        return Err(FetchError::Failed("the appcast is over 30 s".to_owned()));
+        return Err(FetchError::Failed("the fetch is over its time".to_owned()));
     }
     Ok(left)
 }
@@ -349,11 +352,13 @@ mod winhttp {
             },
             "open",
         )?;
-        let deadline = (kind == Kind::Appcast).then(|| Instant::now() + APPCAST_TIMEOUT);
-        let receive = match kind {
-            Kind::Appcast => APPCAST_TIMEOUT,
-            Kind::Download => STALL_TIMEOUT,
+        let whole = match kind {
+            Kind::Appcast => Some(APPCAST_TIMEOUT),
+            Kind::Download => None,
+            Kind::Pinned => Some(PINNED_TIMEOUT),
         };
+        let deadline = whole.map(|whole| Instant::now() + whole);
+        let receive = whole.unwrap_or(STALL_TIMEOUT);
         // SAFETY: the session handle is open.
         unsafe {
             WinHttpSetTimeouts(
@@ -441,6 +446,11 @@ mod winhttp {
             let status = query_u32(&request, WINHTTP_QUERY_STATUS_CODE)
                 .ok_or_else(|| FetchError::Failed("no status".to_owned()))?;
             if matches!(status, 301 | 302 | 303 | 307 | 308) {
+                if kind == Kind::Pinned {
+                    return Err(FetchError::Failed(
+                        "a redirect from a pinned URL".to_owned(),
+                    ));
+                }
                 let location = query_text(&request, WINHTTP_QUERY_LOCATION).ok_or_else(|| {
                     FetchError::Failed("a redirect without a location".to_owned())
                 })?;

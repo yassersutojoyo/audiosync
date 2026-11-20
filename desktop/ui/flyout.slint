@@ -993,6 +993,9 @@ export component TrayFlyout inherits Window {
     callback notice-retry-requested(int);
     // Open Privacy Settings on a notice.
     callback notice-privacy-requested(int);
+    // Add Silent Output on the double-audio notice, and its credit's link.
+    callback notice-silent-output-requested();
+    callback notice-vendor-page-requested();
     callback notice-update-button-pressed(UpdateButton);
     // Open Network Settings under the no-speakers note.
     callback network-settings-requested();
@@ -1264,6 +1267,12 @@ export component TrayFlyout inherits Window {
                                     }
                                     privacy-requested(id) => {
                                         root.notice-privacy-requested(id);
+                                    }
+                                    silent-output-requested => {
+                                        root.notice-silent-output-requested();
+                                    }
+                                    vendor-page-requested => {
+                                        root.notice-vendor-page-requested();
                                     }
                                     update-button-pressed(button) => {
                                         root.notice-update-button-pressed(button);
