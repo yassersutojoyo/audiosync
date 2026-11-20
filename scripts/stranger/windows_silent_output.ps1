@@ -293,7 +293,12 @@ $env:AUDIOSYNC_WEB_REMOTE = '1'
 $env:AUDIOSYNC_WEB_REMOTE_PORT = '18731'
 $app = Start-Process -FilePath $Exe -WorkingDirectory (Split-Path -Parent $Exe) -PassThru
 python -I (Join-Path $here 'remote.py') $log 18731 'Stranger Receiver' | Tee-Object -FilePath "$Work/result.txt" -Append
-if ($LASTEXITCODE -ne 0) { throw 'the receiver could not be switched on through the web remote' }
+if ($LASTEXITCODE -ne 0) {
+  # Run 44772312990 got no pairing code here; the app's own log says why.
+  Note "AudioSync exited: $($app.HasExited)$(if ($app.HasExited) { ", code $($app.ExitCode)" }); log present: $(Test-Path $log)"
+  if (Test-Path $log) { Copy-Item $log (Join-Path $Work 'audiosync-debug.log') }
+  throw 'the receiver could not be switched on through the web remote'
+}
 Start-Sleep -Seconds 6
 
 function Test-Heard([string] $Phase) {
