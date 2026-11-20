@@ -5987,9 +5987,6 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         taken
     }
 
-    /// The speakers that were on come back as they do after a launch: the
-    /// backend kept their settings, and the auto-connect ones switch on as
-    /// the new sender lists them.
     fn add_silent_output(&mut self) {
         let missing = self.audio.silent_output_missing();
         if self.silent_output.start(missing) {
@@ -5999,6 +5996,9 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         }
     }
 
+    /// The speakers that were on come back as they do after a launch: the
+    /// backend kept their settings, and the auto-connect ones switch on as
+    /// the new sender lists them.
     fn retry_airplay(&mut self) {
         self.log
             .log(|| "the user asked to start AirPlay again (Retry)".to_owned());
