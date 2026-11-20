@@ -27,15 +27,16 @@ use i_slint_backend_testing::{ElementHandle, ElementQuery};
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize};
 
-use super::tests::{advance_clock, app_over, hold_clock, leaked};
+use super::tests::{advance_clock, app_over, hold_clock, leaked, press};
 use super::{App, RenamePlace};
 use crate::audio::calibration::{Failure, Phase, Step, Which};
 use crate::now_playing_card::fake::FakeControls;
 use crate::now_playing_card::{CardArtwork, CardTrack, PlayModes, Repeat};
 use crate::ui_model::{
-    self, AllPhase, AllProgress, AppState, Backend, CalibrationState, LeftOutRow, MicKind, MixApp,
-    MockBackend, Notice, NoticeMessage, PresetError, PresetLeftOff, PresetsPreview, SheetRow,
-    SheetState, SourceName, Speaker, SpeakerKind, Waiting, ZoneError,
+    self, AllPhase, AllProgress, AppState, Backend, CalibrationState, CastAddressCheck,
+    CastAddressError, LeftOutRow, MicKind, MixApp, MockBackend, Notice, NoticeMessage, PresetError,
+    PresetLeftOff, PresetsPreview, SheetRow, SheetState, SourceName, Speaker, SpeakerKind, Waiting,
+    ZoneError,
 };
 use crate::window_rules::FocusInput;
 use crate::{Motion, RowPart};
@@ -191,6 +192,11 @@ impl Backend for Stage {
     fn refresh_devices(&mut self) {}
     fn set_when_source_quits(&mut self, _setting: WhenSourceQuits) {}
     fn set_resume_after_sleep(&mut self, _on: bool) {}
+    // As the adapter's first step: what isn't an address is turned down.
+    fn check_cast_address(&mut self, text: &str) -> Result<CastAddressCheck, CastAddressError> {
+        crate::audio::cast_address::CastAddress::parse(text).ok_or(CastAddressError::Invalid)?;
+        Err(CastAddressError::NotFound)
+    }
     fn input_peak(&mut self) -> Option<f32> {
         self.0
             .borrow()
@@ -322,6 +328,17 @@ impl Scene {
         let size = (460.0, height);
         self.size(leaked(self.app.settings()), size);
         Ok(Win(Shown::Settings, size))
+    }
+
+    /// The Mac's light Settings photos read Match System (the Mac was light),
+    /// so the light scene's picker shows it while its colours stay light.
+    fn light_on_match_system(&self) {
+        if self.app.main.get_appearance() == crate::Appearance::Light {
+            self.app
+                .settings()
+                .set_appearance(crate::Appearance::System);
+            render(leaked(self.app.settings()));
+        }
     }
 
     fn guide(&self) -> Result<Win, String> {
@@ -939,7 +956,10 @@ fn b01() -> Vec<Row> {
             s.edit(|state| {
                 for speaker in &mut state.speakers {
                     speaker.enabled = false;
+                    // The adapter shows the Windows volume hint on a switched-on row only.
+                    speaker.device_volume = None;
                 }
+                state.no_speaker_on = true;
             });
             s.play(track(true, true));
             s.main()
@@ -1173,7 +1193,11 @@ fn b04() -> Vec<Row> {
             s.main()
         }),
         row("B04", "MAIN-SOURCE-APPS", |s| {
-            several_apps(&s.app.main)?;
+            // The test API reaches no popup's rows, so the keys unfold Several Apps.
+            s.app.main.invoke_open_sources();
+            render(s.app.main.window());
+            press(s.app.main.window(), slint::platform::Key::End);
+            press(s.app.main.window(), slint::platform::Key::Return);
             s.main()
         }),
         row("B04", "MAIN-SOURCE-APPS-LONG", |s| {
@@ -1390,7 +1414,9 @@ fn b07() -> Vec<Row> {
         row("B07", "MAIN-ADD-ADDRESS-ERROR", |s| {
             s.app.ask_cast_address();
             render(s.app.main.window());
-            s.app.cast_sheet().invoke_confirmed("speaker".into());
+            let typed = "not a valid address!";
+            s.app.cast_sheet().set_address(typed.into());
+            s.app.cast_sheet().invoke_confirmed(typed.into());
             s.main()
         }),
         row("B07", "MAIN-CAST-SEARCHING", |s| {
@@ -1613,6 +1639,18 @@ fn b10() -> Vec<Row> {
     vec![
         row("B10", "EQ-WINDOW", |s| {
             let win = s.equalizer(None)?;
+            // The Mac's EQ-WINDOW photo shows the Electronic curve.
+            let electronic = audiosync_core::eq::PRESETS
+                .iter()
+                .find(|p| p.id == "electronic")
+                .ok_or("no Electronic curve")?;
+            for (band, gain) in electronic.gains_db.iter().enumerate() {
+                s.app
+                    .equalizer()
+                    .invoke_gain_changed(band as i32, *gain as f32);
+            }
+            // The Mac's EQ-WINDOW photo reads Pre +0.5.
+            s.app.equalizer().invoke_preamp_changed(0.5);
             // As the Mac render's: just opened, with no band focused.
             s.app.equalizer().invoke_take_focus();
             Ok(win)
@@ -1674,10 +1712,17 @@ fn b11() -> Vec<Row> {
             let about = s.app.about();
             about.set_version("0.9.3".into());
             about.show().map_err(|error| error.to_string())?;
-            // A headless dialog has no size of its own.
-            Ok(Win(Shown::About, (360.0, 340.0)))
+            // A headless dialog has no size of its own; the real window's is 360x351.
+            Ok(Win(Shown::About, (360.0, 351.0)))
         }),
-        row("B11", "MAIN-SETTINGS", |s| s.settings()),
+        row("B11", "MAIN-SETTINGS", |s| {
+            // As the Mac's photos: Volume Keys on, the light one on Match System.
+            s.app.main.set_volume_keys_available(true);
+            s.app.main.set_volume_keys(true);
+            let win = s.settings()?;
+            s.light_on_match_system();
+            Ok(win)
+        }),
         row("B11", "SETTINGS-UPDATES", |s| {
             s.app.main.set_updater_available(true);
             s.app.main.set_check_updates_automatically(true);
@@ -1692,7 +1737,9 @@ fn b11() -> Vec<Row> {
             main.set_switch_source_on_quit(false);
             main.set_volume_keys_available(true);
             main.set_volume_keys(false);
-            s.settings()
+            let win = s.settings()?;
+            s.light_on_match_system();
+            Ok(win)
         }),
         row("B11", "GUIDE-WINDOW", |s| s.guide()),
         row("B11", "GUIDE-SCROLLED", |s| {
@@ -1751,7 +1798,14 @@ fn b12() -> Vec<Row> {
         }),
         row("B12", "MAIN-ZONE-HEADER", |s| {
             s.load(MockBackend::zones_preview());
-            s.main()
+            // As the Mac's real-app photo: a song playing and a Bluetooth speaker lost.
+            s.play(track(true, true));
+            notice(
+                s,
+                NoticeMessage::SpeakerLost {
+                    speaker: "Headset".into(),
+                },
+            )
         }),
         row("B12", "MAIN-PRESET-SAVE-FIELD", |s| {
             s.load(MockBackend::presets_preview(PresetsPreview::List));
