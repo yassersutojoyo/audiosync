@@ -252,6 +252,10 @@ fn run_pinned(
         platform.pause(POLL);
         put_back(platform, &before).into_iter().for_each(&mut *log);
     }
+    log(format!(
+        "silent output: defaults after the install {:?}",
+        platform.defaults()
+    ));
     Ok(())
 }
 

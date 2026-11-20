@@ -338,6 +338,19 @@ function Get-Names([int] $ProcessId) {
     }) | Where-Object { $_ } | Select-Object -Unique
 }
 function Use($Element) { $Element.GetCurrentPattern($Invoke).Invoke() }
+# VC70: the one Windows dialog a user may meet after UAC; pressed as a user would, and logged.
+function Approve-Dialog {
+  $c = New-Object System.Windows.Automation.PropertyCondition($A::NameProperty, 'Windows Security')
+  foreach ($w in $A::RootElement.FindAll($Scope::Children, $c)) {
+    $yes = Find-In $w.Current.ProcessId '^Install$'
+    if ($yes) { Use $yes; Note 'VC70: a Windows Security dialog asked to install the driver; Install pressed' }
+  }
+}
+# VC40 from the app's own log: its defaults read before the install (VC30) and after its set-back.
+function Get-AppDefaults([string] $When) {
+  $line = Select-String -Path $log -Pattern "silent output: defaults $When the install (.*)" -ErrorAction SilentlyContinue | Select-Object -Last 1
+  if ($line) { @([regex]::Matches($line.Matches[0].Groups[1].Value, 'Some\("([^"]*)"\)|None') | ForEach-Object { if ($_.Groups[1].Success) { $_.Groups[1].Value } else { 'none' } }) }
+}
 
 $beforeOutput = [Endpoints]::Default(0, 0)
 Note "defaults before the install: $(Get-Defaults)"
@@ -362,7 +375,7 @@ Note "leg: $leg$(if ($why) { " ($why)" })"
 
 if ($leg -like 'click*') {
   # VC34's wait: past it, a Windows dialog blocked the install (VC5).
-  $added = Wait-For { (Test-Cable) -and [Endpoints]::Count(0) -ge 2 } 600
+  $added = Wait-For { Approve-Dialog | Out-Null; (Test-Cable) -and [Endpoints]::Count(0) -ge 2 } 600
   if ($script:setup -and -not $script:setup.HasExited) {
     Note "vendor window after the install: $((Get-Names $script:setup.Id) -join ' | ')"
   }
@@ -371,6 +384,16 @@ if ($leg -like 'click*') {
   Note "other windows: $($other -join '; ')"
   Check 'VC52 click' $added 'VB-CABLE active within the 10-minute wait, no dialog in the way'
   if ($script:setup -and -not $script:setup.HasExited) { Stop-Process -Id $script:setup.Id -Force }
+  # The app writes its after-line once VC40's 30 s guard has passed.
+  Wait-For { Get-AppDefaults 'after' } 90 | Out-Null
+  $appBefore = @(Get-AppDefaults 'before')
+  $appAfter = @(Get-AppDefaults 'after')
+  $slots = 'output console', 'output multimedia', 'output communications', 'input console', 'input multimedia', 'input communications'
+  $vc40 = for ($i = 0; $i -lt 6; $i++) { "$($slots[$i]): $($appBefore[$i]) -> $($appAfter[$i])" }
+  # A role with no default before has nothing to be set back to (VC40).
+  $same = $appBefore.Count -eq 6 -and $appAfter.Count -eq 6 -and
+    @(0..5 | Where-Object { $appBefore[$_] -ne $appAfter[$_] -and $appBefore[$_] -ne 'none' }).Count -eq 0
+  Check 'VC40' $same "the app's own defaults before the install equal those after it, per role: $($vc40 -join '; ')"
 } else {
   $cable = Get-Checked 'https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack46.zip' 'VBCABLE_Driver_Pack46.zip' `
     'BC44E8974191A5A2427D6C979E2DAB08DBB09925F3F435DFA2F0BA3E45B6EB90'
