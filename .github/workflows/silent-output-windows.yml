@@ -71,7 +71,7 @@ jobs:
 
       - name: Release build and the receiver
         run: |
-          (cd desktop && cargo build --locked --release --target ${{ matrix.target }})
+          (cd desktop && cargo build --locked --release --features ci-proof --target ${{ matrix.target }})
           # Static CRT: the receiver runs in a Nano Server container with no Visual C++ runtime.
           RUSTFLAGS='-C target-feature=+crt-static' \
             cargo build --locked --release --manifest-path airplay/Cargo.toml --example stranger_rx --target ${{ matrix.target }}

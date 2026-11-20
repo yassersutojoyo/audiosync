@@ -23,6 +23,9 @@ test = true
 # example speakers and nothing plays, for work on the UI. It does nothing on
 # Windows, and release builds never turn it on.
 mock-backend = []
+# Lets the app start on Windows before 11 so the silent-output proof can run on
+# the Server 2022 CI runner. Release builds never turn it on.
+ci-proof = []
 
 [dependencies]
 audiosync-core = { path = "../core" }
