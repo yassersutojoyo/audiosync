@@ -1137,3 +1137,56 @@ fn device_text_arrives_without_line_breaks_bidi_or_invisible_characters_and_capp
         Some(IdleReason::Other("Kitchen Speaker".to_owned()))
     );
 }
+
+/// The C140 vectors: a record's `md` (with `fn` or `ca` where the vector
+/// names one) and port, and the kind it gives.
+// covers: C138, C139, C140
+#[test]
+fn a_cast_device_kind_comes_from_md_and_the_group_port_never_the_name() {
+    use audiosync_cast::discovery::ProductKind::{self, SetTop, Soundbar, Speaker, Tv, Unknown};
+    let id = format!("id={ID}");
+    let vectors: &[(&[&str], u16, ProductKind)] = &[
+        (&["md=Chromecast"], 8009, SetTop),
+        (&["md=chromecast ultra"], 8009, SetTop),
+        (&["md=SHIELD Android TV"], 8009, SetTop),
+        (&["md=Chromecast Audio"], 8009, Speaker),
+        (&["md=Google Nest Mini"], 8009, Speaker),
+        (&["md=Google Nest Hub"], 8009, Speaker),
+        (&["md=V705-H3"], 8009, Tv),
+        (&["md=Bose Smart Ultra Soundbar"], 8009, Soundbar),
+        (&["md=SVS Pro SoundBase"], 8009, Soundbar),
+        (&["md=Pioneer VSX-831"], 8009, Soundbar),
+        (&["md=BRAVIA 4K VH2"], 8009, Tv),
+        (&["md=Acme Smart TV 55"], 8009, Tv),
+        (&["md=Acme 55-TV"], 8009, Tv),
+        (&["md=Acme TVbox"], 8009, Speaker),
+        (&["md=JBL Link 20"], 8009, Speaker),
+        (&["md=Google Cast Group"], 32187, Speaker),
+        (&["md=Chromecast"], 32187, Speaker),
+        (&["fn=Living Room TV", "md=Google Home"], 8009, Speaker),
+        (&["md=Chromecast", "ca=4100"], 8009, SetTop),
+    ];
+    for (txt, port, kind) in vectors {
+        let mut strings: Vec<&[u8]> = vec![id.as_bytes()];
+        strings.extend(txt.iter().map(|s| s.as_bytes()));
+        let device =
+            CastDevice::from_record(&record("A._googlecast._tcp.local.", *port, &strings))
+                .expect("a device");
+        assert_eq!(device.product(), *kind, "{txt:?} on {port}");
+    }
+
+    let mut list = DeviceList::new();
+    let address = SocketAddr::new(v4(10), 8009);
+    list.add_manual(address);
+    let entry = list.get(DeviceKey::Manual(address)).expect("listed");
+    assert_eq!(entry.product(), Unknown, "added by address");
+    let found = record(
+        "A._googlecast._tcp.local.",
+        8009,
+        &[id.as_bytes(), b"md=Chromecast"],
+    );
+    list.apply(BrowseEvent::Resolved(found));
+    let id = DeviceId::parse(ID).expect("id");
+    let entry = list.get(DeviceKey::Id(id)).expect("found");
+    assert_eq!(entry.product(), SetTop, "found by a browse");
+}

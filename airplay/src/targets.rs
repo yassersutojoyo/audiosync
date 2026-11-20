@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use crate::discovery::txt::group_key;
-use crate::discovery::{Device, DeviceKey, StatusFlags, shown_text};
+use crate::discovery::{Device, DeviceKey, ProductKind, StatusFlags, shown_text};
 
 /// What kind of target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -96,6 +96,12 @@ pub struct Target {
 }
 
 impl Target {
+    /// A pair's kind is its members' shared kind, else a speaker; a home
+    /// theater group's is its Apple TV's (P241).
+    pub fn product(&self) -> ProductKind {
+        ProductKind::Unknown
+    }
+
     /// Every member is in view and none reports its partner unreachable
     /// (P176, P181).
     pub fn complete(&self) -> bool {

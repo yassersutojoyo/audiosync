@@ -377,6 +377,30 @@ pub enum SecurityMode {
     HomeKit,
 }
 
+/// What kind of device a receiver is, which its row's glyph shows (P238).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ProductKind {
+    Tv,
+    /// A set-top box or streaming stick.
+    SetTop,
+    /// A smart or wireless speaker.
+    Speaker,
+    /// A soundbar or an AV receiver.
+    Soundbar,
+    Computer,
+    Unknown,
+}
+
+/// The kind P240 gives a model, a manufacturer and a feature mask, each as
+/// advertised.
+pub fn product_kind(
+    _model: Option<&str>,
+    _manufacturer: Option<&str>,
+    _features: Option<Features>,
+) -> ProductKind {
+    ProductKind::Unknown
+}
+
 /// The protocol path for a device (P2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProtocolPath {
@@ -453,6 +477,11 @@ impl Device {
         let raop = self.raop_txt.as_ref().and_then(|txt| txt.status_flags);
         let airplay = self.airplay_txt.as_ref().and_then(|txt| txt.flags);
         StatusFlags(raop.unwrap_or_default().0 | airplay.unwrap_or_default().0)
+    }
+
+    /// Its kind, from its records as they are now (P238, P239).
+    pub fn product(&self) -> ProductKind {
+        ProductKind::Unknown
     }
 
     /// AirPlay `features` when present, otherwise RAOP `ft` (the same mask,

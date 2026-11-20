@@ -137,6 +137,20 @@ pub enum DeviceKind {
     Group,
 }
 
+/// What kind of device it is, which its row's glyph shows (C138).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ProductKind {
+    Tv,
+    /// A set-top box or streaming stick, such as a Chromecast.
+    SetTop,
+    /// A smart or wireless speaker, or a Cast group.
+    Speaker,
+    /// A soundbar or an AV receiver.
+    Soundbar,
+    Computer,
+    Unknown,
+}
+
 /// One Cast device as the host lists it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CastDevice {
@@ -226,6 +240,11 @@ impl CastDevice {
         })
     }
 
+    /// Its kind, from its record alone (C138, C139).
+    pub fn product(&self) -> ProductKind {
+        ProductKind::Unknown
+    }
+
     /// What a group announces, for the debug log (C89); `None` for a single
     /// device.
     pub fn group_log_line(&self) -> Option<String> {
@@ -294,6 +313,12 @@ pub struct Entry {
 }
 
 impl Entry {
+    /// Its device's kind; unknown for one added by address that no browse
+    /// has found yet (C139 rule 6).
+    pub fn product(&self) -> ProductKind {
+        ProductKind::Unknown
+    }
+
     pub fn is_group(&self) -> bool {
         self.device
             .as_ref()
