@@ -81,7 +81,12 @@ impl DefaultEndpoints for WasapiDefaults {
                     properties.display_port,
                 );
                 let listened = container(device).is_some_and(|guid| recorded.contains(&guid));
-                Some(Candidate { id, kind, listened })
+                Some(Candidate {
+                    id,
+                    kind,
+                    listened,
+                    vb_cable: properties.vb_cable,
+                })
             })
             .collect())
     }

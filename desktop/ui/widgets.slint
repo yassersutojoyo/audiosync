@@ -1291,6 +1291,8 @@ export component SmallButton inherits Rectangle {
     in property <length> font-size: Tokens.font-size-callout;
     // Can't be used now: grey, as the Mac's disabled push button.
     in property <bool> dimmed;
+    // Grey while its own work runs, yet kept in the Tab order so focus stays on it.
+    in property <bool> busy;
     // The Mac's system push button in a teal-tinted sheet: teal at 5% with no
     // edge (measured on its Calibrate All sheet), or filled as the default button.
     in property <bool> system;
@@ -1329,7 +1331,7 @@ export component SmallButton inherits Rectangle {
     // A dimmed button is out of the Tab order, as the Mac's disabled one.
     focus := FocusScope {
         focus-on-click: false;
-        focus-on-tab-navigation: !root.dimmed;
+        focus-on-tab-navigation: !root.dimmed || root.busy;
         key-pressed(event) => {
             if event.text == " " || event.text == Key.Return {
                 root.clicked();
@@ -6101,6 +6103,7 @@ export component NoticeStack inherits VerticalLayout {
                                 tip: Strings.silent-output-button-label;
                                 glyph: Glyphs.shield;
                                 dimmed: notice.silent-busy;
+                                busy: notice.silent-busy;
                                 clicked => {
                                     if !notice.silent-busy {
                                         root.silent-output-requested();

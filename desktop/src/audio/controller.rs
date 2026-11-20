@@ -87,9 +87,7 @@ use super::capture::{
 use super::cast::{CastLink, CastSpeakers, CastTrack};
 use super::cast_address::CastAddress;
 use super::clock_probe::{ClockQueue, describe_clock_queue};
-use super::default_output::{
-    DefaultEndpoints, DefaultSwitch, Record, RecordStore, silent_endpoint,
-};
+use super::default_output::{DefaultEndpoints, DefaultSwitch, Record, RecordStore};
 use super::local_volume::{LocalVolumeMemory, LocalVolumes};
 use super::now_playing::{
     Follow, Mix, POLL_INTERVAL, SharedLabels, TrackInfo, TrackReader, TrackSource,
@@ -1435,7 +1433,7 @@ impl<D: Driver> Controller<D> {
             .default_output
             .as_mut()
             .and_then(|(endpoints, _)| endpoints.endpoints().ok())
-            .and_then(|listed| silent_endpoint(&listed, &chosen).map(str::to_owned));
+            .and_then(|listed| self.default_switch.silent(&listed, &chosen));
         let recorded = self
             .app_redirect
             .record()
@@ -4736,7 +4734,7 @@ impl<D: Driver> Controller<D> {
         self.default_switch.holds_out_default()
             || endpoints
                 .endpoints()
-                .is_ok_and(|listed| silent_endpoint(&listed, &chosen).is_none())
+                .is_ok_and(|listed| self.default_switch.silent(&listed, &chosen).is_none())
     }
 
     /// Keeps the endpoints of [`RoutingState::at_start`] one idle check from
@@ -5607,8 +5605,12 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.default_output.as_mut().is_some_and(|(endpoints, _)| {
             endpoints
                 .endpoints()
-                .is_ok_and(|listed| silent_endpoint(&listed, &chosen).is_none())
+                .is_ok_and(|listed| self.default_switch.silent(&listed, &chosen).is_none())
         })
+    }
+
+    fn silent_output_installing(&mut self, installing: bool) {
+        self.default_switch.hold_out_cable(installing);
     }
 
     fn silent_output_added(&mut self) {
@@ -6731,6 +6733,95 @@ mod tests {
         assert_eq!(console(&fake).as_deref(), Some(switch_fakes::SPEAKERS));
         assert_eq!(store.0.borrow().record, None);
         assert_eq!(backend.default_output_record(), None);
+    }
+
+    // covers: VC41
+    #[test]
+    fn a_stream_started_while_vb_cable_installs_never_takes_the_cable_as_the_default() {
+        let mut backend = backend();
+        let (_, fake, _) = with_switch(&mut backend);
+        let on = |id: &str| (Some(id.to_owned()), Some(id.to_owned()));
+        {
+            let mut fake = fake.0.borrow_mut();
+            for candidate in &mut fake.endpoints {
+                candidate.vb_cable = candidate.id == switch_fakes::CABLE;
+            }
+            // Windows moved the defaults to the cable as it appeared.
+            (fake.console, fake.multimedia) = on(switch_fakes::CABLE);
+        }
+        backend.silent_output_installing(true);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(backend.default_output_record(), None);
+        // The install sets them back within its guard, then is done.
+        {
+            let mut fake = fake.0.borrow_mut();
+            (fake.console, fake.multimedia) = on(switch_fakes::SPEAKERS);
+        }
+        backend.silent_output_installing(false);
+        backend.silent_output_added();
+        backend.poll();
+        assert_eq!(console(&fake).as_deref(), Some(switch_fakes::CABLE));
+        assert_eq!(
+            backend.default_output_record(),
+            Some(switch_fakes::the_record())
+        );
+    }
+
+    // covers: VC36
+    #[test]
+    fn an_added_silent_output_has_the_routing_checked_at_the_next_poll() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let checked = Instant::now();
+        backend.routing.last_check = Some(checked);
+        backend.poll();
+        assert_eq!(backend.routing.last_check, Some(checked), "not due yet");
+        backend.silent_output_added();
+        backend.poll();
+        assert!(backend.routing.last_check > Some(checked));
+    }
+
+    // covers: VC45
+    #[test]
+    fn vb_cable_is_no_speaker_and_no_source_while_it_is_the_silent_endpoint() {
+        use crate::audio::outputs::DeviceTraits;
+        let mut backend = backend();
+        let (_, fake, _) = with_switch(&mut backend);
+        for candidate in &mut fake.0.borrow_mut().endpoints {
+            candidate.vb_cable = candidate.id == switch_fakes::CABLE;
+        }
+        backend.connect_output_as(switch_fakes::CABLE, "CABLE Input", OutputKind::Virtual);
+        backend.set_output_traits(
+            switch_fakes::CABLE,
+            DeviceTraits {
+                vb_cable: true,
+                ..DeviceTraits::default()
+            },
+        );
+        let speaker_ids = |backend: &mut MockBackend| -> Vec<String> {
+            let listed = backend.list_outputs().unwrap();
+            listed.into_iter().map(|output| output.id).collect()
+        };
+        assert_eq!(speaker_ids(&mut backend), [HEADPHONES, SPEAKERS]);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(console(&fake).as_deref(), Some(switch_fakes::CABLE));
+        assert_eq!(speaker_ids(&mut backend), [HEADPHONES, SPEAKERS]);
+
+        let input = |id: &str, name: &str, vb_cable: bool| EndpointReading {
+            index: 0,
+            id: Ok(id.to_owned()),
+            properties: Ok(EndpointProperties {
+                name: Some(name.to_owned()),
+                vb_cable,
+                ..EndpointProperties::default()
+            }),
+        };
+        let sources = input_sources(vec![
+            input("cable-out", "CABLE Output", true),
+            input("mic", "Microphone", false),
+        ]);
+        let names: Vec<&str> = sources.iter().map(|source| source.name.as_str()).collect();
+        assert_eq!(names, ["Microphone"]);
     }
 
     // covers: S469, S186
