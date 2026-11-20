@@ -120,6 +120,13 @@ export component IncomingCover inherits Rectangle {
     in property <string> glyph;
     in property <length> glyph-size;
     in property <bool> edge;
+    // The scroll view it flies over, whose top is the parent's top: its
+    // edges fade the new cover as they fade the one in place.
+    in property <length> view-height;
+    in property <length> fade;
+    in property <float> top-fade;
+    in property <float> bottom-fade;
+    in property <color> fade-color;
 
     x: root.look.fades ? root.at-x : root.at-x + (root.look.side > 0 ? root.surface-width - root.at-x : -(root.at-x + root.size)) * (1 - root.look.slid);
     y: root.at-y;
@@ -158,5 +165,17 @@ export component IncomingCover inherits Rectangle {
         border-radius: root.corner;
         border-width: 1px;
         border-color: Tokens.text.with-alpha(0.1);
+    }
+
+    if root.fade > 0: Rectangle {
+        y: -root.at-y;
+        height: root.fade;
+        background: @linear-gradient(180deg, root.fade-color.with-alpha(root.top-fade) 0%, root.fade-color.with-alpha(0) 100%);
+    }
+
+    if root.fade > 0: Rectangle {
+        y: root.view-height - root.fade - root.at-y;
+        height: root.fade;
+        background: @linear-gradient(0deg, root.fade-color.with-alpha(root.bottom-fade) 0%, root.fade-color.with-alpha(0) 100%);
     }
 }

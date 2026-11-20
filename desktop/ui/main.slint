@@ -4663,19 +4663,32 @@ export component MainWindow inherits Window {
         }
     }
 
-    if root.now-playing-shown && root.now-playing-look.sliding: IncomingCover {
-        look: root.now-playing-look;
-        at-x: root.now-playing-tile-x;
-        at-y: root.now-playing-tile-y;
-        size: MainColumns.left(root.columns-width) - 28px;
-        surface-width: root.width;
-        corner: 10px;
-        base: Fluent.main-window;
-        fill: Tokens.text.with-alpha(Tokens.secondary-text-opacity * 0.15);
-        has-artwork: root.now-playing-has-artwork;
-        artwork: root.now-playing-artwork;
-        glyph: Glyphs.music-note;
-        glyph-size: 28px;
+    // Cut to the left column's view across the whole window, so a cover the
+    // column hides or fades in part comes in hidden and faded the same way.
+    if root.now-playing-shown && root.now-playing-look.sliding: Rectangle {
+        y: left-column.absolute-position.y;
+        height: left-column.visible-height;
+        clip: true;
+
+        IncomingCover {
+            look: root.now-playing-look;
+            at-x: root.now-playing-tile-x;
+            at-y: root.now-playing-tile-y - parent.y;
+            size: MainColumns.left(root.columns-width) - 28px;
+            surface-width: root.width;
+            corner: 10px;
+            base: Fluent.main-window;
+            fill: Tokens.text.with-alpha(Tokens.secondary-text-opacity * 0.15);
+            has-artwork: root.now-playing-has-artwork;
+            artwork: root.now-playing-artwork;
+            glyph: Glyphs.music-note;
+            glyph-size: 28px;
+            view-height: parent.height;
+            fade: left-column.fade;
+            top-fade: left-column.top-fade;
+            bottom-fade: left-column.bottom-fade;
+            fade-color: root.background;
+        }
     }
 
     Announcer {
