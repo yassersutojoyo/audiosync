@@ -13293,6 +13293,20 @@ mod tests {
 
     // covers: S382
     #[test]
+    fn the_whole_system_is_heard_twice_while_only_an_airplay_speaker_plays() {
+        let (mut backend, _fake, kitchen) = with_airplay();
+        backend.connect_output_as(TV, "TV", OutputKind::Hdmi);
+        backend.set_default_output(TV);
+        backend.set_output_enabled(SPEAKERS, false).unwrap();
+        backend.set_output_enabled(HEADPHONES, false).unwrap();
+        backend.list_outputs().unwrap();
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(heard_twice(&backend.poll()), [[TV]]);
+    }
+
+    // covers: S382
+    #[test]
     fn another_app_pausing_now_and_then_doesnt_flap_the_whole_system_report() {
         let mut backend = backend();
         backend.connect_output_as(TV, "TV", OutputKind::Hdmi);
