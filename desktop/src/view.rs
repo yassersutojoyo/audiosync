@@ -19799,9 +19799,16 @@ pub(crate) mod tests {
             artwork: red_cover(),
             ..OutgoingSong::default()
         });
-        draw_frames();
+        draw_frames_at(1000, 480);
         // The box partly under the column's top edge, the old cover in it red.
-        scroll(window, 150.0, 400.0, -120.0);
+        // Not `scroll`, which draws at 720 px, where the column fits again.
+        let position = slint::LogicalPosition::new(150.0, 300.0);
+        window.dispatch_event(WindowEvent::PointerMoved { position });
+        window.dispatch_event(WindowEvent::PointerScrolled {
+            position,
+            delta_x: 0.0,
+            delta_y: -120.0,
+        });
         let slide = |side: f32, slid: f32| {
             app.main.set_now_playing_slide(SlideLook {
                 sliding: true,
@@ -19809,12 +19816,12 @@ pub(crate) mod tests {
                 slid,
                 ..SlideLook::default()
             });
-            draw_frames();
+            draw_frames_at(1000, 480);
             red_bounds(window)
         };
         let old = slide(1.0, 0.0);
         let (_, box_top, _, _) = slider_box(&app.main, "Now Playing");
-        assert!(box_top < old.1, "the column hides the box's top");
+        assert!(box_top + 2.0 < old.1, "the column hides the cover's top");
         app.main.set_now_playing_outgoing(OutgoingSong::default());
         app.main.set_now_playing_has_artwork(true);
         app.main.set_now_playing_artwork(red_cover());
