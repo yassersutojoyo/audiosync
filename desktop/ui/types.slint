@@ -269,6 +269,9 @@ export struct SpeakerItem {
     // While leaving, the nearest one that stays, which takes its keyboard
     // focus; empty when none stays.
     hand-off: string,
+    // A Bluetooth device whose reported name has a headphone word: its
+    // glyph is headphones, else a speaker (SpeakerLayout.swift:70).
+    headphone-name: bool,
 }
 
 // A zone member that plays as part of a stereo pair or home theater: the

@@ -472,8 +472,9 @@ export global Glyphs {
         if glyph == root.bluetooth {
             return "M4.5 5 L11 10.75 L8 13.75 V2.25 L11 5.25 L4.5 11";
         }
+        // Own drawing: eight teeth on a rim of radius 5 around a hole, as the Mac's gearshape.
         if glyph == root.gear {
-            return "M8 5.7 A2.3 2.3 0 0 1 8 10.3 A2.3 2.3 0 0 1 8 5.7 Z M8 3.4 A4.6 4.6 0 0 1 8 12.6 A4.6 4.6 0 0 1 8 3.4 Z M8 1.5 V3.4 M8 12.6 V14.5 M1.5 8 H3.4 M12.6 8 H14.5 M3.4 3.4 L4.75 4.75 M11.25 11.25 L12.6 12.6 M3.4 12.6 L4.75 11.25 M11.25 4.75 L12.6 3.4";
+            return "M6.96 3.11 L7.06 1.32 L8.94 1.32 L9.04 3.11 A5 5 0 0 1 10.72 3.81 L12.06 2.61 L13.39 3.94 L12.19 5.28 A5 5 0 0 1 12.89 6.96 L14.68 7.06 L14.68 8.94 L12.89 9.04 A5 5 0 0 1 12.19 10.72 L13.39 12.06 L12.06 13.39 L10.72 12.19 A5 5 0 0 1 9.04 12.89 L8.94 14.68 L7.06 14.68 L6.96 12.89 A5 5 0 0 1 5.28 12.19 L3.94 13.39 L2.61 12.06 L3.81 10.72 A5 5 0 0 1 3.11 9.04 L1.32 8.94 L1.32 7.06 L3.11 6.96 A5 5 0 0 1 3.81 5.28 L2.61 3.94 L3.94 2.61 L5.28 3.81 A5 5 0 0 1 6.96 3.11 Z M8 5.75 A2.25 2.25 0 0 1 8 10.25 A2.25 2.25 0 0 1 8 5.75 Z";
         }
         if glyph == root.microphone {
             return "M6 3.5 A2 2 0 0 1 10 3.5 V7.5 A2 2 0 0 1 6 7.5 Z M3.5 7.5 A4.5 4.5 0 0 0 12.5 7.5 M8 12 V14.5 M5.5 14.5 H10.5";
@@ -880,16 +881,13 @@ export global DeviceIcons {
         if kind == SpeakerKind.headphones || kind == SpeakerKind.usb-headphones {
             return @image-url("../../brand/icons/headphones.svg");
         }
-        if kind == SpeakerKind.bluetooth {
-            return @image-url("../../brand/icons/bluetooth.svg");
-        }
         if kind == SpeakerKind.usb {
             return @image-url("../../brand/icons/usb.svg");
         }
         if kind == SpeakerKind.hdmi || kind == SpeakerKind.display-port {
             return @image-url("../../brand/icons/monitor.svg");
         }
-        if kind == SpeakerKind.cast || kind == SpeakerKind.built-in || kind == SpeakerKind.usb-speakers {
+        if kind == SpeakerKind.cast || kind == SpeakerKind.built-in || kind == SpeakerKind.usb-speakers || kind == SpeakerKind.bluetooth {
             return @image-url("../../brand/icons/speaker.svg");
         }
         return @image-url("../../brand/icons/device.svg");
@@ -918,16 +916,13 @@ export global DeviceIcons {
         if kind == SpeakerKind.headphones || kind == SpeakerKind.usb-headphones {
             return @image-url("../../brand/icons/16/headphones.svg");
         }
-        if kind == SpeakerKind.bluetooth {
-            return @image-url("../../brand/icons/16/bluetooth.svg");
-        }
         if kind == SpeakerKind.usb {
             return @image-url("../../brand/icons/16/usb.svg");
         }
         if kind == SpeakerKind.hdmi || kind == SpeakerKind.display-port {
             return @image-url("../../brand/icons/16/monitor.svg");
         }
-        if kind == SpeakerKind.cast || kind == SpeakerKind.built-in || kind == SpeakerKind.usb-speakers {
+        if kind == SpeakerKind.cast || kind == SpeakerKind.built-in || kind == SpeakerKind.usb-speakers || kind == SpeakerKind.bluetooth {
             return @image-url("../../brand/icons/16/speaker.svg");
         }
         return @image-url("../../brand/icons/16/device.svg");
@@ -956,16 +951,13 @@ export global DeviceIcons {
         if kind == SpeakerKind.headphones || kind == SpeakerKind.usb-headphones {
             return @image-url("../../brand/icons/14/headphones.svg");
         }
-        if kind == SpeakerKind.bluetooth {
-            return @image-url("../../brand/icons/14/bluetooth.svg");
-        }
         if kind == SpeakerKind.usb {
             return @image-url("../../brand/icons/14/usb.svg");
         }
         if kind == SpeakerKind.hdmi || kind == SpeakerKind.display-port {
             return @image-url("../../brand/icons/14/monitor.svg");
         }
-        if kind == SpeakerKind.cast || kind == SpeakerKind.built-in || kind == SpeakerKind.usb-speakers {
+        if kind == SpeakerKind.cast || kind == SpeakerKind.built-in || kind == SpeakerKind.usb-speakers || kind == SpeakerKind.bluetooth {
             return @image-url("../../brand/icons/14/speaker.svg");
         }
         return @image-url("../../brand/icons/14/device.svg");
@@ -3967,7 +3959,7 @@ export component SpeakerRow inherits Rectangle {
                             // In the middle of the gap between the name and the slider,
                             // as the Mac's badgePin, so a hint line below doesn't move it.
                             y: floor((name-line.y + name-line.height + 5px / 2 - self.height / 2) / 1px) * 1px;
-                            icon: DeviceIcons.glyph(root.item.kind, root.item.product);
+                            icon: DeviceIcons.glyph(root.item.headphone-name ? SpeakerKind.headphones : root.item.kind, root.item.product);
                             state: root.item.state;
                             plays: root.item.plays;
                             enabled: !root.item.missing;
@@ -5144,7 +5136,7 @@ export component ZoneMemberRow inherits Rectangle {
                         alignment: center;
                         badge := SpeakerBadge {
                             size: 24px;
-                            icon: DeviceIcons.glyph14(root.item.kind, root.item.product);
+                            icon: DeviceIcons.glyph14(root.item.headphone-name ? SpeakerKind.headphones : root.item.kind, root.item.product);
                             state: root.item.state;
                             plays: root.item.plays;
                             name: root.item.name;

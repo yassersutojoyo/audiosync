@@ -223,8 +223,6 @@ impl Scene {
     fn new(appearance: ui_model::Appearance) -> Scene {
         let mut data = MockBackend::new().snapshot();
         data.running = true;
-        // The Mac photos' Cast search is off, which hides Add by Address.
-        data.cast_by_address = false;
         let state = Rc::new(RefCell::new(data));
         let app = app_over(Stage(state.clone()));
         app.poll_timer.stop();
@@ -1406,7 +1404,6 @@ fn b07() -> Vec<Row> {
             s.main()
         }),
         row("B07", "MAIN-ADD-ADDRESS", |s| {
-            s.edit(|state| state.cast_by_address = true);
             s.app.ask_cast_address();
             s.main()
         }),
@@ -2093,13 +2090,20 @@ fn motion_frames_of_a_song_change_and_a_speaker_switched_off() {
     println!("{}", lines.join("\n"));
 }
 
+/// The Mac photos run with Google Cast on (render.swift:469), so every main
+/// window photo offers Add by Address… as theirs do.
+#[test]
+fn the_photos_offer_add_by_address_as_the_macs_do() {
+    let scene = Scene::new(ui_model::Appearance::Light);
+    assert!(scene.app.main.get_cast_by_address());
+}
+
 /// NOTICE-SOURCE and MAIN-ROW-LOWVOL: a notice and a low-volume hint push
 /// the speaker list past the window's bottom, and the list scrolls to show
 /// Add by Address… whole, as the Mac's scroll view does.
 #[test]
 fn a_list_pushed_down_by_a_notice_scrolls_to_add_by_address() {
     let scene = Scene::new(ui_model::Appearance::Light);
-    scene.edit(|state| state.cast_by_address = true);
     scene
         .speaker(SPEAKERS, |speaker| {
             speaker.enabled = true;

@@ -2543,7 +2543,8 @@ fn every_speaker_kind_has_its_own_device_icon() {
         ("cast", "speaker.svg", "badge-cast.svg"),
         ("built-in", "speaker.svg", "badge-laptop.svg"),
         ("headphones", "headphones.svg", "badge-headphones.svg"),
-        ("bluetooth", "bluetooth.svg", "badge-bluetooth.svg"),
+        // Headphones when the name says so, as SpeakerLayout.swift:70.
+        ("bluetooth", "speaker.svg", "badge-bluetooth.svg"),
         ("usb", "usb.svg", "badge-usb.svg"),
         ("usb-headphones", "headphones.svg", "badge-usb.svg"),
         ("usb-speakers", "speaker.svg", "badge-usb.svg"),
@@ -2595,11 +2596,11 @@ fn every_speaker_kind_has_its_own_device_icon() {
     for (component, icon) in [
         (
             "SpeakerRow",
-            "icon: DeviceIcons.glyph(root.item.kind, root.item.product);",
+            "icon: DeviceIcons.glyph(root.item.headphone-name ? SpeakerKind.headphones : root.item.kind, root.item.product);",
         ),
         (
             "ZoneMemberRow",
-            "icon: DeviceIcons.glyph14(root.item.kind, root.item.product);",
+            "icon: DeviceIcons.glyph14(root.item.headphone-name ? SpeakerKind.headphones : root.item.kind, root.item.product);",
         ),
         ("ZoneHeader", "icon: DeviceIcons.zone;"),
     ] {
@@ -2611,7 +2612,7 @@ fn every_speaker_kind_has_its_own_device_icon() {
     let flyout = include_str!("../ui/flyout.slint");
     assert_eq!(
         flyout
-            .matches("icon: DeviceIcons.glyph16(speaker.kind, speaker.product);")
+            .matches("icon: DeviceIcons.glyph16(speaker.headphone-name ? SpeakerKind.headphones : speaker.kind, speaker.product);")
             .count(),
         3
     );

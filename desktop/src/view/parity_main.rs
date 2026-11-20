@@ -967,3 +967,44 @@ fn the_source_button_draws_the_macs_semibold_name_and_small_glyph() {
     let label = between(&menu, "name-row := HorizontalLayout {", "Glyph {");
     assert!(label.contains("spacing: 4px;"), "{label}");
 }
+
+/// The gear drawn where the icon font is missing (Linux) is a toothed rim
+/// around a hole, as the Mac's gearshape (MainWindow.swift:368), not a hub
+/// with loose spokes, which reads as a sun.
+#[test]
+fn the_drawn_gear_is_a_toothed_rim_around_a_hole() {
+    let glyphs = component(include_str!("../../ui/widgets.slint"), "Glyphs");
+    let gear = drawing(&glyphs, "outline", "gear");
+    let path = gear.trim_start_matches("return \"").trim_end_matches("\";");
+    let contours: Vec<&str> = path.split('M').filter(|part| !part.is_empty()).collect();
+    assert_eq!(contours.len(), 2, "rim and hole: {path}");
+    assert!(
+        contours
+            .iter()
+            .all(|contour| contour.trim_end().ends_with('Z')),
+        "both closed: {path}"
+    );
+}
+
+/// A Bluetooth output's round icon shows what it is, as the Mac's
+/// SpeakerTag.symbol (SpeakerLayout.swift:70): headphones when its name has
+/// a headphone word, else a speaker; the Bluetooth mark stays as the badge.
+#[test]
+fn a_bluetooth_row_shows_headphones_or_a_speaker_not_the_bluetooth_mark() {
+    let widgets = include_str!("../../ui/widgets.slint").replace("\r\n", "\n");
+    let icons = component(&widgets, "DeviceIcons");
+    for size in ["", "16/", "14/"] {
+        assert!(
+            !icons.contains(&format!("icons/{size}bluetooth.svg")),
+            "no Bluetooth glyph at {size}"
+        );
+    }
+    let row = component(&widgets, "SpeakerRow");
+    assert!(row.contains("root.item.headphone-name"), "the row's glyph");
+    let app = app_over(MockBackend::new());
+    let state = app.snapshot();
+    let mut headset = state.speaker("local:bt").expect("Headset").clone();
+    assert!(super::speaker_item(&state, &headset, false, false, None).headphone_name);
+    headset.system_name = "Flip 6".into();
+    assert!(!super::speaker_item(&state, &headset, false, false, None).headphone_name);
+}

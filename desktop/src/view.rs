@@ -6504,6 +6504,22 @@ pub fn row_state(state: SpeakerState) -> RowState {
     }
 }
 
+/// Whether a device name has a headphone word, the Mac's rule for telling
+/// Bluetooth headphones from a speaker (SpeakerLayout.swift:78-84).
+fn is_headphone_name(name: &str) -> bool {
+    let lowered = name.to_lowercase();
+    [
+        "airpods",
+        "headphone",
+        "headset",
+        "earbud",
+        "earphone",
+        "buds",
+    ]
+    .iter()
+    .any(|word| lowered.contains(word))
+}
+
 pub fn speaker_kind(kind: ui_model::SpeakerKind) -> SpeakerKind {
     use ui_model::SpeakerKind as K;
     match kind {
@@ -6672,6 +6688,8 @@ pub fn speaker_item(
         name_text: SharedString::default(),
         kind: speaker_kind(speaker.kind),
         product: product_kind(speaker.product),
+        headphone_name: speaker.kind == ui_model::SpeakerKind::Bluetooth
+            && is_headphone_name(&speaker.system_name),
         show_kind,
         state: row_state(state.speaker_state(speaker)),
         // On while streaming, as the Mac's row state (MenuBar.swift:505-507):
