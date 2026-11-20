@@ -120,10 +120,27 @@ public static class SoftwareDevice {
 }
 
 // A devnode under HTREE\ROOT\0 whose instance ID names its own enumerator
-// rather than ROOT, registered and given its driver as devcon install does.
+// rather than ROOT, registered and given the INF's driver by picking it from
+// the class list: SetupAPI sets hardware IDs on ROOT devices only (0xE0000209).
 public static class NamedDevnode {
   [StructLayout(LayoutKind.Sequential)]
   struct DevinfoData { public uint cbSize; public Guid ClassGuid; public uint DevInst; public IntPtr Reserved; }
+
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  struct InstallParams {
+    public uint cbSize; public uint Flags; public uint FlagsEx; public IntPtr hwndParent; public IntPtr InstallMsgHandler;
+    public IntPtr InstallMsgHandlerContext; public IntPtr FileQueue; public UIntPtr ClassInstallReserved; public uint Reserved;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string DriverPath;
+  }
+
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  struct DriverData {
+    public uint cbSize; public uint DriverType; public UIntPtr Reserved;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string Description;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string MfgName;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string ProviderName;
+    public uint DateLow; public uint DateHigh; public ulong DriverVersion;
+  }
 
   [DllImport("setupapi.dll", SetLastError = true)]
   static extern IntPtr SetupDiCreateDeviceInfoList(ref Guid classGuid, IntPtr parent);
@@ -131,27 +148,40 @@ public static class NamedDevnode {
   static extern bool SetupDiCreateDeviceInfoW(IntPtr set, string name, ref Guid classGuid, string description,
     IntPtr parent, uint flags, ref DevinfoData data);
   [DllImport("setupapi.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-  static extern bool SetupDiSetDeviceRegistryPropertyW(IntPtr set, ref DevinfoData data, uint property, byte[] value, uint size);
+  static extern bool SetupDiGetDeviceInstallParamsW(IntPtr set, ref DevinfoData data, ref InstallParams p);
+  [DllImport("setupapi.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+  static extern bool SetupDiSetDeviceInstallParamsW(IntPtr set, ref DevinfoData data, ref InstallParams p);
+  [DllImport("setupapi.dll", SetLastError = true)]
+  static extern bool SetupDiBuildDriverInfoList(IntPtr set, ref DevinfoData data, uint type);
+  [DllImport("setupapi.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+  static extern bool SetupDiEnumDriverInfoW(IntPtr set, ref DevinfoData data, uint type, uint index, ref DriverData driver);
+  [DllImport("setupapi.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+  static extern bool SetupDiSetSelectedDriverW(IntPtr set, ref DevinfoData data, ref DriverData driver);
   [DllImport("setupapi.dll", SetLastError = true)]
   static extern bool SetupDiCallClassInstaller(uint function, IntPtr set, ref DevinfoData data);
   [DllImport("newdev.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-  static extern bool UpdateDriverForPlugAndPlayDevicesW(IntPtr parent, string hardwareId, string inf, uint flags, out bool reboot);
+  static extern bool DiInstallDevice(IntPtr parent, IntPtr set, ref DevinfoData data, ref DriverData driver, uint flags, out bool reboot);
 
-  public static string Create(string instanceId, string hardwareId, string inf) {
+  static string Failed(string step) { return string.Format("{0} 0x{1:X8}", step, Marshal.GetLastWin32Error()); }
+
+  public static string Create(string instanceId, string inf) {
     var media = new Guid("4d36e96c-e325-11ce-bfc1-08002be10318");
     IntPtr set = SetupDiCreateDeviceInfoList(ref media, IntPtr.Zero);
     var data = new DevinfoData { cbSize = (uint)Marshal.SizeOf(typeof(DevinfoData)) };
-    if (!SetupDiCreateDeviceInfoW(set, instanceId, ref media, "Speakers", IntPtr.Zero, 0, ref data))
-      return string.Format("create 0x{0:X8}", Marshal.GetLastWin32Error());
-    byte[] ids = System.Text.Encoding.Unicode.GetBytes(hardwareId + "\0\0");
-    if (!SetupDiSetDeviceRegistryPropertyW(set, ref data, 1, ids, (uint)ids.Length)) // SPDRP_HARDWAREID
-      return string.Format("hardware ID 0x{0:X8}", Marshal.GetLastWin32Error());
-    if (!SetupDiCallClassInstaller(0x19, set, ref data)) // DIF_REGISTERDEVICE
-      return string.Format("register 0x{0:X8}", Marshal.GetLastWin32Error());
+    if (!SetupDiCreateDeviceInfoW(set, instanceId, ref media, "Speakers", IntPtr.Zero, 0, ref data)) return Failed("create");
+    var p = new InstallParams { cbSize = (uint)Marshal.SizeOf(typeof(InstallParams)) };
+    if (!SetupDiGetDeviceInstallParamsW(set, ref data, ref p)) return Failed("install params");
+    p.Flags |= 0x10000; // DI_ENUMSINGLEINF
+    p.DriverPath = inf;
+    if (!SetupDiSetDeviceInstallParamsW(set, ref data, ref p)) return Failed("driver path");
+    if (!SetupDiBuildDriverInfoList(set, ref data, 1)) return Failed("driver list"); // SPDIT_CLASSDRIVER
+    var driver = new DriverData { cbSize = (uint)Marshal.SizeOf(typeof(DriverData)) };
+    if (!SetupDiEnumDriverInfoW(set, ref data, 1, 0, ref driver)) return Failed("no driver in the INF");
+    if (!SetupDiSetSelectedDriverW(set, ref data, ref driver)) return Failed("select");
+    if (!SetupDiCallClassInstaller(0x19, set, ref data)) return Failed("register"); // DIF_REGISTERDEVICE
     bool reboot;
-    if (!UpdateDriverForPlugAndPlayDevicesW(IntPtr.Zero, hardwareId, inf, 1, out reboot)) // INSTALLFLAG_FORCE
-      return string.Format("driver 0x{0:X8}", Marshal.GetLastWin32Error());
-    return "0x00000000: " + instanceId;
+    if (!DiInstallDevice(IntPtr.Zero, set, ref data, ref driver, 0, out reboot)) return Failed("install " + driver.Description);
+    return "0x00000000: " + instanceId + ", " + driver.Description;
   }
 }
 '@
@@ -218,17 +248,27 @@ pnputil /add-driver (Join-Path $driver 'Scream.inf') /install | Out-File -Append
 $created = [SoftwareDevice]::Create('AudioSyncCI', '*Scream', 'Speakers', 0x2 -bor 0x8) # SilentInstall, DriverRequired
 Note "Scream software device: $created"
 if (-not $created.StartsWith('0x00000000')) {
-  # Runs 44292105824 and 44765458770 got 0x8007007E from SWD on every image; these readings say whether any SWD device can be made.
-  Note "SWD with no capability flags: $([SoftwareDevice]::Create('AudioSyncProbe', '*Scream', 'Speakers', 0))"
-  Note "SWD with a hardware ID no driver matches: $([SoftwareDevice]::Create('AudioSyncProbe2', 'AudioSyncCI\Probe', 'Probe', 0))"
-  Get-Service PlugPlay, DeviceInstall, DsmSvc, DevQueryBroker -ErrorAction SilentlyContinue | ForEach-Object { Note "service $($_.Name): $($_.Status)" }
-  $created = [NamedDevnode]::Create('AUDIOSYNCCI\SCREAM\0000', '*Scream', (Join-Path $driver 'Scream.inf'))
+  # Run 44768767658: SWD gives 0x8007007E on the hosted images even for a device no driver matches.
+  $created = [NamedDevnode]::Create('AUDIOSYNCCI\SCREAM\0000', (Join-Path $driver 'Scream.inf'))
   Note "Scream devnode with its own enumerator: $created"
 }
-$bus = (Get-PnpDevice -PresentOnly -Class MEDIA | Where-Object { $_.HardwareID -contains '*Scream' } |
-  ForEach-Object { (Get-PnpDeviceProperty -InstanceId $_.InstanceId -KeyName DEVPKEY_Device_EnumeratorName).Data }) -join ','
-Note "Scream enumerator: $bus"
-if (-not $created.StartsWith('0x00000000') -or -not $bus -or $bus -match 'ROOT') { throw "no Scream device off the ROOT enumerator ($created, $bus): a ROOT one is listed as virtual, so there is no double audio to prove" }
+if (-not $created.StartsWith('0x00000000')) { & $devcon install (Join-Path $driver 'Scream.inf') '*Scream' | Out-File -Append "$Work/env.txt" }
+if (-not (Wait-For { [Endpoints]::Count(0) -ge 1 } 60)) { throw 'Scream gave no active output' }
+# AudioSync reads the enumerator from the endpoint's store, which keeps a copy as
+# PKEY_Device_EnumeratorName; a ROOT Scream is relabeled as the PC's own card.
+$render = Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render' |
+  ForEach-Object { Join-Path $_.PSPath 'Properties' }
+$enumerator = '{a45c254e-df1c-4efd-8020-67d146a850e0},24'
+$rooted = @($render | Where-Object { (Get-ItemProperty $_ -ErrorAction SilentlyContinue).$enumerator -eq 'ROOT' })
+if ($rooted) {
+  foreach ($key in $rooted) { Set-ItemProperty -Path $key -Name $enumerator -Value 'HDAUDIO' }
+  Restart-Service -Force AudioEndpointBuilder
+  Start-Service Audiosrv
+  Note "relabeled $($rooted.Count) ROOT Scream endpoint(s) as HDAUDIO"
+}
+$bus = ($render | ForEach-Object { (Get-ItemProperty $_ -ErrorAction SilentlyContinue).$enumerator }) -join ','
+Note "Scream endpoint enumerator: $bus"
+if (-not $bus -or $bus -match 'ROOT') { throw "the Scream endpoint is still ROOT ($created, $bus), listed as virtual, so there is no double audio to prove" }
 if (-not (Wait-For { [Endpoints]::Count(0) -ge 1 } 60)) { throw 'Scream gave no active output' }
 Save-Devices 'with Scream'
 
