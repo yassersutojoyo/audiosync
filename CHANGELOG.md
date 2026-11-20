@@ -66,6 +66,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- On Windows and Linux, Bluetooth headphones show a headphones icon as on the Mac, and on Linux the settings button shows a gear instead of a sun-like shape.
 - On Windows, Settings and Web Remote show the app icon tile like the other windows, also after About was opened first.
 - On Windows and Linux, the Equalizer's curve menu shows every curve and Save Curve at once instead of cutting the list at the window's edge.
 - On Windows and Linux, the Guide, About and Equalizer windows use the Mac's background colours, and the Now Playing transport buttons draw no box on hover, as on the Mac.
