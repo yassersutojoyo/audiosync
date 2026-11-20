@@ -9541,6 +9541,57 @@ mod tests {
         adapter
     }
 
+    // covers: VC36
+    #[test]
+    fn an_added_silent_output_is_listed_and_takes_the_default_at_once() {
+        use crate::audio::default_output::tests as switch_fakes;
+        use crate::audio::outputs::DeviceTraits;
+        use crate::audio::silent_output::tests as silent_fakes;
+        use crate::audio::test_cells::SyncRefCell;
+        let mut adapter = adapter();
+        let calls = switch_fakes::Calls::default();
+        let fake =
+            switch_fakes::Shared(Arc::new(SyncRefCell::new(switch_fakes::Fake::new(&calls))));
+        let mut cable = fake.0.borrow_mut().endpoints.pop().expect("the cable");
+        cable.vb_cable = true;
+        let store = switch_fakes::Store::new(&calls);
+        let audio = adapter.audio_mut();
+        audio.set_default_switch(Box::new(fake.clone()), Box::new(store));
+        audio.connect_output_as(TV, "TV", OutputKind::Hdmi);
+        audio.set_default_output(TV);
+        adapter.silent_output =
+            SilentInstall::pinned(Arc::new(silent_fakes::fake()), silent_fakes::stand_in_pin());
+        adapter.refresh_devices();
+        adapter.select_source("system");
+        turn_on(&mut adapter, SPEAKERS);
+        assert_eq!(heard_twice(&adapter).len(), 1);
+
+        adapter.add_silent_output();
+        fake.0.borrow_mut().endpoints.push(cable);
+        let audio = adapter.audio_mut();
+        audio.connect_output_as(CABLE, "CABLE Input", OutputKind::Virtual);
+        audio.set_output_traits(
+            CABLE,
+            DeviceTraits {
+                vb_cable: true,
+                ..DeviceTraits::default()
+            },
+        );
+        audio.connect_input(MIC, "Microphone (USB Audio)", "USB");
+        let offered = |adapter: &AudioAdapter<MockBackend>| {
+            adapter.snapshot().sources.iter().any(|s| s.id == mic())
+        };
+        while adapter.silent_output.running() {
+            adapter.follow_silent_output();
+        }
+        assert!(offered(&adapter), "listed again");
+        adapter.poll();
+        assert_eq!(
+            fake.0.borrow().console.as_deref(),
+            Some(switch_fakes::CABLE)
+        );
+    }
+
     // covers: S382, S470
     #[test]
     fn with_no_spare_output_an_app_heard_from_the_default_output_is_named() {

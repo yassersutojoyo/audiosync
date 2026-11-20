@@ -6767,6 +6767,63 @@ mod tests {
         );
     }
 
+    // covers: VC36
+    #[test]
+    fn an_added_silent_output_has_the_routing_checked_at_the_next_poll() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let checked = Instant::now();
+        backend.routing.last_check = Some(checked);
+        backend.poll();
+        assert_eq!(backend.routing.last_check, Some(checked), "not due yet");
+        backend.silent_output_added();
+        backend.poll();
+        assert!(backend.routing.last_check > Some(checked));
+    }
+
+    // covers: VC45
+    #[test]
+    fn vb_cable_is_no_speaker_and_no_source_while_it_is_the_silent_endpoint() {
+        use crate::audio::outputs::DeviceTraits;
+        let mut backend = backend();
+        let (_, fake, _) = with_switch(&mut backend);
+        for candidate in &mut fake.0.borrow_mut().endpoints {
+            candidate.vb_cable = candidate.id == switch_fakes::CABLE;
+        }
+        backend.connect_output_as(switch_fakes::CABLE, "CABLE Input", OutputKind::Virtual);
+        backend.set_output_traits(
+            switch_fakes::CABLE,
+            DeviceTraits {
+                vb_cable: true,
+                ..DeviceTraits::default()
+            },
+        );
+        let speaker_ids = |backend: &mut MockBackend| -> Vec<String> {
+            let listed = backend.list_outputs().unwrap();
+            listed.into_iter().map(|output| output.id).collect()
+        };
+        assert_eq!(speaker_ids(&mut backend), [HEADPHONES, SPEAKERS]);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(console(&fake).as_deref(), Some(switch_fakes::CABLE));
+        assert_eq!(speaker_ids(&mut backend), [HEADPHONES, SPEAKERS]);
+
+        let input = |id: &str, name: &str, vb_cable: bool| EndpointReading {
+            index: 0,
+            id: Ok(id.to_owned()),
+            properties: Ok(EndpointProperties {
+                name: Some(name.to_owned()),
+                vb_cable,
+                ..EndpointProperties::default()
+            }),
+        };
+        let sources = input_sources(vec![
+            input("cable-out", "CABLE Output", true),
+            input("mic", "Microphone", false),
+        ]);
+        let names: Vec<&str> = sources.iter().map(|source| source.name.as_str()).collect();
+        assert_eq!(names, ["Microphone"]);
+    }
+
     // covers: S469, S186
     #[test]
     fn the_default_comes_back_only_once_the_outputs_have_faded() {

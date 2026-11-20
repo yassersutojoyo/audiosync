@@ -5,7 +5,7 @@
 //! Once its endpoints are active, the default switch (S469) and the app move
 //! (S471) take the source there as they take any other virtual output.
 //!
-//! [`run`] is the whole install over the [`Platform`] seam, which tests drive
+//! [`run_pinned`] is the whole install over the [`Platform`] seam, which tests drive
 //! with fakes; nothing in a test downloads, extracts to a real folder or
 //! launches a setup.
 
@@ -174,17 +174,9 @@ fn put_back(platform: &dyn Platform, before: &[Option<String>]) -> Vec<String> {
     lines
 }
 
-/// The install: `phase` hears where it is and `log` each line for the debug
-/// log. A failure carries its cause for the log.
-pub fn run(
-    platform: &dyn Platform,
-    phase: &mut dyn FnMut(Phase),
-    log: &mut dyn FnMut(String),
-) -> Result<(), (SilentFailure, String)> {
-    run_pinned(platform, PACK_SHA256, phase, log)
-}
-
-/// [`run`] against the digest `pin`, which tests set to their stand-in's.
+/// The install of the pack whose SHA-256 is `pin` ([`PACK_SHA256`] but in
+/// tests): `phase` hears where it is and `log` each line for the debug log.
+/// A failure carries its cause for the log.
 fn run_pinned(
     platform: &dyn Platform,
     pin: &str,
@@ -281,6 +273,8 @@ pub struct SilentInstall {
     /// Installed: the cable is there, the notice's line asks for a restart
     /// until the source is heard once.
     installed: bool,
+    /// The digest the pack must have: [`PACK_SHA256`] but in tests.
+    pin: String,
 }
 
 /// What a poll found.
@@ -296,7 +290,17 @@ impl SilentInstall {
     pub fn new(platform: Arc<dyn Platform>) -> SilentInstall {
         SilentInstall {
             platform: Some(platform),
+            pin: PACK_SHA256.to_owned(),
             ..SilentInstall::default()
+        }
+    }
+
+    /// An install that takes a pack whose SHA-256 is `pin`.
+    #[cfg(test)]
+    pub fn pinned(platform: Arc<dyn Platform>, pin: String) -> SilentInstall {
+        SilentInstall {
+            pin,
+            ..SilentInstall::new(platform)
         }
     }
 
@@ -344,14 +348,16 @@ impl SilentInstall {
         let Some(platform) = self.platform.clone() else {
             return false;
         };
+        let pin = self.pin.clone();
         let (send, receive) = channel();
         let spawned = std::thread::Builder::new()
             .name("silent output".to_owned())
             .spawn(move || {
                 let phases = send.clone();
                 let lines = send.clone();
-                let result = run(
+                let result = run_pinned(
                     platform.as_ref(),
+                    &pin,
                     &mut |phase| {
                         let _ = phases.send(Step::Phase(phase));
                     },
@@ -522,7 +528,7 @@ fn read_only(path: &Path) -> std::io::Result<std::fs::File> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::{Mutex, MutexGuard, OnceLock};
 
     use super::*;
@@ -534,9 +540,14 @@ mod tests {
     const CABLE_OUT: &str = "{0.0.1.00000000}.{cable-out}";
     const STAND_IN: &[u8] = b"a stand-in for the pack";
 
+    /// The digest of the fake's pack, for [`SilentInstall::pinned`].
+    pub(crate) fn stand_in_pin() -> String {
+        sha256(STAND_IN)
+    }
+
     /// What the fake Windows does, by the time since the setup launched.
     #[derive(Default)]
-    struct World {
+    pub(crate) struct World {
         now: Duration,
         launched_at: Option<Duration>,
         /// The cable's endpoints become active.
@@ -559,7 +570,7 @@ mod tests {
         launched: Vec<PathBuf>,
     }
 
-    struct Fake {
+    pub(crate) struct Fake {
         world: Arc<Mutex<World>>,
         pack: Result<Vec<u8>, String>,
         launch: fn() -> Result<(), Launch>,
@@ -578,7 +589,7 @@ mod tests {
         }
     }
 
-    fn fake() -> Fake {
+    pub(crate) fn fake() -> Fake {
         let speakers = Some(SPEAKERS.to_owned());
         let mic = Some(MIC.to_owned());
         let world = World {
@@ -602,7 +613,7 @@ mod tests {
     }
 
     impl Fake {
-        fn world(&self) -> MutexGuard<'_, World> {
+        pub(crate) fn world(&self) -> MutexGuard<'_, World> {
             self.world.lock().unwrap()
         }
 
@@ -724,7 +735,8 @@ mod tests {
         assert!(bad.world().launched.is_empty());
         // The real pin refuses the stand-in.
         let real = fake();
-        let result = run(&real, &mut |_| {}, &mut |_| {}).map_err(|(failure, _)| failure);
+        let result = run_pinned(&real, PACK_SHA256, &mut |_| {}, &mut |_| {})
+            .map_err(|(failure, _)| failure);
         assert_eq!(result, Err(SilentFailure::Mismatch));
         assert!(!real.world().unpacked);
     }
