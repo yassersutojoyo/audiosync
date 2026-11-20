@@ -4292,15 +4292,12 @@ do {
           "native airplay: the kind's tooltip and VoiceOver label say AirPlay 2 for such a row, AirPlay for the rest")
     let kindTV = NativeReceiver(id: "K1", name: "Living Room", model: "", availability: .available, reason: nil,
                                 hints: [], product: ProductKind(raw: ASC_PRODUCT_TV))
-    var kindRow = AppModel.Speaker(id: "ap:K1", name: "Living Room", tag: .airplay, enabled: false,
-                                   volume: 50, offsetMs: nil)
-    kindRow.product = ProductKind(raw: ASC_PRODUCT_SOUNDBAR)
     // covers: P242, P245, P246
     check(ProductKind(raw: ASC_PRODUCT_TV).icon == .tv && ProductKind(raw: ASC_PRODUCT_SETTOP).icon == .settop
             && ProductKind(raw: ASC_PRODUCT_SPEAKER).icon == .smartSpeaker
             && ProductKind(raw: ASC_PRODUCT_COMPUTER).icon == .laptop
             && ProductKind(raw: ASC_PRODUCT_UNKNOWN).icon == nil && ProductKind(raw: 99) == .unknown
-            && kindRow.symbol == .soundbar
+            && ProductKind(raw: ASC_PRODUCT_SOUNDBAR).icon == .soundbar
             && kinds.speakerLabel(name: "Living Room", tag: kinds.speakerTag("AirPlay", product: .tv))
                 == "Living Room, AirPlay, TV"
             && kinds.speakerTag("AirPlay", product: .unknown) == "AirPlay"
@@ -14617,7 +14614,7 @@ do {
         "Kitchen".withCString { name in
             "Nest Audio".withCString { model in
                 CastDeviceChange(AscCastDevice(event: ASC_CAST_APPEARED, id: id, name: name, model: model,
-                                               flags: UInt32(ASC_CAST_FLAG_GROUP), former: nil),
+                                               flags: UInt32(ASC_CAST_FLAG_GROUP), former: nil, product: ASC_PRODUCT_UNKNOWN),
                                  offsetMs: { $0 == kitchen ? 40 : nil })
             }
         }
@@ -16636,7 +16633,7 @@ do {
                 "Lounge".withCString { name in
                     "".withCString { model in
                         CastDeviceChange(AscCastDevice(event: ASC_CAST_APPEARED, id: id, name: name, model: model,
-                                                       flags: 0, former: former), offsetMs: { _ in nil })
+                                                       flags: 0, former: former, product: ASC_PRODUCT_UNKNOWN), offsetMs: { _ in nil })
                     }
                 }
             }
