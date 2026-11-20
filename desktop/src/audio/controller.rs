@@ -4658,7 +4658,10 @@ impl<D: Driver> Controller<D> {
             CaptureTarget::Input { .. } => return,
         };
         self.routing.last_check = Some(now);
-        let rendered: Vec<String> = session.outputs.keys().cloned().collect();
+        let mut rendered: Vec<String> = session.outputs.keys().cloned().collect();
+        // A network speaker's copy counts too; its ID matches no endpoint.
+        rendered.extend(self.enabled_airplay());
+        rendered.extend(self.cast_enabled());
         let snapshot = self
             .driver
             .endpoint_audio()
