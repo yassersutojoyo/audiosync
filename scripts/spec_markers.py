@@ -6,7 +6,7 @@ tests/ in their spec_coverage tests. This covers the rest: tracked Rust, Swift
 and C files elsewhere (crate examples and benches included), and shell and
 Python files, whose marker is `# covers:`. The letter picks
 the spec: S is docs/ENGINE_SPEC.md, P is docs/AIRPLAY_SPEC.md, C is
-docs/CAST_SPEC.md. A withdrawn, retired or superseded clause counts as
+docs/CAST_SPEC.md, VC is docs/WINDOWS_SILENT_OUTPUT_SPEC.md. A withdrawn, retired or superseded clause counts as
 missing (one retired or superseded in part does not). Each ID may carry a note in parentheses, and a
 note may run on to the next lines:
 
@@ -37,10 +37,15 @@ import sys
 
 MARKER = "// covers:"
 HASH_MARKER = "# covers:"
-SPECS = {"S": "ENGINE_SPEC.md", "P": "AIRPLAY_SPEC.md", "C": "CAST_SPEC.md"}
+SPECS = {
+    "S": "ENGINE_SPEC.md",
+    "P": "AIRPLAY_SPEC.md",
+    "C": "CAST_SPEC.md",
+    "VC": "WINDOWS_SILENT_OUTPUT_SPEC.md",
+}
 CRATES_WITH_OWN_CHECK = tuple(f"{c}/{d}/" for c in ("core", "cast", "airplay") for d in ("src", "tests"))
-_ID = re.compile(r"[SPC][1-9][0-9]*[a-z]?")
-_CLAUSE = re.compile(r"\s*- \*\*([SPC][1-9][0-9]*[a-z]?)\*\*(.*)")
+_ID = re.compile(r"(?:VC|[SPC])[1-9][0-9]*[a-z]?")
+_CLAUSE = re.compile(r"\s*- \*\*((?:VC|[SPC])[1-9][0-9]*[a-z]?)\*\*(.*)")
 # Only the opening words: a live clause may mention withdrawn things later on.
 _WITHDRAWN = re.compile(r"\s*[*(]*(withdrawn|(retired|superseded)(?! in part))", re.IGNORECASE)
 _TEST_MAP = re.compile(r"## [0-9]+\. Test map")
@@ -120,7 +125,7 @@ def problems_in(path, text, known):
             found.append(f"{path}:{number}: malformed marker: {stripped}")
             continue
         found += [
-            f"{path}:{number}: {clause} is not a clause of {SPECS[clause[0]]}"
+            f"{path}:{number}: {clause} is not a clause of {SPECS[clause.rstrip('0123456789abcdefghijklmnopqrstuvwxyz')]}"
             for clause in ids
             if clause not in known
         ]
