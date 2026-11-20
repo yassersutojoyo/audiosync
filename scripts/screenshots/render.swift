@@ -45,8 +45,8 @@ enum Mock {
         model.sources = [AppModel.Source(id: "", name: text.sourceSystem, icon: nil, isInput: false)]
         model.master = 72
         model.nowPlaying = NowPlayingMonitor.Track(
-            bundleID: "com.example.player", appName: "Player", title: "Midnight Drive",
-            artist: "Example Artist", album: "Example Album", isPlaying: true, artwork: artwork())
+            bundleID: "com.example.player", appName: "Player", title: song[0],
+            artist: song[1], album: "Example Album", isPlaying: true, artwork: artwork())
         model.equalizerOn = true
         let curve = Mock.equalizer()
         model.equalizerCurve = text.equalizerCurveName(curve.shownCurve, saved: curve.curves)
@@ -126,8 +126,20 @@ enum Mock {
         return EqualizerModel(settings: settings)
     }
 
+    /// AUDIOSYNC_SHOT_TRACK ("Title|Artist") and AUDIOSYNC_SHOT_COVER (an image file)
+    /// replace the example song, for the README shots.
+    static let song: [String] = {
+        let parts = (ProcessInfo.processInfo.environment["AUDIOSYNC_SHOT_TRACK"] ?? "")
+            .split(separator: "|", maxSplits: 1).map(String.init)
+        return parts.count == 2 ? parts : ["Midnight Drive", "Example Artist"]
+    }()
+
     /// Placeholder album art: a plain gradient drawn here, no third-party artwork.
     static func artwork() -> NSImage {
+        if let path = ProcessInfo.processInfo.environment["AUDIOSYNC_SHOT_COVER"],
+           let cover = NSImage(contentsOfFile: path) {
+            return cover
+        }
         NSImage(size: NSSize(width: 112, height: 112), flipped: false) { rect in
             NSGradient(colors: [NSColor(srgbRed: 0.93, green: 0.48, blue: 0.36, alpha: 1),
                                 NSColor(srgbRed: 0.42, green: 0.25, blue: 0.75, alpha: 1)])?

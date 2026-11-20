@@ -5,9 +5,9 @@
 //! takes the card's buttons. It opens no audio stream, so nothing is heard.
 //!
 //! From `desktop/`: `cargo run --example fake_player -- [--every <seconds>]
-//! [--paused] [--track "Title|Artist|Album"]...`. Without `--track` it plays
-//! three built-in test tracks. Each track's cover is a generated picture in its
-//! own color. Lines on standard input: `next`, `prev`, `play`, `pause`,
+//! [--paused] [--track "Title|Artist|Album"]... [--cover <png or jpg>]`.
+//! Without `--track` it plays three built-in test tracks. Each track's cover is
+//! a generated picture in its own color, or the `--cover` file for every track. Lines on standard input: `next`, `prev`, `play`, `pause`,
 //! `toggle`, `shuffle on|off`, `repeat off|one|all`, `quit`. Every change
 //! prints one `state:` line.
 //!
@@ -67,13 +67,18 @@ struct Options {
     every: Option<std::time::Duration>,
     paused: bool,
     tracks: Vec<Track>,
+    cover: Option<std::path::PathBuf>,
 }
+
+/// The `--cover` file's bytes, shown for every track in place of the generated ones.
+static COVER: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
 
 fn parse_options(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
     let mut options = Options {
         every: None,
         paused: false,
         tracks: Vec::new(),
+        cover: None,
     };
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -95,6 +100,9 @@ fn parse_options(args: impl IntoIterator<Item = String>) -> Result<Options, Stri
                     artist: parts.next().unwrap_or_default(),
                     album: parts.next().unwrap_or_default(),
                 });
+            }
+            "--cover" => {
+                options.cover = Some(args.next().ok_or("--cover needs a picture file")?.into());
             }
             other => return Err(format!("unknown argument {other}")),
         }
@@ -355,7 +363,10 @@ mod smtc {
             music.SetTitle(&HSTRING::from(&track.title))?;
             music.SetArtist(&HSTRING::from(&track.artist))?;
             music.SetAlbumTitle(&HSTRING::from(&track.album))?;
-            updater.SetThumbnail(&thumbnail(&super::cover(player.index))?)?;
+            match super::COVER.get() {
+                Some(bytes) => updater.SetThumbnail(&thumbnail(bytes)?)?,
+                None => updater.SetThumbnail(&thumbnail(&super::cover(player.index))?)?,
+            }
             updater.Update()
         }
     }
@@ -396,6 +407,15 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         }
     };
+    if let Some(path) = &options.cover {
+        match std::fs::read(path) {
+            Ok(bytes) => _ = COVER.set(bytes),
+            Err(error) => {
+                eprintln!("fake_player: {}: {error}", path.display());
+                return std::process::ExitCode::from(2);
+            }
+        }
+    }
     let (sender, commands) = channel();
     let session = match smtc::Session::open(sender.clone()) {
         Ok(session) => session,
@@ -479,13 +499,22 @@ mod tests {
 
     #[test]
     fn options_take_tracks_and_timer() {
-        let args = ["--every", "2.5", "--paused", "--track", "Song|Band"];
+        let args = [
+            "--every",
+            "2.5",
+            "--paused",
+            "--track",
+            "Song|Band",
+            "--cover",
+            "a.png",
+        ];
         let options = parse_options(args.map(str::to_owned)).unwrap();
         assert_eq!(options.every, Some(std::time::Duration::from_millis(2500)));
         assert!(options.paused);
         assert_eq!(options.tracks.len(), 1);
         assert_eq!(options.tracks[0].artist, "Band");
         assert_eq!(options.tracks[0].album, "");
+        assert_eq!(options.cover, Some("a.png".into()));
         assert_eq!(parse_options(Vec::new()).unwrap().tracks.len(), 3);
         assert!(parse_options(["--every".to_owned(), "0".to_owned()]).is_err());
     }
