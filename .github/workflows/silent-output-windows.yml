@@ -35,28 +35,15 @@ jobs:
   skia:
     uses: ./.github/workflows/skia.yml
 
-  proof:
-    name: Heard twice, then once (${{ matrix.target }})
+  build:
+    name: Build (${{ matrix.target }})
     needs: skia
+    # Same image as skia.yml: its Skia objects need that image's MSVC STL to link.
+    runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # Not windows-latest: Server 2025 refuses the SWD Scream device (run
-          # 44292105824), and the ROOT one is listed as virtual, so there would
-          # be no double audio to show; Server 2022 also carries Docker.
-          - target: x86_64-pc-windows-msvc
-            runner: windows-2022
-            arch: x64
-            optional: false
-          # VC54: untested rather than red when the runner or a step can't do it.
-          - target: aarch64-pc-windows-msvc
-            runner: windows-11-arm
-            arch: arm64
-            optional: true
-    runs-on: ${{ matrix.runner }}
-    continue-on-error: ${{ matrix.optional }}
-    timeout-minutes: 75
+        target: [x86_64-pc-windows-msvc, aarch64-pc-windows-msvc]
     defaults:
       run:
         shell: bash
@@ -88,13 +75,57 @@ jobs:
           # Static CRT: the receiver runs in a Nano Server container with no Visual C++ runtime.
           RUSTFLAGS='-C target-feature=+crt-static' \
             cargo build --locked --release --manifest-path airplay/Cargo.toml --example stranger_rx --target ${{ matrix.target }}
+          mkdir -p bin
+          cp desktop/target/${{ matrix.target }}/release/audiosync.exe bin/
+          cp airplay/target/${{ matrix.target }}/release/examples/stranger_rx.exe bin/
+
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: silent-output-bin-${{ matrix.target }}
+          path: bin
+          retention-days: 1
+
+  proof:
+    name: Heard twice, then once (${{ matrix.target }})
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Not windows-latest: Server 2025 refuses the SWD Scream device (run
+          # 44292105824), and the ROOT one is listed as virtual, so there would
+          # be no double audio to show; Server 2022 also carries Docker.
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2022
+            arch: x64
+            optional: false
+          # VC54: untested rather than red when the runner or a step can't do it.
+          - target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+            arch: arm64
+            optional: true
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.optional }}
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: silent-output-bin-${{ matrix.target }}
+          path: bin
 
       - name: Heard twice, VB-CABLE added, heard once
         shell: pwsh
         run: >-
           ./scripts/stranger/windows_silent_output.ps1 -Arch ${{ matrix.arch }}
-          -Exe desktop/target/${{ matrix.target }}/release/audiosync.exe
-          -Rx airplay/target/${{ matrix.target }}/release/examples/stranger_rx.exe
+          -Exe bin/audiosync.exe
+          -Rx bin/stranger_rx.exe
           -Work silent-output-work
 
       - name: Untested on this runner (VC54)
