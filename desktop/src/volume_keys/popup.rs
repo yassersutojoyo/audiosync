@@ -434,6 +434,89 @@ unsafe fn draw(dc: HDC, shown: &Shown) {
     }
 }
 
+/// The card as `show` paints it at `scale`, as top-down RGBA with the corners
+/// its window region cuts off left clear, for the LAYAR photos.
+#[cfg(test)]
+pub fn picture(
+    level: f64,
+    waves: i32,
+    dark: bool,
+    name: &str,
+    percent: &str,
+    scale: f64,
+) -> (u32, u32, Vec<u8>) {
+    use windows::Win32::Graphics::Gdi::{
+        BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS,
+        DeleteDC, GdiFlush, PtInRegion,
+    };
+    let shown = Shown {
+        level,
+        waves: waves.clamp(0, 3) as usize,
+        dark,
+        name: name.encode_utf16().collect(),
+        percent: percent.encode_utf16().collect(),
+        started: Instant::now(),
+        rises: false,
+        scale,
+        left: 0,
+        top: 0,
+    };
+    let (width, height) = (
+        (WIDTH * scale).round() as i32,
+        (HEIGHT * scale).round() as i32,
+    );
+    let info = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width,
+            biHeight: -height,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    // SAFETY: a memory DC and bitmap made, read and deleted here; `bits`
+    // holds width * height BGRA pixels while the bitmap lives.
+    unsafe {
+        let dc = CreateCompatibleDC(None);
+        let mut bits = std::ptr::null_mut();
+        let bitmap = CreateDIBSection(
+            Some(dc),
+            &raw const info,
+            DIB_RGB_COLORS,
+            &raw mut bits,
+            None,
+            0,
+        )
+        .expect("a bitmap for the card");
+        let old = SelectObject(dc, HGDIOBJ(bitmap.0));
+        draw(dc, &shown);
+        let _ = GdiFlush();
+        let corner = (CORNER * scale).round() as i32;
+        let region = CreateRoundRectRgn(0, 0, width + 1, height + 1, corner, corner);
+        let bgra = std::slice::from_raw_parts(bits as *const u8, (width * height * 4) as usize);
+        let mut rgba = Vec::with_capacity(bgra.len());
+        for y in 0..height {
+            for x in 0..width {
+                let at = ((y * width + x) * 4) as usize;
+                let alpha = if PtInRegion(region, x, y).as_bool() {
+                    255
+                } else {
+                    0
+                };
+                rgba.extend([bgra[at + 2], bgra[at + 1], bgra[at], alpha]);
+            }
+        }
+        let _ = DeleteObject(HGDIOBJ(region.0));
+        SelectObject(dc, old);
+        let _ = DeleteObject(HGDIOBJ(bitmap.0));
+        let _ = DeleteDC(dc);
+        (width as u32, height as u32, rgba)
+    }
+}
+
 /// A font of `pixels` em height.
 ///
 /// # Safety

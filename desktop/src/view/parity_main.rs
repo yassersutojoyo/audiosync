@@ -94,6 +94,52 @@ fn the_transport_draws_the_macs_filled_glyphs_on_every_system() {
     }
 }
 
+/// The pointer on Previous, Play or Pause, or Next draws no box behind it:
+/// the Mac's transport buttons are `.plain` (MainWindow.swift:504).
+// covers: S450
+#[test]
+fn the_transport_takes_no_hover_box_as_on_the_mac() {
+    use crate::now_playing_card::fake::{FakeControls, track};
+    use i_slint_backend_testing::ElementHandle;
+    use slint::ComponentHandle;
+    use slint::platform::WindowEvent;
+    let app = app_over(MockBackend::new());
+    let fake = FakeControls::default();
+    app.set_media_controls(fake.controls());
+    app.main.show().expect("the main window shows headless");
+    app.poll();
+    fake.read(Some(track("Spotify.exe", "Song", "Band", true)));
+    app.poll();
+    super::tests::draw_frames();
+    let window = app.main.window();
+    window.set_size(slint::LogicalSize::new(776.0, 680.0));
+    slint::platform::update_timers_and_animations();
+    let corner = |x: f32, y: f32| {
+        let shot = window.take_snapshot().expect("drawn");
+        let scale = window.scale_factor();
+        let at = (((y + 3.0) * scale) as usize * shot.width() as usize
+            + ((x + 3.0) * scale) as usize)
+            * 4;
+        <[u8; 4]>::try_from(&shot.as_bytes()[at..at + 4]).expect("a pixel")
+    };
+    for label in ["Previous Track", "Pause", "Next Track"] {
+        let button = ElementHandle::find_by_accessible_label(&app.main, label)
+            .next()
+            .unwrap_or_else(|| panic!("{label}"));
+        let (at, size) = (button.absolute_position(), button.size());
+        let away = slint::LogicalPosition::new(2.0, 2.0);
+        window.dispatch_event(WindowEvent::PointerMoved { position: away });
+        super::tests::advance_clock(std::time::Duration::from_secs(1));
+        super::tests::draw_frames();
+        let before = corner(at.x, at.y);
+        let over = slint::LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0);
+        window.dispatch_event(WindowEvent::PointerMoved { position: over });
+        super::tests::advance_clock(std::time::Duration::from_secs(1));
+        super::tests::draw_frames();
+        assert_eq!(corner(at.x, at.y), before, "{label} drew a hover box");
+    }
+}
+
 /// Auto-connect's bolt is solid on every system, as the Mac's bolt.fill
 /// (MainWindow.swift:2435), where the icon font's is an outline.
 #[test]

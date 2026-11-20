@@ -215,6 +215,8 @@ struct Scene {
     media: FakeControls,
     /// A motion frame: photographed as it stands, without settling.
     still: std::cell::Cell<bool>,
+    /// A photo drawn outside Slint, taken in place of the window's.
+    drawn: RefCell<Option<(Vec<u8>, String)>>,
 }
 
 impl Scene {
@@ -240,6 +242,7 @@ impl Scene {
             state,
             media,
             still: std::cell::Cell::new(false),
+            drawn: RefCell::new(None),
         };
         scene.size(scene.app.main.window(), MAIN);
         scene
@@ -376,6 +379,9 @@ impl Scene {
 
     /// The photo as a PNG and its elements as the JSON screen_compare.py reads.
     fn photo(&self, Win(shown, size): Win) -> Result<(Vec<u8>, String), String> {
+        if let Some(drawn) = self.drawn.borrow_mut().take() {
+            return Ok(drawn);
+        }
         let window = self.window(shown);
         if !self.still.get() {
             settle(window);
@@ -1216,14 +1222,7 @@ fn b04() -> Vec<Row> {
             click(&s.app.main, "Options")?;
             s.main()
         }),
-        row("B04", "LEVEL-POPUP", |s| {
-            s.edit(|state| state.source_id = "input:line".into());
-            let picker = ElementHandle::find_by_element_type_name(&s.app.main, "PairPicker")
-                .next()
-                .ok_or("no channel pair picker")?;
-            click_element(s.app.main.window(), &picker);
-            s.main()
-        }),
+        row("B04", "LEVEL-POPUP", level_popup),
         row("B04", "TRAY-SOURCE-MENU", |s| {
             let win = s.flyout()?;
             click(&s.app.flyout, "Audio Source")?;
@@ -1944,6 +1943,32 @@ fn layar_photos_of_the_headless_rows() {
         for line in &missed {
             println!("  {line}");
         }
+    }
+}
+
+/// The volume keys' level pop-up (volume_keys/popup.rs), the Mac's
+/// LevelPopup, at a level between its MUTED and FULL rows.
+fn level_popup(s: &Scene) -> Result<Win, String> {
+    #[cfg(not(windows))]
+    return Err(format!(
+        "{}: only the Windows keyboard hook takes the volume keys",
+        s.app.strings().get_volume_popup_name()
+    ));
+    #[cfg(windows)]
+    {
+        let strings = s.app.strings();
+        let level = 64.0;
+        let (width, height, rgba) = crate::volume_keys::popup::picture(
+            level,
+            super::volume_waves(level),
+            s.app.shows_dark(),
+            &strings.get_volume_popup_name(),
+            &strings.invoke_volume_popup_announcement(level as i32),
+            2.0,
+        );
+        let window = serde_json::json!({ "window": [width / 2, height / 2], "elements": [] });
+        *s.drawn.borrow_mut() = Some((png(width, height, &rgba), window.to_string()));
+        Ok(Win(Shown::Main, MAIN))
     }
 }
 

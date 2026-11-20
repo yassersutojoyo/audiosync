@@ -2971,6 +2971,7 @@ component NowPlayingCard inherits VerticalLayout {
                 spacing: root.shuffle >= 0 || root.repeat >= 0 ? 2px : 18px;
 
                 if root.shuffle >= 0: IconButton {
+                    plain: true;
                     opacity: root.reveal;
                     glyph-shift: Motion.on ? (1 - root.reveal) * 4px : 0px;
                     glyph: Glyphs.shuffle;
@@ -2989,6 +2990,7 @@ component NowPlayingCard inherits VerticalLayout {
 
                 // As wide as the Mac's 16 pt backward.fill and forward.fill.
                 IconButton {
+                    plain: true;
                     glyph: Glyphs.previous;
                     glyph-size: 21px;
                     label: Strings.previous-track;
@@ -3001,6 +3003,7 @@ component NowPlayingCard inherits VerticalLayout {
                 }
 
                 IconButton {
+                    plain: true;
                     glyph: root.playing != root.icon.shows-old ? Glyphs.pause : Glyphs.play;
                     glyph-size: 22px;
                     glyph-scale: root.icon.scale;
@@ -3015,6 +3018,7 @@ component NowPlayingCard inherits VerticalLayout {
                 }
 
                 IconButton {
+                    plain: true;
                     glyph: Glyphs.next;
                     glyph-size: 21px;
                     label: Strings.next-track;
@@ -3027,6 +3031,7 @@ component NowPlayingCard inherits VerticalLayout {
                 }
 
                 if root.repeat >= 0: IconButton {
+                    plain: true;
                     opacity: root.reveal;
                     glyph-shift: Motion.on ? (1 - root.reveal) * 4px : 0px;
                     glyph: root.repeat == 2 ? Glyphs.repeat-one : Glyphs.repeat-all;

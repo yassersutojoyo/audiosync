@@ -1062,6 +1062,8 @@ export component IconButton inherits Rectangle {
     in property <length> glyph-shift;
     // A mode that is on: a dot under the glyph, in the glyph's color.
     in property <bool> active;
+    // No hover or press fill, as a Mac `.plain` button; the glyph still dims on a press.
+    in property <bool> plain;
     callback clicked();
     // The button gained (true) or lost (false) keyboard focus.
     callback focus-changed(bool);
@@ -1069,7 +1071,7 @@ export component IconButton inherits Rectangle {
     width: 32px;
     height: 32px;
     border-radius: Fluent.radius-control;
-    background: !root.enabled ? transparent : touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : transparent;
+    background: !root.enabled || root.plain ? transparent : touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : transparent;
     opacity: root.enabled ? 1 : Tokens.disabled-opacity;
     animate background { duration: Fluent.fast; }
     forward-focus: focus;

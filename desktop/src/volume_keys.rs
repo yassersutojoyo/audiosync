@@ -4,8 +4,9 @@
 // Tests never take the keyboard or show a window.
 #[cfg(all(windows, not(test)))]
 mod hook;
-#[cfg(all(windows, not(test)))]
-mod popup;
+#[cfg(windows)]
+#[cfg_attr(test, expect(dead_code, reason = "tests only photograph the card"))]
+pub mod popup;
 
 #[cfg(all(windows, not(test)))]
 pub use hook::KeyHook;
