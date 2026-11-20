@@ -1769,9 +1769,11 @@ final class TrackSlideState: ObservableObject {
 
     func change(from old: NowPlayingMonitor.Track?, to new: NowPlayingMonitor.Track?, place: TrackSlide.Place,
                 onScreen: Bool, reduceMotion: Bool) {
-        guard let old, let new, TrackSlide.isSkip(old, new) else {
-            // The same song pausing or getting its cover keeps what runs; another player ends it.
-            if old?.bundleID != new?.bundleID { stop() }
+        let change = TrackSlide.change(from: old, to: new, sliding: slideStart != nil)
+        guard change != .stop else { return stop() }
+        guard let old, let new, change != .none else { return }
+        guard change == .slide else {
+            pressed = nil
             return
         }
         let now = Date.now

@@ -269,6 +269,12 @@ impl TrackSlide {
             .take()
             .filter(|(_, at)| now.saturating_duration_since(*at) <= PRESS_WINDOW)
             .map(|(direction, _)| direction);
+        // A second reading of the song sliding in, or a quick second skip,
+        // lands in the running slide rather than sliding in again.
+        self.expire(now);
+        if on_screen && self.slide.is_some() {
+            return false;
+        }
         let guess = match &self.played_before {
             Some(before) if same_song(before, new) => match self.last {
                 Direction::Next => Direction::Previous,
