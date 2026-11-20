@@ -296,3 +296,19 @@ fn the_guide_scrolls_by_keyboard_after_a_click_and_tab_skips_its_text() {
     press(window, Key::Escape);
     assert!(!window.is_visible(), "Escape closes it after a click");
 }
+
+// Mac EqualizerWindow.swift:25: a plain panel on the system window grey,
+// #F0EFEF and #2C2C2A in the 2x photos, the Settings window's token.
+#[test]
+fn the_equalizer_sits_on_the_mac_window_grey() {
+    assert!(EQUALIZER.contains("    background: Tokens.settings-window;"));
+    assert!(!EQUALIZER.contains("background: Tokens.dark ? Tokens.background : #ffffff;"));
+}
+
+// Mac AppDelegate+Windows.swift:947-948: the Guide's page is the text
+// background, white on light and #1E1E1E on dark, not the tinted window colour.
+#[test]
+fn the_guide_page_is_the_text_background() {
+    assert!(HELP.contains("background: Tokens.dark ? #1e1e1e : #ffffff;"));
+    assert!(!HELP.contains("background: Tokens.background;"));
+}

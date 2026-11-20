@@ -749,6 +749,15 @@ mod tests {
         }
     }
 
+    /// The Mac's standard About panel (AboutPanel.swift:36) sits on the window
+    /// grey, #EFEEED in its photo, which is the Settings window's token.
+    #[test]
+    fn the_about_dialog_has_the_mac_panel_grey() {
+        let about = include_str!("../ui/about.slint");
+        assert!(about.contains("background: Tokens.settings-window;"));
+        assert!(!about.contains("background: Tokens.background;"));
+    }
+
     /// The Mac's menu shortcuts and what each is on Windows: the `Strings`
     /// title of the gear's menu item (empty for a shortcut with no item, as
     /// on the Mac's speaker panels and Equalizer row), its `@keys`, and how

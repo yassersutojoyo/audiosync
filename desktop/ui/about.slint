@@ -14,7 +14,8 @@ export component AboutDialog inherits Dialog {
 
     title: Strings.menu-about;
     icon: @image-url("../res/audiosync-tile-256.png");
-    background: Tokens.background;
+    // The Mac's standard About panel grey (#EFEEED in its photo).
+    background: Tokens.settings-window;
     preferred-width: 360px;
     default-font-family: Fluent.font;
     default-font-weight: Fluent.weight-regular;

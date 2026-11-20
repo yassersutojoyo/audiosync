@@ -126,7 +126,8 @@ export component HelpWindow inherits Window {
 
     title: Strings.help-title;
     icon: @image-url("../res/audiosync-tile-256.png");
-    background: Tokens.background;
+    // The Mac Guide's text background (AppDelegate+Windows.swift:948).
+    background: Tokens.dark ? #1e1e1e : #ffffff;
     min-width: 440px;
     min-height: 300px;
     preferred-width: 640px;

@@ -478,8 +478,8 @@ export component EqualizerWindow inherits Window {
 
     title: Strings.equalizer-title;
     icon: @image-url("../res/audiosync-tile-256.png");
-    // White on light, as the Mac's equalizer window (its photo).
-    background: Tokens.dark ? Tokens.background : #ffffff;
+    // The Mac panel's system window grey (#F0EFEF, #2C2C2A in its 2x photos).
+    background: Tokens.settings-window;
     min-width: 520px;
     max-width: 520px;
     // Fixed in size, as on the Mac; the photo test reads it.
