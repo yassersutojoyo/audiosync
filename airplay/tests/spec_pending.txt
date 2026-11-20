@@ -4,3 +4,10 @@
 # test, so this list only shrinks. "Partly done" names what already exists.
 
 # AirPlay 2 (behind its flag until the real-receiver checks of G17).
+
+# Host clauses: desktop/src and Tests/logictest.swift test them, which this check does not read.
+P242 the row glyph per kind is the host's; desktop/src tests it
+P243 the row follows a kind change in the host's UI update; desktop/src tests it
+P244 zone members keep their last glyph in the host; desktop/src tests it
+P245 the accessible name is the host's; desktop/src and the Mac logic test test it
+P246 the found and kind-change log lines are the host's; desktop/src tests it

@@ -56,10 +56,10 @@ use crate::{
     CalibrationRowItem, CastList, CastProblem, CastSheet, CastState, DeviceVolumeHint,
     EqualizerWindow, Fold, GuidePage, GuideStepItem, GuideWindow, HiddenItem, IconLook,
     KeyboardFocus, LeftOutItem, MainControl, MainWindow, MixAppItem, Motion, NameField, NoticeItem,
-    NoticeKind, OutgoingSong, Palette, PasswordDialog, PinDialog, PinPhase, PresetItem, RowPart,
-    RowState, ScreenReader, SlideLook, SourceLook, SourceRowKind, SpeakerGroup, SpeakerItem,
-    SpeakerKind, Strings, Tokens, TrackMotion, TrayFlyout, UpdateButton, ZoneChoice, ZoneItem,
-    ZoneNameDialog, ZoneTarget, speaker_names,
+    NoticeKind, OutgoingSong, Palette, PasswordDialog, PinDialog, PinPhase, PresetItem,
+    ProductKind, RowPart, RowState, ScreenReader, SlideLook, SourceLook, SourceRowKind,
+    SpeakerGroup, SpeakerItem, SpeakerKind, Strings, Tokens, TrackMotion, TrayFlyout, UpdateButton,
+    ZoneChoice, ZoneItem, ZoneNameDialog, ZoneTarget, speaker_names,
 };
 
 mod engine;
@@ -6522,6 +6522,18 @@ pub fn speaker_kind(kind: ui_model::SpeakerKind) -> SpeakerKind {
     }
 }
 
+pub fn product_kind(product: ui_model::ProductKind) -> ProductKind {
+    use ui_model::ProductKind as P;
+    match product {
+        P::Unknown => ProductKind::Unknown,
+        P::Tv => ProductKind::Tv,
+        P::SetTop => ProductKind::Settop,
+        P::Speaker => ProductKind::Speaker,
+        P::Soundbar => ProductKind::Soundbar,
+        P::Computer => ProductKind::Computer,
+    }
+}
+
 fn availability(a: ui_model::Availability) -> Availability {
     match a {
         ui_model::Availability::Open => Availability::Open,
@@ -6658,6 +6670,7 @@ pub fn speaker_item(
         renaming: false,
         name_text: SharedString::default(),
         kind: speaker_kind(speaker.kind),
+        product: product_kind(speaker.product),
         show_kind,
         state: row_state(state.speaker_state(speaker)),
         // On while streaming, as the Mac's row state (MenuBar.swift:505-507):
@@ -6756,6 +6769,7 @@ fn missing_item(strings: &Strings<'_>, state: &AppState, zone_id: &str, id: &str
         device_name: name.clone(),
         name,
         kind: speaker_kind(kind),
+        product: absent.map_or(ProductKind::Unknown, |member| product_kind(member.product)),
         show_kind: !kind.is_this_pc(),
         state: RowState::Off,
         availability: Availability::Open,
@@ -14832,12 +14846,51 @@ pub(crate) mod tests {
         let label = strings.invoke_speaker_label(
             row.name.clone(),
             row.kind,
+            row.product,
             row.show_kind,
             row.system_name,
         );
         assert!(
             label.starts_with("Desk left,"),
             "Narrator reads the new name first: {label}"
+        );
+    }
+
+    // covers: P242, P245
+    #[test]
+    fn a_network_row_is_read_with_its_kind_after_its_type() {
+        let app = app_over(MockBackend::new());
+        let strings = app.main.global::<Strings>();
+        let label = |product: ProductKind, system: &str| {
+            strings.invoke_speaker_label(
+                "Living Room".into(),
+                SpeakerKind::Airplay,
+                product,
+                true,
+                system.into(),
+            )
+        };
+        assert_eq!(label(ProductKind::Tv, ""), "Living Room, AirPlay, TV");
+        assert_eq!(
+            label(ProductKind::Settop, "Den"),
+            "Living Room, AirPlay, Streaming box, device name Den"
+        );
+        assert_eq!(
+            label(ProductKind::Speaker, ""),
+            "Living Room, AirPlay, Smart speaker"
+        );
+        assert_eq!(
+            label(ProductKind::Soundbar, ""),
+            "Living Room, AirPlay, Soundbar or receiver"
+        );
+        assert_eq!(
+            label(ProductKind::Computer, ""),
+            "Living Room, AirPlay, Computer"
+        );
+        assert_eq!(label(ProductKind::Unknown, ""), "Living Room, AirPlay");
+        assert_eq!(
+            product_kind(ui_model::ProductKind::SetTop),
+            ProductKind::Settop
         );
     }
 

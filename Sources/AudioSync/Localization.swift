@@ -1176,6 +1176,18 @@ struct UIStrings {
         }
     }
 
+    /// A network speaker's type followed by its kind's word (P245): "AirPlay, TV".
+    func speakerTag(_ tag: String, product: ProductKind) -> String {
+        switch product {
+        case .tv: return "\(tag), TV"
+        case .setTop: return "\(tag), Streaming box"
+        case .speaker: return "\(tag), Smart speaker"
+        case .soundbar: return "\(tag), Soundbar or receiver"
+        case .computer: return "\(tag), Computer"
+        case .unknown: return tag
+        }
+    }
+
     /// A speaker row's VoiceOver label: "Kitchen, Bluetooth".
     func speakerLabel(name: String, tag: String?) -> String {
         guard let tag else { return name }

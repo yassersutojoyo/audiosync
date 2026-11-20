@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 
 use audiosync_airplay::discovery::{
     BrowseEvent, Browser, Device, DeviceId, DeviceKey, Directory, DirectoryEvent, DnsRecord,
-    Features, ProtocolPath, Resolver, ScopedAddr, SecurityMode, ServiceKind, ServiceRecord,
-    StatusFlags, Txt, connect_order, parse_raop_instance,
+    Features, ProductKind, ProtocolPath, Resolver, ScopedAddr, SecurityMode, ServiceKind,
+    ServiceRecord, StatusFlags, Txt, connect_order, parse_raop_instance,
 };
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason};
 use audiosync_airplay::metadata::MetadataSupport;
@@ -1308,4 +1308,77 @@ fn a_device_name_shows_without_controls_bidi_or_invisible_characters() {
 
 fn raop_device_named(instance: &str) -> Device {
     Device::from_records(DeviceKey::Id(ID), Some(&raop(instance, &[])), None).expect("device")
+}
+
+/// The P247 vectors: the TXT strings of `_airplay._tcp` and the kind they
+/// give, then the RAOP fallback, the name never read and a TXT change.
+// covers: P238, P239, P240, P247
+#[test]
+fn a_device_kind_comes_from_model_manufacturer_and_features_never_the_name() {
+    use ProductKind::{Computer, SetTop, Soundbar, Speaker, Tv, Unknown};
+    let vectors: &[(&[&str], ProductKind)] = &[
+        (&["model=AppleTV2,1", "features=0x39f7"], SetTop),
+        (&["model=AppleTV14,1", "features=0x39f7"], SetTop),
+        (&["model=appletv11,1"], SetTop),
+        (
+            &["model=AudioAccessory5,1", "features=0x3C0200,0x14340"],
+            Speaker,
+        ),
+        (&["model=AudioAccessory6,1"], Speaker),
+        (&["model=MacBookPro18,3", "features=0x39f7"], Computer),
+        (&["model=Mac16,1"], Computer),
+        (&["model=Macmini9,1"], Computer),
+        (&["model=iMac21,1"], Computer),
+        (&["model=AppleTVBox1,1", "features=0x3C0200"], Speaker),
+        (
+            &["manufacturer=Sonos", "model=Arc Ultra", "flags=0x4"],
+            Soundbar,
+        ),
+        (
+            &["manufacturer=Sonos", "model=Beam", "features=0x7F8AD0"],
+            Soundbar,
+        ),
+        (
+            &["manufacturer=Sonos", "model=Era 300", "features=0x3C0200"],
+            Speaker,
+        ),
+        (
+            &["manufacturer=Sonos", "model=Rayleigh", "features=0x3C0200"],
+            Speaker,
+        ),
+        (&["model=Smart Soundbar 10", "features=0x7F8AD0"], Soundbar),
+        (&["model=Speaker1,1", "features=0x7F8AD0,0x38BCB46"], Tv),
+        (&["model=Speaker1,1", "features=0x3C0200,0x14340"], Speaker),
+        (&["features=0x1"], Tv),
+        (&["features=0x3C0200"], Speaker),
+        (&["deviceid=00:00:5E:00:53:01"], Unknown),
+    ];
+    for (txt, kind) in vectors {
+        let device = Device::from_records(DeviceKey::Id(ID), None, Some(&airplay("Den", txt)))
+            .expect("device");
+        assert_eq!(device.product(), *kind, "{txt:?}");
+    }
+
+    let raop_only = raop_device(&["am=AppleTV3,2", "ft=0x39f7"]);
+    assert_eq!(raop_only.product(), SetTop, "RAOP fallback");
+
+    let named = Device::from_records(
+        DeviceKey::Id(ID),
+        None,
+        Some(&airplay(
+            "Living Room TV",
+            &["model=Speaker1,1", "features=0x3C0200"],
+        )),
+    )
+    .expect("device");
+    assert_eq!(named.product(), Speaker, "the instance name is never read");
+
+    // A TXT change gives a new device, whose kind follows the new record.
+    let changed = Device::from_records(
+        DeviceKey::Id(ID),
+        None,
+        Some(&airplay("Den", &["model=Speaker1,1", "features=0x80"])),
+    )
+    .expect("device");
+    assert_eq!(changed.product(), Tv);
 }

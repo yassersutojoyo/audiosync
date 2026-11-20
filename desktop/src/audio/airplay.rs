@@ -107,7 +107,8 @@ use audiosync_core::volume::{
 use super::SESSION_RATE;
 use super::backend::{
     AirPlayAvailability, AirPlayGroup, AirPlayGroupKind, AirPlayInfo, AirPlayPasswordPrompt,
-    AirPlayPinPrompt, AirPlayProblem, BackendEvent, InTarget, PairingPhase, UNKNOWN_DEVICE_NAME,
+    AirPlayPinPrompt, AirPlayProblem, BackendEvent, InTarget, PairingPhase, ProductKind,
+    UNKNOWN_DEVICE_NAME,
 };
 use super::explicit_pause::{ExplicitPause, Step, sound_frames};
 use super::pairings::PairingStore;
@@ -2208,6 +2209,7 @@ impl AirPlaySpeakers {
                             .iter()
                             .any(|member| self.over_airplay2(&speaker_id(&member.key))),
                         group: Some(self.group_info(target)),
+                        product: target.product().into(),
                     };
                 }
                 AirPlayInfo {
@@ -2237,6 +2239,9 @@ impl AirPlaySpeakers {
                     code_every_time: self.asks_every_time(id),
                     airplay2: self.over_airplay2(id),
                     group: None,
+                    product: self.listed.get(id).map_or(ProductKind::Unknown, |listed| {
+                        listed.device().product().into()
+                    }),
                 }
             })
             .collect();
@@ -4123,15 +4128,32 @@ impl AirPlaySpeakers {
                 }
                 let availability = self.availability_of(&id, &info);
                 let appeared = !self.listed.contains_key(&id);
+                let was = self.listed.get(&id).map(|listed| listed.device().product());
+                let product = info.device.product();
                 self.names.insert(id.clone(), info.device.name.clone());
                 self.log.log(|| {
-                    let what = if appeared { "found" } else { "changed" };
-                    format!(
-                        "AirPlay receiver {what}: {}, {}",
-                        self.label(&id),
-                        describe_availability(availability)
-                    )
+                    if appeared {
+                        format!(
+                            "AirPlay receiver found: {}, {}, kind {product:?}",
+                            self.label(&id),
+                            describe_availability(availability)
+                        )
+                    } else {
+                        format!(
+                            "AirPlay receiver changed: {}, {}",
+                            self.label(&id),
+                            describe_availability(availability)
+                        )
+                    }
                 });
+                if let Some(was) = was.filter(|was| *was != product) {
+                    self.log.log(|| {
+                        format!(
+                            "AirPlay receiver {} kind changed: {was:?} to {product:?}",
+                            self.label(&id)
+                        )
+                    });
+                }
                 self.listed.insert(id.clone(), Listed { info: *info });
                 if self.asleep {
                     self.changed_asleep.insert(id.clone());
@@ -5583,6 +5605,39 @@ pub mod tests {
                 .all(|speaker| airplay.listed_name(&id_of(speaker)).is_none())
         );
         assert_eq!(airplay.listed_name(&id_of(&kitchen)), Some("Kitchen"));
+    }
+
+    // covers: P246
+    #[test]
+    fn a_found_receiver_logs_its_kind_and_a_change_of_kind_logs_once() {
+        let path = crate::debug_log::test_dir("airplay-kind-log").join("log.txt");
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        airplay.set_debug_log(DebugLog::new(Some(path.clone())));
+        fake.appear(&device(1, "Den", APPLE_TV_TXT));
+        airplay.poll();
+        assert_eq!(airplay.speakers()[0].product, ProductKind::SetTop);
+        let tv: Vec<&str> = OPEN_TXT
+            .iter()
+            .chain(&["am=Speaker1,1", "ft=0x80"])
+            .copied()
+            .collect();
+        fake.change(&device(1, "Den", &tv));
+        airplay.poll();
+        fake.change(&device(1, "Den TV", &tv));
+        airplay.poll();
+        assert_eq!(airplay.speakers()[0].product, ProductKind::Tv);
+        assert!(airplay.log.flush(crate::debug_log::TEST_FLUSH));
+        let messages = crate::debug_log::read_messages(&path);
+        let found = messages
+            .iter()
+            .filter(|message| message.contains("found") && message.ends_with("kind SetTop"))
+            .count();
+        let changed = messages
+            .iter()
+            .filter(|message| message.contains("kind changed: SetTop to Tv"))
+            .count();
+        assert_eq!((found, changed), (1, 1), "{messages:?}");
     }
 
     #[test]

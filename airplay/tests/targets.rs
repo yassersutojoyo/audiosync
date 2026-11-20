@@ -615,3 +615,49 @@ fn a_group_public_name_shows_without_controls_or_hidden_characters() {
     assert_eq!(targets.len(), 1, "{targets:?}");
     assert_eq!(targets[0].name, "Kit chen");
 }
+
+/// A pair member with `model` (none when empty) and the pair keys.
+fn modelled_member(n: u8, model: &str, gid: &str) -> Device {
+    let model = format!("model={model}");
+    let mut txt = vec!["flags=0x4", "gpn=Kitchen", "igl=1", "gcgl=1"];
+    if model != "model=" {
+        txt.push(&model);
+    }
+    let gid = format!("gid={gid}");
+    let tsid = format!("tsid={TSID}");
+    txt.push(&gid);
+    txt.push(&tsid);
+    device(n, &format!("Speaker {n}"), &txt)
+}
+
+// covers: P241, P247
+#[test]
+fn a_pair_takes_its_members_shared_kind_and_a_home_theater_is_a_set_top_box() {
+    use audiosync_airplay::discovery::ProductKind;
+    let gid = format!("{TSID}+0+{OTHER_UUID}");
+    let homepods = find_targets([&pair_member(1, "0x4", &gid), &pair_member(2, "0x4", &gid)]);
+    assert_eq!(homepods[0].product(), ProductKind::Speaker);
+
+    let bars = find_targets([
+        &modelled_member(1, "Smart Soundbar 10", &gid),
+        &modelled_member(2, "Smart Soundbar 10", &gid),
+    ]);
+    assert_eq!(bars[0].product(), ProductKind::Soundbar, "shared kind");
+
+    let mixed = find_targets([
+        &modelled_member(1, "AudioAccessory5,1", &gid),
+        &modelled_member(2, "", &gid),
+    ]);
+    assert_eq!(
+        mixed[0].product(),
+        ProductKind::Speaker,
+        "speaker and unknown"
+    );
+
+    let theater = find_targets([
+        &apple_tv(9),
+        &theater_speaker(3, "0x4"),
+        &theater_speaker(4, "0x4"),
+    ]);
+    assert_eq!(theater[0].product(), ProductKind::SetTop);
+}

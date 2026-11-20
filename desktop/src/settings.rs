@@ -58,7 +58,7 @@ use serde::{Deserialize, Serialize};
 use crate::audio::app_output::AppRecord;
 #[cfg(windows)]
 use crate::audio::app_output::AppRecordStore;
-use crate::audio::backend::OutputKind;
+use crate::audio::backend::{OutputKind, ProductKind};
 use crate::audio::cast_address;
 use crate::audio::default_output::Record as DefaultRecord;
 #[cfg(any(windows, target_os = "linux", test))]
@@ -578,9 +578,10 @@ where
 }
 
 /// A kind this build doesn't know costs only that entry.
-fn kinds_that_read<'de, D>(deserializer: D) -> Result<BTreeMap<String, OutputKind>, D::Error>
+fn kinds_that_read<'de, D, K>(deserializer: D) -> Result<BTreeMap<String, K>, D::Error>
 where
     D: serde::Deserializer<'de>,
+    K: serde::de::DeserializeOwned,
 {
     let value = serde_json::Value::deserialize(deserializer)?;
     let serde_json::Value::Object(entries) = value else {
@@ -790,6 +791,14 @@ pub struct Settings {
         deserialize_with = "kinds_that_read"
     )]
     pub zone_member_kinds: BTreeMap<String, OutputKind>,
+    /// The kind each network zone member last showed, by speaker key, so
+    /// its row keeps its glyph while it is out of view (P244); left out
+    /// while empty.
+    #[serde(
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "kinds_that_read"
+    )]
+    pub zone_member_products: BTreeMap<String, ProductKind>,
     /// The groups were moved to zones (spec S248). A file without it, as
     /// every version 2 file, has not been migrated; the defaults have, since
     /// there are no groups to move. A mark that isn't a bool was written by
@@ -1028,6 +1037,7 @@ impl Default for Settings {
             groups: Vec::new(),
             speaker_zones: Vec::new(),
             zone_member_kinds: BTreeMap::new(),
+            zone_member_products: BTreeMap::new(),
             speaker_zones_migrated: true,
             speaker_presets: Vec::new(),
             speaker_presets_migrated: true,
@@ -1329,6 +1339,12 @@ impl Settings {
                 .filter(|(key, _)| usable_name_key(key))
                 .take(MAX_ENTRIES)
                 .collect(),
+            zone_member_products: self
+                .zone_member_products
+                .into_iter()
+                .filter(|(key, _)| usable_name_key(key))
+                .take(MAX_ENTRIES)
+                .collect(),
             speaker_zones_migrated: self.speaker_zones_migrated,
             speaker_presets,
             speaker_presets_migrated: self.speaker_presets_migrated,
@@ -1555,6 +1571,7 @@ fn unreadable_fields(text: &str) -> Vec<String> {
         ("groups", Value::is_array),
         ("speaker_zones", Value::is_array),
         ("zone_member_kinds", Value::is_object),
+        ("zone_member_products", Value::is_object),
         ("speaker_presets", Value::is_array),
         ("last_zone_id", Value::is_u64),
         ("last_preset_id", Value::is_u64),
@@ -2088,6 +2105,7 @@ mod tests {
                 "lc:{0.0.0.00000000}.{speakers}".to_owned(),
                 OutputKind::Usb,
             )]),
+            zone_member_products: BTreeMap::from([("ap:0011223344AA".to_owned(), ProductKind::Tv)]),
             speaker_zones_migrated: true,
             speaker_presets: vec![SavedPreset {
                 id: "p1".to_owned(),
@@ -2634,6 +2652,7 @@ mod tests {
             groups,
             speaker_zones,
             zone_member_kinds,
+            zone_member_products,
             speaker_zones_migrated: _,
             speaker_presets,
             speaker_presets_migrated: _,
@@ -2677,6 +2696,7 @@ mod tests {
         assert_ne!(groups, default.groups);
         assert_ne!(speaker_zones, default.speaker_zones);
         assert_ne!(zone_member_kinds, default.zone_member_kinds);
+        assert_ne!(zone_member_products, default.zone_member_products);
         assert_ne!(speaker_presets, default.speaker_presets);
         assert_ne!(last_zone_id, default.last_zone_id);
         assert_ne!(last_preset_id, default.last_preset_id);

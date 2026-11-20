@@ -377,6 +377,78 @@ pub enum SecurityMode {
     HomeKit,
 }
 
+/// What kind of device a receiver is, which its row's glyph shows (P238).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ProductKind {
+    Tv,
+    /// A set-top box or streaming stick.
+    SetTop,
+    /// A smart or wireless speaker.
+    Speaker,
+    /// A soundbar or an AV receiver.
+    Soundbar,
+    Computer,
+    Unknown,
+}
+
+/// The kind P240 gives a model, a manufacturer and a feature mask, each as
+/// advertised.
+pub fn product_kind(
+    model: Option<&str>,
+    manufacturer: Option<&str>,
+    features: Option<Features>,
+) -> ProductKind {
+    let model = model
+        .map(|model| shown_text(model).to_ascii_lowercase())
+        .filter(|model| !model.is_empty());
+    let manufacturer = manufacturer.map(|text| shown_text(text).to_ascii_lowercase());
+    if let Some(kind) = model.as_deref().and_then(apple_model_kind) {
+        return kind;
+    }
+    if let Some(model) = model.as_deref() {
+        let sonos_bar = ["arc", "beam", "ray", "amp"].iter().any(|bar| {
+            model
+                .strip_prefix(bar)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '))
+        });
+        if manufacturer.as_deref() == Some("sonos") && sonos_bar {
+            return ProductKind::Soundbar;
+        }
+        if ["soundbar", "sound bar", "soundbase"]
+            .iter()
+            .any(|word| model.contains(word))
+        {
+            return ProductKind::Soundbar;
+        }
+    }
+    if features.is_some_and(|features| features.has(0) || features.has(7)) {
+        return ProductKind::Tv;
+    }
+    if model.is_some() || features.is_some() {
+        return ProductKind::Speaker;
+    }
+    ProductKind::Unknown
+}
+
+/// Rule 1 of P240: an Apple model identifier, a prefix then `digits,digits`,
+/// whose whole prefix names a kind. `model` is lowercase.
+fn apple_model_kind(model: &str) -> Option<ProductKind> {
+    let digits_at = model.find(|c: char| c.is_ascii_digit())?;
+    let (prefix, number) = model.split_at(digits_at);
+    let (major, minor) = number.split_once(',')?;
+    let all_digits = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
+    if !all_digits(major) || !all_digits(minor) {
+        return None;
+    }
+    match prefix {
+        "appletv" => Some(ProductKind::SetTop),
+        "audioaccessory" => Some(ProductKind::Speaker),
+        "macbookpro" | "macbookair" | "macbook" | "macmini" | "macpro" | "imacpro" | "imac"
+        | "mac" => Some(ProductKind::Computer),
+        _ => None,
+    }
+}
+
 /// The protocol path for a device (P2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProtocolPath {
@@ -453,6 +525,23 @@ impl Device {
         let raop = self.raop_txt.as_ref().and_then(|txt| txt.status_flags);
         let airplay = self.airplay_txt.as_ref().and_then(|txt| txt.flags);
         StatusFlags(raop.unwrap_or_default().0 | airplay.unwrap_or_default().0)
+    }
+
+    /// Its kind, from its records as they are now (P238, P239).
+    pub fn product(&self) -> ProductKind {
+        let airplay = self.airplay_txt.as_ref();
+        let raop = self.raop_txt.as_ref();
+        let model = airplay
+            .and_then(|txt| txt.model.as_deref())
+            .or_else(|| raop.and_then(|txt| txt.model.as_deref()));
+        let features = airplay
+            .and_then(|txt| txt.features)
+            .or_else(|| raop.and_then(|txt| txt.features));
+        product_kind(
+            model,
+            airplay.and_then(|txt| txt.manufacturer.as_deref()),
+            features,
+        )
     }
 
     /// AirPlay `features` when present, otherwise RAOP `ft` (the same mask,

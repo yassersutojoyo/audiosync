@@ -2563,7 +2563,7 @@ fn every_speaker_kind_has_its_own_device_icon() {
         .expect("DeviceIcons")..];
     let function = |name: &str| {
         let body = &icons[icons
-            .find(&format!("function {name}(kind: SpeakerKind) -> image {{"))
+            .find(&format!("function {name}(kind: SpeakerKind"))
             .unwrap_or_else(|| panic!("DeviceIcons.{name}"))..];
         &body[..body.find("\n    }").expect("the function ends")]
     };
@@ -2593,10 +2593,13 @@ fn every_speaker_kind_has_its_own_device_icon() {
         }
     }
     for (component, icon) in [
-        ("SpeakerRow", "icon: DeviceIcons.glyph(root.item.kind);"),
+        (
+            "SpeakerRow",
+            "icon: DeviceIcons.glyph(root.item.kind, root.item.product);",
+        ),
         (
             "ZoneMemberRow",
-            "icon: DeviceIcons.glyph14(root.item.kind);",
+            "icon: DeviceIcons.glyph14(root.item.kind, root.item.product);",
         ),
         ("ZoneHeader", "icon: DeviceIcons.zone;"),
     ] {
@@ -2608,7 +2611,7 @@ fn every_speaker_kind_has_its_own_device_icon() {
     let flyout = include_str!("../ui/flyout.slint");
     assert_eq!(
         flyout
-            .matches("icon: DeviceIcons.glyph16(speaker.kind);")
+            .matches("icon: DeviceIcons.glyph16(speaker.kind, speaker.product);")
             .count(),
         3
     );

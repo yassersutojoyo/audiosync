@@ -9,7 +9,7 @@
 import { Button, ComboBox } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { Availability, CastState, DeviceVolumeHint, NoticeItem, RowPart, UpdateButton, RowState, SourceLook, SourceRowKind, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
+import { Availability, CastState, DeviceVolumeHint, NoticeItem, RowPart, UpdateButton, RowState, SourceLook, SourceRowKind, ProductKind, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
 
 import "../../brand/fonts/Poppins-Medium.ttf";
 import "../res/fonts/Inter-Regular.ttf";
@@ -857,7 +857,22 @@ export global DeviceIcons {
     out property <image> zone: @image-url("../../brand/icons/zone.svg");
     out property <image> zone16: @image-url("../../brand/icons/16/zone.svg");
 
-    public pure function glyph(kind: SpeakerKind) -> image {
+    public pure function glyph(kind: SpeakerKind, product: ProductKind) -> image {
+        if product == ProductKind.tv {
+            return @image-url("../../brand/icons/tv.svg");
+        }
+        if product == ProductKind.settop {
+            return @image-url("../../brand/icons/settop.svg");
+        }
+        if product == ProductKind.speaker {
+            return @image-url("../../brand/icons/smart-speaker.svg");
+        }
+        if product == ProductKind.soundbar {
+            return @image-url("../../brand/icons/soundbar.svg");
+        }
+        if product == ProductKind.computer {
+            return @image-url("../../brand/icons/laptop.svg");
+        }
         if kind == SpeakerKind.airplay || kind == SpeakerKind.airplay2 {
             return @image-url("../../brand/icons/smart-speaker.svg");
         }
@@ -881,7 +896,22 @@ export global DeviceIcons {
     }
 
     // The same drawings at 16 px, for the tray panel's 28 px circles.
-    public pure function glyph16(kind: SpeakerKind) -> image {
+    public pure function glyph16(kind: SpeakerKind, product: ProductKind) -> image {
+        if product == ProductKind.tv {
+            return @image-url("../../brand/icons/16/tv.svg");
+        }
+        if product == ProductKind.settop {
+            return @image-url("../../brand/icons/16/settop.svg");
+        }
+        if product == ProductKind.speaker {
+            return @image-url("../../brand/icons/16/smart-speaker.svg");
+        }
+        if product == ProductKind.soundbar {
+            return @image-url("../../brand/icons/16/soundbar.svg");
+        }
+        if product == ProductKind.computer {
+            return @image-url("../../brand/icons/16/laptop.svg");
+        }
         if kind == SpeakerKind.airplay || kind == SpeakerKind.airplay2 {
             return @image-url("../../brand/icons/16/smart-speaker.svg");
         }
@@ -904,7 +934,22 @@ export global DeviceIcons {
     }
 
     // The same drawings at 14 px, for the 24 px circles of a zone's speakers.
-    public pure function glyph14(kind: SpeakerKind) -> image {
+    public pure function glyph14(kind: SpeakerKind, product: ProductKind) -> image {
+        if product == ProductKind.tv {
+            return @image-url("../../brand/icons/14/tv.svg");
+        }
+        if product == ProductKind.settop {
+            return @image-url("../../brand/icons/14/settop.svg");
+        }
+        if product == ProductKind.speaker {
+            return @image-url("../../brand/icons/14/smart-speaker.svg");
+        }
+        if product == ProductKind.soundbar {
+            return @image-url("../../brand/icons/14/soundbar.svg");
+        }
+        if product == ProductKind.computer {
+            return @image-url("../../brand/icons/14/laptop.svg");
+        }
         if kind == SpeakerKind.airplay || kind == SpeakerKind.airplay2 {
             return @image-url("../../brand/icons/14/smart-speaker.svg");
         }
@@ -3920,13 +3965,13 @@ export component SpeakerRow inherits Rectangle {
                             // In the middle of the gap between the name and the slider,
                             // as the Mac's badgePin, so a hint line below doesn't move it.
                             y: floor((name-line.y + name-line.height + 5px / 2 - self.height / 2) / 1px) * 1px;
-                            icon: DeviceIcons.glyph(root.item.kind);
+                            icon: DeviceIcons.glyph(root.item.kind, root.item.product);
                             state: root.item.state;
                             plays: root.item.plays;
                             enabled: !root.item.missing;
                             name: root.item.name;
                             help: Strings.help(root.item.state);
-                            label: root.item.cast-group ? Strings.cast-group-label(root.item.name, root.item.cast-group-note) : root.item.cast-added-by-address ? Strings.cast-group-label(Strings.speaker-label(root.item.name, root.item.kind, false, root.item.system-name), Strings.cast-added-by-address) : Strings.speaker-label(root.item.name, root.item.kind, root.item.show-kind, root.item.system-name);
+                            label: root.item.cast-group ? Strings.cast-group-label(root.item.name, root.item.cast-group-note) : root.item.cast-added-by-address ? Strings.cast-group-label(Strings.speaker-label(root.item.name, root.item.kind, root.item.product, false, root.item.system-name), Strings.cast-added-by-address) : Strings.speaker-label(root.item.name, root.item.kind, root.item.product, root.item.show-kind, root.item.system-name);
                             description: Strings.with-group-note(root.item.group-note, root.item.zone-note != "" ? root.item.zone-note : root.availability-note != "" ? (root.note-help != "" ? Strings.announcements(root.availability-note, root.note-help) : root.availability-note) : Strings.help(root.item.state));
                             toggled => {
                                 root.toggled();
@@ -5097,7 +5142,7 @@ export component ZoneMemberRow inherits Rectangle {
                         alignment: center;
                         badge := SpeakerBadge {
                             size: 24px;
-                            icon: DeviceIcons.glyph14(root.item.kind);
+                            icon: DeviceIcons.glyph14(root.item.kind, root.item.product);
                             state: root.item.state;
                             plays: root.item.plays;
                             name: root.item.name;

@@ -69,7 +69,7 @@ use audiosync_core::volume::gain_for_position;
 use super::SESSION_RATE;
 use super::backend::{
     BackendEvent, CastDiscovery, CastGroup, CastInfo, CastMember, CastMembers, CastProblem,
-    CastStatus,
+    CastStatus, ProductKind,
 };
 use super::capture::CONVERT_CHUNK;
 use super::cast_address::{self, CastAddress};
@@ -614,6 +614,8 @@ pub struct CastSpeakers {
     feed: CastFeed,
     list: DeviceList,
     announcements: Announcements,
+    /// The kind each listed device was last logged with (P246).
+    logged_kinds: BTreeMap<DeviceId, ProductKind>,
     /// The one device the user turned on.
     enabled: Option<DeviceId>,
     /// The device saved as on at the last quit, which turns on once listed
@@ -677,6 +679,7 @@ impl CastSpeakers {
             feed: CastFeed::new(),
             list: DeviceList::new(),
             announcements: Announcements::default(),
+            logged_kinds: BTreeMap::new(),
             enabled: None,
             saved_on: None,
             volumes: BTreeMap::new(),
@@ -1161,6 +1164,9 @@ impl CastSpeakers {
             } else {
                 0.0
             },
+            product: self
+                .entry(id)
+                .map_or(ProductKind::Unknown, |entry| entry.product().into()),
         }
     }
 
@@ -1278,6 +1284,26 @@ impl CastSpeakers {
 
     fn entry(&self, id: DeviceId) -> Option<&Entry> {
         self.list.get(self.key_of(id))
+    }
+
+    /// Logs a newly listed device's kind, and a later change of it once
+    /// (P246).
+    fn log_kind(&mut self, id: DeviceId) {
+        let Some(now) = self
+            .entry(id)
+            .map(|entry| ProductKind::from(entry.product()))
+        else {
+            return;
+        };
+        match self.logged_kinds.insert(id, now) {
+            None => self
+                .log
+                .log(|| format!("Cast: {} found, kind {now:?}", self.name(id))),
+            Some(was) if was != now => self
+                .log
+                .log(|| format!("Cast: {} kind changed: {was:?} to {now:?}", self.name(id))),
+            Some(_) => {}
+        }
     }
 
     fn name(&self, id: DeviceId) -> String {
@@ -1806,7 +1832,14 @@ impl CastSpeakers {
                         self.identified(from, id);
                     }
                     if let ListEvent::Removed(DeviceKey::Id(id)) = change {
+                        self.logged_kinds.remove(&id);
                         self.off_when_gone(id);
+                    }
+                    if let ListEvent::Added(DeviceKey::Id(id))
+                    | ListEvent::Updated(DeviceKey::Id(id))
+                    | ListEvent::Identified { id, .. } = change
+                    {
+                        self.log_kind(id);
                     }
                     self.pending.push(BackendEvent::CastChanged);
                 }

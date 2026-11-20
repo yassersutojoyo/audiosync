@@ -25,7 +25,7 @@ use audiosync_core::volume;
 use crate::speaker_names;
 use audiosync_core::calibrate_all::{AirPlayMoves, AirPlayShared, Class, EndReason, RowState};
 
-pub use crate::audio::backend::{CastMembers, InTarget};
+pub use crate::audio::backend::{CastMembers, InTarget, ProductKind};
 use crate::audio::calibration::{Failure, Missing, Phase};
 pub use crate::audio::outputs::MicKind;
 
@@ -240,6 +240,8 @@ pub struct Speaker {
     /// The name Windows or AirPlay discovery reports.
     pub system_name: String,
     pub kind: SpeakerKind,
+    /// A network speaker's kind from its records; unknown for the rest.
+    pub product: ProductKind,
     /// Chosen by the user; it plays while streaming is on.
     pub enabled: bool,
     /// 0 to 100: an AirPlay row's device level rounded down (spec S290),
@@ -312,6 +314,8 @@ pub struct AbsentMember {
     /// this run; empty when neither is known.
     pub name: String,
     pub kind: SpeakerKind,
+    /// The kind it showed when last listed, kept with its zone (P244).
+    pub product: ProductKind,
     /// A stereo pair or home theater this launch can't play, since AirPlay 2
     /// is off.
     pub needs_airplay2: bool,
@@ -2211,6 +2215,7 @@ impl MockBackend {
             waiting: None,
             cast: None,
             group: None,
+            product: ProductKind::Unknown,
             mic_left_out: None,
             in_target: None,
         };
@@ -2567,6 +2572,7 @@ impl MockBackend {
             id: "airplay:theater:4C2D".into(),
             name: "Home Theater".into(),
             kind: SpeakerKind::AirPlay2,
+            product: ProductKind::SetTop,
             needs_airplay2: false,
             in_target: None,
         });
@@ -2642,6 +2648,7 @@ impl MockBackend {
                 id: "airplay:patio".into(),
                 name: "Patio".into(),
                 kind: SpeakerKind::AirPlay,
+                product: ProductKind::Unknown,
                 needs_airplay2: false,
                 in_target: None,
             });
@@ -3061,6 +3068,7 @@ impl Backend for MockBackend {
                     taken_over: false,
                 }),
                 group: None,
+                product: ProductKind::Unknown,
                 mic_left_out: None,
                 in_target: None,
             });
@@ -3561,6 +3569,7 @@ mod tests {
             waiting: None,
             cast: None,
             group: None,
+            product: ProductKind::Unknown,
             mic_left_out: None,
             in_target: None,
         };

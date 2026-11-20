@@ -272,14 +272,22 @@ extension AppDelegate {
     private func memberSymbol(_ member: ZoneMemberState, name: String) -> DeviceIcon {
         listedSymbol(member, name: name)
             ?? zones.first { $0.members.contains(member.key) }?.memberIcons?[member.key].flatMap(DeviceIcon.init(rawValue:))
-            ?? .speaker
+            ?? (member.kind == .airplay ? SpeakerTag.airplay.symbol(name: name) : .speaker)
     }
 
     /// The glyph of a member listed now; nil for a local device that isn't.
     private func listedSymbol(_ member: ZoneMemberState, name: String) -> DeviceIcon? {
         switch member.kind {
-        case .airplay: return SpeakerTag.airplay.symbol(name: name)
-        case .cast: return SpeakerTag.cast.symbol(name: name)
+        // Out of view, a network member keeps the glyph its zone remembered (P244).
+        case .airplay:
+            guard member.facts.listed else { return nil }
+            let receiver = NativeAirPlayID.receiver(member.appID)
+            let product = receiver.flatMap { nativeAirPlay?.model.receivers[$0]?.product }
+            return SpeakerTag.airplay.listedMemberSymbol(product: product, name: name)
+        case .cast:
+            guard member.facts.listed else { return nil }
+            let product = CastID.device(member.appID).flatMap { castModel.devices[$0]?.product }
+            return SpeakerTag.cast.listedMemberSymbol(product: product, name: name)
         case .local:
             // The rows pick a local badge by the device's own name, as `Speaker.symbol` does.
             guard let device = localDevices[member.appID] else { return nil }

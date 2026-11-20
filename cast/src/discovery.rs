@@ -137,6 +137,42 @@ pub enum DeviceKind {
     Group,
 }
 
+/// What kind of device it is, which its row's glyph shows (C138).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ProductKind {
+    Tv,
+    /// A set-top box or streaming stick, such as a Chromecast.
+    SetTop,
+    /// A smart or wireless speaker, or a Cast group.
+    Speaker,
+    /// A soundbar or an AV receiver.
+    Soundbar,
+    Computer,
+    Unknown,
+}
+
+/// The models C139 rule 2 names, lowercase.
+const MODEL_KINDS: [(&str, ProductKind); 18] = [
+    ("chromecast", ProductKind::SetTop),
+    ("chromecast hd", ProductKind::SetTop),
+    ("chromecast ultra", ProductKind::SetTop),
+    ("eureka dongle", ProductKind::SetTop),
+    ("shield android tv", ProductKind::SetTop),
+    ("chromecast audio", ProductKind::Speaker),
+    ("google home", ProductKind::Speaker),
+    ("google home mini", ProductKind::Speaker),
+    ("google nest mini", ProductKind::Speaker),
+    ("nest audio", ProductKind::Speaker),
+    ("nest wifi point", ProductKind::Speaker),
+    ("google nest hub", ProductKind::Speaker),
+    ("google nest hub max", ProductKind::Speaker),
+    ("lenovo smart display 7", ProductKind::Speaker),
+    ("lenovo smart display 10", ProductKind::Speaker),
+    ("tpm191e", ProductKind::Tv),
+    ("v705-h3", ProductKind::Tv),
+    ("d24f-j09", ProductKind::Tv),
+];
+
 /// One Cast device as the host lists it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CastDevice {
@@ -226,6 +262,37 @@ impl CastDevice {
         })
     }
 
+    /// Its kind, from its record alone (C138, C139).
+    pub fn product(&self) -> ProductKind {
+        if self.kind == DeviceKind::Group {
+            return ProductKind::Speaker;
+        }
+        let Some(model) = self
+            .model
+            .as_deref()
+            .map(|model| model.trim().to_ascii_lowercase())
+            .filter(|model| !model.is_empty())
+        else {
+            return ProductKind::Unknown;
+        };
+        if let Some((_, kind)) = MODEL_KINDS.iter().find(|(name, _)| *name == model) {
+            return *kind;
+        }
+        if ["soundbar", "sound bar", "soundbase"]
+            .iter()
+            .any(|word| model.contains(word))
+            || model.starts_with("vsx-")
+            || model.starts_with("pioneer vsx-")
+        {
+            return ProductKind::Soundbar;
+        }
+        let tv_word = model.split([' ', '-', '_']).any(|word| word == "tv");
+        if model.starts_with("bravia") || tv_word {
+            return ProductKind::Tv;
+        }
+        ProductKind::Speaker
+    }
+
     /// What a group announces, for the debug log (C89); `None` for a single
     /// device.
     pub fn group_log_line(&self) -> Option<String> {
@@ -294,6 +361,14 @@ pub struct Entry {
 }
 
 impl Entry {
+    /// Its device's kind; unknown for one added by address that no browse
+    /// has found yet (C139 rule 6).
+    pub fn product(&self) -> ProductKind {
+        self.device
+            .as_ref()
+            .map_or(ProductKind::Unknown, CastDevice::product)
+    }
+
     pub fn is_group(&self) -> bool {
         self.device
             .as_ref()

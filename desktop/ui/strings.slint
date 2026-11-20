@@ -6,7 +6,7 @@
 // English only for now. @tr marks each string for Slint's gettext translation
 // when a second language is added.
 
-import { SpeakerKind, Availability, AirPlayProblem, CastList, CastProblem, CastState, DeviceVolumeHint, GuidePage, NoticeKind, PinPhase, RowState, SpeakerGroup, SpeakerItem, UpdateButton } from "types.slint";
+import { ProductKind, SpeakerKind, Availability, AirPlayProblem, CastList, CastProblem, CastState, DeviceVolumeHint, GuidePage, NoticeKind, PinPhase, RowState, SpeakerGroup, SpeakerItem, UpdateButton } from "types.slint";
 
 export global Strings {
     // The sender's AirPlay 2 session limit, set from Rust (AIRPLAY2_SESSIONS).
@@ -1548,19 +1548,47 @@ export global Strings {
         return @tr("Other");
     }
 
-    // A speaker row's accessible label: "Kitchen, AirPlay", followed for a
-    // renamed speaker by the name its device reports (`system`, else empty).
-    public pure function speaker-label(name: string, kind: SpeakerKind, show-kind: bool, system: string) -> string {
+    // A network speaker's kind as Narrator reads it after its type (P245);
+    // empty when unknown.
+    public pure function product-word(product: ProductKind) -> string {
+        if product == ProductKind.tv {
+            return @tr("TV");
+        }
+        if product == ProductKind.settop {
+            return @tr("Streaming box");
+        }
+        if product == ProductKind.speaker {
+            return @tr("Smart speaker");
+        }
+        if product == ProductKind.soundbar {
+            return @tr("Soundbar or receiver");
+        }
+        if product == ProductKind.computer {
+            return @tr("Computer");
+        }
+        return "";
+    }
+
+    // A speaker row's accessible label: "Kitchen, AirPlay", then the kind of
+    // device ("Living Room, AirPlay, TV"), followed for a renamed speaker by
+    // the name its device reports (`system`, else empty).
+    public pure function speaker-label(name: string, kind: SpeakerKind, product: ProductKind, show-kind: bool, system: string) -> string {
         if system == "" && !show-kind {
             return name;
-        }
-        if system == "" {
-            return @tr("{}, {}", name, root.speaker-kind(kind));
         }
         if !show-kind {
             return @tr("{}, device name {}", name, system);
         }
-        return @tr("{}, {}, device name {}", name, root.speaker-kind(kind), system);
+        if product == ProductKind.unknown && system == "" {
+            return @tr("{}, {}", name, root.speaker-kind(kind));
+        }
+        if product == ProductKind.unknown {
+            return @tr("{}, {}, device name {}", name, root.speaker-kind(kind), system);
+        }
+        if system == "" {
+            return @tr("{}, {}, {}", name, root.speaker-kind(kind), root.product-word(product));
+        }
+        return @tr("{}, {}, {}, device name {}", name, root.speaker-kind(kind), root.product-word(product), system);
     }
 
     // The name field's accessible label; its placeholder is the device's

@@ -1,4 +1,5 @@
 import Foundation
+import CAudioSyncCore
 import CoreAudio
 
 /// What kind of output a speaker is, shown as a small icon after its name.
@@ -74,6 +75,13 @@ enum SpeakerTag: Equatable {
         }
     }
 
+    /// A listed network zone member's glyph; `product` is nil while its
+    /// record is out of view, and then the zone keeps the glyph it remembered (P244).
+    func listedMemberSymbol(product: ProductKind?, name: String) -> DeviceIcon? {
+        guard let product else { return nil }
+        return product.icon ?? symbol(name: name)
+    }
+
     /// True when a device name has a headphone word. macOS reports Bluetooth
     /// speakers with the headphones terminal too, so for Bluetooth the name decides.
     static func isHeadphoneName(_ name: String) -> Bool {
@@ -90,6 +98,36 @@ enum SpeakerTag: Equatable {
         // An "active" blue, as Control Center shows AirPlay and Bluetooth.
         case .airplay, .systemAirPlay, .bluetooth: return .active
         default: return .teal
+        }
+    }
+}
+
+/// What kind of device a network speaker is, from its discovery records
+/// (P238, C138): its round icon shows it, and VoiceOver names it.
+enum ProductKind: Equatable {
+    case unknown, tv, setTop, speaker, soundbar, computer
+
+    /// From the core's `ASC_PRODUCT_*`; an unknown value reads as unknown.
+    init(raw: Int32) {
+        switch raw {
+        case ASC_PRODUCT_TV: self = .tv
+        case ASC_PRODUCT_SETTOP: self = .setTop
+        case ASC_PRODUCT_SPEAKER: self = .speaker
+        case ASC_PRODUCT_SOUNDBAR: self = .soundbar
+        case ASC_PRODUCT_COMPUTER: self = .computer
+        default: self = .unknown
+        }
+    }
+
+    /// The glyph for the kind (P242); nil keeps the protocol's own glyph.
+    var icon: DeviceIcon? {
+        switch self {
+        case .tv: return .tv
+        case .setTop: return .settop
+        case .speaker: return .smartSpeaker
+        case .soundbar: return .soundbar
+        case .computer: return .laptop
+        case .unknown: return nil
         }
     }
 }

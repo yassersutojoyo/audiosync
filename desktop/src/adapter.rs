@@ -86,8 +86,8 @@ use icu_normalizer::DecomposingNormalizerBorrowed;
 
 use crate::audio::backend::{
     AirPlayAvailability, AirPlayInfo, AirPlayProblem, AudioBackend, BackendError, BackendEvent,
-    CastDiscovery, CastInfo, CastProblem, CastStatus, OutputInfo, OutputKind, SourceId, SourceInfo,
-    StopReason, ZoneVolumes,
+    CastDiscovery, CastInfo, CastProblem, CastStatus, OutputInfo, OutputKind, ProductKind,
+    SourceId, SourceInfo, StopReason, ZoneVolumes,
 };
 use crate::audio::backend::{AirPlayPinPrompt, PairingPhase};
 use crate::audio::cast_address::{self, CastAddress};
@@ -509,6 +509,11 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The kind each local zone member was last listed as before this run,
     /// by speaker key, from the settings file.
     saved_kinds: BTreeMap<String, OutputKind>,
+    /// The kind each network speaker last showed in this run, by speaker key
+    /// (P244).
+    products: BTreeMap<String, ProductKind>,
+    /// The kind each network zone member showed before this run (P244).
+    saved_products: BTreeMap<String, ProductKind>,
     /// The endpoint IDs a device left when what was set for it followed it
     /// to a new one ([`AudioAdapter::move_output`]), until they are listed
     /// again: the same device's old IDs, not other devices of its name.
@@ -773,6 +778,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             nameless: BTreeSet::new(),
             kinds: BTreeMap::new(),
             saved_kinds: BTreeMap::new(),
+            products: BTreeMap::new(),
+            saved_products: BTreeMap::new(),
             left_behind: BTreeSet::new(),
             airplay_listed: BTreeSet::new(),
             airplay_on_by_hand: BTreeSet::new(),
@@ -952,6 +959,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             member_names: zone.member_names.clone(),
         }));
         self.saved_kinds = saved.zone_member_kinds.clone();
+        self.saved_products = saved.zone_member_products.clone();
         self.presets = presets::from_stored(saved.speaker_presets.iter().map(SavedPreset::preset));
         self.presets_leaving_reference = saved
             .speaker_presets
@@ -1163,6 +1171,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .map(SavedZone::from)
                 .collect(),
             zone_member_kinds: self.zone_member_kinds(),
+            zone_member_products: self.zone_member_products(),
             speaker_zones_migrated: true,
             speaker_presets: self
                 .presets
@@ -3093,6 +3102,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 taken_over: self.cast_taken_over(&speaker.id),
             }),
             group: None,
+            product: speaker.product,
             mic_left_out: None,
             in_target: None,
         }
@@ -3467,6 +3477,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
             } else if new {
                 appeared.push(speaker.id.clone());
             }
+            if speaker.product != ProductKind::Unknown {
+                self.products
+                    .insert(airplay_key(&speaker.id), speaker.product);
+            }
             self.airplay_names.insert(speaker.id.clone(), speaker.name);
             listed.insert(speaker.id);
         }
@@ -3586,6 +3600,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     id: key.clone(),
                     name: self.custom_names.shown(key, last),
                     kind,
+                    product: self
+                        .products
+                        .get(key)
+                        .or(self.saved_products.get(key))
+                        .copied()
+                        .unwrap_or_default(),
                     needs_airplay2: SpeakerKey::parse(key)
                         .is_some_and(|key| self.needs_airplay2(&key)),
                     in_target: match SpeakerKey::parse(key) {
@@ -3616,6 +3636,20 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 };
                 let kind = self.kinds.get(&id).or(self.saved_kinds.get(key))?;
                 Some((key.clone(), *kind))
+            })
+            .collect()
+    }
+
+    /// The kind each network zone member last showed, in this run, else
+    /// before it (P244).
+    fn zone_member_products(&self) -> BTreeMap<String, ProductKind> {
+        self.zones
+            .list()
+            .iter()
+            .flat_map(|zone| &zone.members)
+            .filter_map(|key| {
+                let product = self.products.get(key).or(self.saved_products.get(key))?;
+                Some((key.clone(), *product))
             })
             .collect()
     }
@@ -4480,9 +4514,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
             BackendEvent::AirPlayChanged => self.airplay_listed(),
             BackendEvent::CastChanged => {
                 let mut names = std::mem::take(&mut self.cast_names);
-                let listed: BTreeMap<String, String> = self
-                    .audio
-                    .cast_speakers()
+                let speakers = self.audio.cast_speakers();
+                for speaker in &speakers {
+                    if speaker.product != ProductKind::Unknown {
+                        self.products.insert(cast_key(&speaker.id), speaker.product);
+                    }
+                }
+                let listed: BTreeMap<String, String> = speakers
                     .into_iter()
                     .map(|speaker| (speaker.id.clone(), self.cast_own_name(&speaker)))
                     .collect();
@@ -4922,6 +4960,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 group.missing.sort_by_key(|name| name.to_lowercase());
                 group
             }),
+            product: speaker.product,
             mic_left_out: None,
             in_target,
         }
@@ -4956,6 +4995,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             // The reference has no delay setting (spec S181).
             delay_ms: (!output.is_reference).then_some(output.delay_ms),
             availability: Availability::Open,
+            product: ProductKind::Unknown,
             paired: false,
             holds_password: false,
             holds_credentials: false,
@@ -9833,6 +9873,57 @@ mod tests {
             .playing_params(endpoint_id)
             .expect("it plays")
             .delay_frames
+    }
+
+    // covers: P243, P244
+    #[test]
+    fn an_airplay_row_shows_its_records_kind_follows_a_change_and_keeps_it_in_a_zone() {
+        let (mut adapter, fake, kitchen, _study) = airplay_adapter();
+        adapter.poll();
+        let id = ap(&kitchen);
+        let product = |adapter: &AudioAdapter<MockBackend>| {
+            adapter.snapshot().speaker(&id).expect("listed").product
+        };
+        assert_eq!(
+            product(&adapter),
+            ProductKind::Unknown,
+            "no model, no features"
+        );
+
+        fn with(extra: &[&'static str]) -> Vec<&'static str> {
+            OPEN_TXT.iter().chain(extra).copied().collect()
+        }
+        let tv = device(1, "Kitchen", &with(&["am=Speaker1,1", "ft=0x80"]));
+        fake.change(&tv);
+        adapter.poll();
+        assert_eq!(product(&adapter), ProductKind::Tv);
+        let names: Vec<String> = adapter
+            .snapshot()
+            .layout()
+            .1
+            .iter()
+            .map(|s| s.name.clone())
+            .collect();
+        assert_eq!(names, ["Headphones", "Kitchen", "Speakers", "Study"]);
+
+        let homepod = device(1, "Kitchen", &with(&["am=AudioAccessory5,1"]));
+        fake.change(&homepod);
+        adapter.poll();
+        assert_eq!(product(&adapter), ProductKind::Speaker);
+        fake.change(&tv);
+        adapter.poll();
+
+        adapter.new_zone_with(&id, "Living");
+        fake.gone(&tv);
+        adapter.poll();
+        let state = adapter.snapshot();
+        let absent = state.absent_member(&id).expect("out of view");
+        assert_eq!(absent.product, ProductKind::Tv, "its last glyph");
+        assert_eq!(
+            adapter.zone_member_products(),
+            BTreeMap::from([(id.clone(), ProductKind::Tv)]),
+            "kept for a relaunch"
+        );
     }
 
     // covers: S222
