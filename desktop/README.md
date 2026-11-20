@@ -152,8 +152,11 @@ from All System Audio unless you pick an app or an input device under Audio
 Source.
 
 Windows can't mute the sound AudioSync captures, so the source would also
-play straight from the PC, without the delay. AudioSync deals with that while
-it streams. With All System Audio it makes a virtual output (a software audio
+play straight from the PC, without the delay. AudioSync deals with that only
+when the PC has a virtual output, and it doesn't install one. Without one, the
+PC's own speaker plays ahead of the rest and a notice asks you to route or mute
+it by hand. With a virtual output, AudioSync moves the sound itself while it
+streams. With All System Audio it makes a virtual output (a software audio
 device, such as a virtual cable, that it isn't playing to) the Windows
 default; with one app it moves only that app there. Both go back when
 streaming stops. With several apps, or every app except some, nothing is
