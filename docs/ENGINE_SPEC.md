@@ -5462,6 +5462,7 @@ S231 has no Windows test: Windows reads no device latency.
 | the_whole_system_is_heard_twice_from_the_default_output (`desktop/src/audio/controller.rs`) | S382 |
 | the_whole_system_is_heard_twice_while_only_an_airplay_speaker_plays (`desktop/src/audio/controller.rs`) | S382 |
 | an_airplay_speaker_on_but_not_playing_is_no_copy (`desktop/src/audio/controller.rs`) | S382 |
+| a_cast_speaker_on_but_not_playing_is_no_copy (`desktop/src/audio/controller.rs`) | S382 |
 | double_audio_held_back_while_a_silent_output_exists_is_reported_once_it_goes (`desktop/src/audio/controller.rs`) | S382 |
 | another_app_pausing_now_and_then_doesnt_flap_the_whole_system_report (`desktop/src/audio/controller.rs`) | S382 |
 | the_check_runs_at_the_first_poll_then_every_few_seconds (`desktop/src/audio/controller.rs`) | S382 |

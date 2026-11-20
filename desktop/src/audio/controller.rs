@@ -13363,6 +13363,43 @@ mod tests {
 
     // covers: S382
     #[test]
+    fn a_cast_speaker_on_but_not_playing_is_no_copy() {
+        use audiosync_cast::audio::StreamFormat;
+        use audiosync_cast::discovery::DeviceId;
+        use audiosync_cast::host::{AttemptId, HostEvent};
+        use audiosync_cast::session::SessionEvent;
+
+        use crate::audio::cast::tests::{FakeCast, KITCHEN};
+        let mut backend = backend();
+        backend.connect_output_as(TV, "TV", OutputKind::Hdmi);
+        backend.set_default_output(TV);
+        backend.set_output_enabled(SPEAKERS, false).unwrap();
+        backend.set_output_enabled(HEADPHONES, false).unwrap();
+        backend.list_outputs().unwrap();
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        backend.poll();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert!(heard_twice(&backend.poll()).is_empty(), "still connecting");
+        let device = DeviceId::parse(KITCHEN).unwrap();
+        cast.report(HostEvent::Started {
+            attempt: AttemptId(1),
+            device,
+            format: StreamFormat::wav(48_000).unwrap(),
+        });
+        cast.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device,
+            event: SessionEvent::Playing,
+        });
+        backend.poll();
+        assert_eq!(check_routing(&mut backend), [[TV]]);
+    }
+
+    // covers: S382
+    #[test]
     fn the_whole_system_is_heard_twice_while_only_an_airplay_speaker_plays() {
         let (mut backend, fake, kitchen) = with_airplay();
         backend.connect_output_as(TV, "TV", OutputKind::Hdmi);
