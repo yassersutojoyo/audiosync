@@ -4,10 +4,6 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ## [0.9.3] - 2026-11-20
 
-### Pending, lands before release
-
-- On Windows, every window uses the app icon tile.
-
 ### Added
 
 - On the Mac, Windows and Linux, a network speaker's row shows what kind of device it is: a TV, a streaming box, a smart speaker, or a soundbar or receiver. A speaker in a zone keeps its icon while it is out of view.
@@ -70,6 +66,9 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- On Windows, Settings and Web Remote show the app icon tile like the other windows, also after About was opened first.
+- On Windows and Linux, the Equalizer's curve menu shows every curve and Save Curve at once instead of cutting the list at the window's edge.
+- On Windows and Linux, the Guide, About and Equalizer windows use the Mac's background colours, and the Now Playing transport buttons draw no box on hover, as on the Mac.
 - On the Mac, Windows and Linux, Next right after Previous slides the new cover in from the right again, and a second song change or a quick second Next during a slide joins that slide instead of sliding a cover in twice. On Windows and Linux, the incoming cover stays inside the left column while the speaker list is scrolled.
 - On Windows and Linux, the Master Volume divider sits the same distance below the row as on the Mac, without the gap above it.
 - HomePods on software 27 play again over AirPlay 2. They turned AudioSync away before the first sound because of the name it sent with its requests. Thanks to [emosheeep](https://github.com/emosheeep) for the report and the fix.
