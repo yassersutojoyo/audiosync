@@ -19783,9 +19783,12 @@ pub(crate) mod tests {
         )
     }
 
+    /// He scrolled the column so the cover sat under its faded top edge,
+    /// and the new cover came in whole, then cut and faded once it landed
+    /// (maintainer 2026-11-20 11.03).
     // covers: S463
     #[test]
-    fn the_next_cover_crosses_the_window_whole_level_with_its_box_in_a_scrolled_column() {
+    fn the_next_cover_keeps_the_columns_cut_and_fade_in_a_scrolled_column() {
         let app = app_over(MockBackend::new());
         hold_clock();
         let window = app.main.window();
@@ -19810,21 +19813,19 @@ pub(crate) mod tests {
             red_bounds(window)
         };
         let old = slide(1.0, 0.0);
-        // As on the Mac only the window clips the new cover, so it shows
-        // whole where the column hides the top of the box.
         let (_, box_top, _, _) = slider_box(&app.main, "Now Playing");
         assert!(box_top < old.1, "the column hides the box's top");
-        // The cover sits 2 px under the box's top, as the Mac's.
-        let whole = (old.0, box_top + 2.0, old.2, old.3);
         app.main.set_now_playing_outgoing(OutgoingSong::default());
         app.main.set_now_playing_has_artwork(true);
         app.main.set_now_playing_artwork(red_cover());
+        // Only the unfaded red counts, so a top level with the old one's is
+        // the same cut and fade.
         for (side, slid) in [(1.0, 0.25), (-1.0, 0.5), (1.0, 0.75)] {
             let (_, top, _, bottom) = slide(side, slid);
             assert_eq!(
                 (top, bottom),
-                (whole.1, whole.3),
-                "level with the whole box ({side}, {slid})"
+                (old.1, old.3),
+                "cut and faded as the old cover ({side}, {slid})"
             );
         }
         assert!(
@@ -19832,7 +19833,7 @@ pub(crate) mod tests {
             "Next's cover crosses the speaker list"
         );
         assert!(slide(-1.0, 0.5).0 < old.0, "Previous's comes from the left");
-        assert_eq!(slide(1.0, 1.0), whole, "it lands on the whole box");
+        assert_eq!(slide(1.0, 1.0), old, "it lands on the old cover's look");
     }
 
     // covers: S463
