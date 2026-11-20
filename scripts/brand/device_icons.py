@@ -89,6 +89,17 @@ def arc_line(cx, cy, rad, w, a0, a1):
         circ(*pt(cx, cy, rad, a0), w / 2) + circ(*pt(cx, cy, rad, a1), w / 2)
 
 
+def ears(apex, base, top, spread, w):
+    """A TV's two antenna arms as one polygon, so even-odd leaves no hole where they meet."""
+    k = spread / (base - top)
+    n = math.hypot(spread, base - top)
+    ox, oy = w / 2 * (base - top) / n, w / 2 * spread / n
+    a1, a2 = (apex - spread - ox, top + oy), (apex - spread + ox, top - oy)
+    outer = a1[0] + (base - a1[1]) * k
+    m = lambda q: (2 * apex - q[0], q[1])
+    return poly([a1, a2, (apex, a2[1] + (apex - a2[0]) / k), m(a2), m(a1), (2 * apex - outer, base), (outer, base)])
+
+
 # Every grid: walls 2, gaps 2, outer corner radius 2, cut-out radius 1.
 GLYPHS = {18: {
     "laptop": ("evenodd",
@@ -103,9 +114,7 @@ GLYPHS = {18: {
     "monitor": ("evenodd",
                 rr(1, 2, 17, 14, 2) + rr(3, 4, 15, 12, 1) + rr(8, 14, 10, 15)
                 + rr(5, 15, 13, 17, 1)),
-    "tv": ("evenodd",
-           rr(1, 3, 17, 14, 2) + rr(3, 5, 15, 12, 1)
-           + rr(3, 14, 6, 16, bl=1, br=1) + rr(12, 14, 15, 16, bl=1, br=1)),
+    "tv": ("evenodd", rr(1, 6, 17, 16, 2) + rr(3, 8, 15, 14, 1) + ears(9, 6, 2, 4, 2)),
     "bluetooth": ("nonzero",
                   line([(4.5, 5.5), (13.5, 12.5), (9, 16), (9, 2), (13.5, 5.5), (4.5, 12.5)], 2)),
     "usb": ("evenodd",
@@ -121,6 +130,7 @@ GLYPHS = {18: {
     "soundbar": ("evenodd",
                  rr(1, 6, 17, 12, 3) + circ(5, 9, 1) + circ(9, 9, 1) + circ(13, 9, 1)),
 }, 16: {
+    "tv": ("evenodd", rr(1, 5, 15, 14, 2) + rr(3, 7, 13, 12, 1) + ears(8, 5, 1.5, 3.5, 2)),
     "settop": ("evenodd",
                rr(1, 2, 15, 10, 2) + circ(11, 6, 1) + rr(3, 12, 13, 14, 1)),
     "soundbar": ("evenodd",
@@ -136,9 +146,7 @@ GLYPHS = {18: {
                    sector(7, 7, 6, 4, 180, 360) + rr(1, 7, 5, 13, 2) + rr(9, 7, 13, 13, 2)),
     "monitor": ("evenodd",
                 rr(1, 1, 13, 10, 2) + rr(3, 3, 11, 8, 1) + rr(6, 10, 8, 11) + rr(4, 11, 10, 13, 1)),
-    "tv": ("evenodd",
-           rr(1, 2, 13, 11, 2) + rr(3, 4, 11, 9, 1)
-           + rr(3, 11, 5, 13, bl=1, br=1) + rr(9, 11, 11, 13, bl=1, br=1)),
+    "tv": ("evenodd", rr(1, 5, 13, 13, 2) + rr(3, 7, 11, 11, 1) + ears(7, 5, 1.5, 3, 1.75)),
     "bluetooth": ("nonzero",
                   line([(3.5, 4.5), (10.5, 9.5), (7, 12.5), (7, 1.5), (10.5, 4.5), (3.5, 9.5)], 2)),
     "usb": ("evenodd",
