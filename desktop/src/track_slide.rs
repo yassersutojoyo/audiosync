@@ -144,6 +144,8 @@ pub struct TrackSlide {
     place: Place,
     pressed: Option<(Direction, Instant)>,
     played_before: Option<CardTrack>,
+    /// The last change's side: back to the song before goes the other way.
+    last: Direction,
     wait: Option<Instant>,
     /// An ignored wait easing back: since when, from where, and its breath.
     settle: Option<(Instant, f64, f64)>,
@@ -158,6 +160,7 @@ impl TrackSlide {
             place,
             pressed: None,
             played_before: None,
+            last: Direction::Next,
             wait: None,
             settle: None,
             slide: None,
@@ -267,10 +270,15 @@ impl TrackSlide {
             .filter(|(_, at)| now.saturating_duration_since(*at) <= PRESS_WINDOW)
             .map(|(direction, _)| direction);
         let guess = match &self.played_before {
-            Some(before) if same_song(before, new) => Direction::Previous,
+            Some(before) if same_song(before, new) => match self.last {
+                Direction::Next => Direction::Previous,
+                Direction::Previous => Direction::Next,
+            },
             _ => Direction::Next,
         };
+        let direction = pressed.unwrap_or(guess);
         self.played_before = Some(old.clone());
+        self.last = direction;
         if !on_screen {
             self.stop();
             return false;
@@ -282,7 +290,7 @@ impl TrackSlide {
         self.settle = None;
         self.slide = Some(Slide {
             start: now,
-            direction: pressed.unwrap_or(guess),
+            direction,
             fades: still,
             reached,
             breath,

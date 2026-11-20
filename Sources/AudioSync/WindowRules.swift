@@ -373,10 +373,12 @@ enum TrackSlide {
         old.bundleID == new.bundleID && (old.title, old.artist, old.album) != (new.title, new.artist, new.album)
     }
 
-    /// A change with no press: Previous when the new song is the one played before the old one.
-    static func guessed(_ new: NowPlayingMonitor.Track, playedBefore: NowPlayingMonitor.Track?) -> Direction {
+    /// A change with no press: back to the song played before the old one goes the other way from
+    /// the `last` change, so Previous then Next back comes from the right; any other song is Next.
+    static func guessed(_ new: NowPlayingMonitor.Track, playedBefore: NowPlayingMonitor.Track?,
+                        last: Direction = .next) -> Direction {
         guard let before = playedBefore, before.bundleID == new.bundleID, !isSkip(before, new) else { return .next }
-        return .previous
+        return last == .next ? .previous : .next
     }
 
     /// How long the next song has waited for its cover (`ArtHold`): from a

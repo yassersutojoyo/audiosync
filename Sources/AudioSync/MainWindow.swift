@@ -1778,14 +1778,14 @@ final class TrackSlideState: ObservableObject {
         let press = pressed.flatMap {
             TrackSlide.direction(pressed: $0.direction, secondsSincePress: now.timeIntervalSince($0.at))
         }
-        let guess = TrackSlide.guessed(new, playedBefore: playedBefore)
+        let guess = TrackSlide.guessed(new, playedBefore: playedBefore, last: direction)
         playedBefore = old
         pressed = nil
+        direction = press ?? guess
         let style = TrackSlide.style(onScreen: onScreen, reduceMotion: reduceMotion)
         guard style != .instant else { return stop() }
         waitStart = nil
         settleStart = nil
-        direction = press ?? guess
         fades = style == .fade
         seconds = TrackSlide.seconds(place, reduceMotion: fades)
         slides += 1
