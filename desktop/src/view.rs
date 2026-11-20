@@ -8357,7 +8357,16 @@ pub(crate) mod tests {
         let os = if cfg!(windows) { "windows" } else { "linux" };
         let mut backend = MockBackend::new();
         backend.set_running(true);
+        // The mock's low Windows volume would put its warning on the README.
+        let speakers = backend
+            .speaker_mut("local:speakers")
+            .expect("the PC's speakers");
+        speakers.device_volume = None;
+        speakers.system_volume = None;
         let app = app_over(backend);
+        // At rest: no fade caught midway, no long artist line caught mid-scroll.
+        app.main.global::<Motion>().set_on(false);
+        app.flyout.global::<Motion>().set_on(false);
         hold_clock();
         let fake = FakeControls::default();
         app.set_media_controls(fake.controls());
@@ -8367,25 +8376,21 @@ pub(crate) mod tests {
         app.refresh();
         app.poll();
         app.ambient.borrow_mut().advance(1.0, || None);
-        app.main.set_now_playing_ambient(app.ambient_look(
-            0,
-            ambient::WINDOW_DENSITY,
-            ambient::WINDOW_SLOT,
-            false,
-        ));
-        app.flyout.set_now_playing_ambient(app.ambient_look(
-            1,
-            ambient::FLYOUT_DENSITY,
-            ambient::FLYOUT_SLOT,
-            false,
-        ));
         for (look, appearance) in [
             ("light", ui_model::Appearance::Light),
             ("dark", ui_model::Appearance::Dark),
         ] {
             app.apply_appearance(appearance);
             draw_frames();
+            // Theme colours animate in on the held clock; the status line's
+            // fade steps once per timer run, about ten of them.
+            for _ in 0..30 {
+                advance_clock(Duration::from_millis(100));
+                draw_frames();
+            }
             for window in [app.main.window(), app.flyout.window()] {
+                // A shown window gets the brand accent from apply_frame.
+                app.use_brand_accent(window);
                 window.dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor: 2.0 });
             }
             // The same sizes as shots_of_the_main_window_and_flyout above.
@@ -8399,6 +8404,19 @@ pub(crate) mod tests {
             app.flyout
                 .window()
                 .set_size(slint::LogicalSize::new(300.0, fit));
+            // The art's masks follow the laid-out strip width and the scale.
+            app.main.set_now_playing_ambient(app.ambient_look(
+                0,
+                ambient::WINDOW_DENSITY,
+                ambient::WINDOW_SLOT,
+                false,
+            ));
+            app.flyout.set_now_playing_ambient(app.ambient_look(
+                1,
+                ambient::FLYOUT_DENSITY,
+                ambient::FLYOUT_SLOT,
+                false,
+            ));
             for (name, window) in [
                 ("main-window", app.main.window()),
                 ("tray-panel", app.flyout.window()),

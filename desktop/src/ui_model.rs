@@ -2660,7 +2660,7 @@ impl MockBackend {
         mock
     }
 
-    fn speaker_mut(&mut self, id: &str) -> Option<&mut Speaker> {
+    pub(crate) fn speaker_mut(&mut self, id: &str) -> Option<&mut Speaker> {
         self.state.speakers.iter_mut().find(|s| s.id == id)
     }
 
