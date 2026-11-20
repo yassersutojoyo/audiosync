@@ -1196,6 +1196,10 @@ pub trait AudioBackend {
     /// to it and the routing is checked at the next poll (VC36).
     fn silent_output_added(&mut self) {}
 
+    /// Whether AudioSync is installing a silent output: its endpoints are
+    /// no silent endpoint until the install is done (VC41).
+    fn silent_output_installing(&mut self, _installing: bool) {}
+
     /// The Google Cast speakers on the network, by name, with their
     /// settings; empty while there is no Cast sender.
     fn cast_speakers(&self) -> Vec<CastInfo> {

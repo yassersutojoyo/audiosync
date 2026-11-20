@@ -6733,6 +6733,38 @@ mod tests {
         assert_eq!(backend.default_output_record(), None);
     }
 
+    // covers: VC41
+    #[test]
+    fn a_stream_started_while_vb_cable_installs_never_takes_the_cable_as_the_default() {
+        let mut backend = backend();
+        let (_, fake, _) = with_switch(&mut backend);
+        let on = |id: &str| (Some(id.to_owned()), Some(id.to_owned()));
+        {
+            let mut fake = fake.0.borrow_mut();
+            for candidate in &mut fake.endpoints {
+                candidate.vb_cable = candidate.id == switch_fakes::CABLE;
+            }
+            // Windows moved the defaults to the cable as it appeared.
+            (fake.console, fake.multimedia) = on(switch_fakes::CABLE);
+        }
+        backend.silent_output_installing(true);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(backend.default_output_record(), None);
+        // The install sets them back within its guard, then is done.
+        {
+            let mut fake = fake.0.borrow_mut();
+            (fake.console, fake.multimedia) = on(switch_fakes::SPEAKERS);
+        }
+        backend.silent_output_installing(false);
+        backend.silent_output_added();
+        backend.poll();
+        assert_eq!(console(&fake).as_deref(), Some(switch_fakes::CABLE));
+        assert_eq!(
+            backend.default_output_record(),
+            Some(switch_fakes::the_record())
+        );
+    }
+
     // covers: S469, S186
     #[test]
     fn the_default_comes_back_only_once_the_outputs_have_faded() {

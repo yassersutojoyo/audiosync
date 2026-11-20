@@ -50,6 +50,8 @@ pub struct Candidate {
     /// Whether something records the same device's input side, as with a
     /// loopback cable an app listens to: such an endpoint is taken last.
     pub listened: bool,
+    /// Its device is VB-CABLE (`crate::audio::silent_output::is_vb_cable`).
+    pub vb_cable: bool,
 }
 
 /// Windows' default output per role, and the active render endpoints.
@@ -554,6 +556,7 @@ pub(crate) mod tests {
             id: id.to_owned(),
             kind,
             listened: false,
+            vb_cable: false,
         }
     }
 
