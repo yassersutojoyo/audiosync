@@ -858,8 +858,8 @@ struct RoutingState {
     /// What was last reported: empty while the source is heard only through
     /// AudioSync.
     reported: Vec<DirectPath>,
-    /// Whether the last report sent named an output.
-    told: bool,
+    /// The last report sent.
+    told: Vec<DirectPath>,
     /// The last error of the check: an error that repeats is logged once.
     error: Option<BackendError>,
 }
@@ -4662,8 +4662,8 @@ impl<D: Driver> Controller<D> {
         self.routing.last_check = Some(now);
         let mut rendered: Vec<String> = session.outputs.keys().cloned().collect();
         // A network speaker's copy counts too; its ID matches no endpoint.
-        rendered.extend(self.enabled_airplay());
-        rendered.extend(self.cast_enabled());
+        rendered.extend(self.airplay.iter().flat_map(AirPlaySpeakers::playing));
+        rendered.extend(self.cast.as_ref().and_then(CastSpeakers::playing_id));
         let snapshot = self
             .driver
             .endpoint_audio()
@@ -4722,18 +4722,14 @@ impl<D: Driver> Controller<D> {
         // Where the source can be moved to a silent endpoint (Windows),
         // AudioSync handles double audio itself and asks for no change, so
         // a report made before one existed is taken back.
-        if changed || self.routing.told {
-            let left = self.double_audio_left_to_user();
-            if left && changed {
-                self.routing.told = !answer.paths.is_empty();
-                self.pending.push(BackendEvent::HeardTwice {
-                    paths: answer.paths,
-                });
-            } else if !left && self.routing.told {
-                self.routing.told = false;
-                self.pending
-                    .push(BackendEvent::HeardTwice { paths: Vec::new() });
-            }
+        let told = if self.double_audio_left_to_user() {
+            answer.paths
+        } else {
+            Vec::new()
+        };
+        if told != self.routing.told {
+            self.routing.told.clone_from(&told);
+            self.pending.push(BackendEvent::HeardTwice { paths: told });
         }
         self.routing.played_on = answer.played_on;
         self.hold_at_start_briefly();
@@ -13368,13 +13364,14 @@ mod tests {
     // covers: S382
     #[test]
     fn the_whole_system_is_heard_twice_while_only_an_airplay_speaker_plays() {
-        let (mut backend, _fake, kitchen) = with_airplay();
+        let (mut backend, fake, kitchen) = with_airplay();
         backend.connect_output_as(TV, "TV", OutputKind::Hdmi);
         backend.set_default_output(TV);
         backend.set_output_enabled(SPEAKERS, false).unwrap();
         backend.set_output_enabled(HEADPHONES, false).unwrap();
         backend.list_outputs().unwrap();
         backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        fake.state(&kitchen, SpeakerState::Playing);
         backend.start(&SourceId::WholeSystem).unwrap();
         assert_eq!(heard_twice(&backend.poll()), [[TV]]);
     }
