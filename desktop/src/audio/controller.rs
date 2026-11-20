@@ -6815,6 +6815,26 @@ mod tests {
         assert_eq!(heard_twice(&backend.poll()), [Vec::<String>::new()]);
     }
 
+    // covers: S382
+    #[test]
+    fn double_audio_held_back_while_a_silent_output_exists_is_reported_once_it_goes() {
+        let mut backend = backend();
+        let (_, fake, _) = with_switch(&mut backend);
+        backend.connect_output_as(TV, "TV", OutputKind::Hdmi);
+        backend.set_default_output(TV);
+        backend.list_outputs().unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert!(
+            heard_twice(&backend.poll()).is_empty(),
+            "the switch handles it"
+        );
+        fake.0
+            .borrow_mut()
+            .endpoints
+            .retain(|candidate| candidate.id != switch_fakes::CABLE);
+        assert_eq!(check_routing(&mut backend), [[TV]]);
+    }
+
     // covers: VC45
     #[test]
     fn vb_cable_is_no_speaker_and_no_source_while_it_is_the_silent_endpoint() {
@@ -13323,6 +13343,26 @@ mod tests {
             assert!(check_routing(&mut backend).is_empty());
         }
         assert_eq!(check_routing(&mut backend), [[SPEAKERS]]);
+    }
+
+    // covers: S382
+    #[test]
+    fn an_airplay_speaker_on_but_not_playing_is_no_copy() {
+        let (mut backend, fake, kitchen) = with_airplay();
+        backend.connect_output_as(TV, "TV", OutputKind::Hdmi);
+        backend.set_default_output(TV);
+        backend.set_output_enabled(SPEAKERS, false).unwrap();
+        backend.set_output_enabled(HEADPHONES, false).unwrap();
+        backend.list_outputs().unwrap();
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert!(
+            heard_twice(&backend.poll()).is_empty(),
+            "only the PC is heard"
+        );
+        fake.state(&kitchen, SpeakerState::Playing);
+        backend.poll();
+        assert_eq!(check_routing(&mut backend), [[TV]]);
     }
 
     // covers: S382
