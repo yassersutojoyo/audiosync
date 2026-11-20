@@ -8338,6 +8338,81 @@ pub(crate) mod tests {
         }
     }
 
+    /// Saves the README's main window and tray panel, light and dark, at 2x
+    /// over the mock backend's example speakers, as
+    /// main-window-<os>-light.png and tray-panel-<os>-light.png (and -dark)
+    /// in AUDIOSYNC_SHOT_DIR. The card plays AUDIOSYNC_SHOT_TRACK
+    /// ("Title|Artist") with AUDIOSYNC_SHOT_COVER, a square of raw RGBA bytes.
+    #[test]
+    #[ignore = "writes screenshots: run with --ignored and AUDIOSYNC_SHOT_* set"]
+    fn readme_shots() {
+        use crate::now_playing_card::CardArtwork;
+        use crate::now_playing_card::fake::{FakeControls, track};
+        let var = |name: &str| std::env::var(name).unwrap_or_else(|_| panic!("{name} is set"));
+        let dir = std::path::PathBuf::from(var("AUDIOSYNC_SHOT_DIR"));
+        let song = var("AUDIOSYNC_SHOT_TRACK");
+        let (title, artist) = song.split_once('|').expect("Title|Artist");
+        let rgba = std::fs::read(var("AUDIOSYNC_SHOT_COVER")).expect("the cover reads");
+        let side = ((rgba.len() / 4) as f64).sqrt() as u32;
+        let os = if cfg!(windows) { "windows" } else { "linux" };
+        let mut backend = MockBackend::new();
+        backend.set_running(true);
+        let app = app_over(backend);
+        hold_clock();
+        let fake = FakeControls::default();
+        app.set_media_controls(fake.controls());
+        let mut playing = track("Player.exe", title, artist, true);
+        playing.artwork = Some(CardArtwork::new(side, &rgba));
+        fake.read(Some(playing));
+        app.refresh();
+        app.poll();
+        app.ambient.borrow_mut().advance(1.0, || None);
+        app.main.set_now_playing_ambient(app.ambient_look(
+            0,
+            ambient::WINDOW_DENSITY,
+            ambient::WINDOW_SLOT,
+            false,
+        ));
+        app.flyout.set_now_playing_ambient(app.ambient_look(
+            1,
+            ambient::FLYOUT_DENSITY,
+            ambient::FLYOUT_SLOT,
+            false,
+        ));
+        for (look, appearance) in [
+            ("light", ui_model::Appearance::Light),
+            ("dark", ui_model::Appearance::Dark),
+        ] {
+            app.apply_appearance(appearance);
+            draw_frames();
+            for window in [app.main.window(), app.flyout.window()] {
+                window.dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor: 2.0 });
+            }
+            // The same sizes as shots_of_the_main_window_and_flyout above.
+            app.main
+                .window()
+                .set_size(slint::LogicalSize::new(696.0, 680.0));
+            app.flyout
+                .window()
+                .set_size(slint::LogicalSize::new(300.0, 720.0));
+            let fit = app.flyout.get_fit_height();
+            app.flyout
+                .window()
+                .set_size(slint::LogicalSize::new(300.0, fit));
+            for (name, window) in [
+                ("main-window", app.main.window()),
+                ("tray-panel", app.flyout.window()),
+            ] {
+                let shot = window
+                    .take_snapshot()
+                    .expect("the software renderer draws it");
+                let file = png(shot.width(), shot.height(), shot.as_bytes());
+                std::fs::write(dir.join(format!("{name}-{os}-{look}.png")), file)
+                    .expect("the PNG is written");
+            }
+        }
+    }
+
     /// An uncompressed RGBA PNG (stored deflate blocks), since the Windows
     /// build has no image crate.
     fn png(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
