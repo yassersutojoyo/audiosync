@@ -925,6 +925,11 @@ pub struct App {
     /// With the debug log on: what moves, for how long, and the main
     /// window's frame times since it started.
     frame_trace: RefCell<Option<(&'static str, Duration, Vec<std::time::Instant>)>>,
+    /// With the debug log on: what started the main window's slide, and
+    /// the frame clock's time of it and of each frame drawn of it since.
+    /// The rendering notifier above may not run, so these come from the
+    /// slide's own frames.
+    slide_frames: RefCell<Option<(&'static str, Vec<std::time::Instant>)>>,
     /// Moves a microphone calibration on while one holds the outputs.
     calibration_timer: Timer,
     /// Moves the input level meter while an input device is captured.
@@ -1420,6 +1425,7 @@ impl App {
             motion_epoch: std::time::Instant::now(),
             slide_timer: Timer::default(),
             frame_trace: RefCell::default(),
+            slide_frames: RefCell::default(),
             calibration_timer: Timer::default(),
             meter_timer: Timer::default(),
             meter_level: Cell::new(0.0),
@@ -1506,7 +1512,13 @@ impl App {
         let weak = Rc::downgrade(&app);
         app.main.global::<TrackMotion>().on_slide(move |tick| {
             weak.upgrade().map_or_else(SlideLook::default, |app| {
-                slide_look(app.window_slide.borrow_mut().look(app.frame_time(tick)).0)
+                let at = app.frame_time(tick);
+                if let Some((_, frames)) = app.slide_frames.borrow_mut().as_mut()
+                    && frames.last().is_some_and(|last| at > *last)
+                {
+                    frames.push(at);
+                }
+                slide_look(app.window_slide.borrow_mut().look(at).0)
             })
         });
         let weak = Rc::downgrade(&app);
@@ -2193,6 +2205,35 @@ impl App {
         });
     }
 
+    /// With the debug log on, times the frames of the main window's slide
+    /// that `what` starts at `now`, after logging the one before.
+    fn time_slide(&self, what: &'static str, now: std::time::Instant) {
+        if self.log.enabled() {
+            self.log_slide_frames();
+            *self.slide_frames.borrow_mut() = Some((what, vec![now]));
+        }
+    }
+
+    /// Logs the timed slide's frames: a late first frame is a slide that
+    /// shows only its end, a long gap a choppy one.
+    fn log_slide_frames(&self) {
+        let Some((what, frames)) = self.slide_frames.borrow_mut().take() else {
+            return;
+        };
+        let gaps: Vec<u128> = frames
+            .windows(2)
+            .map(|pair| pair[1].duration_since(pair[0]).as_millis())
+            .collect();
+        self.log.log(|| {
+            format!(
+                "now playing card: the slide after the {what} drew {} frames, the first {} ms after it, the longest gap {} ms",
+                gaps.len(),
+                gaps.first().copied().unwrap_or_default(),
+                gaps.iter().skip(1).max().copied().unwrap_or_default()
+            )
+        });
+    }
+
     /// Starts or ends the Now Playing cards' slide for a change of song; a
     /// card that is hidden, or with the system's animations off, swaps at once.
     fn slide_change(&self, old: Option<&CardTrack>, new: Option<&CardTrack>) {
@@ -2204,6 +2245,7 @@ impl App {
             .change(old, new, window_shows, still, now)
         {
             self.trace_frames("song change", Duration::from_millis(700));
+            self.time_slide("song change", now);
             self.main
                 .set_now_playing_outgoing(outgoing_song(old, &self.cover_image));
         }
@@ -2247,6 +2289,9 @@ impl App {
         self.main.set_now_playing_slide(slide_look(window));
         self.flyout.set_now_playing_slide(slide_look(panel));
         self.main.set_now_playing_moving(window_moving);
+        if !window_moving {
+            self.log_slide_frames();
+        }
         self.flyout.set_now_playing_moving(panel_moving);
         window_moving || panel_moving
     }
@@ -2322,6 +2367,7 @@ impl App {
             let (window_shows, panel_shows, still) = self.slides_shown();
             if direction.is_some() {
                 self.trace_frames("track button press", Duration::from_millis(600));
+                self.time_slide("track button press", now);
             }
             self.window_slide
                 .borrow_mut()
