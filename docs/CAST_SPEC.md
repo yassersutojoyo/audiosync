@@ -62,6 +62,55 @@ Provenance. Written on 2026-10-21 from public sources: Google's Cast developer d
 - **C135** The sender's browser keeps only the addresses of a resolved instance that discovery may use, and drops an instance left with none. Never a loopback, unspecified, multicast or broadcast address, the broadcast address of one of this computer's IPv4 subnets, or an address of this computer itself; a link-local address (169.254/16, fe80::/10) only when this computer holds one of the same family; otherwise an address inside one of this computer's subnets, or a private IPv4 or unique local IPv6 (fc00::/7) address anywhere, which an mDNS reflector may pass on from a routed network such as an IoT VLAN. A Teredo (2001::/32) or 6to4 (2002::/16) subnet of this computer counts as no link, since its prefix is built from a public IPv4 address. The browser reads this computer's interface addresses at most once a second. A device the user adds by address (C18) is not checked: that address is the user's choice. The reason: a record is not authenticated, so without this check any host on the network could make the sender open TLS connections to services of this computer or to any host on the internet. *Source:* RFC 6762 §11 (multicast DNS answers come from the local link), RFC 4193 (unique local addresses), RFC 4380 (Teredo), RFC 3056 (6to4); AudioSync design.
 - **C136** Every text a device supplies is filtered where the sender parses it, before it reaches the user, the Mac or the debug log: the TXT values (C12), the instance name when the host shows it as the device's name, a group member's `name` (C94), an unknown multizone type (C96), an app's `displayName` and `statusText` (C37), an unknown `controlType`, `playerState` or `idleReason` (C51) and the `reason` of a refusal (C83). Each run of whitespace, line breaks included, becomes one space; every other control character (C0, C1), every bidi control (U+061C, U+200E, U+200F, U+202A to U+202E, U+2066 to U+2069) and every invisible format character (U+00AD, U+180E, U+200B, U+2060 to U+2064, U+206A to U+206F, U+FEFF, U+FFF9 to U+FFFB) is dropped; the zero-width joiner and non-joiner stay, since emoji sequences and several scripts need them. The result is trimmed and keeps its first 64 characters, with no joiner or space left last where the cut split a sequence. A device on the network then can't reverse or hide part of a name, forge a line in the debug log or fill the list with a long name. Identifiers the protocol sends back (`appId`, `sessionId`, `transportId`, a member's `deviceId`) are not filtered where the protocol uses them; a `deviceId` the debug log names is. *Source:* Unicode Standard Annex #9 (bidi controls); Unicode Technical Report #36 §2 (visual spoofing); AudioSync design.
 
+### Device kind and icon
+
+The kinds, the glyphs, the accessible name and the zone behavior are those of the AirPlay specification, P238 and P242 to P246 [airplay-spec]; these clauses say how a Cast record gives the kind.
+
+- **C138** *Added 2026-11-20.* Each Cast device carries a kind (P238 [airplay-spec]), computed by the sender from its discovery record alone, reported with the device and computed again whenever its TXT record or port changes. The input is `md` (C13) in its filtered form (C136), trimmed and compared ignoring ASCII case. Neither `fn`, the instance name nor a name the user gave is read. `ca` is not read either: C13 says the sources disagree on it, and the one public example of a first-generation Chromecast, `ca=4100`, would have the video-output capability bit (1 [cast-android-device]) clear on a device that only drives a TV. *Source:* AudioSync design; community protocol write-up [oakbits] (`ca` values).
+- **C139** *Added 2026-11-20.* The kind is the first rule that matches, in this order:
+
+  1. The instance is a group (C14): `speaker`.
+  2. `md` is one of these models:
+
+     | `md` | Kind |
+     |---|---|
+     | Chromecast, Chromecast HD, Chromecast Ultra, Eureka Dongle, SHIELD Android TV | `settop` |
+     | Chromecast Audio, Google Home, Google Home Mini, Google Nest Mini, Nest Audio, Nest Wifi point, Google Nest Hub, Google Nest Hub Max, Lenovo Smart Display 7, Lenovo Smart Display 10 | `speaker` |
+     | TPM191E, V705-H3, D24f-J09 | `tv` |
+
+  3. `md` contains `soundbar`, `sound bar` or `soundbase`, or starts with `VSX-` or `Pioneer VSX-`: `soundbar`.
+  4. `md` starts with `BRAVIA`, or has `TV` as a whole word (between the ends, spaces, hyphens or underscores): `tv`.
+  5. `md` is present: `speaker`.
+  6. Otherwise, as for a device added by address (C18) until a browse finds it: `unknown`.
+
+  A Chromecast is a stick that plays through a TV, so it is a set-top device rather than a TV. *Source:* observed behavior of open-source senders [pychromecast] (its table of model names: Chromecast, Chromecast HD, Chromecast Ultra, Eureka Dongle, SHIELD Android TV and the Nest Hubs and Lenovo Smart Displays as video devices; Chromecast Audio, Google Home and Nest speakers, Bose Smart Ultra Soundbar, Smart Soundbar 10, SVS Pro SoundBase, Pioneer VSX-831, VSX-1131 and VSX-LX305, JBL Link and LG WK7 as audio devices; BRAVIA 4K GB and BRAVIA 4K VH2 from Sony, TPM191E from Philips, V705-H3 and D24f-J09 from Vizio as video devices); community protocol write-up [oakbits] (`md` Chromecast and Chromecast Audio). *Required:* the Nest Hubs and Lenovo Smart Displays are speakers with a small screen and take `speaker`; the Philips and Vizio models are televisions by their makers' naming, an assumption the G16 check settles; rule 5 is the fallback.
+- **C140** *Added 2026-11-20.* Vectors for C138 and C139 (`md` as advertised, port 8009 unless given; "constructed" marks a record made for the vector):
+
+  | Record | Kind | Rule | Origin |
+  |---|---|---|---|
+  | `md=Chromecast` | `settop` | 2 | [oakbits] |
+  | `md=chromecast ultra` | `settop` | 2 | [pychromecast] (case) |
+  | `md=SHIELD Android TV` | `settop` | 2 | [pychromecast] (table before the `TV` word) |
+  | `md=Chromecast Audio` | `speaker` | 2 | [oakbits] |
+  | `md=Google Nest Mini` | `speaker` | 2 | [pychromecast] |
+  | `md=Google Nest Hub` | `speaker` | 2 | [pychromecast] |
+  | `md=V705-H3` | `tv` | 2 | [pychromecast] |
+  | `md=Bose Smart Ultra Soundbar` | `soundbar` | 3 | [pychromecast] |
+  | `md=SVS Pro SoundBase` | `soundbar` | 3 | [pychromecast] |
+  | `md=Pioneer VSX-831` | `soundbar` | 3 | [pychromecast] |
+  | `md=BRAVIA 4K VH2` | `tv` | 4 | [pychromecast] |
+  | `md=Acme Smart TV 55` | `tv` | 4 | constructed |
+  | `md=Acme 55-TV` | `tv` | 4 | constructed (hyphen ends the word) |
+  | `md=Acme TVbox` | `speaker` | 5 | constructed (`TV` not a whole word) |
+  | `md=JBL Link 20` | `speaker` | 5 | [pychromecast] |
+  | `md=Google Cast Group`, port 32187 | `speaker` | 1 | constructed (group by port) |
+  | `md=Chromecast`, port 32187 | `speaker` | 1 | constructed (group wins) |
+  | no `md` (added by address) | `unknown` | 6 | constructed |
+  | `fn=Living Room TV`, `md=Google Home` | `speaker` | 2 | constructed (the name is never read) |
+  | `md=Chromecast`, `ca=4100` | `settop` | 2 | [oakbits] (`ca` never read) |
+
+  *Source:* the sources of C139.
+
 ## 3. Connection
 
 - **C19** The sender opens one TCP connection to the device (C15) and runs TLS over it as the client. The connection stays open for the whole session; every Cast message in both directions travels on it. *Source:* community protocol write-ups [oakbits], [node-castv2]; RFC 8446 and RFC 5246 (TLS).
@@ -262,6 +311,7 @@ What a sender needs that no source used here settles. Each gap names the clauses
 - **G13 Newer firmware** (C26, C47). Unknown: whether any current device needs `contentUrl` instead of `contentId`, or a sender id other than `sender-0` for app traffic. Settle: *hardware*, the session run against the newest devices at hand; a failure there is retried with `contentUrl` set and a random sender id.
 - **G14 Device authentication** (C31, C119). Unknown: whether any device or firmware refuses a sender that skips the device authentication step, or closes the channel on the challenge. No source reports either. Settle: watch for a `CLOSE` or `LAUNCH_ERROR` right after connect on any device, and for a channel closed before the reply (C119), and record the model and firmware.
 - **G15 Device authentication in the field** (C121, C123, C125, C127, C129, C133). Unknown: which devices answer the challenge (old Chromecasts, Cast groups through their leader, and TVs and speakers with Cast built in), whether any leaves out the nonce or signs with SHA-1, whether any chain carries a critical name constraints extension, and how often a device's key changes (a firmware update or a factory reset that keeps its `id`). A verified answer with a new key re-pins (C129) because refusing it buys little: an attacker who owns a genuine Cast device can answer every check and announce it under a fresh `id`, or under a device's `id` before its first pin, so the pin cannot tell a replaced key from such a device anyway. What the pin does stop is a host without a genuine device's key standing in for a device that has answered before: its silence or its failed answer never plays. Follow-up for the user interface: a control that removes a device discovery found (a forget action on its row) and so clears its entry as C133 says; until it exists, only an address added by hand can be cleared from the app. Settle: the C132 line logged at every connect on each model at hand; a device with Cast built in from another maker, and a group, among them. Revocation (C127) is revisited if Google documents the CRL format or a device key is reported leaked.
+- **G16 Device kinds on real devices.** *Added 2026-11-20.* The kind rules (C139) rest on one open-source sender's table of model names and one write-up. Open: the `md` of current Google devices not in that table (such as a Google TV streamer, which rule 4 would show as `tv`), of televisions with Cast built in whose `md` is a bare model number (they fall to `speaker`), and whether the Philips and Vizio models of C139 are televisions. Each real device seen by the project adds its record to the C140 vectors.
 
 ## 10. Test map
 
@@ -554,6 +604,7 @@ Every clause rests on the sources below or is marked as AudioSync's design. Goog
 - [openscreen-cast-auth]: Google Open Screen library, Cast sender channel authentication (BSD-3-Clause; behavior only): https://chromium.googlesource.com/openscreen/+/refs/heads/main/cast/sender/channel/cast_auth_util.cc
 - [openscreen-cast-certs]: Google Open Screen library, Cast certificate folder: trust store, validator, certificate helpers and the root certificate files (BSD-3-Clause; behavior and certificate data only): https://chromium.googlesource.com/openscreen/+/refs/heads/main/cast/common/certificate/
 - [openscreen-license]: Google Open Screen library, LICENSE (BSD-3-Clause, Copyright The Chromium Authors): https://chromium.googlesource.com/openscreen/+/refs/heads/main/LICENSE
+- [airplay-spec]: AudioSync AirPlay sender specification, in this repository: [`AIRPLAY_SPEC.md`](AIRPLAY_SPEC.md)
 
 Standards: RFC 2119, RFC 3986 (URIs), RFC 5246 (TLS 1.2), RFC 5737 (documentation addresses), RFC 6762 (mDNS), RFC 6763 (DNS-SD), RFC 8259 (JSON), RFC 8446 (TLS 1.3), RFC 9110 (HTTP semantics), RFC 9112 (HTTP/1.1), RFC 9639 (FLAC), all at https://www.rfc-editor.org/.
 
@@ -589,3 +640,4 @@ Standards: RFC 2119, RFC 3986 (URIs), RFC 5246 (TLS 1.2), RFC 5737 (documentatio
 [openscreen-cast-auth]: https://chromium.googlesource.com/openscreen/+/refs/heads/main/cast/sender/channel/cast_auth_util.cc
 [openscreen-cast-certs]: https://chromium.googlesource.com/openscreen/+/refs/heads/main/cast/common/certificate/
 [openscreen-license]: https://chromium.googlesource.com/openscreen/+/refs/heads/main/LICENSE
+[airplay-spec]: AIRPLAY_SPEC.md
