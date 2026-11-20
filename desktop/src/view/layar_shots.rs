@@ -1618,9 +1618,12 @@ fn b10() -> Vec<Row> {
             Ok(win)
         }),
         row("B10", "EQ-CURVE-MENU", |s| {
-            let win = s.equalizer(None)?;
+            s.equalizer(None)?;
             click(&s.app.equalizer(), "Curve")?;
-            Ok(win)
+            // The window grows while the menu is open, as a shown one does.
+            let size = (EQUALIZER_WIDTH, s.app.equalizer().get_fit_height());
+            s.size(s.app.equalizer().window(), size);
+            Ok(Win(Shown::Equalizer, size))
         }),
         row("B10", "EQ-SLIDER-DRAG", |s| {
             let win = s.equalizer(None)?;

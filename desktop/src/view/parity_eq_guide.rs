@@ -62,6 +62,43 @@ fn every_curve_menu_item_is_reachable_inside_the_window() {
     );
 }
 
+// Mac EqualizerWindow.swift:196's menu shows every curve and Save Curve…
+// at once. A Slint popup can't leave its window, so the window grows while
+// the menu is open, to the full menu 8 px above its bottom, and shrinks back.
+#[test]
+fn the_equalizer_grows_to_show_the_whole_curve_menu() {
+    let app = app_over(MockBackend::new());
+    app.show_equalizer();
+    let eq = app.equalizer();
+    let closed = eq.get_fit_height();
+    let button = ElementHandle::find_by_accessible_label(&eq, "Curve")
+        .find(|element| element.accessible_role() == Some(AccessibleRole::Combobox))
+        .expect("the curve menu");
+    button.invoke_accessible_default_action();
+    let presets = eq.get_preset_count() as f32;
+    // MenuRoom.rows: 24 px rows, the divider before Save Curve…, 4 px padding at each end.
+    let full = (presets + 1.0) * 24.0 + 9.0 + 8.0;
+    let below = button.absolute_position().y + button.size().height + 4.0;
+    assert_eq!(
+        eq.get_fit_height(),
+        below + full + 8.0,
+        "open, it fits the menu"
+    );
+    // The popup is sized as it opens, before the window has grown.
+    let list = ElementHandle::find_by_element_id(&eq, "CurveMenu::list")
+        .next()
+        .expect("the curve list");
+    assert!(
+        list.size().height >= full - 8.0,
+        "the list shows all {} rows: {} px tall",
+        presets + 1.0,
+        list.size().height
+    );
+
+    press(eq.window(), Key::Escape);
+    assert_eq!(eq.get_fit_height(), closed, "closed, it shrinks back");
+}
+
 // Mac EqualizerWindow.swift:159-160 is a native pop-up button filling its
 // 170 pt frame. The 2x EQ-WINDOW screen captures of 19 Nov measure it 21 pt
 // tall, white on light with the curve name in the text colour, and a 17 pt
@@ -97,7 +134,7 @@ fn the_equalizer_has_a_fixed_size_and_only_a_close_button() {
     assert!(EQUALIZER.contains("height: 140px;"), "bands 140 tall");
     assert!(!EQUALIZER.contains("min-height: 140px;"));
     assert!(!EQUALIZER.contains("min-height: 360px;"));
-    assert!(EQUALIZER.contains("max-height: content.preferred-height;"));
+    assert!(EQUALIZER.contains("max-height: root.fit-height;"));
     assert!(VIEW.contains("self.follow_dialog_frame(&self.equalizer(), \"equalizer\");"));
 }
 

@@ -221,10 +221,14 @@ component CurveMenu inherits Rectangle {
     callback save();
     callback rename();
     callback delete();
+    // The menu claimed `serial` and needs the window `height` high to show whole.
+    callback opened(int, length);
     property <string> shown: root.current >= 0 && root.current < root.names.length ? root.names[root.current] : Strings.equalizer-custom;
     property <string> saved-name: root.saved-shown ? root.shown : "";
 
     property <int> menu-serial;
+    // The window height the open menu asked for: the popup is sized before the window grows.
+    property <length> asked-height;
 
     function open-menu() {
         if MenuState.open != 0 && MenuState.open == root.menu-serial {
@@ -236,6 +240,8 @@ component CurveMenu inherits Rectangle {
         // how it tells it closed; with nothing focused it couldn't.
         focus.focus();
         root.menu-serial = MenuState.claim();
+        root.asked-height = root.absolute-position.y + root.height + 4px + MenuRoom.rows(root.names.length + (root.saved-shown ? 3 : 1), root.names.length > root.preset-count ? 2 : 1) + 8px;
+        root.opened(root.menu-serial, root.asked-height);
         menu.show();
     }
 
@@ -319,7 +325,7 @@ component CurveMenu inherits Rectangle {
         close-policy: close-on-click-outside;
         // The window cuts a popup at its edge, so a long list stops 8 px
         // above the window's bottom and its rows scroll.
-        height: MenuRoom.height > 0px ? min(panel.preferred-height, MenuRoom.height - root.absolute-position.y - root.height - 12px + 2 * MenuRoom.margin) : panel.preferred-height;
+        height: MenuRoom.height > 0px ? min(panel.preferred-height, max(MenuRoom.height, root.asked-height) - root.absolute-position.y - root.height - 12px + 2 * MenuRoom.margin) : panel.preferred-height;
 
         panel := MenuPanel {
             count: root.names.length + (root.saved-shown ? 3 : 1);
@@ -483,9 +489,13 @@ export component EqualizerWindow inherits Window {
     min-width: 520px;
     max-width: 520px;
     // Fixed in size, as on the Mac; the photo test reads it.
-    out property <length> fit-height: content.preferred-height;
-    min-height: content.preferred-height;
-    max-height: content.preferred-height;
+    // A popup can't leave its window, so it grows while the curve menu is
+    // open to show the whole menu, as the Mac's does past the window's edge.
+    out property <length> fit-height: MenuState.open != 0 && MenuState.open == root.curve-menu-serial ? max(content.preferred-height, root.curve-menu-height) : content.preferred-height;
+    property <int> curve-menu-serial;
+    property <length> curve-menu-height;
+    min-height: root.fit-height;
+    max-height: root.fit-height;
     default-font-family: Fluent.font;
     default-font-weight: Fluent.weight-regular;
     default-font-size: Tokens.font-size-body;
@@ -558,6 +568,8 @@ export component EqualizerWindow inherits Window {
         }
 
         content := VerticalLayout {
+            y: 0;
+            height: self.preferred-height;
             padding: 18px;
             spacing: 14px;
 
@@ -634,6 +646,10 @@ export component EqualizerWindow inherits Window {
                             }
                             delete => {
                                 root.delete-curve();
+                            }
+                            opened(serial, height) => {
+                                root.curve-menu-serial = serial;
+                                root.curve-menu-height = height;
                             }
                         }
                     }
