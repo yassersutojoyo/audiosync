@@ -245,12 +245,42 @@
   .feature p { color: var(--text-2); margin: 0; font-size: .98rem; }
   .feature svg { width: 30px; height: 30px; color: var(--mark); margin-bottom: 12px; }
 
-  .shots { display: grid; grid-template-columns: 1fr 1.6fr; gap: 24px; align-items: start; margin-top: 40px; }
-  .shots figure { margin: 0; }
-  .shots figcaption { color: var(--text-2); font-size: .92rem; margin-top: 12px; }
-  .shots .panel figcaption { text-align: center; }
-  .shots .panel img { max-width: 328px; margin-inline: auto; }
-  @media (max-width: 760px) { .shots { grid-template-columns: 1fr; } }
+  /* Screenshot switcher. The bar stays hidden until the script runs. */
+  .gallery { margin-top: 40px; }
+  .gallery figure { margin: 20px 0 0; }
+  .gallery figcaption { color: var(--text-2); font-size: .92rem; margin-top: 12px; text-align: center; }
+  /* Both shots share one pixel density, so flex-grow set to each image's pixel
+     width keeps them at true relative size. */
+  .stage { display: flex; gap: 32px; justify-content: center; align-items: flex-start; }
+  .stage picture { display: contents; }
+  /* The Mac shots' own transparent margins already make a gap of about 40 px. */
+  .stage[data-os="mac"] { gap: 0; }
+  .stage [data-slot="main"] { flex: 1816 1 0; min-width: 0; }
+  .stage [data-slot="panel"] { flex: 696 1 0; min-width: 0; }
+  .stage[data-os="windows"] [data-slot="main"], .stage[data-os="linux"] [data-slot="main"] { flex-grow: 1392; }
+  .stage[data-os="windows"] [data-slot="panel"], .stage[data-os="linux"] [data-slot="panel"] { flex-grow: 600; }
+  /* The Mac shots carry their own frame; these are bare rectangles. */
+  .stage[data-os="windows"] img, .stage[data-os="linux"] img { box-shadow: 0 0 0 1px var(--line); }
+  @media (max-width: 640px) {
+    .stage[data-os] { flex-direction: column; align-items: center; gap: 24px; }
+    .stage[data-os] [data-slot] { flex: none; width: 100%; }
+    .stage [data-slot="panel"] { max-width: 348px; }
+    .stage[data-os="windows"] [data-slot="panel"], .stage[data-os="linux"] [data-slot="panel"] { max-width: 300px; }
+  }
+  .gallery-bar { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: center; }
+  .gallery-bar[hidden] { display: none; }
+  .seg {
+    display: inline-flex; gap: 4px; padding: 4px;
+    border-radius: var(--corner-control); background: var(--card); border: 1px solid var(--edge);
+  }
+  .seg button {
+    min-width: 44px; min-height: 44px; padding: 0 16px; border: 0; border-radius: 9px;
+    background: transparent; color: var(--text); font: inherit; font-size: .95rem; font-weight: 600; cursor: pointer;
+  }
+  .seg button:hover { background: var(--card-soft); }
+  .seg button[aria-selected="true"], .seg button[aria-pressed="true"] { background: var(--btn-bg); color: var(--btn-text); }
+  .shot-eq { max-width: 640px; margin: 40px auto 0; }
+  .shot-eq figcaption { color: var(--text-2); font-size: .92rem; margin-top: 12px; text-align: center; }
 
   /* Limits */
   .limits { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
@@ -338,7 +368,7 @@
       <div class="shot-hero">
         <picture>
           <source srcset="https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/docs/images/main-window-dark.png" media="(prefers-color-scheme: dark)">
-          <img src="https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/docs/images/main-window-light.png" width="1816" height="1990" alt="The AudioSync main window: audio source, Now Playing, master volume, presets and the equalizer set to Loudness on the left; on the right, the Mac's own speakers, a Downstairs zone with two speakers in it and the connected speakers, each with a volume slider and, for local outputs, a sync delay">
+          <img src="https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/docs/images/main-window-light.png" width="1816" height="1948" alt="The AudioSync main window: audio source, Now Playing, master volume, presets and the equalizer set to Loudness on the left; on the right, the Mac's own speakers, a Downstairs zone with two speakers in it and the connected speakers, each with a volume slider and, for local outputs, a sync delay">
         </picture>
       </div>
     </div>
@@ -450,22 +480,42 @@
         </article>
       </div>
 
-      <div class="shots">
-        <figure class="panel reveal">
-          <picture>
-            <source srcset="https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/docs/images/menu-bar-panel-dark.png" media="(prefers-color-scheme: dark)">
-            <img src="https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/docs/images/menu-bar-panel-light.png" width="656" height="1054" loading="lazy" alt="The AudioSync menu bar panel: power switch, audio source, the Evening preset and master volume, then the Mac's speakers, a Downstairs zone with its two speakers and the connected speakers, each shown as on or off">
-          </picture>
-          <figcaption>The menu bar panel, for when you just want to flip a speaker on.</figcaption>
-        </figure>
-        <figure class="reveal">
-          <picture>
-            <source srcset="https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/docs/images/equalizer-dark.png" media="(prefers-color-scheme: dark)">
-            <img src="https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/docs/images/equalizer-light.png" width="1136" height="740" loading="lazy" alt="The AudioSync equalizer window, switched on with the Loudness curve: a preamp and ten band sliders">
-          </picture>
-          <figcaption>The equalizer. Pick a preset or drag the bands yourself.</figcaption>
-        </figure>
+      <div class="gallery" id="gallery">
+        <div class="gallery-bar" hidden>
+          <div class="seg" role="tablist" aria-label="Operating system">
+            <button type="button" role="tab" id="tab-mac" data-os="mac" aria-controls="gallery-stage" aria-selected="true">macOS</button>
+            <button type="button" role="tab" id="tab-windows" data-os="windows" aria-controls="gallery-stage" aria-selected="false" tabindex="-1">Windows</button>
+            <button type="button" role="tab" id="tab-linux" data-os="linux" aria-controls="gallery-stage" aria-selected="false" tabindex="-1">Linux</button>
+          </div>
+          <div class="seg" role="group" aria-label="Screenshot theme">
+            <button type="button" data-theme="light" aria-pressed="true">Light</button>
+            <button type="button" data-theme="dark" aria-pressed="false">Dark</button>
+          </div>
+        </div>
+        <div id="gallery-stage">
+          <figure class="reveal">
+            <div class="stage" data-os="mac">
+              <picture>
+                <source srcset="https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/docs/images/main-window-dark.png" media="(prefers-color-scheme: dark)">
+                <img data-slot="main" src="https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/docs/images/main-window-light.png" width="1816" height="1948" loading="lazy" alt="The AudioSync main window: audio source, Now Playing, master volume, presets and the equalizer set to Loudness on the left; on the right, the Mac's own speakers, a Downstairs zone with two speakers in it and the connected speakers, each with a volume slider and, for local outputs, a sync delay">
+              </picture>
+              <picture>
+                <source srcset="https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/docs/images/menu-bar-panel-dark.png" media="(prefers-color-scheme: dark)">
+                <img data-slot="panel" src="https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/docs/images/menu-bar-panel-light.png" width="696" height="1302" loading="lazy" alt="The AudioSync menu bar panel: power switch, the song playing and the audio source, the Evening preset and master volume, then the Mac's speakers, a Downstairs zone with its two speakers and the connected speakers, each shown as on or off">
+              </picture>
+            </div>
+            <figcaption>The main window, with the menu bar panel open.</figcaption>
+          </figure>
+        </div>
       </div>
+
+      <figure class="shot-eq reveal">
+        <picture>
+          <source srcset="https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/docs/images/equalizer-dark.png" media="(prefers-color-scheme: dark)">
+          <img src="https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/docs/images/equalizer-light.png" width="1136" height="744" loading="lazy" alt="The AudioSync equalizer window, switched on with the Loudness curve: a preamp and ten band sliders">
+        </picture>
+        <figcaption>The equalizer. Pick a preset or drag the bands yourself.</figcaption>
+      </figure>
     </div>
   </section>
 
@@ -590,6 +640,92 @@ cd audiosync
     }, { rootMargin: '0px 0px -6% 0px' });
     root.classList.add('js-reveal');
     items.forEach(function (item) { seen.observe(item); });
+  })();
+  (function () {
+    var gallery = document.getElementById('gallery');
+    if (!gallery) return;
+    var base = 'https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/docs/images/';
+    function trayPanel(name, h) {
+      return { file: 'tray-panel-' + name.toLowerCase(), w: 600, h: h,
+        alt: 'The AudioSync tray panel on ' + name + ': the song playing, master volume and the speakers, each shown as on or off' };
+    }
+    function otherMain(name) {
+      return { file: 'main-window-' + name.toLowerCase(), w: 1392, h: 1360,
+        alt: 'The AudioSync main window on ' + name + ': the song playing, audio source, master volume, and the speakers, each with a volume slider' };
+    }
+    var systems = {
+      mac: {
+        panel: { file: 'menu-bar-panel', w: 696, h: 1302,
+          alt: "The AudioSync menu bar panel: power switch, the song playing and the audio source, the Evening preset and master volume, then the Mac's speakers, a Downstairs zone with its two speakers and the connected speakers, each shown as on or off" },
+        main: { file: 'main-window', w: 1816, h: 1948,
+          alt: "The AudioSync main window: audio source, Now Playing, master volume, presets and the equalizer set to Loudness on the left; on the right, the Mac's own speakers, a Downstairs zone with two speakers in it and the connected speakers, each with a volume slider and, for local outputs, a sync delay" },
+        caption: 'The main window, with the menu bar panel open.'
+      },
+      windows: { panel: trayPanel('Windows', 994), main: otherMain('Windows'),
+        caption: 'The main window on Windows, with the tray panel open.' },
+      linux: { panel: trayPanel('Linux', 992), main: otherMain('Linux'),
+        caption: 'The main window on Linux, with the tray panel open.' }
+    };
+    var ua = navigator.userAgent;
+    var os = /Windows/.test(ua) ? 'windows' : (/Linux|X11/.test(ua) && !/Android/.test(ua)) ? 'linux' : 'mac';
+    var theme = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    var tabs = [].slice.call(gallery.querySelectorAll('[role="tab"]'));
+    var themes = [].slice.call(gallery.querySelectorAll('[data-theme]'));
+    var stage = document.getElementById('gallery-stage');
+
+    // From here on the theme buttons pick the picture, not the media query.
+    [].forEach.call(stage.querySelectorAll('source'), function (s) { s.parentNode.removeChild(s); });
+    stage.setAttribute('role', 'tabpanel');
+    stage.tabIndex = 0;
+
+    function show() {
+      ['panel', 'main'].forEach(function (slot) {
+        var shot = systems[os][slot];
+        var img = stage.querySelector('img[data-slot="' + slot + '"]');
+        img.width = shot.w;
+        img.height = shot.h;
+        img.alt = shot.alt;
+        img.src = base + shot.file + '-' + theme + '.png';
+      });
+      stage.querySelector('.stage').setAttribute('data-os', os);
+      stage.querySelector('figcaption').textContent = systems[os].caption;
+      tabs.forEach(function (tab) {
+        var on = tab.getAttribute('data-os') === os;
+        tab.setAttribute('aria-selected', on ? 'true' : 'false');
+        tab.tabIndex = on ? 0 : -1;
+      });
+      themes.forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-theme') === theme ? 'true' : 'false'); });
+      stage.setAttribute('aria-labelledby', 'tab-' + os);
+    }
+
+    tabs.forEach(function (tab, i) {
+      tab.addEventListener('click', function () { os = tab.getAttribute('data-os'); show(); });
+      tab.addEventListener('keydown', function (e) {
+        var next = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: tabs.length - 1 }[e.key];
+        if (next === undefined) return;
+        e.preventDefault();
+        var target = tabs[(next + tabs.length) % tabs.length];
+        os = target.getAttribute('data-os');
+        show();
+        target.focus();
+      });
+    });
+    themes.forEach(function (b) {
+      b.addEventListener('click', function () { theme = b.getAttribute('data-theme'); show(); });
+    });
+    show();
+    gallery.querySelector('.gallery-bar').hidden = false;
+
+    window.addEventListener('load', function () {
+      var later = window.requestIdleCallback || function (fn) { setTimeout(fn, 300); };
+      later(function () {
+        Object.keys(systems).forEach(function (name) {
+          ['panel', 'main'].forEach(function (slot) {
+            ['light', 'dark'].forEach(function (t) { new Image().src = base + systems[name][slot].file + '-' + t + '.png'; });
+          });
+        });
+      });
+    });
   })();
 </script>
 </body>

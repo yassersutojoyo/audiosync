@@ -11,7 +11,7 @@
         { "key": "X-Frame-Options", "value": "DENY" },
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'none'; script-src 'sha256-+YzzSpDKU2GWq0c/RCbXVdS0bss5loOYPipu26zfa3g='; style-src 'unsafe-inline'; img-src 'self' https://raw.githubusercontent.com; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+          "value": "default-src 'none'; script-src 'sha256-3pfuaB3k6CvlZr6VIZM+06VfTB9eFXVNeiOtoGzLzsY='; style-src 'unsafe-inline'; img-src 'self' https://raw.githubusercontent.com; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
         }
       ]
     }
