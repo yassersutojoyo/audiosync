@@ -8,7 +8,9 @@ enum DeviceIcon: String, CaseIterable {
     case headphones
     case laptop
     case monitor
+    case settop
     case smartSpeaker = "smart-speaker"
+    case soundbar
     case speaker
     case tv
     case usb
@@ -24,7 +26,7 @@ enum DeviceIcon: String, CaseIterable {
     /// Even-odd cuts the holes; nonzero joins the overlapping strokes of the line marks.
     var evenOdd: Bool {
         switch self {
-        case .device, .headphones, .laptop, .monitor, .smartSpeaker, .speaker, .tv, .usb: return true
+        case .device, .headphones, .laptop, .monitor, .settop, .smartSpeaker, .soundbar, .speaker, .tv, .usb: return true
         case .bluetooth, .zone: return false
         }
     }
@@ -73,12 +75,24 @@ enum DeviceIcon: String, CaseIterable {
                 p.l(8, 11); p.l(6, 11); p.l(6, 10); p.z(); p.m(5, 11); p.l(9, 11); p.a(9, 12, 1, -90, 0, true)
                 p.l(10, 12); p.a(9, 12, 1, 0, 90, true); p.l(5, 13); p.a(5, 12, 1, 90, 180, true); p.l(4, 12)
                 p.a(5, 12, 1, 180, -90, true); p.z()
+            case .settop:
+                p.m(3, 2); p.l(11, 2); p.a(11, 4, 2, -90, 0, true); p.l(13, 6); p.a(11, 6, 2, 0, 90, true); p.l(3, 8)
+                p.a(3, 6, 2, 90, 180, true); p.l(1, 4); p.a(3, 4, 2, 180, -90, true); p.z(); p.m(9, 5)
+                p.a(10, 5, 1, 180, 0, true); p.a(10, 5, 1, 0, 180, true); p.z(); p.m(4, 10); p.l(10, 10)
+                p.a(10, 11, 1, -90, 0, true); p.l(11, 11); p.a(10, 11, 1, 0, 90, true); p.l(4, 12)
+                p.a(4, 11, 1, 90, 180, true); p.l(3, 11); p.a(4, 11, 1, 180, -90, true); p.z()
             case .smartSpeaker:
                 p.m(6, 1); p.l(8, 1); p.a(8, 4, 3, -90, 0, true); p.l(11, 10); p.a(8, 10, 3, 0, 90, true); p.l(6, 13)
                 p.a(6, 10, 3, 90, 180, true); p.l(3, 4); p.a(6, 4, 3, 180, -90, true); p.z(); p.m(6, 4); p.l(8, 4)
                 p.a(8, 5, 1, -90, 0, true); p.l(9, 5); p.a(8, 5, 1, 0, 90, true); p.l(6, 6)
                 p.a(6, 5, 1, 90, 180, true); p.l(5, 5); p.a(6, 5, 1, 180, -90, true); p.z(); p.m(5.5, 9.5)
                 p.a(7, 9.5, 1.5, 180, 0, true); p.a(7, 9.5, 1.5, 0, 180, true); p.z()
+            case .soundbar:
+                p.m(4, 4); p.l(10, 4); p.a(10, 7, 3, -90, 0, true); p.l(13, 7); p.a(10, 7, 3, 0, 90, true); p.l(4, 10)
+                p.a(4, 7, 3, 90, 180, true); p.l(1, 7); p.a(4, 7, 3, 180, -90, true); p.z(); p.m(3, 7)
+                p.a(4, 7, 1, 180, 0, true); p.a(4, 7, 1, 0, 180, true); p.z(); p.m(6, 7); p.a(7, 7, 1, 180, 0, true)
+                p.a(7, 7, 1, 0, 180, true); p.z(); p.m(9, 7); p.a(10, 7, 1, 180, 0, true); p.a(10, 7, 1, 0, 180, true)
+                p.z()
             case .speaker:
                 p.m(5, 1); p.l(9, 1); p.a(9, 3, 2, -90, 0, true); p.l(11, 11); p.a(9, 11, 2, 0, 90, true); p.l(5, 13)
                 p.a(5, 11, 2, 90, 180, true); p.l(3, 3); p.a(5, 3, 2, 180, -90, true); p.z(); p.m(6, 4)
@@ -155,12 +169,24 @@ enum DeviceIcon: String, CaseIterable {
                 p.l(9, 13); p.l(7, 13); p.l(7, 12); p.z(); p.m(5, 13); p.l(11, 13); p.a(11, 14, 1, -90, 0, true)
                 p.l(12, 14); p.a(11, 14, 1, 0, 90, true); p.l(5, 15); p.a(5, 14, 1, 90, 180, true); p.l(4, 14)
                 p.a(5, 14, 1, 180, -90, true); p.z()
+            case .settop:
+                p.m(3, 2); p.l(13, 2); p.a(13, 4, 2, -90, 0, true); p.l(15, 8); p.a(13, 8, 2, 0, 90, true); p.l(3, 10)
+                p.a(3, 8, 2, 90, 180, true); p.l(1, 4); p.a(3, 4, 2, 180, -90, true); p.z(); p.m(10, 6)
+                p.a(11, 6, 1, 180, 0, true); p.a(11, 6, 1, 0, 180, true); p.z(); p.m(4, 12); p.l(12, 12)
+                p.a(12, 13, 1, -90, 0, true); p.l(13, 13); p.a(12, 13, 1, 0, 90, true); p.l(4, 14)
+                p.a(4, 13, 1, 90, 180, true); p.l(3, 13); p.a(4, 13, 1, 180, -90, true); p.z()
             case .smartSpeaker:
                 p.m(7, 1); p.l(9, 1); p.a(9, 5, 4, -90, 0, true); p.l(13, 11); p.a(9, 11, 4, 0, 90, true); p.l(7, 15)
                 p.a(7, 11, 4, 90, 180, true); p.l(3, 5); p.a(7, 5, 4, 180, -90, true); p.z(); p.m(6, 4); p.l(10, 4)
                 p.a(10, 5, 1, -90, 0, true); p.l(11, 5); p.a(10, 5, 1, 0, 90, true); p.l(6, 6)
                 p.a(6, 5, 1, 90, 180, true); p.l(5, 5); p.a(6, 5, 1, 180, -90, true); p.z(); p.m(6.25, 10.5)
                 p.a(8, 10.5, 1.75, 180, 0, true); p.a(8, 10.5, 1.75, 0, 180, true); p.z()
+            case .soundbar:
+                p.m(4, 5); p.l(12, 5); p.a(12, 8, 3, -90, 0, true); p.l(15, 8); p.a(12, 8, 3, 0, 90, true); p.l(4, 11)
+                p.a(4, 8, 3, 90, 180, true); p.l(1, 8); p.a(4, 8, 3, 180, -90, true); p.z(); p.m(4, 8)
+                p.a(5, 8, 1, 180, 0, true); p.a(5, 8, 1, 0, 180, true); p.z(); p.m(7, 8); p.a(8, 8, 1, 180, 0, true)
+                p.a(8, 8, 1, 0, 180, true); p.z(); p.m(10, 8); p.a(11, 8, 1, 180, 0, true)
+                p.a(11, 8, 1, 0, 180, true); p.z()
             case .speaker:
                 p.m(5, 1); p.l(11, 1); p.a(11, 3, 2, -90, 0, true); p.l(13, 13); p.a(11, 13, 2, 0, 90, true)
                 p.l(5, 15); p.a(5, 13, 2, 90, 180, true); p.l(3, 3); p.a(5, 3, 2, 180, -90, true); p.z(); p.m(7, 4)
@@ -239,12 +265,24 @@ enum DeviceIcon: String, CaseIterable {
                 p.l(10, 15); p.l(8, 15); p.l(8, 14); p.z(); p.m(6, 15); p.l(12, 15); p.a(12, 16, 1, -90, 0, true)
                 p.l(13, 16); p.a(12, 16, 1, 0, 90, true); p.l(6, 17); p.a(6, 16, 1, 90, 180, true); p.l(5, 16)
                 p.a(6, 16, 1, 180, -90, true); p.z()
+            case .settop:
+                p.m(3, 3); p.l(15, 3); p.a(15, 5, 2, -90, 0, true); p.l(17, 9); p.a(15, 9, 2, 0, 90, true); p.l(3, 11)
+                p.a(3, 9, 2, 90, 180, true); p.l(1, 5); p.a(3, 5, 2, 180, -90, true); p.z(); p.m(12, 7)
+                p.a(13, 7, 1, 180, 0, true); p.a(13, 7, 1, 0, 180, true); p.z(); p.m(5, 13); p.l(13, 13)
+                p.a(13, 14, 1, -90, 0, true); p.l(14, 14); p.a(13, 14, 1, 0, 90, true); p.l(5, 15)
+                p.a(5, 14, 1, 90, 180, true); p.l(4, 14); p.a(5, 14, 1, 180, -90, true); p.z()
             case .smartSpeaker:
                 p.m(8, 1); p.l(10, 1); p.a(10, 5, 4, -90, 0, true); p.l(14, 13); p.a(10, 13, 4, 0, 90, true)
                 p.l(8, 17); p.a(8, 13, 4, 90, 180, true); p.l(4, 5); p.a(8, 5, 4, 180, -90, true); p.z(); p.m(7, 5)
                 p.l(11, 5); p.a(11, 6, 1, -90, 0, true); p.l(12, 6); p.a(11, 6, 1, 0, 90, true); p.l(7, 7)
                 p.a(7, 6, 1, 90, 180, true); p.l(6, 6); p.a(7, 6, 1, 180, -90, true); p.z(); p.m(7, 12)
                 p.a(9, 12, 2, 180, 0, true); p.a(9, 12, 2, 0, 180, true); p.z()
+            case .soundbar:
+                p.m(4, 6); p.l(14, 6); p.a(14, 9, 3, -90, 0, true); p.l(17, 9); p.a(14, 9, 3, 0, 90, true); p.l(4, 12)
+                p.a(4, 9, 3, 90, 180, true); p.l(1, 9); p.a(4, 9, 3, 180, -90, true); p.z(); p.m(4, 9)
+                p.a(5, 9, 1, 180, 0, true); p.a(5, 9, 1, 0, 180, true); p.z(); p.m(8, 9); p.a(9, 9, 1, 180, 0, true)
+                p.a(9, 9, 1, 0, 180, true); p.z(); p.m(12, 9); p.a(13, 9, 1, 180, 0, true)
+                p.a(13, 9, 1, 0, 180, true); p.z()
             case .speaker:
                 p.m(6, 1); p.l(12, 1); p.a(12, 3, 2, -90, 0, true); p.l(14, 15); p.a(12, 15, 2, 0, 90, true)
                 p.l(6, 17); p.a(6, 15, 2, 90, 180, true); p.l(4, 3); p.a(6, 3, 2, 180, -90, true); p.z()
