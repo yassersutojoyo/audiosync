@@ -56,15 +56,18 @@ struct CastDevice: Equatable {
     var offline: Bool
     /// Added by address; no browse has found its `id` yet (C18).
     var manual: Bool
+    /// Its kind from its record (C138).
+    var product: ProductKind
 
     init(id: String, name: String, model: String = "", group: Bool = false, offline: Bool = false,
-         manual: Bool = false) {
+         manual: Bool = false, product: ProductKind = .unknown) {
         self.id = id
         self.name = name
         self.model = model
         self.group = group
         self.offline = offline
         self.manual = manual
+        self.product = product
     }
 }
 
@@ -331,7 +334,8 @@ extension CastDeviceChange {
                                 model: raw.model.map { String(cString: $0) } ?? "",
                                 group: raw.flags & UInt32(ASC_CAST_FLAG_GROUP) != 0,
                                 offline: raw.flags & UInt32(ASC_CAST_FLAG_OFFLINE) != 0,
-                                manual: raw.flags & UInt32(ASC_CAST_FLAG_MANUAL) != 0)
+                                manual: raw.flags & UInt32(ASC_CAST_FLAG_MANUAL) != 0,
+                                product: ProductKind(raw: raw.product))
         switch raw.event {
         case ASC_CAST_APPEARED:
             let former = raw.former.map { String(cString: $0) } ?? ""
@@ -346,6 +350,7 @@ extension CastDeviceChange {
     var logLine: String {
         func describe(_ d: CastDevice, _ offset: Double?) -> String {
             "\(d.name) (\(d.id))" + (d.model.isEmpty ? "" : ", \(d.model)") + (d.group ? ", a group" : "")
+                + (d.product == .unknown ? "" : ", kind \(d.product)")
                 + (d.offline ? ", offline" : "") + (offset.map { ", offset \(Int($0)) ms" } ?? "")
         }
         switch self {

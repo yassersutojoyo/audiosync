@@ -959,6 +959,7 @@ pub(crate) mod tests {
             waiting: None,
             cast: None,
             group: None,
+            product: crate::ui_model::ProductKind::Unknown,
             mic_left_out: None,
             in_target: None,
         }

@@ -2331,7 +2331,10 @@ struct SpeakerRow: View {
     /// In its zone's box, which takes the place of the row's own hover fill.
     var grouped = false
 
-    private var tag: String? { showTag ? model.text.speakerTag(speaker.tag, airPlay2: speaker.airPlay2) : nil }
+    private var tag: String? {
+        showTag ? model.text.speakerTag(model.text.speakerTag(speaker.tag, airPlay2: speaker.airPlay2),
+                                        product: speaker.product) : nil
+    }
 
     private var showSync: Bool { model.delayPanels.isOpen(speaker.id) }
 

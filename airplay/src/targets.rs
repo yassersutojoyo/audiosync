@@ -99,7 +99,19 @@ impl Target {
     /// A pair's kind is its members' shared kind, else a speaker; a home
     /// theater group's is its Apple TV's (P241).
     pub fn product(&self) -> ProductKind {
-        ProductKind::Unknown
+        if self.id.kind == TargetKind::HomeTheater {
+            return ProductKind::SetTop;
+        }
+        let mut kinds = self
+            .members
+            .iter()
+            .filter_map(|member| member.device.as_ref().map(|device| device.product()));
+        match kinds.next() {
+            Some(first) if first != ProductKind::Unknown && kinds.all(|kind| kind == first) => {
+                first
+            }
+            _ => ProductKind::Speaker,
+        }
     }
 
     /// Every member is in view and none reports its partner unreachable

@@ -123,6 +123,14 @@ extern "C" {
 #define ASC_AIRPLAY_FLAG_CREDENTIALS_KEPT 8192 /* credentials are stored for it, turned down or not, which asc_airplay_forget_pairing drops */
 #define ASC_AIRPLAY_FLAG_CREDENTIALS_TURNED_DOWN 16384 /* an answer turned its stored credentials down this run; asc_airplay_credentials_turned_down hands that to a new handle */
 
+/* What kind of device a network speaker is (AscAirPlayReceiver.product, AscCastDevice.product). */
+#define ASC_PRODUCT_UNKNOWN 0  /* its records don't tell */
+#define ASC_PRODUCT_TV 1       /* a television */
+#define ASC_PRODUCT_SETTOP 2   /* a set-top box or streaming stick */
+#define ASC_PRODUCT_SPEAKER 3  /* a smart or wireless speaker */
+#define ASC_PRODUCT_SOUNDBAR 4 /* a soundbar or an AV receiver */
+#define ASC_PRODUCT_COMPUTER 5 /* a computer */
+
 /* What a sender event reports (AscAirPlayEvent.kind). */
 #define ASC_AIRPLAY_EVENT_STATE 1    /* a speaker's state changed: .state */
 #define ASC_AIRPLAY_EVENT_ERROR 2    /* an error ended a speaker's session: .error */
@@ -1712,6 +1720,7 @@ typedef struct AscAirPlayReceiver {
     const char *target;   /* the "pair:<tsid>" or "theater:<group>" ID of the target it is a member of, or "" */
     const char *control;  /* a home theater group's Apple TV, by its id, or "" (P229) */
     const char *missing;  /* a target's members out of view or playing nothing, by name, one per line, or "" (P181) */
+    int32_t product;      /* ASC_PRODUCT_*: its kind, a target's by its members (P238, P241) */
 } AscAirPlayReceiver;
 
 /*
@@ -2232,6 +2241,7 @@ typedef struct AscCastDevice {
     uint32_t flags;    /* ASC_CAST_FLAG_* bits */
     const char *former; /* on the APPEARED of a device a browse found that was added by address:
                            the "manual:<ip:port>" id it was listed under; "" otherwise */
+    int32_t product;   /* ASC_PRODUCT_*: its kind (C138) */
 } AscCastDevice;
 
 /*

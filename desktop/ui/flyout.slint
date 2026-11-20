@@ -1529,9 +1529,9 @@ export component TrayFlyout inherits Window {
                                                 index: index;
 
                                                 FlyoutRow {
-                                                    icon: DeviceIcons.glyph16(speaker.kind);
+                                                    icon: DeviceIcons.glyph16(speaker.kind, speaker.product);
                                                     name: speaker.name;
-                                                    label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
+                                                    label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.product, speaker.show-kind, speaker.system-name);
                                                     description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
                                                     note: Strings.speaker-note(speaker);
                                                     system-name: speaker.system-name;
@@ -1655,9 +1655,9 @@ export component TrayFlyout inherits Window {
 
                                                 for speaker in zone-members.shown ? zone.members : []: FlyoutRow {
                                                     indent: 13px;
-                                                    icon: DeviceIcons.glyph16(speaker.kind);
+                                                    icon: DeviceIcons.glyph16(speaker.kind, speaker.product);
                                                     name: speaker.name;
-                                                    label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
+                                                    label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.product, speaker.show-kind, speaker.system-name);
                                                     description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
                                                     caption: speaker.zone-note;
                                                     note: Strings.speaker-note(speaker);
@@ -1689,9 +1689,9 @@ export component TrayFlyout inherits Window {
                                             index: index;
 
                                             FlyoutRow {
-                                                icon: DeviceIcons.glyph16(speaker.kind);
+                                                icon: DeviceIcons.glyph16(speaker.kind, speaker.product);
                                                 name: speaker.name;
-                                                label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
+                                                label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.product, speaker.show-kind, speaker.system-name);
                                                 description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
                                                 note: Strings.speaker-note(speaker);
                                                 system-name: speaker.system-name;

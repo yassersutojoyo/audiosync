@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 
 use audiosync_airplay::discovery::{
     BrowseEvent, Browser, Device, DeviceId, DeviceKey, Directory, DirectoryEvent, DnsRecord,
-    Features, ProductKind, ProtocolPath, Resolver, ScopedAddr, SecurityMode, ServiceKind, ServiceRecord,
-    StatusFlags, Txt, connect_order, parse_raop_instance,
+    Features, ProductKind, ProtocolPath, Resolver, ScopedAddr, SecurityMode, ServiceKind,
+    ServiceRecord, StatusFlags, Txt, connect_order, parse_raop_instance,
 };
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason};
 use audiosync_airplay::metadata::MetadataSupport;

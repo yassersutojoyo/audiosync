@@ -820,7 +820,8 @@ extension AppDelegate {
                                             self.speakerNames.renamed(key: SpeakerKey.make(id: NativeAirPlayID.app(member),
                                                                                            airplay: true))
                                         }
-                                    })
+                                    },
+                                    product: receiver.flatMap { native?.receivers[$0]?.product } ?? .unknown)
         }
     }
 

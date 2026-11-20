@@ -21,6 +21,11 @@ export enum MainControl { power, source, input-pair, transport, master-volume, e
 // connected speaker's name.
 export enum SpeakerKind { airplay, airplay2, cast, built-in, headphones, bluetooth, usb, usb-headphones, usb-speakers, hdmi, display-port, virtual, other }
 
+// What kind of device a network speaker is, from its records (P238, C138):
+// the glyph in its toggle and a word Narrator reads. `unknown` keeps the
+// kind's own glyph.
+export enum ProductKind { unknown, tv, settop, speaker, soundbar, computer }
+
 // An AirPlay row that plays a stereo pair or a home theater group (an Apple
 // TV's speakers) as one speaker; none for any other row.
 export enum SpeakerGroup { none, stereo-pair, home-theater }
@@ -151,6 +156,7 @@ export struct SpeakerItem {
     renaming: bool,
     name-text: string,
     kind: SpeakerKind,
+    product: ProductKind,
     // Connected speakers show their kind; the PC's own outputs don't.
     show-kind: bool,
     state: RowState,

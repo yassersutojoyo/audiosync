@@ -76,7 +76,7 @@ use audiosync_airplay::audio::SAMPLE_RATE;
 use audiosync_airplay::dacp::{DacpAdvertiser, RemoteCommand};
 use audiosync_airplay::discovery::mdns::{MdnsAdvertiser, MdnsBrowser};
 use audiosync_airplay::discovery::{
-    Browser, Device, DeviceKey, ProtocolPath, ServiceKind, shown_text,
+    Browser, Device, DeviceKey, ProductKind, ProtocolPath, ServiceKind, shown_text,
 };
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason, Warning};
 use audiosync_airplay::homekit::HomeKitCredentials;
@@ -205,6 +205,30 @@ pub const AIRPLAY_FLAG_CREDENTIALS_KEPT: u32 = 8192;
 /// An answer turned its stored credentials down this run (P154), which the
 /// host hands the next handle ([`asc_airplay_credentials_turned_down`]).
 pub const AIRPLAY_FLAG_CREDENTIALS_TURNED_DOWN: u32 = 16384;
+
+/// What kind of device a network speaker is ([`AscAirPlayReceiver::product`],
+/// [`AscCastDevice::product`](crate::ffi::AscCastDevice::product); P238,
+/// C138): none the records tell.
+pub const PRODUCT_UNKNOWN: i32 = 0;
+pub const PRODUCT_TV: i32 = 1;
+/// A set-top box or streaming stick.
+pub const PRODUCT_SETTOP: i32 = 2;
+/// A smart or wireless speaker.
+pub const PRODUCT_SPEAKER: i32 = 3;
+/// A soundbar or an AV receiver.
+pub const PRODUCT_SOUNDBAR: i32 = 4;
+pub const PRODUCT_COMPUTER: i32 = 5;
+
+fn product_code(kind: ProductKind) -> i32 {
+    match kind {
+        ProductKind::Tv => PRODUCT_TV,
+        ProductKind::SetTop => PRODUCT_SETTOP,
+        ProductKind::Speaker => PRODUCT_SPEAKER,
+        ProductKind::Soundbar => PRODUCT_SOUNDBAR,
+        ProductKind::Computer => PRODUCT_COMPUTER,
+        ProductKind::Unknown => PRODUCT_UNKNOWN,
+    }
+}
 
 /// What a sender event reports ([`AscAirPlayEvent::kind`]): a speaker's
 /// state changed ([`AscAirPlayEvent::state`]).
@@ -457,6 +481,9 @@ pub struct AscAirPlayReceiver {
     /// The names of a target's members out of view or playing nothing, one
     /// per line; "" for none and for anything else (P181).
     pub missing: *const c_char,
+    /// `PRODUCT_*`: its kind, a target's by its members (P238, P241);
+    /// `PRODUCT_UNKNOWN` for a gone receiver.
+    pub product: i32,
 }
 
 /// One thing that happened to a speaker, or to the stream. The strings are
@@ -1982,8 +2009,10 @@ impl AscAirPlay {
         let mut target = String::new();
         let mut control = String::new();
         let mut missing = String::new();
+        let mut product = PRODUCT_UNKNOWN;
         let (code, id, name, model, (availability, unsupported), flags) = match &event {
             ReceiverEvent::Appeared(info) | ReceiverEvent::Changed(info) => {
+                product = product_code(info.device.product());
                 let id = receiver_id(&info.device.key);
                 let mut paired = self.paired(&id);
                 let (availability, mut flags) = if self.over_airplay2(&id, info) {
@@ -2045,6 +2074,7 @@ impl AscAirPlay {
                 0,
             ),
             ReceiverEvent::Target(TargetChange::Updated(found)) => {
+                product = product_code(found.product());
                 let id = found.id.to_string();
                 let mut flags = AIRPLAY_FLAG_TARGET;
                 let silent = self.target_missing.get(&id).map_or(&[][..], Vec::as_slice);
@@ -2119,6 +2149,7 @@ impl AscAirPlay {
             target: self.receiver_strings[3].as_ptr(),
             control: self.receiver_strings[4].as_ptr(),
             missing: self.receiver_strings[5].as_ptr(),
+            product,
         }
     }
 
@@ -4606,6 +4637,7 @@ mod tests {
             target: ptr::null(),
             control: ptr::null(),
             missing: ptr::null(),
+            product: -1,
         }
     }
 

@@ -52,6 +52,8 @@ struct NativeReceiver: Equatable {
     var control = ""
     /// A target's members out of view or playing nothing, by name (P181).
     var missing: [String] = []
+    /// Its kind from its records, a target's by P241.
+    var product: ProductKind = .unknown
 
     /// How the speaker list shows it, if at all: one that can play is open;
     /// one that asks for a PIN or a password needs a code, which AudioSync
@@ -80,6 +82,7 @@ struct NativeReceiver: Equatable {
     var logDescription: String {
         var parts = ["\(name) (\(id))"]
         if !model.isEmpty { parts.append(model) }
+        if product != .unknown { parts.append("kind \(product)") }
         parts.append(availability.rawValue + (reason.map { " (\($0))" } ?? ""))
         if !hints.isEmpty { parts.append("hints: " + hints.joined(separator: " ")) }
         if !target.isEmpty { parts.append("member of " + target) }

@@ -59,6 +59,8 @@ final class AppModel: ObservableObject {
         var calibrationLeftOut: CalibrationLeftOut? = nil
         /// The local output the others' delays are relative to: it can't be hidden.
         var isReference = false
+        /// A network speaker's kind from its records; unknown for local outputs.
+        var product: ProductKind = .unknown
 
         /// A speaker AudioSync streams to through AirPlay, not a local output.
         var isAirPlay: Bool { tag == .airplay }
@@ -69,7 +71,7 @@ final class AppModel: ObservableObject {
         /// The system name when renamed, for VoiceOver labels.
         var renamedFrom: String? { isRenamed ? systemName : nil }
         /// The badge icon, from the reported name so a rename doesn't change it.
-        var symbol: DeviceIcon { tag.symbol(name: systemName.isEmpty ? name : systemName) }
+        var symbol: DeviceIcon { product.icon ?? tag.symbol(name: systemName.isEmpty ? name : systemName) }
     }
 
     /// The Hidden Speakers menu, and which sections hold a present speaker
@@ -1977,7 +1979,7 @@ struct MenuBarView: View {
                           shownNote: t.panelRowNote(hint), connecting: connecting,
                           renamedFrom: speaker.renamedFrom,
                           value: t.rowValue(model.state(of: speaker), offline: speaker.unannounced),
-                          kind: speaker.tag, airPlay2: speaker.airPlay2,
+                          kind: speaker.tag, airPlay2: speaker.airPlay2, product: speaker.product,
                           // The row's note says what its prompt waits for instead.
                           availability: speaker.codeWait == nil ? speaker.availability : .open,
                           deviceVolume: model.deviceVolume(of: speaker).map { DeviceVolumeGlyph($0, text: t) }) {
@@ -2017,6 +2019,7 @@ private struct CompactRow: View {
     /// The kind of output, shown as a small icon after the name.
     var kind: SpeakerTag? = nil
     var airPlay2 = false
+    var product: ProductKind = .unknown
     var availability: SpeakerAvailability = .open
     /// A switched-on local output's device volume hint: a glyph, with the
     /// hint as its tooltip and in the VoiceOver hint (S198).
@@ -2024,6 +2027,10 @@ private struct CompactRow: View {
     let toggle: () -> Void
     @StateObject private var hover = HoverState()
     @Environment(\.isEnabled) private var isEnabled
+
+    private var shownTag: String? {
+        kind.map { text.speakerTag(text.speakerTag($0, airPlay2: airPlay2), product: product) }
+    }
 
     var body: some View {
         Button(action: toggle) {
@@ -2066,10 +2073,8 @@ private struct CompactRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hover.isHovered = $0 }
-        .accessibilityLabel(label ?? text.speakerLabel(name: name, tag: kind.map { text.speakerTag($0, airPlay2: airPlay2) },
-                                                       renamedFrom: renamedFrom))
-        .layarKey(label ?? text.speakerLabel(name: name, tag: kind.map { text.speakerTag($0, airPlay2: airPlay2) },
-                                                       renamedFrom: renamedFrom))
+        .accessibilityLabel(label ?? text.speakerLabel(name: name, tag: shownTag, renamedFrom: renamedFrom))
+        .layarKey(label ?? text.speakerLabel(name: name, tag: shownTag, renamedFrom: renamedFrom))
         .accessibilityValue(value ?? text.value(state))
         .accessibilityHint(text.rowHint(state, note: hint ?? deviceVolume?.accessibilityNote
                                             ?? text.availability(availability)))

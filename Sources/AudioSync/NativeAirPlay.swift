@@ -820,7 +820,8 @@ final class NativeAirPlay {
                                       credentialsTurnedDown:
                                           raw.flags & UInt32(ASC_AIRPLAY_FLAG_CREDENTIALS_TURNED_DOWN) != 0,
                                       control: text(raw.control),
-                                      missing: text(raw.missing).split(separator: "\n").map(String.init))
+                                      missing: text(raw.missing).split(separator: "\n").map(String.init),
+                                      product: ProductKind(raw: raw.product))
         return raw.event == ASC_AIRPLAY_APPEARED ? .appeared(receiver) : .changed(receiver)
     }
 

@@ -45,7 +45,8 @@ use audiosync_cast::device_keys::DeviceKeyBook;
 use audiosync_cast::discovery::mdns::MdnsBrowser;
 use audiosync_cast::discovery::reach::Reachability;
 use audiosync_cast::discovery::{
-    Announcements, BrowseEvent, DEVICE_PORT, DeviceId, DeviceKey, DeviceKind, DeviceList, ListEvent,
+    Announcements, BrowseEvent, DEVICE_PORT, DeviceId, DeviceKey, DeviceKind, DeviceList,
+    ListEvent, ProductKind,
 };
 use audiosync_cast::error::ConnectError;
 use audiosync_cast::group::{GroupMember, GroupRecords};
@@ -58,7 +59,10 @@ use audiosync_cast::status::{self, ControlType};
 use audiosync_cast::stream::StreamError;
 
 use super::airplay::{LATEST_PANIC, PANICS, caught_panic_location, note_panic_locations};
-use super::{host_slice, stereo_samples};
+use super::{
+    PRODUCT_COMPUTER, PRODUCT_SETTOP, PRODUCT_SOUNDBAR, PRODUCT_SPEAKER, PRODUCT_TV,
+    PRODUCT_UNKNOWN, host_slice, stereo_samples,
+};
 use crate::airplay_pairings::write_atomically;
 use crate::delay_line::DelayLine;
 use crate::eq::{self, BAND_COUNT, EqSettings};
@@ -243,6 +247,9 @@ pub struct AscCastDevice {
     /// by address, the `manual:<address>` ID it was listed under, so the
     /// host moves what it kept for it (C18); "" otherwise.
     pub former: *const c_char,
+    /// `PRODUCT_*`: its kind (C138, C139); `PRODUCT_UNKNOWN` for a gone
+    /// device or an address no browse found.
+    pub product: i32,
 }
 
 /// One member of the playing group (C94, C95). The strings are
@@ -385,6 +392,17 @@ impl Pending {
     }
 }
 
+fn cast_product_code(kind: ProductKind) -> i32 {
+    match kind {
+        ProductKind::Tv => PRODUCT_TV,
+        ProductKind::SetTop => PRODUCT_SETTOP,
+        ProductKind::Speaker => PRODUCT_SPEAKER,
+        ProductKind::Soundbar => PRODUCT_SOUNDBAR,
+        ProductKind::Computer => PRODUCT_COMPUTER,
+        ProductKind::Unknown => PRODUCT_UNKNOWN,
+    }
+}
+
 /// A device change waiting for the host.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Change {
@@ -394,6 +412,7 @@ struct Change {
     model: String,
     flags: u32,
     former: String,
+    product: i32,
 }
 
 /// An attempt whose `Ended` hasn't come yet.
@@ -745,8 +764,10 @@ impl AscCast {
             model: String::new(),
             flags: 0,
             former: String::new(),
+            product: PRODUCT_UNKNOWN,
         };
         if let Some(entry) = entry {
+            change.product = cast_product_code(entry.product());
             if let Some(device) = &entry.device {
                 change.name = device
                     .name
@@ -1075,6 +1096,7 @@ impl AscCast {
             model: self.change_strings[2].as_ptr(),
             flags: change.flags,
             former: self.change_strings[3].as_ptr(),
+            product: change.product,
         }
     }
 
@@ -2675,6 +2697,7 @@ mod tests {
             model: ptr::null(),
             flags: 0,
             former: ptr::null(),
+            product: -1,
         }
     }
 
@@ -2690,6 +2713,7 @@ mod tests {
                 model: text(device.model),
                 flags: device.flags,
                 former: text(device.former),
+                product: device.product,
             });
         }
         found
@@ -3164,6 +3188,7 @@ mod tests {
             model: "Chromecast Audio".to_owned(),
             flags,
             former: String::new(),
+            product: PRODUCT_SPEAKER,
         };
         let gone = Change {
             event: CAST_GONE,
@@ -3172,6 +3197,7 @@ mod tests {
             model: String::new(),
             flags: 0,
             former: String::new(),
+            product: PRODUCT_UNKNOWN,
         };
         assert_eq!(
             devices(handle),
@@ -3407,6 +3433,7 @@ mod tests {
             model: String::new(),
             flags,
             former: String::new(),
+            product: PRODUCT_UNKNOWN,
         };
         assert_eq!(
             devices(handle),

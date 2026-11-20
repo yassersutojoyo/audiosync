@@ -619,12 +619,7 @@ fn a_group_public_name_shows_without_controls_or_hidden_characters() {
 /// A pair member with `model` (none when empty) and the pair keys.
 fn modelled_member(n: u8, model: &str, gid: &str) -> Device {
     let model = format!("model={model}");
-    let mut txt = vec![
-        "flags=0x4",
-        "gpn=Kitchen",
-        "igl=1",
-        "gcgl=1",
-    ];
+    let mut txt = vec!["flags=0x4", "gpn=Kitchen", "igl=1", "gcgl=1"];
     if model != "model=" {
         txt.push(&model);
     }
@@ -653,7 +648,11 @@ fn a_pair_takes_its_members_shared_kind_and_a_home_theater_is_a_set_top_box() {
         &modelled_member(1, "AudioAccessory5,1", &gid),
         &modelled_member(2, "", &gid),
     ]);
-    assert_eq!(mixed[0].product(), ProductKind::Speaker, "speaker and unknown");
+    assert_eq!(
+        mixed[0].product(),
+        ProductKind::Speaker,
+        "speaker and unknown"
+    );
 
     let theater = find_targets([
         &apple_tv(9),

@@ -1169,9 +1169,8 @@ fn a_cast_device_kind_comes_from_md_and_the_group_port_never_the_name() {
     for (txt, port, kind) in vectors {
         let mut strings: Vec<&[u8]> = vec![id.as_bytes()];
         strings.extend(txt.iter().map(|s| s.as_bytes()));
-        let device =
-            CastDevice::from_record(&record("A._googlecast._tcp.local.", *port, &strings))
-                .expect("a device");
+        let device = CastDevice::from_record(&record("A._googlecast._tcp.local.", *port, &strings))
+            .expect("a device");
         assert_eq!(device.product(), *kind, "{txt:?} on {port}");
     }
 

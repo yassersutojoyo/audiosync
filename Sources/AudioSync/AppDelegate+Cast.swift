@@ -403,7 +403,8 @@ extension AppDelegate {
                                                   group: castModel.groupMembers(of: id, name: castMemberName),
                                                   manual: device.manual,
                                                   removable: castModel.manualAddresses[id] != nil,
-                                                  volumeStep: volume?.step ?? 0))
+                                                  volumeStep: volume?.step ?? 0),
+                                    product: device.product)
         }
     }
 

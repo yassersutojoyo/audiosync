@@ -97,6 +97,51 @@ pub struct SourceInfo {
     pub hands_free: bool,
 }
 
+/// What kind of device a network speaker is, from its discovery records
+/// (P238, C138): its row's glyph shows it, and Narrator names it (P245).
+/// Kept with a zone for a member out of view (P244).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ProductKind {
+    #[default]
+    Unknown,
+    Tv,
+    /// A set-top box or streaming stick.
+    SetTop,
+    /// A smart or wireless speaker.
+    Speaker,
+    /// A soundbar or an AV receiver.
+    Soundbar,
+    Computer,
+}
+
+impl From<audiosync_airplay::discovery::ProductKind> for ProductKind {
+    fn from(kind: audiosync_airplay::discovery::ProductKind) -> ProductKind {
+        use audiosync_airplay::discovery::ProductKind as K;
+        match kind {
+            K::Tv => ProductKind::Tv,
+            K::SetTop => ProductKind::SetTop,
+            K::Speaker => ProductKind::Speaker,
+            K::Soundbar => ProductKind::Soundbar,
+            K::Computer => ProductKind::Computer,
+            K::Unknown => ProductKind::Unknown,
+        }
+    }
+}
+
+impl From<audiosync_cast::discovery::ProductKind> for ProductKind {
+    fn from(kind: audiosync_cast::discovery::ProductKind) -> ProductKind {
+        use audiosync_cast::discovery::ProductKind as K;
+        match kind {
+            K::Tv => ProductKind::Tv,
+            K::SetTop => ProductKind::SetTop,
+            K::Speaker => ProductKind::Speaker,
+            K::Soundbar => ProductKind::Soundbar,
+            K::Computer => ProductKind::Computer,
+            K::Unknown => ProductKind::Unknown,
+        }
+    }
+}
+
 /// What kind of device an output is, as Windows describes its endpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum OutputKind {
@@ -226,6 +271,8 @@ pub struct AirPlayInfo {
     /// Set for a stereo pair or home theater group, listed as one speaker
     /// while the AirPlay 2 switch is on (spec P176).
     pub group: Option<AirPlayGroup>,
+    /// Its kind from its records, a target's by its members (P238, P241).
+    pub product: ProductKind,
 }
 
 /// What a stereo pair or home theater group row says about its members.
@@ -472,6 +519,8 @@ pub struct CastInfo {
     pub format: Option<Codec>,
     /// How long its feed waits for L while it is in a session, in ms (C77).
     pub hold_back_ms: f64,
+    /// Its kind from its record (C138).
+    pub product: ProductKind,
 }
 
 /// A Cast group as its row shows it.

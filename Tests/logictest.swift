@@ -4290,6 +4290,22 @@ do {
             && kinds.speakerTag(.cast, airPlay2: true) == "Google Cast"
             && kinds.speakerLabel(name: "Loft", tag: kinds.speakerTag(.airplay, airPlay2: true)) == "Loft, AirPlay 2",
           "native airplay: the kind's tooltip and VoiceOver label say AirPlay 2 for such a row, AirPlay for the rest")
+    let kindTV = NativeReceiver(id: "K1", name: "Living Room", model: "", availability: .available, reason: nil,
+                                hints: [], product: ProductKind(raw: ASC_PRODUCT_TV))
+    var kindRow = AppModel.Speaker(id: "ap:K1", name: "Living Room", tag: .airplay, enabled: false,
+                                   volume: 50, offsetMs: nil)
+    kindRow.product = ProductKind(raw: ASC_PRODUCT_SOUNDBAR)
+    // covers: P242, P245, P246
+    check(ProductKind(raw: ASC_PRODUCT_TV).icon == .tv && ProductKind(raw: ASC_PRODUCT_SETTOP).icon == .settop
+            && ProductKind(raw: ASC_PRODUCT_SPEAKER).icon == .smartSpeaker
+            && ProductKind(raw: ASC_PRODUCT_COMPUTER).icon == .laptop
+            && ProductKind(raw: ASC_PRODUCT_UNKNOWN).icon == nil && ProductKind(raw: 99) == .unknown
+            && kindRow.symbol == .soundbar
+            && kinds.speakerLabel(name: "Living Room", tag: kinds.speakerTag("AirPlay", product: .tv))
+                == "Living Room, AirPlay, TV"
+            && kinds.speakerTag("AirPlay", product: .unknown) == "AirPlay"
+            && kindTV.logDescription.contains("kind tv"),
+          "device kind: each kind has its own glyph and word, unknown keeps the type's glyph, the log names the kind")
     paths.apply(.changed(NativeReceiver(id: "H8", name: "Loft", model: "", availability: .available, reason: nil,
                                         hints: ["airplay", "airplay2", "over-airplay2", "paired"], overAirPlay2: true,
                                         paired: true)))
