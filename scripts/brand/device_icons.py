@@ -1,8 +1,9 @@
 """Generates AudioSync's own device icons (circle glyphs, 12 px badges).
 
-Circle glyphs are drawn per grid, 18 px for the 32 px circle and 14 px for the
-24 and 26 px circles (the sheet's 18 in 32), each on its own whole pixels
-rather than scaled; the 14 px set goes in a subfolder named 14.
+Circle glyphs are drawn per grid, 18 px for the 32 px circle, 16 px for the
+tray panel's 28 px circle and 14 px for the 24 and 26 px circles (the sheet's
+18 in 32), each on its own whole pixels rather than scaled; the smaller sets go
+in subfolders named after their grid.
 
 Every straight horizontal or vertical edge is asserted to land on a whole
 pixel; curves and diagonals are left to antialiasing.
@@ -115,6 +116,15 @@ GLYPHS = {18: {
              + line([(2, 11), (9, 15), (16, 11)], 2)),
     "device": ("evenodd",
                rr(2, 2, 16, 16, 2) + rr(4, 4, 14, 14, 1) + circ(9, 9, 3)),
+    "settop": ("evenodd",
+               rr(1, 3, 17, 11, 2) + circ(13, 7, 1) + rr(4, 13, 14, 15, 1)),
+    "soundbar": ("evenodd",
+                 rr(1, 6, 17, 12, 3) + circ(5, 9, 1) + circ(9, 9, 1) + circ(13, 9, 1)),
+}, 16: {
+    "settop": ("evenodd",
+               rr(1, 2, 15, 10, 2) + circ(11, 6, 1) + rr(3, 12, 13, 14, 1)),
+    "soundbar": ("evenodd",
+                 rr(1, 5, 15, 11, 3) + circ(5, 8, 1) + circ(8, 8, 1) + circ(11, 8, 1)),
 }, 14: {
     "laptop": ("evenodd",
                rr(2, 2, 12, 10, tl=2, tr=2, br=0, bl=0) + rr(4, 4, 10, 8, 1) + rr(1, 10, 13, 12, 1)),
@@ -139,6 +149,10 @@ GLYPHS = {18: {
              + line([(2, 9), (7, 12), (12, 9)], 2)),
     "device": ("evenodd",
                rr(2, 2, 12, 12, 2) + rr(4, 4, 10, 10, 1) + circ(7, 7, 1.5)),
+    "settop": ("evenodd",
+               rr(1, 2, 13, 8, 2) + circ(10, 5, 1) + rr(3, 10, 11, 12, 1)),
+    "soundbar": ("evenodd",
+                 rr(1, 4, 13, 10, 3) + circ(4, 7, 1) + circ(7, 7, 1) + circ(10, 7, 1)),
 }}
 
 # 12 px badges: solid shapes, 1 px gaps, corner radius 1.
