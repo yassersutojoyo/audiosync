@@ -26,7 +26,7 @@ export component ZoneNameDialog inherits Dialog {
     callback cancelled();
 
     title: root.heading;
-    icon: @image-url("../res/audiosync-256.png");
+    icon: @image-url("../res/audiosync-tile-256.png");
     background: Tokens.background;
     default-font-family: Fluent.font;
     default-font-weight: Fluent.weight-regular;
@@ -140,7 +140,7 @@ export component PinDialog inherits Dialog {
     property <bool> can-pair: root.phase == PinPhase.ready && root.pin.character-count == 4;
 
     title: Strings.pin-dialog-title(root.speaker);
-    icon: @image-url("../res/audiosync-256.png");
+    icon: @image-url("../res/audiosync-tile-256.png");
     background: Tokens.background;
     default-font-family: Fluent.font;
     default-font-weight: Fluent.weight-regular;
@@ -269,7 +269,7 @@ export component PasswordDialog inherits Dialog {
     property <bool> can-pair: root.password != "";
 
     title: Strings.password-dialog-title(root.speaker);
-    icon: @image-url("../res/audiosync-256.png");
+    icon: @image-url("../res/audiosync-tile-256.png");
     background: Tokens.background;
     default-font-family: Fluent.font;
     default-font-weight: Fluent.weight-regular;

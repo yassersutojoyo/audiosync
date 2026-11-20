@@ -726,6 +726,29 @@ mod tests {
         assert!(!about.contains("BrandMark {") && !about.contains("Wordmark {"));
     }
 
+    /// Every window's title bar and taskbar button carry the main window's
+    /// app icon tile; the older plain mark stayed on the secondary windows.
+    #[test]
+    fn every_window_uses_the_app_icon_tile() {
+        let windows = [
+            ("about", include_str!("../ui/about.slint")),
+            ("dialogs", include_str!("../ui/dialogs.slint")),
+            ("equalizer", include_str!("../ui/equalizer.slint")),
+            ("guide", include_str!("../ui/guide.slint")),
+            ("help", include_str!("../ui/help.slint")),
+            ("main", include_str!("../ui/main.slint")),
+            ("remote", include_str!("../ui/remote.slint")),
+            ("settings", include_str!("../ui/settings.slint")),
+            ("setup", include_str!("../ui/setup.slint")),
+        ];
+        for (name, src) in windows {
+            assert!(
+                !src.contains("icon: @image-url(\"../res/audiosync-256.png\")"),
+                "{name}.slint still uses the old window icon"
+            );
+        }
+    }
+
     /// The Mac's menu shortcuts and what each is on Windows: the `Strings`
     /// title of the gear's menu item (empty for a shortcut with no item, as
     /// on the Mac's speaker panels and Equalizer row), its `@keys`, and how
