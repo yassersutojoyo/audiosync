@@ -871,6 +871,38 @@ fn one_burst_of_resend_requests_after_a_resume_never_steps() {
 
 // covers: P200
 #[test]
+fn a_steady_run_of_228_resend_requests_a_minute_steps_up_within_11_seconds() {
+    let mut rig = quiet_rig();
+    let id = rig.add(speaker(1, Codec::Pcm));
+    // 3% loss at about 125 packets a second, as fake_tv asked on 2026-11-21.
+    let mut second = 1.0;
+    while second < 12.0 {
+        run_to(&mut rig, second);
+        lose_one(&mut rig, id);
+        second += 60.0 / 228.0;
+    }
+    run_to(&mut rig, 12.5);
+    assert_eq!(rig.stream.latency_frames(), 8_820, "{:?}", timelines(&rig));
+}
+
+// covers: P200
+#[test]
+fn a_burst_and_one_request_10_seconds_later_never_step() {
+    let mut rig = quiet_rig();
+    let id = rig.add(speaker(1, Codec::Pcm));
+    run_to(&mut rig, 2.0);
+    for _ in 0..25 {
+        lose_one(&mut rig, id);
+        rig.run_for(Duration::from_millis(40));
+    }
+    rig.run_for(Duration::from_secs(10));
+    lose_one(&mut rig, id);
+    rig.run_for(Duration::from_secs(30));
+    assert_eq!(rig.stream.latency_frames(), LOW, "{:?}", timelines(&rig));
+}
+
+// covers: P200
+#[test]
 fn a_rate_step_comes_back_with_its_receiver_and_comes_again_after_a_step_down() {
     let mut rig = quiet_rig();
     let id = rig.add(speaker(1, Codec::Pcm));
