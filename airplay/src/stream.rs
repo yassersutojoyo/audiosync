@@ -1451,6 +1451,10 @@ impl Stream {
             self.stepped_up = true;
             self.before_step = frames.saturating_sub(STEP_FRAMES);
             self.clean_since = Some(t);
+            // A new stream starts there, before its first sound.
+            if self.speakers.is_empty() {
+                self.set_latency(self.host_latency, now);
+            }
         }
         let id = SpeakerId(self.next_speaker);
         self.next_speaker += 1;
