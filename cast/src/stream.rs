@@ -1331,8 +1331,7 @@ fn pump(mut reader: AudioReader, shared: Arc<Shared>) {
                     live.responses.push(block);
                 }
             }
-            // Counted with the push, under the lock stats() reads both under,
-            // so no snapshot holds silence as an underrun before it is queued.
+            // Under the lock stats() reads, so no snapshot counts silence a push is still to queue.
             shared.underrun_frames.fetch_add(silent, Ordering::Relaxed);
             drop(live);
             shared.wake.notify_all();

@@ -684,17 +684,24 @@ fn flush_point(server: &Ap2Server, nth: usize) -> (u16, u32) {
     )
 }
 
-/// Timelines started over or moved since the sender's first: each flushes a
-/// playing speaker (P143), as a host stalled past L on a loaded machine does.
+/// Timeline restarts so far: each flushes a playing speaker (P143), as a host
+/// stalled past L on a loaded machine does. The test sets no Lf, so no other
+/// timeline change flushes.
 fn timeline_flushes(tv: &mut Playing) -> usize {
     tv.events.drain(&tv.sender);
-    let timelines = tv
-        .events
+    tv.events
         .seen
         .iter()
-        .filter(|(_, event)| matches!(event, SenderEvent::Timeline { .. }))
-        .count();
-    timelines.saturating_sub(1)
+        .filter(|(_, event)| {
+            matches!(
+                event,
+                SenderEvent::Timeline {
+                    restarted: true,
+                    ..
+                }
+            )
+        })
+        .count()
 }
 
 // Part of P213 on the AirPlay 2 path, over loopback: every pause sends the
