@@ -469,4 +469,34 @@ mod tests {
         assert_eq!(arrivals[0].start, floor);
         assert_eq!(writer.position(), floor + FRAMES_PER_PACKET as u64);
     }
+
+    // A capture that stalls for less than RESYNC_FRAMES (a player that
+    // closes its stream between tracks) and resumes at real-time pace: its
+    // first block after the stall is the next track's first audio, so it
+    // must start the audio with the block after it, not be dropped as late.
+    // covers: P112
+    #[test]
+    fn the_first_block_after_a_short_stall_is_kept_when_the_next_one_comes_in_real_time() {
+        let origin = Instant::now();
+        let (mut writer, mut reader) = ring(2 * MIN_INPUT_FRAMES, origin);
+        let block = [1000i16; 2 * FRAMES_PER_PACKET];
+        writer.write_i16(&block, origin);
+        let mut out = [[0, 0]; FRAMES_PER_PACKET];
+        for packet in 0..10 {
+            reader.cut((packet * FRAMES_PER_PACKET) as i64, &mut out);
+        }
+        reader.drain_arrivals(|_| {});
+        let floor = reader.floor();
+
+        let first = [2000i16; 2 * FRAMES_PER_PACKET];
+        let next = [3000i16; 2 * FRAMES_PER_PACKET];
+        let at = origin + Duration::from_millis(100);
+        writer.write_i16(&first, at);
+        writer.write_i16(&next, at + Duration::from_millis(8));
+
+        assert_eq!(writer.position(), floor + 2 * FRAMES_PER_PACKET as u64);
+        reader.cut(floor as i64, &mut out);
+        assert_eq!(out[0], [2000, 2000]);
+        assert_eq!(reader.dropped(), 0);
+    }
 }
