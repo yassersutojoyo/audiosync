@@ -2998,6 +2998,20 @@ mod tests {
 
     // covers: S398
     #[test]
+    fn the_first_packet_after_silence_written_before_any_keeps_its_head() {
+        // A capture opened at 0 that waited: silence up to 40 ms.
+        let mut gaps = GapFill::started(SESSION_RATE, 0);
+        assert_eq!(gaps.idle(50 * HNS_PER_MS), 1_920);
+        // Its first packet, a song's first 1024 frames, is stamped at 30 ms.
+        assert_eq!(gaps.packet(30 * HNS_PER_MS, 1_024, false), (0, 0, false));
+        // The next one follows on, and a later pause still fills.
+        let next = 30 * HNS_PER_MS + 213_333;
+        assert_eq!(gaps.packet(next, 1_024, false), (0, 0, false));
+        assert!(gaps.idle(next + 100 * HNS_PER_MS) > 0);
+    }
+
+    // covers: S398
+    #[test]
     fn an_hour_of_gap_fills_exactly_the_frames_of_an_hour() {
         let mut gaps = GapFill::new(SESSION_RATE);
         gaps.packet(0, 480, false);
