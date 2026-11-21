@@ -127,6 +127,8 @@ pub(crate) fn ring(frames: usize, origin: Instant) -> (InputWriter, InputReader)
             late: None,
             fresh: true,
             moves_taken: 0,
+            held: vec![0; frames / 2].into_boxed_slice(),
+            held_frames: 0,
         },
         InputReader {
             shared,
@@ -154,6 +156,9 @@ pub struct InputWriter {
     fresh: bool,
     /// The sequence of the last [`TimelineMove`] taken.
     moves_taken: u64,
+    /// The last write's frames, when all of them came late (P112).
+    held: Box<[u32]>,
+    held_frames: usize,
 }
 
 impl InputWriter {
@@ -243,15 +248,41 @@ impl InputWriter {
             let late = behind.min(count);
             (late, start + late)
         };
+        // A write held back as late was the resumed capture's first: it
+        // starts the audio, ahead of this one.
+        let released = self.held_frames as u64;
         let room = (capacity + floor).saturating_sub(first);
-        let keep = (count - late).min(room);
-        for index in 0..keep {
+        let held = if resync && paced {
+            released.min(room)
+        } else {
+            0
+        };
+        for index in 0..held {
             let slot = ((first + index) % capacity) as usize;
+            shared.slots[slot].store(self.held[index as usize], Ordering::Relaxed);
+        }
+        let keep = (count - late).min(room - held);
+        for index in 0..keep {
+            let slot = ((first + held + index) % capacity) as usize;
             shared.slots[slot].store(frame((late + index) as usize), Ordering::Relaxed);
         }
-        let end = first + keep;
+        // A write wholly behind is held until the next one shows whether
+        // the host is catching up (it is dropped then) or resumed at
+        // real-time pace.
+        self.held_frames = 0;
+        if late == count && !resync {
+            let hold = frames.min(self.held.len());
+            for index in 0..hold {
+                self.held[index] = frame(frames - hold + index);
+            }
+            self.held_frames = hold;
+        }
+        let end = first + held + keep;
         shared.write.store(end.max(start), Ordering::Release);
-        shared.received.fetch_add(count, Ordering::Release);
+        shared.received.fetch_add(
+            count + released - self.held_frames as u64,
+            Ordering::Release,
+        );
         if count > 0 {
             self.fresh = false;
         }
