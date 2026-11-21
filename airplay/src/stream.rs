@@ -21,7 +21,7 @@
 //! step whatever their delay (P102).
 
 use std::collections::VecDeque;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -88,6 +88,9 @@ const RATE_GAP_REQUESTS: usize = 20;
 /// The window of a speaker's resend rate and of its debug line, in seconds
 /// (P200).
 const RATE_WINDOW: f64 = 60.0;
+/// Those requests span at least this many seconds: one burst re-asking for
+/// a lost run is no rate (P200).
+const RATE_SPAN: f64 = 10.0;
 /// The input ring by default: 2 s (at least 1 s, P111).
 pub const DEFAULT_INPUT_FRAMES: usize = 2 * audio::SAMPLE_RATE as usize;
 /// Times within this many seconds of being due count as due, so a wake-up
@@ -641,6 +644,7 @@ impl Speaker {
     /// Starts sending at timeline packet `packet` with RTP timestamp
     /// `rtptime`, flagged as the first after RECORD or FLUSH.
     fn start_at(&mut self, packet: u64, rtptime: u32) {
+        self.recent_requests = [f64::NEG_INFINITY; RATE_GAP_REQUESTS];
         self.next_packet = packet;
         self.rtp_offset = rtptime.wrapping_sub((packet * PACKET_FRAMES) as u32);
         self.first_pending = true;
@@ -919,6 +923,12 @@ pub struct Stream {
     /// A step on its way: when the end of its packet sounds, and the new Lf
     /// (P200).
     step_due: Option<(f64, u32)>,
+    /// The Lf a resend-rate step took the stream to, by receiver address,
+    /// for the stream's life; it is the receiver's floor when it joins
+    /// again (P200).
+    rate_levels: Vec<(IpAddr, u32)>,
+    /// The receiver whose resend rate started the step on its way.
+    rate_ip: Option<IpAddr>,
     /// The first packet cut at full gain again after a forced step's
     /// fade-out and silence; only the test-only `step_up` sets it (P200).
     silence_until: u64,
@@ -981,6 +991,8 @@ impl Stream {
             before_step: 0,
             host_latency: 0,
             step_due: None,
+            rate_levels: Vec::new(),
+            rate_ip: None,
             silence_until: 0,
             input: reader,
             model: RateModel::new(start),
@@ -1294,13 +1306,15 @@ impl Stream {
 
     /// Starts a wanted step without a quiet window: the next packet cut
     /// fades out and the 4 after it are silent (P200).
-    fn fade_step(&mut self, t: f64) {
+    fn fade_step(&mut self, t: f64) -> bool {
         let fade = self.next_cut;
         if let Some(frames) = self.step_wanted
             && self.start_step(t, frames, fade)
         {
             self.silence_until = fade + 1 + STEP_SILENCE_PACKETS;
+            return true;
         }
+        false
     }
 
     /// A speaker played without a packet (P200): the session's one step up
@@ -1365,6 +1379,10 @@ impl Stream {
         let old = self.latency_frames;
         self.latency_frames = frames;
         if frames > old {
+            if let Some(ip) = self.rate_ip.take() {
+                self.rate_levels.retain(|(at, _)| *at != ip);
+                self.rate_levels.push((ip, frames));
+            }
             self.step_floor = frames;
             self.before_step = old;
             self.clean_since = Some(at);
@@ -1410,6 +1428,17 @@ impl Stream {
     ) -> SpeakerId {
         self.handle_timeout(now);
         let t = self.clock.seconds(now);
+        // A receiver whose resend rate stepped this stream joins at that
+        // level again (P200).
+        let ip = config.destinations.control.ip();
+        if let Some(&(_, frames)) = self.rate_levels.iter().find(|(at, _)| *at == ip)
+            && frames > self.step_floor
+        {
+            self.step_floor = frames;
+            self.stepped_up = true;
+            self.before_step = frames.saturating_sub(STEP_FRAMES);
+            self.clean_since = Some(t);
+        }
         let id = SpeakerId(self.next_speaker);
         self.next_speaker += 1;
         let codec = config.codec;
@@ -1845,9 +1874,12 @@ impl Stream {
         let counters = speaker.counters.clone();
         counters.resend_requests.fetch_add(1, Ordering::Relaxed);
         speaker.rate_requests += 1;
-        // The request 20 back came within the minute: more than 20 a
-        // minute, so the receiver is cutting out (P200).
-        let steady = t - speaker.recent_requests[speaker.recent_next] < RATE_WINDOW;
+        // The request 20 back came within the minute but not in the same
+        // burst: more than 20 a minute, so the receiver is cutting out
+        // (P200).
+        let span = t - speaker.recent_requests[speaker.recent_next];
+        let steady = (RATE_SPAN..RATE_WINDOW).contains(&span);
+        let ip = speaker.destinations.control.ip();
         speaker.recent_requests[speaker.recent_next] = t;
         speaker.recent_next = (speaker.recent_next + 1) % RATE_GAP_REQUESTS;
         for offset in 0..request.count.min(MAX_RESEND_REQUEST) {
@@ -1904,11 +1936,15 @@ impl Stream {
             speaker.history[slot].resends += 1;
             counters.packets_resent.fetch_add(1, Ordering::Relaxed);
         }
+        // After a step down the rate may step up again.
+        if steady && self.step_floor == 0 && self.step_due.is_none() && self.clean_since.is_none() {
+            self.stepped_up = false;
+        }
         if gap || steady {
             self.note_gap(t);
         }
-        if steady {
-            self.fade_step(t);
+        if steady && self.fade_step(t) {
+            self.rate_ip = Some(ip);
         }
     }
 
