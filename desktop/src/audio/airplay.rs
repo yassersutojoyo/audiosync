@@ -11999,8 +11999,8 @@ pub mod tests {
         assert!(backend.airplay_speakers()[0].playing);
         assert_eq!(
             backend.playing_params("speakers").unwrap().delay_frames,
-            4_800,
-            "L = 100 ms at 48 kHz"
+            9_600,
+            "L = 200 ms at 48 kHz, as the receiver reports nothing"
         );
         let methods = receiver.methods();
         for method in ["OPTIONS", "ANNOUNCE", "SETUP", "RECORD"] {
@@ -12840,7 +12840,10 @@ pub mod tests {
         fake.report_latency(b2, 50_000, LatencySources::AUDIO_LATENCY);
         fake.report_latency(c3, 1_400_000, LatencySources::AUDIO_LATENCY);
         airplay.poll();
-        assert_eq!(latencies(&fake.take_calls()), [14_112, 14_112, 66_150]);
+        assert_eq!(
+            latencies(&fake.take_calls()),
+            [8_820, 14_112, 14_112, 66_150]
+        );
         assert_eq!(ms(airplay.latency()), 3150);
         fake.set_sounding(true);
         airplay.set_enabled(&id_of(c3), false).unwrap();

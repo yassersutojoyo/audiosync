@@ -10013,7 +10013,10 @@ mod tests {
 
         adapter.set_speaker_enabled(&ap(&kitchen), true);
         assert!(adapter.snapshot().speaker(&ap(&kitchen)).unwrap().enabled);
-        assert!(matches!(fake.take_calls()[..], [Call::Add { .. }]));
+        assert!(matches!(
+            fake.take_calls()[..],
+            [Call::Latency(8_820), Call::Add { .. }]
+        ));
         assert_eq!(local_delay(&adapter, SPEAKERS), 91_200, "L + 150 ms");
 
         adapter.set_speaker_enabled(&ap(&kitchen), false);
@@ -10146,7 +10149,10 @@ mod tests {
         assert!(!row.enabled && !row.paired);
         assert_eq!(row.availability, Availability::NeedsCode);
         assert!(!state.running, "nothing else is on");
-        assert_eq!(fake.take_calls().last(), Some(&Call::Remove(id_of(&tv))));
+        assert!(
+            fake.take_calls()
+                .ends_with(&[Call::Remove(id_of(&tv)), Call::Latency(4_410)])
+        );
     }
 
     // covers: S223
@@ -12926,7 +12932,7 @@ mod tests {
         assert_eq!(speaker.volume, 30.0);
         assert!(matches!(
             next.take_calls().as_slice(),
-            [Call::Add { id, .. }] if *id == id_of(&kitchen)
+            [Call::Latency(8_820), Call::Add { id, .. }] if *id == id_of(&kitchen)
         ));
     }
 
