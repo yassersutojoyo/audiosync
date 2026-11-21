@@ -907,3 +907,39 @@ fn a_rate_step_comes_back_with_its_receiver_and_comes_again_after_a_step_down() 
     }
     assert_eq!(rig.stream.latency_frames(), 8_820, "stepped up again");
 }
+
+// covers: P200
+#[test]
+fn a_receiver_that_rejoins_next_to_a_sounding_speaker_can_still_step_on_its_rate() {
+    let mut rig = quiet_rig();
+    let one = rig.add(speaker(1, Codec::Pcm));
+    rig.add(speaker(2, Codec::Pcm));
+    let mut second = 1.0;
+    while second < 50.0 {
+        run_to(&mut rig, second);
+        lose_one(&mut rig, one);
+        second += 2.0;
+    }
+    assert_eq!(rig.stream.latency_frames(), 8_820, "stepped up");
+    rig.stream.remove_speaker(one);
+    rig.drain();
+    run_to(&mut rig, 130.0);
+    assert_eq!(
+        rig.stream.latency_frames(),
+        LOW,
+        "a clean minute steps down"
+    );
+
+    let again = rig.add(speaker(1, Codec::Pcm));
+    let mut second = 131.0;
+    while second < 180.0 {
+        run_to(&mut rig, second);
+        lose_one(&mut rig, again);
+        second += 2.0;
+    }
+    assert_eq!(
+        rig.stream.latency_frames(),
+        8_820,
+        "its rate steps up again"
+    );
+}
