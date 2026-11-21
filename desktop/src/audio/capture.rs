@@ -1059,6 +1059,8 @@ pub struct GapFill {
     /// Whether the frames written so far end with silence written while
     /// nothing came, and no packet has reached past it yet.
     filled: bool,
+    /// Whether no packet has come since a [`GapFill::started`] tracker began.
+    before_first: bool,
 }
 
 impl GapFill {
@@ -1069,6 +1071,7 @@ impl GapFill {
             anchor: None,
             written: 0,
             filled: false,
+            before_first: false,
         }
     }
 
@@ -1081,6 +1084,7 @@ impl GapFill {
             anchor: Some(now),
             written: 0,
             filled: true,
+            before_first: true,
         }
     }
 
@@ -1137,6 +1141,7 @@ impl GapFill {
     ) -> (usize, usize, bool) {
         let packet_end = start.saturating_add(self.length(frames as u64));
         let filled = std::mem::take(&mut self.filled);
+        let before_first = std::mem::take(&mut self.before_first);
         let Some(end) = self.end() else {
             self.rebase(start, frames);
             return (0, 0, false);
@@ -1150,6 +1155,12 @@ impl GapFill {
             };
             self.rebase(start, frames);
             return (fill as usize, 0, fill > 0 && !filled);
+        }
+        if filled && before_first {
+            // Silence written before any packet stands for no audio, so the
+            // first packet (a song's head) follows it whole.
+            self.rebase(end, frames);
+            return (0, 0, false);
         }
         if filled {
             // It starts inside the silence written while nothing came: its
