@@ -21,6 +21,11 @@ const MICROS_PER_SECOND: u64 = 1_000_000;
 /// (P84): 4410 frames, 0.1 s.
 pub const LATENCY_MARGIN_FRAMES: u32 = 4_410;
 
+/// The R_s P200 assumes for a speaker that reported nothing: 0.1 s, so it
+/// starts at 0.2 s, since such a receiver gives no evidence when it drops
+/// late packets.
+pub const UNREPORTED_MICROS: u64 = 100_000;
+
 /// Which of the three reports gave a value, as the C interface numbers
 /// them (P202).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -122,14 +127,15 @@ pub fn latency_needed_frames(micros: u64) -> u32 {
 }
 
 /// The stream's starting Lf from every speaker's R_s in microseconds:
-/// `clamp(R_max + 4410, 4410, 88 200)` frames, 4410 for an empty list
-/// (P200).
+/// `clamp(R_max + 4410, 4410, 88 200)` frames, where an R_s of 0 counts as
+/// [`UNREPORTED_MICROS`], and 4410 for an empty list (P200).
 pub fn session_latency_frames<I>(reported_us: I) -> u32
 where
     I: IntoIterator<Item = u64>,
 {
     reported_us
         .into_iter()
+        .map(|us| if us == 0 { UNREPORTED_MICROS } else { us })
         .max()
         .map_or(MIN_LATENCY_FRAMES, latency_needed_frames)
 }

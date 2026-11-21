@@ -26,7 +26,7 @@ fn the_c_session_latency_matches_the_crate() {
         4_410
     );
     assert_eq!(c_rule(&[]), 4_410);
-    assert_eq!(c_rule(&[-1, -400_000]), 4_410);
+    assert_eq!(c_rule(&[-1, -400_000]), 8_820);
     let cases: [&[i64]; 5] = [
         &[250_000, 400_000],
         &[1_300_000],
