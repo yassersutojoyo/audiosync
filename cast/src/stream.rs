@@ -1302,6 +1302,7 @@ fn pump(mut reader: AudioReader, shared: Arc<Shared>) {
             now = Duration::ZERO;
         }
         let mut blocks = Vec::new();
+        let mut silent = 0;
         loop {
             match pacer.next(now, reader.available() >= block_frames) {
                 Pace::Audio => {
@@ -1311,9 +1312,7 @@ fn pump(mut reader: AudioReader, shared: Arc<Shared>) {
                 }
                 Pace::Silence => {
                     blocks.push(vec![0; block_frames * FRAME_BYTES]);
-                    shared
-                        .underrun_frames
-                        .fetch_add(block_frames as u64, Ordering::Relaxed);
+                    silent += block_frames as u64;
                 }
                 Pace::Wait => break,
             }
@@ -1332,6 +1331,8 @@ fn pump(mut reader: AudioReader, shared: Arc<Shared>) {
                     live.responses.push(block);
                 }
             }
+            // Under the lock stats() reads, so no snapshot counts silence a push is still to queue.
+            shared.underrun_frames.fetch_add(silent, Ordering::Relaxed);
             drop(live);
             shared.wake.notify_all();
         }
