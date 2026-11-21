@@ -942,6 +942,43 @@ fn a_rate_step_comes_back_with_its_receiver_and_comes_again_after_a_step_down() 
 
 // covers: P200
 #[test]
+fn a_new_stream_starts_at_the_level_its_receivers_rate_reached() {
+    let mut rig = quiet_rig();
+    let id = rig.add(speaker(1, Codec::Pcm));
+    let mut second = 1.0;
+    while second < 50.0 {
+        run_to(&mut rig, second);
+        lose_one(&mut rig, id);
+        second += 2.0;
+    }
+    assert_eq!(rig.stream.latency_frames(), 8_820, "stepped up");
+    rig.stream.remove_speaker(id);
+    rig.drain();
+    // The host's value over no speaker, as at Streaming off.
+    rig.stream.set_latency(LOW, rig.now);
+    rig.drain();
+    run_to(&mut rig, 55.0);
+    let before = timelines(&rig).len();
+
+    // Streaming switched off and on: the host sets its own value only after
+    // the receiver joined, as both hosts do.
+    let again = rig.add(speaker(1, Codec::Pcm));
+    assert_eq!(rig.stream.latency_frames(), 8_820, "starts at the level");
+    rig.stream.set_latency(LOW, rig.now);
+    rig.drain();
+    run_to(&mut rig, 60.0);
+    assert!(
+        timelines(&rig)[before..].iter().all(|&(ms, _)| ms == 200),
+        "{:?}",
+        &timelines(&rig)[before..]
+    );
+    for (_, sync) in rig.syncs(again) {
+        assert_eq!(sync.next_rtp.wrapping_sub(sync.rtp_heard), 8_820);
+    }
+}
+
+// covers: P200
+#[test]
 fn a_receiver_that_rejoins_next_to_a_sounding_speaker_can_still_step_on_its_rate() {
     let mut rig = quiet_rig();
     let one = rig.add(speaker(1, Codec::Pcm));
