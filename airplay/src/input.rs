@@ -127,6 +127,8 @@ pub(crate) fn ring(frames: usize, origin: Instant) -> (InputWriter, InputReader)
             late: None,
             fresh: true,
             moves_taken: 0,
+            held: vec![0; frames / 2].into_boxed_slice(),
+            held_frames: 0,
         },
         InputReader {
             shared,
@@ -154,6 +156,9 @@ pub struct InputWriter {
     fresh: bool,
     /// The sequence of the last [`TimelineMove`] taken.
     moves_taken: u64,
+    /// The last write's frames, when all of them came late (P112).
+    held: Box<[u32]>,
+    held_frames: usize,
 }
 
 impl InputWriter {
@@ -243,15 +248,41 @@ impl InputWriter {
             let late = behind.min(count);
             (late, start + late)
         };
+        // A write held back as late was the resumed capture's first: it
+        // starts the audio, ahead of this one.
+        let released = self.held_frames as u64;
         let room = (capacity + floor).saturating_sub(first);
-        let keep = (count - late).min(room);
-        for index in 0..keep {
+        let held = if resync && paced {
+            released.min(room)
+        } else {
+            0
+        };
+        for index in 0..held {
             let slot = ((first + index) % capacity) as usize;
+            shared.slots[slot].store(self.held[index as usize], Ordering::Relaxed);
+        }
+        let keep = (count - late).min(room - held);
+        for index in 0..keep {
+            let slot = ((first + held + index) % capacity) as usize;
             shared.slots[slot].store(frame((late + index) as usize), Ordering::Relaxed);
         }
-        let end = first + keep;
+        // A write wholly behind is held until the next one shows whether
+        // the host is catching up (it is dropped then) or resumed at
+        // real-time pace.
+        self.held_frames = 0;
+        if late == count && !resync {
+            let hold = frames.min(self.held.len());
+            for index in 0..hold {
+                self.held[index] = frame(frames - hold + index);
+            }
+            self.held_frames = hold;
+        }
+        let end = first + held + keep;
         shared.write.store(end.max(start), Ordering::Release);
-        shared.received.fetch_add(count, Ordering::Release);
+        shared.received.fetch_add(
+            count + released - self.held_frames as u64,
+            Ordering::Release,
+        );
         if count > 0 {
             self.fresh = false;
         }
@@ -468,5 +499,35 @@ mod tests {
         assert!(arrivals[0].resync && !arrivals[0].late);
         assert_eq!(arrivals[0].start, floor);
         assert_eq!(writer.position(), floor + FRAMES_PER_PACKET as u64);
+    }
+
+    // A capture that stalls for less than RESYNC_FRAMES (a player that
+    // closes its stream between tracks) and resumes at real-time pace: its
+    // first block after the stall is the next track's first audio, so it
+    // must start the audio with the block after it, not be dropped as late.
+    // covers: P112
+    #[test]
+    fn the_first_block_after_a_short_stall_is_kept_when_the_next_one_comes_in_real_time() {
+        let origin = Instant::now();
+        let (mut writer, mut reader) = ring(2 * MIN_INPUT_FRAMES, origin);
+        let block = [1000i16; 2 * FRAMES_PER_PACKET];
+        writer.write_i16(&block, origin);
+        let mut out = [[0, 0]; FRAMES_PER_PACKET];
+        for packet in 0..10 {
+            reader.cut((packet * FRAMES_PER_PACKET) as i64, &mut out);
+        }
+        reader.drain_arrivals(|_| {});
+        let floor = reader.floor();
+
+        let first = [2000i16; 2 * FRAMES_PER_PACKET];
+        let next = [3000i16; 2 * FRAMES_PER_PACKET];
+        let at = origin + Duration::from_millis(100);
+        writer.write_i16(&first, at);
+        writer.write_i16(&next, at + Duration::from_millis(8));
+
+        assert_eq!(writer.position(), floor + 2 * FRAMES_PER_PACKET as u64);
+        reader.cut(floor as i64, &mut out);
+        assert_eq!(out[0], [2000, 2000]);
+        assert_eq!(reader.dropped(), 0);
     }
 }
