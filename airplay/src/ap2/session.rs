@@ -82,8 +82,8 @@ pub struct Ap2Config {
     pub password: Option<Secret>,
     /// The random device ID of `deviceID` and `macAddress` (P5, P43).
     pub device_id: [u8; 6],
-    /// The timing the first session SETUP asks for: NTP, or PTP when it was
-    /// remembered for the device (P157, P217).
+    /// The timing the first session SETUP asks for: PTP when the receiver
+    /// sets bit 41 and the PTP service gave it a peer, NTP otherwise (P157).
     pub timing: Timing,
     /// The PTP service's clock, when it runs (P158). Without it a session
     /// never asks for PTP.
@@ -222,9 +222,9 @@ pub enum Ap2Event {
         added: bool,
         first_accepted: bool,
     },
-    /// The session SETUP with the remembered PTP got an answer other than
-    /// 200: the entry is dropped and a new connection asks for NTP first
-    /// (P217).
+    /// The session SETUP that asked for PTP first got an answer other than
+    /// 200: the entry, if any, is dropped and a new connection asks for NTP
+    /// (P157, P217).
     TimingRefused,
     /// The stream is set up and flushed (P42).
     Ready(StreamPorts),

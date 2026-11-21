@@ -2,6 +2,12 @@
 
 User-visible changes in each version. Loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/). Downloads are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page.
 
+## [Unreleased]
+
+### Fixed
+
+- AirPlay 2 speakers that support PTP timing now get it first, as Apple's own sender gives it to them. A WiiM Amp that took the older NTP timing stopped playing after a few minutes, while AudioSync still showed it playing, until its volume changed.
+
 ## [0.9.3] - 2026-11-20
 
 ### Added
@@ -1136,6 +1142,7 @@ The first public release, an early alpha.
 - Now Playing works with Spotify and Music only.
 - The prebuilt app needs macOS 26 (Tahoe) or later.
 
+[Unreleased]: https://github.com/yassersutojoyo/audiosync/compare/v0.9.3...HEAD
 [0.9.3]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.9.3
 [0.9.2]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.9.2
 [0.9.1]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.9.1

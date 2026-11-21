@@ -858,13 +858,21 @@ fn a_target_whose_members_hold_legacy_credentials_stays_on_airplay1_under_the_pr
     );
 }
 
+/// A receiver that sets bit 41 and takes either timing.
+fn both_timings_fake() -> FakeAp2 {
+    let mut fake = ptp_fake();
+    fake.refuse_timing.clear();
+    fake
+}
+
 fn ptp_fake() -> FakeAp2 {
     let mut fake = FakeAp2::new();
     fake.info_body = plist(dict(&[
         ("features", int((1 << 38) | (1 << 41) | (1 << 48))),
         ("statusFlags", int(0x4)),
     ]));
-    fake.status_once.insert("SETUP session".to_owned(), 501);
+    // An open receiver handles only PTP.
+    fake.refuse_timing.push("NTP".to_owned());
     fake
 }
 
@@ -1316,7 +1324,7 @@ fn a_member_that_connects_outside_the_services_family_plays_again_on_ntp() {
         return;
     };
     let first = Ap2Server::start(ptp_fake());
-    let second = Ap2Server::start_on(v6, ptp_fake());
+    let second = Ap2Server::start_on(v6, both_timings_fake());
     let port = second.address.port();
     // Its IPv4 address must refuse, so the session falls back to IPv6.
     if TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_err() {
@@ -1391,7 +1399,7 @@ fn a_single_speaker_that_connects_outside_the_services_family_moves_the_service_
         "{:?}",
         events.of(&device.key)
     );
-    assert_eq!(setup_timings(&server), ["NTP", "PTP", "PTP"]);
+    assert_eq!(setup_timings(&server), ["PTP", "PTP"]);
     assert_one_clock_keeps_syncing(&listener);
     events.drain(&sender);
     assert_eq!(ptp_warnings(&events, &device.key), 0);
@@ -1427,7 +1435,7 @@ fn moved_to_ipv6() -> Option<(Ap2Server, PtpListener, Sender, HostAudio, Events,
         "{:?}",
         events.of(&device.key)
     );
-    assert_eq!(setup_timings(&server), ["NTP", "PTP", "PTP"]);
+    assert_eq!(setup_timings(&server), ["PTP", "PTP"]);
     Some((server, listener, sender, host, events, device))
 }
 
@@ -1444,7 +1452,7 @@ fn a_speaker_lost_after_the_service_moved_reconnects_on_ptp_in_the_moved_family(
         "{:?}",
         events.of(&device.key)
     );
-    assert_eq!(setup_timings(&server), ["NTP", "PTP", "PTP", "PTP"]);
+    assert_eq!(setup_timings(&server), ["PTP", "PTP", "PTP"]);
     // The loss closed the service; its Syncs still queued carry the old clock.
     listener.syncs(Duration::from_millis(300));
     assert_one_clock_keeps_syncing(&listener);
@@ -1464,7 +1472,7 @@ fn a_speaker_that_falls_outside_the_moved_family_later_moves_the_service_again()
     let port = server.address.port();
     drop(server);
     let mut fake = ptp_fake();
-    fake.status_once.clear();
+    fake.refuse_timing.clear();
     let moved = Ap2Server::start_at(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port), fake);
     assert!(
         playing(&mut events, &sender, &device.key, 2),
@@ -1499,7 +1507,7 @@ fn a_speaker_that_lost_its_address_in_the_moved_family_binds_the_service_in_anot
     let port = server.address.port();
     drop(server);
     let mut fake = ptp_fake();
-    fake.status_once.clear();
+    fake.refuse_timing.clear();
     let moved = Ap2Server::start_at(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port), fake);
     assert!(
         playing(&mut events, &sender, &device.key, 2),
@@ -1586,17 +1594,17 @@ fn a_moved_speaker_refused_in_the_new_family_plays_on_ntp_with_one_warning() {
         skipped("no IPv6 loopback");
         return;
     };
-    let server = Ap2Server::start(ptp_fake());
+    let server = Ap2Server::start(both_timings_fake());
     let front = TcpListener::bind((v6, 0)).expect("a listener");
     let port = front.local_addr().expect("address").port();
     if TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_err() {
         skipped(&format!("port {port} is taken on IPv4"));
         return;
     }
-    // The first session (its NTP SETUP, then its PTP retry) lands on IPv6,
-    // outside the IPv4 service, which moves there; the restart is refused on
-    // IPv6 and lands on IPv4 again.
-    let _flip = FamilyFlip::start(front, 2, server.address);
+    // The first session (its PTP SETUP) lands on IPv6, outside the IPv4
+    // service, which moves there; the restart is refused on IPv6 and lands
+    // on IPv4 again.
+    let _flip = FamilyFlip::start(front, 1, server.address);
     let listener = PtpListener::bind();
     let (sender, _host) = ptp_sender(&listener);
     let mut events = Events::default();
@@ -1616,7 +1624,7 @@ fn a_moved_speaker_refused_in_the_new_family_plays_on_ntp_with_one_warning() {
     events.drain(&sender);
     assert_eq!(
         setup_timings(&server),
-        ["NTP", "PTP", "PTP", "NTP"],
+        ["PTP", "PTP", "NTP"],
         "{:?}",
         events.of(&device.key)
     );
@@ -1638,7 +1646,7 @@ fn a_member_whose_ipv6_address_is_closed_plays_on_ipv4_with_ntp() {
         return;
     };
     let first = Ap2Server::start_on(v6, ptp_fake());
-    let second = Ap2Server::start(ptp_fake());
+    let second = Ap2Server::start(both_timings_fake());
     let port = second.address.port();
     // Its IPv6 address must refuse, so the session falls back to IPv4.
     if TcpListener::bind((v6, port)).is_err() {
@@ -1677,7 +1685,7 @@ fn a_member_whose_ipv6_address_is_closed_plays_on_ipv4_with_ntp() {
         "{:?}",
         events.of(&db_key)
     );
-    assert_eq!(setup_timings(&second), ["NTP", "PTP", "NTP"]);
+    assert_eq!(setup_timings(&second), ["PTP", "NTP"]);
     assert_one_clock_keeps_syncing(&listener);
     events.drain(&sender);
     assert_eq!(

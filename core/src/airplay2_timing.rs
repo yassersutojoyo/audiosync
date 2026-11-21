@@ -5,7 +5,7 @@
 //!
 //! The entries are a cache that holds no secret. A missing, unreadable or
 //! foreign file means no entries, and each receiver's next session asks for
-//! NTP first, as P157 does without an entry; it never keeps a pairing from
+//! timing as P157 does without an entry; it never keeps a pairing from
 //! working. An entry that doesn't read costs only that receiver's entry, and
 //! an ID read twice keeps its first entry.
 //!

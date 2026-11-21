@@ -96,7 +96,7 @@ fn the_ptp_only_television_announces_bit_41_and_refuses_ntp() {
 }
 
 #[test]
-fn the_sender_plays_the_ptp_only_television_on_one_ptp_retry() {
+fn the_sender_plays_the_ptp_only_television_with_ptp_first() {
     let _serial = serial();
     let mut fake = television(
         "AudioSync Test TV",
@@ -173,7 +173,7 @@ fn the_sender_plays_the_ptp_only_television_on_one_ptp_retry() {
             (timing, answered.as_ref().map_or(0, |answer| answer.status))
         })
         .collect();
-    assert_eq!(setups, [("NTP".to_owned(), 501), ("PTP".to_owned(), 200)]);
+    assert_eq!(setups, [("PTP".to_owned(), 200)]);
     let keys = fake.keys();
     let order: Vec<&str> = keys
         .iter()
@@ -182,21 +182,16 @@ fn the_sender_plays_the_ptp_only_television_on_one_ptp_retry() {
         .collect();
     assert_eq!(
         order,
-        [
-            "SETUP session",
-            "SETUP session",
-            "RECORD",
-            "SETPEERS",
-            "SETUP stream"
-        ],
+        ["SETUP session", "RECORD", "SETPEERS", "SETUP stream"],
         "{keys:?}"
     );
     drop(fake);
 
     events.drain(&sender);
+    // A PTP answer to PTP first doesn't show it refuses NTP (P217).
     let remembered = events.of(&key).iter().any(|event| {
         matches!(event, SpeakerEvent::TimingRemembered(memory) if memory.timing == Timing::Ptp)
     });
-    assert!(remembered, "{:?}", events.of(&key));
+    assert!(!remembered, "{:?}", events.of(&key));
     sender.shutdown();
 }
