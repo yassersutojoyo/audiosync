@@ -2267,11 +2267,26 @@ do {
             && !plays(track(spotify), .system, running: false),
           "known playing: a paused reading, no reading or a stopped monitor's last reading never counts")
 }
-// A media key reaches the player, not AudioSync: the poll plus a reading (up to about 140 ms on the Mac) must stay under 0.6 s.
-check(NowPlayingMonitor.pollInterval(onScreen: true, playerRuns: true) == 0.25
+// A media key's play state shows through the player's change notice and the burst after it, so the steady poll
+// only backs that up (2026-11-21: reading Spotify every 0.25 s with two scripts a reading, playing or paused,
+// took 73% of a 10 s sample of the Mac app and 21-37% CPU).
+check(NowPlayingMonitor.pollInterval(onScreen: true, playerRuns: true) == 1
         && NowPlayingMonitor.pollInterval(onScreen: true, playerRuns: false) == 2
         && NowPlayingMonitor.pollInterval(onScreen: false, playerRuns: true) == 2,
-      "now playing: the players are read every 0.25 s while the card or panel shows a player's track, else every 2 s")
+      "now playing: the players are read every 1 s while the card or panel shows a player's track, else every 2 s")
+do {
+    let spotifyReading = NowPlayingMonitor.readingScript("com.spotify.client", modes: true)
+    let musicReading = NowPlayingMonitor.readingScript("com.apple.Music", modes: true)
+    let bareReading = NowPlayingMonitor.readingScript("com.apple.Music", modes: false)
+    check(spotifyReading.contains("player state") && spotifyReading.contains("shuffling enabled")
+            && spotifyReading.contains("repeating enabled") && musicReading.contains("shuffle enabled")
+            && musicReading.contains("song repeat") && bareReading.contains("player position")
+            && !bareReading.contains("shuffle") && !bareReading.contains("song repeat"),
+          "now playing: one script reads the track, its shuffle and repeat and its position; a player without the mode terms gets it without them")
+    let perMinute = { (onScreen: Bool) in Int(60 / NowPlayingMonitor.pollInterval(onScreen: onScreen, playerRuns: true)) }
+    check(perMinute(true) == 60 && perMinute(false) == 30,
+          "now playing: one script a reading runs 60 a minute on screen (480 before) and 30 off screen (60 before), playing or paused")
+}
 // 14 Nov on the Mac: Spotify reports a pause 329-395 ms after F8, so one 0.25 s poll after its notice landed past 0.6 s.
 // covers: S218
 do {
