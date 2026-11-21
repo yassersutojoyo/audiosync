@@ -684,6 +684,19 @@ fn flush_point(server: &Ap2Server, nth: usize) -> (u16, u32) {
     )
 }
 
+/// Timelines started over or moved since the sender's first: each flushes a
+/// playing speaker (P143), as a host stalled past L on a loaded machine does.
+fn timeline_flushes(tv: &mut Playing) -> usize {
+    tv.events.drain(&tv.sender);
+    let timelines = tv
+        .events
+        .seen
+        .iter()
+        .filter(|(_, event)| matches!(event, SenderEvent::Timeline { .. }))
+        .count();
+    timelines.saturating_sub(1)
+}
+
 // Part of P213 on the AirPlay 2 path, over loopback: every pause sends the
 // television one FLUSH naming the first packet not sent and stops the
 // audio; every resume continues from that packet with no request.
@@ -698,21 +711,35 @@ fn each_pause_flushes_once_at_the_first_unsent_packet_and_its_resume_continues()
     let mut tv = play(&server);
     assert!(wait_until(LONG, || audio.lock().map_or(0, |a| a.len()) >= 100));
     // The FLUSH after the stream SETUP (P42).
-    assert_eq!(count(&server, "FLUSH"), 1);
+    assert!(
+        wait_until(LONG, || (1..=1 + timeline_flushes(&mut tv))
+            .contains(&count(&server, "FLUSH"))),
+        "{:?}",
+        tv.events.seen
+    );
     let setups = count(&server, "SETUP stream");
     let records = count(&server, "RECORD");
 
     for cycle in 1..=3 {
+        let before = count(&server, "FLUSH");
+        let moved = timeline_flushes(&mut tv);
         tv.sender.pause();
         // A pause while paused does nothing.
         tv.sender.pause();
-        assert!(wait_until(LONG, || count(&server, "FLUSH") == 1 + cycle));
+        assert!(wait_until(LONG, || count(&server, "FLUSH") > before));
         tv.run(Duration::from_millis(400), false);
         let (held, last) = {
             let audio = audio.lock().expect("audio");
             (audio.len(), audio.last().expect("audio").clone())
         };
-        let (seq, rtptime) = flush_point(&server, cycle);
+        // Nothing flushes while paused, so the pause's FLUSH is the last.
+        let flushes = count(&server, "FLUSH");
+        assert!(
+            flushes <= before + 1 + timeline_flushes(&mut tv) - moved,
+            "cycle {cycle}: {:?}",
+            tv.events.seen
+        );
+        let (seq, rtptime) = flush_point(&server, flushes - 1);
         assert_eq!(seq, last.seq.wrapping_add(1), "cycle {cycle}");
         assert_eq!(
             rtptime,
@@ -726,6 +753,7 @@ fn each_pause_flushes_once_at_the_first_unsent_packet_and_its_resume_continues()
             "no audio while paused"
         );
 
+        let moved = timeline_flushes(&mut tv);
         let resumed = Instant::now();
         tv.sender.resume();
         // A resume while playing does nothing.
@@ -735,10 +763,11 @@ fn each_pause_flushes_once_at_the_first_unsent_packet_and_its_resume_continues()
         assert!(first.at >= resumed);
         assert_eq!((first.seq, first.rtptime), (seq, rtptime), "cycle {cycle}");
         assert!(first.marker, "cycle {cycle}");
-        assert_eq!(
-            count(&server, "FLUSH"),
-            1 + cycle,
-            "a resume sends no FLUSH"
+        assert!(
+            wait_until(LONG, || count(&server, "FLUSH")
+                <= flushes + timeline_flushes(&mut tv) - moved),
+            "a resume sends no FLUSH: {:?}",
+            tv.events.seen
         );
     }
     assert_eq!(count(&server, "SETUP stream"), setups);
