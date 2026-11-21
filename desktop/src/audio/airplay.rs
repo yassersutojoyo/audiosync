@@ -5760,10 +5760,14 @@ pub mod tests {
         let calls = fake.take_calls();
         assert!(matches!(
             &calls[..],
-            [Call::Add { .. }, Call::Credentials(..)]
+            [
+                Call::Latency(8_820),
+                Call::Add { .. },
+                Call::Credentials(..)
+            ]
         ));
         assert_eq!(
-            calls[1],
+            calls[2],
             Call::Credentials(id.clone(), "0123456789ABCDEF".to_owned())
         );
         drop(airplay);
@@ -5778,7 +5782,7 @@ pub mod tests {
         assert_eq!(airplay.set_enabled(&id, true), Ok(()));
         airplay.set_streaming(true);
         assert_eq!(
-            fake.take_calls()[1..],
+            fake.take_calls()[2..],
             [Call::Credentials(id, "0123456789ABCDEF".to_owned())]
         );
     }
@@ -7593,7 +7597,10 @@ pub mod tests {
         airplay.set_streaming(true);
         fake.take_calls();
         airplay.forget_pairing(&id);
-        assert_eq!(fake.take_calls(), [Call::Remove(id.clone())]);
+        assert_eq!(
+            fake.take_calls(),
+            [Call::Remove(id.clone()), Call::Latency(4_410)]
+        );
         assert!(airplay.enabled_ids().is_empty());
         let row = &airplay.speakers()[0];
         assert!(!row.paired);
@@ -8208,17 +8215,23 @@ pub mod tests {
         airplay.set_streaming(true);
         assert_eq!(
             fake.take_calls(),
-            [Call::Add {
-                id: id.clone(),
-                volume: Volume::Db(-12.0),
-                delay: Duration::ZERO,
-            }]
+            [
+                Call::Latency(8_820),
+                Call::Add {
+                    id: id.clone(),
+                    volume: Volume::Db(-12.0),
+                    delay: Duration::ZERO,
+                }
+            ]
         );
         airplay.set_streaming(false);
-        assert_eq!(fake.take_calls(), [Call::Remove(id.clone())]);
+        assert_eq!(
+            fake.take_calls(),
+            [Call::Remove(id.clone()), Call::Latency(4_410)]
+        );
         airplay.set_streaming(true);
         airplay.set_enabled(&id, false).unwrap();
-        assert_eq!(fake.take_calls()[1], Call::Remove(id));
+        assert_eq!(fake.take_calls()[2], Call::Remove(id));
         assert!(!airplay.chosen());
     }
 
@@ -8441,7 +8454,10 @@ pub mod tests {
             ]
         );
         assert!(airplay.enabled_ids().is_empty(), "turned off");
-        assert_eq!(fake.take_calls(), [Call::Remove(id.clone())]);
+        assert_eq!(
+            fake.take_calls(),
+            [Call::Remove(id.clone()), Call::Latency(4_410)]
+        );
         assert_eq!(
             airplay.set_enabled(&id, true),
             Err(AirPlayProblem::NeedsPassword),
@@ -8476,7 +8492,7 @@ pub mod tests {
         assert!(!airplay.chosen());
 
         airplay.set_enabled(&id, false).unwrap();
-        assert_eq!(fake.take_calls(), [Call::Remove(id)]);
+        assert_eq!(fake.take_calls(), [Call::Remove(id), Call::Latency(4_410)]);
     }
 
     // covers: S222
@@ -8772,6 +8788,14 @@ pub mod tests {
         ]
     }
 
+    /// The calls of a join into an empty stream: Lf for a speaker that
+    /// reports nothing (P200) first.
+    fn joined_alone_with(id: &str, password: &str) -> Vec<Call> {
+        let mut calls = vec![Call::Latency(8_820)];
+        calls.extend(joined_with(id, password));
+        calls
+    }
+
     // covers: S223
     #[test]
     fn a_password_typed_switches_the_speaker_on_and_is_kept_until_quit() {
@@ -8786,7 +8810,7 @@ pub mod tests {
         assert!(airplay.submit_password(&id, "hunter2"));
         assert_eq!(airplay.password_prompt(), None);
         assert_eq!(airplay.enabled_ids(), std::slice::from_ref(&id));
-        assert_eq!(fake.take_calls(), joined_with(&id, "hunter2"));
+        assert_eq!(fake.take_calls(), joined_alone_with(&id, "hunter2"));
         assert!(airplay.chosen());
         assert_eq!(
             airplay.speakers()[0].availability,
@@ -8799,7 +8823,7 @@ pub mod tests {
         airplay
             .set_enabled(&id, true)
             .expect("no prompt the second time");
-        assert_eq!(fake.take_calls(), joined_with(&id, "hunter2"));
+        assert_eq!(fake.take_calls(), joined_alone_with(&id, "hunter2"));
     }
 
     // covers: S223
@@ -10772,12 +10796,15 @@ pub mod tests {
         let volume = airplay_volume(DEFAULT_LOCAL_POSITION, NO_ZONE_POSITION);
         assert_eq!(
             fake.take_calls(),
-            [Call::AddTarget {
-                id: PAIR.to_owned(),
-                volume,
-                delay: Duration::ZERO,
-                members: vec![id_of(&left), id_of(&right)],
-            }]
+            [
+                Call::Latency(8_820),
+                Call::AddTarget {
+                    id: PAIR.to_owned(),
+                    volume,
+                    delay: Duration::ZERO,
+                    members: vec![id_of(&left), id_of(&right)],
+                }
+            ]
         );
         assert!(airplay.chosen());
 
@@ -10802,7 +10829,10 @@ pub mod tests {
         assert!(airplay.speakers()[0].playing);
 
         airplay.set_enabled(PAIR, false).expect("off");
-        assert_eq!(fake.take_calls(), [Call::RemoveTarget(PAIR.to_owned())]);
+        assert_eq!(
+            fake.take_calls(),
+            [Call::RemoveTarget(PAIR.to_owned()), Call::Latency(4_410)]
+        );
     }
 
     // covers: P181
@@ -11092,13 +11122,18 @@ pub mod tests {
         assert_eq!(airplay.enabled_ids(), [PAIR]);
 
         airplay.set_enabled(PAIR, false).expect("off");
-        assert_eq!(fake.take_calls(), [Call::RemoveTarget(PAIR.to_owned())]);
+        assert_eq!(
+            fake.take_calls(),
+            [Call::RemoveTarget(PAIR.to_owned()), Call::Latency(4_410)]
+        );
         let ids: Vec<String> = airplay.speakers().into_iter().map(|row| row.id).collect();
         assert_eq!(ids, [id_of(&left), id_of(&right)]);
         airplay
             .set_enabled(&id_of(&left), true)
             .expect("Left plays by itself");
-        assert!(matches!(&fake.take_calls()[..], [Call::Add { id, .. }] if *id == id_of(&left)));
+        assert!(
+            matches!(&fake.take_calls()[..], [Call::Latency(8_820), Call::Add { id, .. }] if *id == id_of(&left))
+        );
     }
 
     // covers: P176
@@ -11119,7 +11154,9 @@ pub mod tests {
         airplay.poll();
         assert!(airplay.chosen(), "Left counts as chosen");
         airplay.set_streaming(true);
-        assert!(matches!(&fake.take_calls()[..], [Call::Add { id, .. }] if *id == id_of(&left)));
+        assert!(
+            matches!(&fake.take_calls()[..], [Call::Latency(8_820), Call::Add { id, .. }] if *id == id_of(&left))
+        );
 
         // Right, held back by the pair, says why it stays off.
         assert_eq!(
@@ -11202,7 +11239,9 @@ pub mod tests {
             AirPlayAvailability::Open
         );
         airplay.set_enabled(PAIR, true).expect("Left can play");
-        assert!(matches!(&fake.take_calls()[..], [Call::AddTarget { id, .. }] if id == PAIR));
+        assert!(
+            matches!(&fake.take_calls()[..], [Call::Latency(8_820), Call::AddTarget { id, .. }] if id == PAIR)
+        );
     }
 
     // covers: P176
@@ -11356,7 +11395,9 @@ pub mod tests {
         let prompt = airplay.password_prompt().expect("a prompt");
         assert_eq!((prompt.name.as_str(), prompt.wrong), ("Right", false));
         assert!(airplay.submit_password(&id_of(&right), "hunter2"));
-        assert!(matches!(&fake.take_calls()[..], [Call::AddTarget { id, .. }] if id == PAIR));
+        assert!(
+            matches!(&fake.take_calls()[..], [Call::Latency(8_820), Call::AddTarget { id, .. }] if id == PAIR)
+        );
         (airplay, left, right)
     }
 
@@ -11958,8 +11999,8 @@ pub mod tests {
         assert!(backend.airplay_speakers()[0].playing);
         assert_eq!(
             backend.playing_params("speakers").unwrap().delay_frames,
-            4_800,
-            "L = 100 ms at 48 kHz"
+            9_600,
+            "L = 200 ms at 48 kHz, as the receiver reports nothing"
         );
         let methods = receiver.methods();
         for method in ["OPTIONS", "ANNOUNCE", "SETUP", "RECORD"] {
@@ -12360,7 +12401,7 @@ pub mod tests {
         airplay.poll();
         fake.take_calls();
         airplay.set_streaming(true);
-        assert!(latencies(&fake.take_calls()).is_empty());
+        assert_eq!(latencies(&fake.take_calls()), [8_820], "neither reports");
     }
 
     // covers: S280
@@ -12386,7 +12427,7 @@ pub mod tests {
 
     // covers: P200
     #[test]
-    fn every_new_stream_starts_at_4410_whatever_lf_the_last_one_reached() {
+    fn every_new_stream_starts_from_the_reports_whatever_lf_the_last_one_reached() {
         let fake = FakeAirPlay::new();
         let (mut airplay, _kitchen, _den) = kitchen_and_den(&fake, 0.0);
         fake.set_latency(Duration::from_millis(400));
@@ -12395,7 +12436,7 @@ pub mod tests {
         fake.take_calls();
         airplay.set_streaming(true);
         let calls = fake.take_calls();
-        assert!(latencies(&calls).is_empty(), "{calls:?}");
+        assert_eq!(latencies(&calls), [8_820], "{calls:?}");
     }
 
     // covers: S280
@@ -12508,14 +12549,14 @@ pub mod tests {
         airplay.poll();
         assert_eq!(
             latencies(&fake.take_calls()),
-            [4_410],
+            [8_820],
             "Lf unchanged, still answered"
         );
-        fake.report_latency(&den, 50_000, LatencySources::AUDIO_LATENCY);
+        fake.report_latency(&den, 300_000, LatencySources::AUDIO_LATENCY);
         airplay.poll();
         assert_eq!(
             latencies(&fake.take_calls()),
-            [6_615],
+            [17_640],
             "the new Lf is the answer"
         );
     }
@@ -12551,7 +12592,7 @@ pub mod tests {
         assert!(airplay.poll().is_empty(), "no notice");
         assert_eq!(
             fake.take_calls(),
-            [Call::Latency(4_410)],
+            [Call::Latency(8_820)],
             "Lf and d′ stay; the report is answered (P201)"
         );
         assert_eq!(ms(airplay.latency()), 1750);
@@ -12799,7 +12840,10 @@ pub mod tests {
         fake.report_latency(b2, 50_000, LatencySources::AUDIO_LATENCY);
         fake.report_latency(c3, 1_400_000, LatencySources::AUDIO_LATENCY);
         airplay.poll();
-        assert_eq!(latencies(&fake.take_calls()), [14_112, 14_112, 66_150]);
+        assert_eq!(
+            latencies(&fake.take_calls()),
+            [8_820, 14_112, 14_112, 66_150]
+        );
         assert_eq!(ms(airplay.latency()), 3150);
         fake.set_sounding(true);
         airplay.set_enabled(&id_of(c3), false).unwrap();

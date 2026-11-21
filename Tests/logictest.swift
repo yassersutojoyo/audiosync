@@ -4853,7 +4853,7 @@ do {
             == "[AudioSync] native AirPlay: timeline: L = 1750 ms, restarted",
           "native airplay: latency and timeline log lines")
 
-    // covers: P200 (the Mac host starts every stream at 0.1 s, whatever Lf the last one reached)
+    // covers: P200 (the Mac host starts every stream from the reports, whatever Lf the last one reached)
     do {
         let freshRule: ([Int64]) -> UInt32 = { reported in
             reported.withUnsafeBufferPointer { asc_airplay_session_latency_frames($0.baseAddress, $0.count) }
@@ -4863,8 +4863,8 @@ do {
         afterStep.timeline(ms: 400)
         let emptiedAt = afterStep.newFrames(over: [], rule: freshRule)
         let rejoinAt = afterStep.newFrames(over: ["A1"], rule: freshRule)
-        check(emptiedAt == 4_410 && rejoinAt == nil,
-              "airplay latency: a speaker whose last stream stepped starts its next one at 0.1 s",
+        check(emptiedAt == 4_410 && rejoinAt == 8_820,
+              "airplay latency: a speaker whose last stream stepped starts its next one afresh, at 0.2 s as it reports nothing",
               "\(String(describing: emptiedAt)) \(String(describing: rejoinAt))")
     }
 
@@ -4948,7 +4948,7 @@ do {
         let outcome = nothing.apply(.latency(id: "A1", ms: 1750, receiverFrames: nil, reportedUs: 0, sources: 0))
         // covers: S283
         check(outcome == nil && nothing.receiverLatency.estimateMs(of: ["A1"]) == 0
-                && nothing.receiverLatency.newFrames(over: ["A1"], rule: rule) == nil
+                && nothing.receiverLatency.newFrames(over: ["A1"], rule: rule) == 8_820
                 && NativeReceiverLatency.reportText(us: 0, sources: 0) == "reports nothing"
                 && NativeReceiverLatency.reportText(us: 220_400, sources: 5) == "reports 220 ms (Audio-Latency, arrivalToRender)",
               "airplay latency: a receiver reporting nothing starts at zero without a warning")

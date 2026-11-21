@@ -8,13 +8,14 @@ mod common;
 use std::time::Duration;
 
 use audiosync_airplay::audio::FRAMES_PER_PACKET;
+use audiosync_airplay::latency::session_latency_frames;
 use audiosync_airplay::rtp::{HEADER_BYTES, RESEND_PREFIX_BYTES, ResendRequest, SyncPacket};
 use audiosync_airplay::sdp::Codec;
 use audiosync_airplay::sender::{Sender, SenderConfig, SenderEvent, SpeakerOptions, SpeakerState};
 use audiosync_airplay::stream::{PacketKind, SpeakerId, StreamConfig, StreamEvent};
 use audiosync_airplay::volume::Volume;
 use common::net::{Behavior, Events, HostAudio, NetReceiver, serial, wait_until};
-use common::rig::{Host, Rig, decode, host_frame, speaker};
+use common::rig::{Host, Rig, Rng, decode, host_frame, speaker};
 
 const LOW: u32 = 4_410;
 const LONG: Duration = Duration::from_secs(15);
@@ -753,4 +754,192 @@ fn a_step_waits_and_says_so_once_while_m_leaves_no_room() {
         .filter(|event| matches!(event, StreamEvent::StepWaiting { .. }))
         .count();
     assert_eq!(told, 1);
+}
+
+/// Audio packets that reach the receiver after their play time, by the
+/// latest sync sent before each, over a network adding up to `jitter`
+/// seconds one way: the receiver drops them without asking for a resend.
+fn dropped_late(rig: &Rig, id: SpeakerId, jitter: f64, rng: &mut Rng) -> usize {
+    let syncs = rig.syncs(id);
+    rig.audio(id)
+        .iter()
+        .filter(|packet| {
+            let arrival = packet.at + rng.uniform(0.0, jitter);
+            syncs
+                .iter()
+                .rfind(|(at, _)| *at <= packet.at)
+                .is_some_and(|(_, sync)| arrival > heard_by(sync, packet.header.timestamp))
+        })
+        .count()
+}
+
+// covers: P200
+#[test]
+fn a_receiver_that_reports_nothing_plays_with_room_for_a_jittery_network() {
+    let mut rig = Rig::new(StreamConfig {
+        latency_frames: LOW,
+        input_frames: 88_200,
+        host_answers_latency: true,
+    });
+    rig.host = Some(Host::new(0.0));
+    let mut rng = Rng::new(1121);
+    // Up to 120 ms one way, as a busy 2.4 GHz network gives.
+    let jitter = 0.12;
+    let id = rig.add(speaker(1, Codec::Alac));
+    rig.stream.set_latency(session_latency_frames([0]), rig.now);
+    run_to(&mut rig, 20.0);
+    assert!(rig.stream.latency_frames() >= 8_820);
+    assert_eq!(dropped_late(&rig, id, jitter, &mut rng), 0, "fresh");
+
+    rig.stream.pause(rig.now);
+    rig.run_for(Duration::from_secs(5));
+    rig.stream.resume(rig.now);
+    rig.answer_flushes();
+    run_to(&mut rig, 40.0);
+    assert!(rig.stream.latency_frames() >= 8_820, "after a pause");
+    assert_eq!(dropped_late(&rig, id, jitter, &mut rng), 0, "after a pause");
+
+    rig.stream.remove_speaker(id);
+    rig.drain();
+    let again = rig.add(speaker(2, Codec::Alac));
+    rig.stream.set_latency(session_latency_frames([0]), rig.now);
+    run_to(&mut rig, 60.0);
+    assert!(rig.stream.latency_frames() >= 8_820, "after a reconnect");
+    assert_eq!(
+        dropped_late(&rig, again, jitter, &mut rng),
+        0,
+        "after a reconnect"
+    );
+}
+
+// covers: P200
+#[test]
+fn a_steady_run_of_in_time_resend_requests_steps_up_and_keeps_it() {
+    let mut rig = quiet_rig();
+    let id = rig.add(speaker(1, Codec::Pcm));
+    // 30 requests a minute, each still in time, as the television on a
+    // jittery network sent while it cut out.
+    let mut second = 1.0;
+    while second < 70.0 {
+        run_to(&mut rig, second);
+        lose_one(&mut rig, id);
+        second += 2.0;
+    }
+    assert_eq!(rig.stream.latency_frames(), 8_820, "{:?}", timelines(&rig));
+
+    rig.stream.pause(rig.now);
+    rig.run_for(Duration::from_secs(5));
+    rig.stream.resume(rig.now);
+    rig.answer_flushes();
+    rig.stream.restart(rig.now);
+    rig.answer_flushes();
+    let resumed = rig.t();
+    let mut second = resumed + 1.0;
+    while second < resumed + 90.0 {
+        run_to(&mut rig, second);
+        lose_one(&mut rig, id);
+        second += 2.0;
+    }
+    assert_eq!(
+        rig.stream.latency_frames(),
+        8_820,
+        "kept across a pause and a restart while the requests go on"
+    );
+}
+
+// covers: P200
+#[test]
+fn one_burst_of_resend_requests_after_a_resume_never_steps() {
+    let mut rig = quiet_rig();
+    let id = rig.add(speaker(1, Codec::Pcm));
+    run_to(&mut rig, 5.0);
+    rig.stream.pause(rig.now);
+    rig.run_for(Duration::from_secs(2));
+    rig.stream.resume(rig.now);
+    rig.answer_flushes();
+    rig.run_for(Duration::from_secs(1));
+    // A receiver asking again and again for one lost run, 25 times in a
+    // second.
+    for _ in 0..25 {
+        lose_one(&mut rig, id);
+        rig.run_for(Duration::from_millis(40));
+    }
+    // Well inside the clean minute a step up would wait out.
+    rig.run_for(Duration::from_secs(30));
+    assert_eq!(rig.stream.latency_frames(), LOW, "{:?}", timelines(&rig));
+}
+
+// covers: P200
+#[test]
+fn a_rate_step_comes_back_with_its_receiver_and_comes_again_after_a_step_down() {
+    let mut rig = quiet_rig();
+    let id = rig.add(speaker(1, Codec::Pcm));
+    let mut second = 1.0;
+    while second < 50.0 {
+        run_to(&mut rig, second);
+        lose_one(&mut rig, id);
+        second += 2.0;
+    }
+    assert_eq!(rig.stream.latency_frames(), 8_820, "stepped up");
+
+    rig.stream.remove_speaker(id);
+    rig.drain();
+    let again = rig.add(speaker(1, Codec::Pcm));
+    rig.stream.set_latency(LOW, rig.now);
+    run_to(&mut rig, 55.0);
+    assert_eq!(
+        rig.stream.latency_frames(),
+        8_820,
+        "the same receiver joins again at its level"
+    );
+
+    run_to(&mut rig, 130.0);
+    assert_eq!(
+        rig.stream.latency_frames(),
+        LOW,
+        "a clean minute steps down"
+    );
+    let mut second = 131.0;
+    while second < 180.0 {
+        run_to(&mut rig, second);
+        lose_one(&mut rig, again);
+        second += 2.0;
+    }
+    assert_eq!(rig.stream.latency_frames(), 8_820, "stepped up again");
+}
+
+// covers: P200
+#[test]
+fn a_receiver_that_rejoins_next_to_a_sounding_speaker_can_still_step_on_its_rate() {
+    let mut rig = quiet_rig();
+    let one = rig.add(speaker(1, Codec::Pcm));
+    rig.add(speaker(2, Codec::Pcm));
+    let mut second = 1.0;
+    while second < 50.0 {
+        run_to(&mut rig, second);
+        lose_one(&mut rig, one);
+        second += 2.0;
+    }
+    assert_eq!(rig.stream.latency_frames(), 8_820, "stepped up");
+    rig.stream.remove_speaker(one);
+    rig.drain();
+    run_to(&mut rig, 130.0);
+    assert_eq!(
+        rig.stream.latency_frames(),
+        LOW,
+        "a clean minute steps down"
+    );
+
+    let again = rig.add(speaker(1, Codec::Pcm));
+    let mut second = 131.0;
+    while second < 180.0 {
+        run_to(&mut rig, second);
+        lose_one(&mut rig, again);
+        second += 2.0;
+    }
+    assert_eq!(
+        rig.stream.latency_frames(),
+        8_820,
+        "its rate steps up again"
+    );
 }

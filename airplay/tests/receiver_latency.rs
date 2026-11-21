@@ -271,7 +271,7 @@ fn receiver_latency_largest_per_session() {
 #[test]
 fn session_latency_rule() {
     assert_eq!(session_latency_frames([]), 4_410);
-    assert_eq!(session_latency_frames([0, 0]), 4_410);
+    assert_eq!(session_latency_frames([0, 0]), 8_820);
     assert_eq!(session_latency_frames([250_000, 400_000]), 22_050);
     assert_eq!(session_latency_frames([1_300_000]), 61_740);
     assert_eq!(session_latency_frames([200_000, 1_300_000]), 61_740);

@@ -1775,6 +1775,16 @@ impl Driver {
                     self.emit_speaker(&key, SpeakerEvent::Trace(line.clone()));
                 }
             }
+            StreamEvent::ResendRate { speaker, requests } => {
+                let Some(key) = self.stream_ids.get(&speaker).cloned() else {
+                    return;
+                };
+                let mut line = format!("resend_rate requests_per_min={requests}");
+                if requests > 20 {
+                    line.push_str(" warning: more than 20 a minute, the receiver is cutting out");
+                }
+                self.emit_speaker(&key, SpeakerEvent::Trace(line));
+            }
             StreamEvent::LatencyShortfall {
                 speaker,
                 reported_us,

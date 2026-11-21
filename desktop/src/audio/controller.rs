@@ -7893,7 +7893,7 @@ mod tests {
         assert!(cast_free(&backend), "the Cast tap is back in its slot");
         assert_eq!(
             fake.take_calls(),
-            [Call::Remove(id.clone())],
+            [Call::Remove(id.clone()), Call::Latency(4_410)],
             "the AirPlay speaker left the stream"
         );
         assert_eq!(cast.state().stops, 1, "the Cast speaker left the stream");
@@ -13871,18 +13871,21 @@ mod tests {
         assert_eq!(delay_frames(&backend, HEADPHONES), 84_000);
         assert_eq!(
             fake.take_calls(),
-            [Call::Add {
-                id: id.clone(),
-                volume: Volume::Db(-12.0),
-                delay: Duration::ZERO,
-            }]
+            [
+                Call::Latency(8_820),
+                Call::Add {
+                    id: id.clone(),
+                    volume: Volume::Db(-12.0),
+                    delay: Duration::ZERO,
+                }
+            ]
         );
         assert_eq!(backend.enabled_airplay(), std::slice::from_ref(&id));
 
         backend.set_airplay_enabled(&id, false).unwrap();
         assert_eq!(delay_frames(&backend, SPEAKERS), 7_200, "back to its own");
         assert_eq!(delay_frames(&backend, HEADPHONES), 0);
-        assert_eq!(fake.take_calls(), [Call::Remove(id)]);
+        assert_eq!(fake.take_calls(), [Call::Remove(id), Call::Latency(4_410)]);
     }
 
     // covers: S21
@@ -13906,16 +13909,22 @@ mod tests {
         assert!(!feed.is_free(), "the capture holds the feed");
         assert_eq!(
             fake.take_calls(),
-            [Call::Add {
-                id: id.clone(),
-                volume: Volume::Db(-12.0),
-                delay: Duration::ZERO,
-            }]
+            [
+                Call::Latency(8_820),
+                Call::Add {
+                    id: id.clone(),
+                    volume: Volume::Db(-12.0),
+                    delay: Duration::ZERO,
+                }
+            ]
         );
         assert_eq!(delay_frames(&backend, SPEAKERS), 84_000);
 
         backend.stop();
-        assert_eq!(fake.take_calls(), [Call::Remove(id.clone())]);
+        assert_eq!(
+            fake.take_calls(),
+            [Call::Remove(id.clone()), Call::Latency(4_410)]
+        );
         assert!(feed.is_free(), "the feed is back for the next capture");
         assert_eq!(backend.enabled_airplay(), [id], "it stays on");
     }
