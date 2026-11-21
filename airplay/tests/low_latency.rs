@@ -868,3 +868,42 @@ fn one_burst_of_resend_requests_after_a_resume_never_steps() {
     rig.run_for(Duration::from_secs(30));
     assert_eq!(rig.stream.latency_frames(), LOW, "{:?}", timelines(&rig));
 }
+
+// covers: P200
+#[test]
+fn a_rate_step_comes_back_with_its_receiver_and_comes_again_after_a_step_down() {
+    let mut rig = quiet_rig();
+    let id = rig.add(speaker(1, Codec::Pcm));
+    let mut second = 1.0;
+    while second < 50.0 {
+        run_to(&mut rig, second);
+        lose_one(&mut rig, id);
+        second += 2.0;
+    }
+    assert_eq!(rig.stream.latency_frames(), 8_820, "stepped up");
+
+    rig.stream.remove_speaker(id);
+    rig.drain();
+    let again = rig.add(speaker(1, Codec::Pcm));
+    rig.stream.set_latency(LOW, rig.now);
+    run_to(&mut rig, 55.0);
+    assert_eq!(
+        rig.stream.latency_frames(),
+        8_820,
+        "the same receiver joins again at its level"
+    );
+
+    run_to(&mut rig, 130.0);
+    assert_eq!(
+        rig.stream.latency_frames(),
+        LOW,
+        "a clean minute steps down"
+    );
+    let mut second = 131.0;
+    while second < 180.0 {
+        run_to(&mut rig, second);
+        lose_one(&mut rig, again);
+        second += 2.0;
+    }
+    assert_eq!(rig.stream.latency_frames(), 8_820, "stepped up again");
+}
