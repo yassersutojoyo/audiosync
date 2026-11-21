@@ -91,6 +91,9 @@ const RATE_WINDOW: f64 = 60.0;
 /// Those requests span at least this many seconds: one burst re-asking for
 /// a lost run is no rate (P200).
 const RATE_SPAN: f64 = 10.0;
+/// And fall in at least this many distinct seconds, so a burst and one
+/// stray request after it are no rate (P200).
+const RATE_SECONDS: usize = 5;
 /// The input ring by default: 2 s (at least 1 s, P111).
 pub const DEFAULT_INPUT_FRAMES: usize = 2 * audio::SAMPLE_RATE as usize;
 /// Times within this many seconds of being due count as due, so a wake-up
@@ -533,6 +536,15 @@ impl OwnEncoding {
     }
 }
 
+/// One second of a speaker's resend requests (P200).
+#[derive(Clone, Copy, Debug)]
+struct RateSecond {
+    second: i64,
+    /// When its first request came, in seconds.
+    first: f64,
+    requests: u32,
+}
+
 #[derive(Debug)]
 struct Speaker {
     id: SpeakerId,
@@ -561,10 +573,9 @@ struct Speaker {
     /// the sync stating the step goes: as the end of the step's packet
     /// sounds on this speaker (P200).
     step_sync: Option<(u32, f64)>,
-    /// When its last [`RATE_GAP_REQUESTS`] resend requests came, oldest
-    /// next to overwrite (P200).
-    recent_requests: [f64; RATE_GAP_REQUESTS],
-    recent_next: usize,
+    /// Its resend requests of the last [`RATE_WINDOW`], one entry per
+    /// second that had any, oldest first; never more than 60 (P200).
+    recent_requests: VecDeque<RateSecond>,
     /// The start of the minute its resend rate line counts, and the
     /// requests in it (P200).
     rate_since: f64,
@@ -644,7 +655,7 @@ impl Speaker {
     /// Starts sending at timeline packet `packet` with RTP timestamp
     /// `rtptime`, flagged as the first after RECORD or FLUSH.
     fn start_at(&mut self, packet: u64, rtptime: u32) {
-        self.recent_requests = [f64::NEG_INFINITY; RATE_GAP_REQUESTS];
+        self.recent_requests.clear();
         self.next_packet = packet;
         self.rtp_offset = rtptime.wrapping_sub((packet * PACKET_FRAMES) as u32);
         self.first_pending = true;
@@ -1471,8 +1482,7 @@ impl Stream {
             rtp_offset: 0,
             first_pending: true,
             step_sync: None,
-            recent_requests: [f64::NEG_INFINITY; RATE_GAP_REQUESTS],
-            recent_next: 0,
+            recent_requests: VecDeque::with_capacity(RATE_WINDOW as usize),
             rate_since: t,
             rate_requests: 0,
             started: false,
@@ -1876,14 +1886,29 @@ impl Stream {
         let counters = speaker.counters.clone();
         counters.resend_requests.fetch_add(1, Ordering::Relaxed);
         speaker.rate_requests += 1;
-        // The request 20 back came within the minute but not in the same
-        // burst: more than 20 a minute, so the receiver is cutting out
-        // (P200).
-        let span = t - speaker.recent_requests[speaker.recent_next];
-        let steady = (RATE_SPAN..RATE_WINDOW).contains(&span);
+        let second = t.floor() as i64;
+        let recent = &mut speaker.recent_requests;
+        while recent
+            .front()
+            .is_some_and(|old| second - old.second >= RATE_WINDOW as i64)
+        {
+            recent.pop_front();
+        }
+        match recent.back_mut() {
+            Some(last) if last.second == second => last.requests += 1,
+            _ => recent.push_back(RateSecond {
+                second,
+                first: t,
+                requests: 1,
+            }),
+        }
+        // More than 20 within the minute, spread over 5 seconds and 10 s
+        // or more: the receiver is cutting out, however fast it asks (P200).
+        let requests: u32 = recent.iter().map(|s| s.requests).sum();
+        let steady = requests as usize > RATE_GAP_REQUESTS
+            && recent.len() >= RATE_SECONDS
+            && recent.front().is_some_and(|old| t - old.first >= RATE_SPAN);
         let ip = speaker.destinations.control.ip();
-        speaker.recent_requests[speaker.recent_next] = t;
-        speaker.recent_next = (speaker.recent_next + 1) % RATE_GAP_REQUESTS;
         for offset in 0..request.count.min(MAX_RESEND_REQUEST) {
             let seq = request.first.wrapping_add(offset);
             let slot = usize::from(seq) % HISTORY_PACKETS;
