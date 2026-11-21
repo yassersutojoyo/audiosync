@@ -157,7 +157,7 @@ pub struct InputWriter {
     fresh: bool,
     /// The sequence of the last [`TimelineMove`] taken.
     moves_taken: u64,
-    /// The last write's frames, when all of them came late (P112).
+    /// The current run's wholly late writes, in order (P112).
     held: Box<[u32]>,
     held_frames: usize,
 }
