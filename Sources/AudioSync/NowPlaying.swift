@@ -407,8 +407,10 @@ final class NowPlayingMonitor {
 
     /// Seconds between readings of the players. A play/pause key goes to the
     /// player, not to AudioSync, so only a reading shows it on the card.
+    /// A play state or track change shows through the player's change notice and
+    /// the burst after it; the steady poll backs that up and catches the rest.
     static func pollInterval(onScreen: Bool, playerRuns: Bool, bursting: Bool = false) -> TimeInterval {
-        onScreen && playerRuns ? (bursting ? 0.1 : 0.25) : 2.0
+        onScreen && playerRuns ? (bursting ? 0.1 : 1.0) : 2.0
     }
 
     // Main thread.
@@ -462,7 +464,8 @@ final class NowPlayingMonitor {
     private let commandLock = NSLock()
     private var commandsQueued = 0                       // under commandLock: commands not yet started
     private var denied: Set<String> = []                 // players refusing our Apple Events
-    private var modeTerms: [String: Bool] = [:]          // whether a player's mode script compiles
+    private var modeTerms: [String: Bool] = [:]          // whether a player's reading compiles with the mode terms
+    private var compiled: [String: NSAppleScript] = [:]  // scripts run every reading, by source
     private lazy var consent: AutomationConsent = {
         let consent = AutomationConsent(queue: self.scripts) { app, mayPrompt, done in
             DispatchQueue.global(qos: .userInitiated).async { done(NowPlayingMonitor.sendConsentEvent(app, mayPrompt: mayPrompt)) }
@@ -694,13 +697,21 @@ final class NowPlayingMonitor {
         }
     }
 
-    private func query(_ bundleID: String) -> Answer {
+    /// The player's state, track, shuffle and repeat, and position in one script. `modes`: with the
+    /// shuffle and repeat terms, which a player lacking them fails to compile.
+    static func readingScript(_ bundleID: String, modes: Bool) -> String {
         // Fields joined by a separator that never appears in metadata.
         let sep = "\u{1F}"
         // Spotify's duration is in ms, Music's in seconds. Whole ms avoid the locale's decimal
         // separator; rounding outside the tell block keeps scripting additions away from the player.
-        let durationToMs = bundleID == Self.spotify ? 1 : 1000
-        let script = """
+        let durationToMs = bundleID == spotify ? 1 : 1000
+        // Spotify says whether the track takes shuffle and repeat; Music always does.
+        let (shuffle, repeating) = bundleID == spotify
+            ? ("if shuffling enabled then set sh to shuffling as string",
+               "if repeating enabled then set rp to repeating as string")
+            : ("set sh to shuffle enabled as string", "set rp to song repeat as string")
+        let modeLines = modes ? "try\n\(shuffle)\nend try\ntry\n\(repeating)\nend try" : ""
+        return """
             with timeout of 2 seconds
                 if application id "\(bundleID)" is not running then return "stopped"
                 tell application id "\(bundleID)"
@@ -712,7 +723,10 @@ final class NowPlayingMonitor {
                     try
                         set i to (id of t) as string
                     end try
-                    set trackText to trackText & "\(sep)" & i
+                    set sh to ""
+                    set rp to ""
+                    \(modeLines)
+                    set trackText to trackText & "\(sep)" & i & "\(sep)" & sh & "\(sep)" & rp
                     set p to missing value
                     set d to missing value
                     try
@@ -727,23 +741,36 @@ final class NowPlayingMonitor {
                 return trackText & timing
             end timeout
             """
+    }
+
+    private func query(_ bundleID: String) -> Answer {
+        if modeTerms[bundleID] == nil {
+            var error: NSDictionary?
+            let compiles = NSAppleScript(source: Self.readingScript(bundleID, modes: true))?.compileAndReturnError(&error) ?? false
+            modeTerms[bundleID] = compiles
+            if !compiles {
+                DebugTrace.log("Now Playing: \(bundleID) lacks the shuffle or repeat terms, "
+                               + "so those buttons stay hidden: \(error.map { "\($0)" } ?? "")")
+            }
+        }
+        let script = Self.readingScript(bundleID, modes: modeTerms[bundleID] == true)
         // Stamped before the script runs: a reply can take up to 2 s, and a later stamp would let
         // a "playing" read just before a pause look current to the capture watch (S335).
         let readAt = ProcessInfo.processInfo.systemUptime
-        guard let result = run(target: bundleID, script)?.stringValue else {
+        guard let result = run(target: bundleID, keep: true, script)?.stringValue else {
             return .empty(denied.contains(bundleID) ? .denied : .unreadable)
         }
         if result == "stopped" { return .empty(.stopped) }
-        let parts = result.components(separatedBy: sep)
-        guard parts.count >= 5, !parts[1].isEmpty else {
+        let parts = result.components(separatedBy: "\u{1F}")
+        guard parts.count >= 7, !parts[1].isEmpty else {
             return .empty(parts[0] == "playing" ? .playingNameless : .unreadable)
         }
         let appName = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first?.localizedName
             ?? bundleID
         let isPlaying = parts[0] == "playing"
-        let modes = readModes(bundleID)
+        let modes = Self.modes(bundleID, shuffle: parts[5], repeating: parts[6])
         var position: Position?
-        if parts.count >= 7, let elapsedMs = Int(parts[5]), let lengthMs = Int(parts[6]), lengthMs > 0 {
+        if parts.count >= 9, let elapsedMs = Int(parts[7]), let lengthMs = Int(parts[8]), lengthMs > 0 {
             position = Position(elapsed: Double(min(max(0, elapsedMs), lengthMs)) / 1000,
                                 length: Double(lengthMs) / 1000, readAt: readAt, playing: isPlaying)
         }
@@ -751,45 +778,6 @@ final class NowPlayingMonitor {
                             album: parts[3], isPlaying: isPlaying, artwork: nil, position: position,
                             playerState: ExplicitPause.playerState(parts[0]),
                             shuffle: modes.shuffle, repeatMode: modes.repeatMode, songID: parts[4]))
-    }
-
-    /// Shuffle and repeat in a script of their own: a term the player lacks fails only this
-    /// one, which hides the two buttons and leaves the track.
-    private func readModes(_ bundleID: String) -> (shuffle: Bool?, repeatMode: RepeatMode?) {
-        let sep = "\u{1F}"
-        // Spotify says whether the track takes shuffle and repeat; Music always does.
-        let (shuffle, repeating) = bundleID == Self.spotify
-            ? ("if shuffling enabled then set sh to shuffling as string",
-               "if repeating enabled then set rp to repeating as string")
-            : ("set sh to shuffle enabled as string", "set rp to song repeat as string")
-        let script = """
-            with timeout of 2 seconds
-                if application id "\(bundleID)" is not running then return ""
-                tell application id "\(bundleID)"
-                    set sh to ""
-                    set rp to ""
-                    try
-                        \(shuffle)
-                    end try
-                    try
-                        \(repeating)
-                    end try
-                    return sh & "\(sep)" & rp
-                end tell
-            end timeout
-            """
-        if modeTerms[bundleID] == nil {
-            var error: NSDictionary?
-            let compiles = NSAppleScript(source: script)?.compileAndReturnError(&error) ?? false
-            modeTerms[bundleID] = compiles
-            if !compiles {
-                DebugTrace.log("Now Playing: \(bundleID) lacks the shuffle or repeat terms, "
-                               + "so those buttons stay hidden: \(error.map { "\($0)" } ?? "")")
-            }
-        }
-        guard modeTerms[bundleID] == true else { return (nil, nil) }
-        let parts = run(target: bundleID, script)?.stringValue?.components(separatedBy: sep) ?? []
-        return parts.count == 2 ? Self.modes(bundleID, shuffle: parts[0], repeating: parts[1]) : (nil, nil)
     }
 
     /// The track's cover, and whether one is still on its way.
@@ -997,9 +985,12 @@ final class NowPlayingMonitor {
     /// Runs `source`, which talks to the player `target`, and reports when
     /// macOS starts or stops refusing AudioSync's Apple Events to it.
     /// `command`: a button press, whose timeout is a real failure worth logging.
-    private func run(target: String, command: Bool = false, _ source: String) -> NSAppleEventDescriptor? {
+    /// `keep`: the script runs every reading, so it is compiled once and kept.
+    private func run(target: String, command: Bool = false, keep: Bool = false, _ source: String) -> NSAppleEventDescriptor? {
         var error: NSDictionary?
-        let result = NSAppleScript(source: source)?.executeAndReturnError(&error)
+        let script = compiled[source] ?? NSAppleScript(source: source)
+        if keep { compiled[source] = script }
+        let result = script?.executeAndReturnError(&error)
         let code = error?[NSAppleScript.errorNumber] as? Int
         if let error, command || !Self.meansNoTrack(code) {
             DebugTrace.log(Self.scriptErrorLine(target: target, code: code, error: "\(error)"))
