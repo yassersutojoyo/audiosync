@@ -846,3 +846,25 @@ fn a_steady_run_of_in_time_resend_requests_steps_up_and_keeps_it() {
         "kept across a pause and a restart while the requests go on"
     );
 }
+
+// covers: P200
+#[test]
+fn one_burst_of_resend_requests_after_a_resume_never_steps() {
+    let mut rig = quiet_rig();
+    let id = rig.add(speaker(1, Codec::Pcm));
+    run_to(&mut rig, 5.0);
+    rig.stream.pause(rig.now);
+    rig.run_for(Duration::from_secs(2));
+    rig.stream.resume(rig.now);
+    rig.answer_flushes();
+    rig.run_for(Duration::from_secs(1));
+    // A receiver asking again and again for one lost run, 25 times in a
+    // second.
+    for _ in 0..25 {
+        lose_one(&mut rig, id);
+        rig.run_for(Duration::from_millis(40));
+    }
+    // Well inside the clean minute a step up would wait out.
+    rig.run_for(Duration::from_secs(30));
+    assert_eq!(rig.stream.latency_frames(), LOW, "{:?}", timelines(&rig));
+}
