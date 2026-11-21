@@ -530,4 +530,37 @@ mod tests {
         assert_eq!(out[0], [2000, 2000]);
         assert_eq!(reader.dropped(), 0);
     }
+
+    // The host hands one block over in two writes at the same instant (the
+    // gap fill's silence then the packet, or a block split for resampling),
+    // so the second one is no sign of catching up.
+    // covers: P112
+    #[test]
+    fn a_block_after_a_short_stall_handed_over_in_two_writes_is_kept_whole() {
+        let origin = Instant::now();
+        let (mut writer, mut reader) = ring(2 * MIN_INPUT_FRAMES, origin);
+        let block = [1000i16; 2 * FRAMES_PER_PACKET];
+        writer.write_i16(&block, origin);
+        let mut out = [[0, 0]; FRAMES_PER_PACKET];
+        for packet in 0..10 {
+            reader.cut((packet * FRAMES_PER_PACKET) as i64, &mut out);
+        }
+        reader.drain_arrivals(|_| {});
+        let floor = reader.floor();
+
+        let head = [2000i16; 2 * FRAMES_PER_PACKET];
+        let rest = [2500i16; 2 * FRAMES_PER_PACKET];
+        let next = [3000i16; 2 * FRAMES_PER_PACKET];
+        let at = origin + Duration::from_millis(100);
+        writer.write_i16(&head, at);
+        writer.write_i16(&rest, at);
+        writer.write_i16(&next, at + Duration::from_millis(10));
+
+        assert_eq!(writer.position(), floor + 3 * FRAMES_PER_PACKET as u64);
+        reader.cut(floor as i64, &mut out);
+        assert_eq!(out[0], [2000, 2000]);
+        reader.cut((floor + FRAMES_PER_PACKET as u64) as i64, &mut out);
+        assert_eq!(out[0], [2500, 2500]);
+        assert_eq!(reader.dropped(), 0);
+    }
 }
