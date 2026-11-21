@@ -1044,7 +1044,9 @@ const MAX_FILL_SECONDS: u64 = 21;
 /// (or that Windows marks as a discontinuity) gets silence for the time
 /// between them, and while nothing comes, each wake of the capture loop
 /// writes silence up to shortly before now. A packet that starts inside
-/// silence written that way skips the frames already filled. Times are in
+/// silence written that way skips the frames already filled, except the
+/// first packet after silence written since a [`GapFill::started`] open,
+/// which follows it whole. Times are in
 /// 100 ns units of the performance counter, as
 /// `IAudioCaptureClient::GetBuffer` gives a packet's position. Never
 /// allocates, locks or blocks.
@@ -1059,6 +1061,8 @@ pub struct GapFill {
     /// Whether the frames written so far end with silence written while
     /// nothing came, and no packet has reached past it yet.
     filled: bool,
+    /// Whether no packet has come since a [`GapFill::started`] tracker began.
+    before_first: bool,
 }
 
 impl GapFill {
@@ -1069,6 +1073,7 @@ impl GapFill {
             anchor: None,
             written: 0,
             filled: false,
+            before_first: false,
         }
     }
 
@@ -1081,6 +1086,7 @@ impl GapFill {
             anchor: Some(now),
             written: 0,
             filled: true,
+            before_first: true,
         }
     }
 
@@ -1137,6 +1143,7 @@ impl GapFill {
     ) -> (usize, usize, bool) {
         let packet_end = start.saturating_add(self.length(frames as u64));
         let filled = std::mem::take(&mut self.filled);
+        let before_first = std::mem::take(&mut self.before_first);
         let Some(end) = self.end() else {
             self.rebase(start, frames);
             return (0, 0, false);
@@ -1150,6 +1157,12 @@ impl GapFill {
             };
             self.rebase(start, frames);
             return (fill as usize, 0, fill > 0 && !filled);
+        }
+        if filled && before_first {
+            // Silence written before any packet stands for no audio, so the
+            // first packet (a song's head) follows it whole.
+            self.rebase(end, frames);
+            return (0, 0, false);
         }
         if filled {
             // It starts inside the silence written while nothing came: its
@@ -2994,6 +3007,20 @@ mod tests {
         // One that reaches past it is written from its end on.
         assert_eq!(gaps.packet(25 * HNS_PER_MS, 480, false), (0, 240, false));
         assert_eq!(gaps.packet(35 * HNS_PER_MS, 480, false), (0, 0, false));
+    }
+
+    // covers: S398
+    #[test]
+    fn the_first_packet_after_silence_written_before_any_keeps_its_head() {
+        // A capture opened at 0 that waited: silence up to 40 ms.
+        let mut gaps = GapFill::started(SESSION_RATE, 0);
+        assert_eq!(gaps.idle(50 * HNS_PER_MS), 1_920);
+        // Its first packet, a song's first 1024 frames, is stamped at 30 ms.
+        assert_eq!(gaps.packet(30 * HNS_PER_MS, 1_024, false), (0, 0, false));
+        // The next one follows on, and a later pause still fills.
+        let next = 30 * HNS_PER_MS + 213_333;
+        assert_eq!(gaps.packet(next, 1_024, false), (0, 0, false));
+        assert!(gaps.idle(next + 100 * HNS_PER_MS) > 0);
     }
 
     // covers: S398
