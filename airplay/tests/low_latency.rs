@@ -811,3 +811,38 @@ fn a_receiver_that_reports_nothing_plays_with_room_for_a_jittery_network() {
         "after a reconnect"
     );
 }
+
+// covers: P200
+#[test]
+fn a_steady_run_of_in_time_resend_requests_steps_up_and_keeps_it() {
+    let mut rig = quiet_rig();
+    let id = rig.add(speaker(1, Codec::Pcm));
+    // 30 requests a minute, each still in time, as the television on a
+    // jittery network sent while it cut out.
+    let mut second = 1.0;
+    while second < 70.0 {
+        run_to(&mut rig, second);
+        lose_one(&mut rig, id);
+        second += 2.0;
+    }
+    assert_eq!(rig.stream.latency_frames(), 8_820, "{:?}", timelines(&rig));
+
+    rig.stream.pause(rig.now);
+    rig.run_for(Duration::from_secs(5));
+    rig.stream.resume(rig.now);
+    rig.answer_flushes();
+    rig.stream.restart(rig.now);
+    rig.answer_flushes();
+    let resumed = rig.t();
+    let mut second = resumed + 1.0;
+    while second < resumed + 90.0 {
+        run_to(&mut rig, second);
+        lose_one(&mut rig, id);
+        second += 2.0;
+    }
+    assert_eq!(
+        rig.stream.latency_frames(),
+        8_820,
+        "kept across a pause and a restart while the requests go on"
+    );
+}
