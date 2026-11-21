@@ -150,7 +150,8 @@ fn unpack(word: u32) -> Frame {
 /// audio thread, and not `Clone`: there is one producer.
 pub struct InputWriter {
     shared: Arc<Shared>,
-    /// The arrival time and size of the last write, when it was late.
+    /// When the current run of late writes began and the frames it holds
+    /// so far, while the last write was late.
     late: Option<(Instant, u64)>,
     /// No frame of the current capture was handed over yet.
     fresh: bool,
@@ -229,8 +230,8 @@ impl InputWriter {
         let start = shared.write.load(Ordering::Relaxed);
         let count = frames as u64;
         let behind = floor.saturating_sub(start);
-        // Still behind at real-time pace (at least half the time the last
-        // late write's frames last): not catching up, so resumed.
+        // Still behind at real-time pace (at least half the time the late
+        // run's frames last since it began): not catching up, so resumed.
         let paced = self.late.is_some_and(|(previous, size)| {
             at.saturating_duration_since(previous).as_secs_f64() * f64::from(SAMPLE_RATE)
                 >= size as f64 / 2.0
@@ -266,16 +267,20 @@ impl InputWriter {
             let slot = ((first + held + index) % capacity) as usize;
             shared.slots[slot].store(frame((late + index) as usize), Ordering::Relaxed);
         }
-        // A write wholly behind is held until the next one shows whether
-        // the host is catching up (it is dropped then) or resumed at
-        // real-time pace.
-        self.held_frames = 0;
-        if late == count && !resync {
+        // Writes wholly behind are held, in order, until a later one shows
+        // whether the host is catching up (they are dropped then) or resumed
+        // at real-time pace.
+        if late > 0 && late == count {
+            if self.held_frames + frames > self.held.len() {
+                self.held_frames = 0;
+            }
             let hold = frames.min(self.held.len());
             for index in 0..hold {
-                self.held[index] = frame(frames - hold + index);
+                self.held[self.held_frames + index] = frame(frames - hold + index);
             }
-            self.held_frames = hold;
+            self.held_frames += hold;
+        } else {
+            self.held_frames = 0;
         }
         let end = first + held + keep;
         shared.write.store(end.max(start), Ordering::Release);
@@ -287,7 +292,10 @@ impl InputWriter {
             self.fresh = false;
         }
         if late > 0 {
-            self.late = Some((at, count));
+            self.late = Some(match self.late {
+                Some((since, size)) if late == count => (since, size + count),
+                _ => (at, count),
+            });
             self.record_arrival(start, end, at, LATE_BIT);
         } else {
             self.late = None;
