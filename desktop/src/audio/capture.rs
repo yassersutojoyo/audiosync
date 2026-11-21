@@ -1044,7 +1044,9 @@ const MAX_FILL_SECONDS: u64 = 21;
 /// (or that Windows marks as a discontinuity) gets silence for the time
 /// between them, and while nothing comes, each wake of the capture loop
 /// writes silence up to shortly before now. A packet that starts inside
-/// silence written that way skips the frames already filled. Times are in
+/// silence written that way skips the frames already filled, except the
+/// first packet after silence written since a [`GapFill::started`] open,
+/// which follows it whole. Times are in
 /// 100 ns units of the performance counter, as
 /// `IAudioCaptureClient::GetBuffer` gives a packet's position. Never
 /// allocates, locks or blocks.

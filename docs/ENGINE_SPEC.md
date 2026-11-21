@@ -5674,6 +5674,7 @@ S231 has no Windows test: Windows reads no device latency.
 | a_packet_inside_the_silence_written_skips_the_frames_filled (`desktop/src/audio/capture.rs`) | S398 |
 | late_packets_inside_one_fill_are_never_written_twice (`desktop/src/audio/capture.rs`) | S398 |
 | an_hour_of_gap_fills_exactly_the_frames_of_an_hour (`desktop/src/audio/capture.rs`) | S398 |
+| the_first_packet_after_silence_written_before_any_keeps_its_head (`desktop/src/audio/capture.rs`) | S398 |
 | an_idle_wake_two_hours_on_writes_21_s_and_keeps_pace_from_now (`desktop/src/audio/capture.rs`) | S332, S398 |
 
 ### Hidden speakers, the waiting notice, track progress, output channels and the level meter: core and Windows (`cargo test` in `core/` and `desktop/`)
