@@ -37,6 +37,12 @@ const LANE_FRAMES: usize = MAX_LAG_FRAMES + CONVERT_CHUNK;
 /// from one stream to another, 5 ms (S480).
 const FADE_FRAMES: f32 = SESSION_RATE as f32 * 0.005;
 
+/// How far the sound may move a stream taking over from where the stamps
+/// put it, and the frames compared: stamps of the two loopbacks were
+/// measured about half a millisecond apart (S480).
+const ALIGN_FRAMES: i64 = 240;
+const ALIGN_WINDOW: i64 = 1024;
+
 /// One stream's frames waiting to be mixed, stereo, in a ring buffer.
 struct Lane {
     samples: Box<[f32]>,
@@ -91,6 +97,52 @@ impl Lane {
             self.len -= dropped;
             self.owed += frames.unsigned_abs() as usize - dropped;
         }
+    }
+
+    /// Its sample `k` frames after the first waiting one, both channels
+    /// summed; a negative `k` reaches back into frames already mixed, as far
+    /// as the ring still holds them.
+    fn mono(&self, k: i64) -> Option<f32> {
+        if k < self.len as i64 - LANE_FRAMES as i64 || k >= self.len as i64 {
+            return None;
+        }
+        let at = (self.start as i64 + k).rem_euclid(LANE_FRAMES as i64) as usize * 2;
+        Some(self.samples[at] + self.samples[at + 1])
+    }
+
+    /// The shift, within [`ALIGN_FRAMES`] of `guess`, that lines its sound up
+    /// best with `going`'s: `guess` itself when neither is loud enough or
+    /// nothing matches well. Ties go to the shift nearest `guess`.
+    fn shift_by_sound(&self, going: &Lane, guess: i64) -> i64 {
+        let (mut best, mut best_score) = (guess, 0.9_f32);
+        for distance in 0..=ALIGN_FRAMES {
+            for shift in [guess - distance, guess + distance] {
+                let low = (self.len as i64 - LANE_FRAMES as i64)
+                    .max(going.len as i64 - LANE_FRAMES as i64 - shift);
+                let high = (self.len as i64).min(going.len as i64 - shift);
+                if high - low < ALIGN_WINDOW {
+                    continue;
+                }
+                let (mut dot, mut own, mut other) = (0.0_f32, 0.0_f32, 0.0_f32);
+                for k in high - ALIGN_WINDOW..high {
+                    let (Some(a), Some(b)) = (self.mono(k), going.mono(k + shift)) else {
+                        continue;
+                    };
+                    dot += a * b;
+                    own += a * a;
+                    other += b * b;
+                }
+                let floor = ALIGN_WINDOW as f32 * 1e-6;
+                if own < floor || other < floor {
+                    continue;
+                }
+                let score = dot / (own * other).sqrt();
+                if score > best_score + 1e-4 {
+                    (best, best_score) = (shift, score);
+                }
+            }
+        }
+        best
     }
 
     /// How many of `frames` incoming frames pay off what the lane owes.
@@ -411,8 +463,8 @@ impl<S: LaneStream> MixLanes<S> {
     /// Hears only the stream of `pid` when `alone`, else every stream but
     /// it; every stream while that leaves none. Each stream coming in is
     /// first lined up in time with the one going out that has the highest
-    /// key, by the positions their gap tracking reached, then they
-    /// cross-fade over [`FADE_FRAMES`] (S480).
+    /// key, by the positions their gap tracking reached and then by their
+    /// sound, then they cross-fade over [`FADE_FRAMES`] (S480).
     pub fn select(&mut self, pid: u32, alone: bool) {
         self.selected = Some((pid, alone));
         self.apply_selection();
@@ -440,22 +492,30 @@ impl<S: LaneStream> MixLanes<S> {
             .filter_map(|index| {
                 let slot = self.slots[index].as_ref()?;
                 (self.mixer.lanes[index + 1].target > 0.0 && !heard(slot))
-                    .then(|| Some((slot.opened.pid, head(&self.mixer, index, slot)?)))
-                    .flatten()
+                    .then(|| (slot.opened.pid, index, head(&self.mixer, index, slot)))
             })
-            .max_by_key(|&(pid, _)| pid)
-            .map(|(_, head)| head);
+            .max_by_key(|&(pid, _, _)| pid)
+            .map(|(_, index, head)| (index, head));
         for index in 0..self.slots.len() {
             let Some(slot) = self.slots[index].as_ref() else {
                 continue;
             };
             let target = if heard(slot) { 1.0 } else { 0.0 };
             let coming = head(&self.mixer, index, slot);
+            let joining = target > 0.0 && self.mixer.lanes[index + 1].target == 0.0;
+            if joining && let Some((out, out_head)) = leaving {
+                let guess = match (out_head, coming) {
+                    (Some(out_head), Some(coming)) => {
+                        (coming - out_head) * i64::from(SESSION_RATE) / HNS_PER_SECOND as i64
+                    }
+                    _ => 0,
+                };
+                let lanes = &self.mixer.lanes;
+                let shift = lanes[index + 1].shift_by_sound(&lanes[out + 1], guess);
+                self.mixer.lanes[index + 1].shift(shift);
+            }
             let lane = &mut self.mixer.lanes[index + 1];
-            if target > 0.0 && lane.target == 0.0 {
-                if let (Some(out), Some(coming)) = (leaving, coming) {
-                    lane.shift((coming - out) * i64::from(SESSION_RATE) / HNS_PER_SECOND as i64);
-                }
+            if joining {
                 lane.gain = 0.0;
             }
             lane.target = target;
