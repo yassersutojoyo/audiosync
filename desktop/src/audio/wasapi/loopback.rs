@@ -1092,6 +1092,10 @@ struct EndpointLevels {
     /// Odd while a reading is written, raised past each.
     version: AtomicU64,
     db: [AtomicU32; 2],
+    /// The loudest level of each side written since the mix last read.
+    loudest: [AtomicU32; 2],
+    /// The version the mix last read.
+    taken: AtomicU64,
     software: AtomicBool,
     /// When the volume changed, in 100 ns units.
     at: AtomicU64,
@@ -1105,9 +1109,13 @@ impl EndpointLevels {
             .writing
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let unread = self.taken.load(Ordering::Acquire) != self.version.load(Ordering::Relaxed);
         self.version.fetch_add(1, Ordering::AcqRel);
-        for (slot, db) in self.db.iter().zip(db) {
+        for ((slot, loudest), db) in self.db.iter().zip(&self.loudest).zip(db) {
             slot.store(db.to_bits(), Ordering::Relaxed);
+            let before = f32::from_bits(loudest.load(Ordering::Relaxed));
+            let level = if unread { before.max(db) } else { db };
+            loudest.store(level.to_bits(), Ordering::Relaxed);
         }
         self.software.store(software, Ordering::Relaxed);
         self.at.store(at, Ordering::Relaxed);
@@ -1116,13 +1124,17 @@ impl EndpointLevels {
 
     /// The reading written after `seen`, which it moves on; called on the
     /// mix's real-time thread.
-    fn read(&self, seen: &mut u64) -> Option<([f32; 2], bool, u64)> {
+    fn read(&self, seen: &mut u64) -> Option<([f32; 2], [f32; 2], bool, u64)> {
         let version = self.version.load(Ordering::Acquire);
         if version == *seen || version % 2 == 1 {
             return None;
         }
         let db = self
             .db
+            .each_ref()
+            .map(|slot| f32::from_bits(slot.load(Ordering::Relaxed)));
+        let loudest = self
+            .loudest
             .each_ref()
             .map(|slot| f32::from_bits(slot.load(Ordering::Relaxed)));
         let software = self.software.load(Ordering::Relaxed);
@@ -1132,7 +1144,8 @@ impl EndpointLevels {
             return None;
         }
         *seen = version;
-        Some((db, software, at))
+        self.taken.store(version, Ordering::Release);
+        Some((db, loudest, software, at))
     }
 }
 
@@ -1189,12 +1202,17 @@ impl LevelsWatch {
             levels: Arc::clone(&levels),
             frequency,
         };
-        // The volume as it stands holds for every frame already captured.
-        reader.read(0);
         let listener: IAudioEndpointVolumeCallback = LevelsListener { reader }.into();
         // SAFETY: the listener stays alive and registered until this value
         // unregisters it on drop.
         unsafe { control.RegisterControlChangeNotify(&listener) }.ok()?;
+        // Read once registered, so a change in between is never missed.
+        LevelsReader {
+            control: control.clone(),
+            levels: Arc::clone(&levels),
+            frequency,
+        }
+        .read(now_hns(frequency));
         Some(LevelsWatch {
             control,
             listener,
@@ -1539,8 +1557,8 @@ fn mix_loop(
                 .levels
                 .as_ref()
                 .and_then(|watch| watch.levels.read(&mut levels_seen));
-            if let Some((db, software, at)) = reading {
-                undo.change(db, db, software, at);
+            if let Some((db, loudest, software, at)) = reading {
+                undo.change(db, loudest, software, at);
             }
             floored = undo.floored();
             let gains = undo.gains(lanes.position(key));
@@ -1599,6 +1617,28 @@ mod tests {
 
     use super::super::com::{READY_TIMEOUT, StuckThreads, spawn_worker_within};
     use super::*;
+
+    // covers: S480
+    #[test]
+    fn levels_keep_the_loudest_reading_the_mix_has_not_seen() {
+        let levels = EndpointLevels::default();
+        let mut seen = 0;
+        levels.write([-20.0, -20.0], true, 1);
+        assert_eq!(
+            levels.read(&mut seen).map(|read| read.1),
+            Some([-20.0, -20.0])
+        );
+        levels.write([0.0, -3.0], true, 2);
+        levels.write([-20.0, -30.0], true, 3);
+        let read = levels.read(&mut seen).unwrap();
+        assert_eq!((read.0, read.1), ([-20.0, -30.0], [0.0, -3.0]));
+        levels.write([-30.0, -30.0], true, 4);
+        assert_eq!(
+            levels.read(&mut seen).map(|read| read.1),
+            Some([-30.0, -30.0])
+        );
+        assert_eq!(levels.read(&mut seen), None);
+    }
     use crate::audio::SESSION_RATE;
 
     /// How long the fake Windows audio hangs before it answers again.

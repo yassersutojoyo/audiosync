@@ -222,6 +222,9 @@ impl StreamMixer {
         joining.len = 0;
         joining.owed = 0;
         joining.open = true;
+        joining.comp = [1.0, 1.0];
+        joining.comp_target = [1.0, 1.0];
+        joining.comp_left = 0;
         joining.append_silence(level);
     }
 
@@ -392,6 +395,9 @@ pub struct MixLanes<S> {
     /// The stream heard alone, or the one left out, as [`MixLanes::select`]
     /// set; every stream is heard without one.
     selected: Option<(u32, bool)>,
+    /// The bits one of the other streams' apps must have for them to be
+    /// heard instead of `pid`'s.
+    needs: u32,
     /// The selection the mix plays now, as [`MixLanes::effective`] gives it.
     heard: Option<(u32, bool)>,
     /// When the switch to a new selection was asked for, while it waits.
@@ -415,6 +421,7 @@ impl<S: LaneStream> MixLanes<S> {
             mixer,
             pace: GapFill::started(SESSION_RATE, now),
             selected: None,
+            needs: 0,
             heard: None,
             switch_since: None,
             fading: false,
@@ -423,24 +430,26 @@ impl<S: LaneStream> MixLanes<S> {
     }
 
     /// Hears only the stream of `pid` when `alone`, else every stream but
-    /// it; every stream while that leaves none. The mix moves at a read: at
-    /// once in 10 ms of silence that comes within [`SILENCE_WAIT_HNS`], else
-    /// by fading out to nothing, then the new streams in, over
-    /// [`FADE_FRAMES`] each; two live streams are never cross-faded (S480).
+    /// it while one of them is an app with every bit of `needs`; `pid`'s
+    /// alone otherwise, which is silence while it isn't in the mix. The mix
+    /// moves at a read: at once in 10 ms of silence that comes within
+    /// [`SILENCE_WAIT_HNS`], else, and always toward `pid` alone, by fading
+    /// out to nothing, then the new streams in, over [`FADE_FRAMES`] each;
+    /// two live streams are never cross-faded (S480).
     pub fn select(&mut self, pid: u32, alone: bool, needs: u32) {
-        let _ = needs;
         self.selected = Some((pid, alone));
+        self.needs = needs;
     }
 
     /// The selection as it can be heard with the streams in the mix.
     fn effective(&self) -> Option<(u32, bool)> {
-        let others = self
+        let (pid, alone) = self.selected?;
+        let needed = self
             .slots
             .iter()
             .flatten()
-            .any(|slot| self.selected.is_some_and(|(pid, _)| slot.opened.pid != pid));
-        self.selected
-            .filter(|&(pid, alone)| if alone { self.holds(pid) } else { others })
+            .any(|slot| slot.opened.pid != pid && slot.opened.pid & self.needs == self.needs);
+        Some((pid, alone || !needed))
     }
 
     fn heard_by(selection: Option<(u32, bool)>, slot: &Slot<S>) -> bool {
@@ -468,7 +477,9 @@ impl<S: LaneStream> MixLanes<S> {
                 return;
             }
         } else if self.quiet < QUIET_FRAMES {
-            if now.saturating_sub(since) >= SILENCE_WAIT_HNS {
+            // Its own stream alone shuts out sound that may come twice: no wait.
+            let alone = wanted.is_some_and(|(_, alone)| alone);
+            if alone || now.saturating_sub(since) >= SILENCE_WAIT_HNS {
                 self.fading = true;
                 for index in 0..self.slots.len() {
                     if let Some(slot) = &self.slots[index]
@@ -841,15 +852,17 @@ impl VolumeUndo {
     /// in software when `software`; in hardware or unknown otherwise, which
     /// the loopback doesn't carry.
     pub fn change(&mut self, levels: [f32; 2], loudest: [f32; 2], software: bool, at: u64) {
-        let _ = loudest;
-        let gains = if software {
-            levels.map(|db| 10_f32.powf(-db / 20.0))
-        } else {
-            [1.0, 1.0]
+        let gain = |levels: [f32; 2]| {
+            if software {
+                levels.map(|db| 10_f32.powf(-db / 20.0))
+            } else {
+                [1.0, 1.0]
+            }
         };
+        let gains = gain(levels);
         self.floored = software && levels.iter().any(|&db| db < UNDO_FLOOR_DB);
-        for (applied, gain) in self.applied.iter_mut().zip(gains) {
-            *applied = applied.min(gain);
+        for ((applied, gain), passed) in self.applied.iter_mut().zip(gains).zip(gain(loudest)) {
+            *applied = applied.min(gain).min(passed);
         }
         self.pending = Some((gains, at));
     }
