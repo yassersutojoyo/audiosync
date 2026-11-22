@@ -835,4 +835,43 @@ mod tests {
         assert_eq!(out[0], [5500, 5500]);
         assert_eq!(reader.dropped() - discarded, FRAMES_PER_PACKET as u64);
     }
+
+    // P248, P143: a restart or a new capture while a partly late write is
+    // held drops it; the next write starts the audio and nothing stale plays,
+    // even when that write comes at real-time pace.
+    // covers: P248
+    #[test]
+    fn a_restart_or_new_capture_drops_a_held_partly_late_write() {
+        for restart in [true, false] {
+            let origin = Instant::now();
+            let (mut writer, mut reader) = ring(2 * MIN_INPUT_FRAMES, origin);
+            writer.write_i16(&[1000i16; 2 * 2971], origin);
+            let mut out = [[0, 0]; FRAMES_PER_PACKET];
+            for packet in 0..10 {
+                reader.cut((packet * FRAMES_PER_PACKET) as i64, &mut out);
+            }
+            let discarded = reader.dropped();
+            writer.write_i16(&ramp(941), origin + Duration::from_millis(100));
+            if restart {
+                reader.rebase();
+            } else {
+                writer.new_capture();
+            }
+            let floor = reader.floor();
+            writer.write_i16(&[5000i16; 2 * 941], origin + Duration::from_millis(121));
+
+            assert_eq!(writer.position(), floor + 941);
+            for packet in 0..3 {
+                reader.cut(
+                    (floor + (packet * FRAMES_PER_PACKET) as u64) as i64,
+                    &mut out,
+                );
+                assert!(
+                    out.iter()
+                        .all(|frame| *frame == [5000, 5000] || *frame == [0, 0])
+                );
+            }
+            assert_eq!(reader.dropped() - discarded, 941);
+        }
+    }
 }
