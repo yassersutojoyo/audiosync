@@ -63,8 +63,11 @@ struct Lane {
     /// [`FADE_FRAMES`] step per frame.
     gain: f32,
     target: f32,
-    /// What each channel is multiplied by besides `gain`.
+    /// What each channel is multiplied by besides `gain`, moving in a
+    /// straight line to `comp_target` over the `comp_left` frames left.
     comp: [f32; 2],
+    comp_target: [f32; 2],
+    comp_left: usize,
 }
 
 impl Lane {
@@ -79,6 +82,8 @@ impl Lane {
             gain: 1.0,
             target: 1.0,
             comp: [1.0, 1.0],
+            comp_target: [1.0, 1.0],
+            comp_left: 0,
         }
     }
 
@@ -126,6 +131,13 @@ impl Lane {
                 } else {
                     (self.gain - step).max(self.target)
                 };
+            }
+            if self.comp_left > 0 {
+                let left = self.comp_left as f32;
+                for (comp, target) in self.comp.iter_mut().zip(self.comp_target) {
+                    *comp += (target - *comp) / left;
+                }
+                self.comp_left -= 1;
             }
             frame[0] += self.samples[at] * self.gain * self.comp[0];
             frame[1] += self.samples[at + 1] * self.gain * self.comp[1];
@@ -525,19 +537,26 @@ impl<S: LaneStream> MixLanes<S> {
         }
     }
 
-    /// Mixes app `pid`'s stream at `gains`, per channel.
+    /// Mixes app `pid`'s stream at `gains`, per channel, reached over
+    /// [`FADE_FRAMES`].
+    #[cfg(any(windows, test))]
     pub fn compensate(&mut self, pid: u32, gains: [f32; 2]) {
         for index in 0..self.slots.len() {
             if self.slots[index]
                 .as_ref()
                 .is_some_and(|slot| slot.opened.pid == pid)
             {
-                self.mixer.lanes[index + 1].comp = gains;
+                let lane = &mut self.mixer.lanes[index + 1];
+                if lane.comp_target != gains {
+                    lane.comp_target = gains;
+                    lane.comp_left = FADE_FRAMES as usize;
+                }
             }
         }
     }
 
     /// Where app `pid`'s stream has reached, in 100 ns units.
+    #[cfg(windows)]
     pub fn position(&self, pid: u32) -> Option<u64> {
         self.slots
             .iter()
@@ -562,6 +581,16 @@ impl<S: LaneStream> MixLanes<S> {
             count += 1;
         }
         count
+    }
+
+    /// The first open stream whose app `pick` takes, with its app.
+    #[cfg(windows)]
+    pub fn find(&self, pick: impl Fn(u32) -> bool) -> Option<(u32, &S)> {
+        self.slots
+            .iter()
+            .flatten()
+            .find(|slot| pick(slot.opened.pid))
+            .map(|slot| (slot.opened.pid, &slot.opened.stream))
     }
 
     /// The open streams, in lane order.
@@ -755,16 +784,19 @@ pub fn as_bytes(samples: &[f32]) -> &[u8] {
 
 /// Below this level of a render endpoint's volume, in dB, its loopback is
 /// too quiet to bring back up cleanly (S480).
+#[cfg(any(windows, test))]
 pub const UNDO_FLOOR_DB: f32 = -40.0;
 
 /// How far past a volume change a stream must have reached before frames
 /// mixed from it surely carry the new volume: the mix's lag bound plus the
 /// audio engine's lead, in 100 ns units.
+#[cfg(any(windows, test))]
 pub const UNDO_MARGIN_HNS: u64 = 1_500_000;
 
 /// The stereo levels, in dB, of a render endpoint with `channels` levels:
 /// each channel of a stereo endpoint, else the loudest one on both sides,
 /// whose gain is the smallest (S480).
+#[cfg(any(windows, test))]
 pub fn stereo_levels(channels: &[f32]) -> [f32; 2] {
     match channels {
         [left, right] => [*left, *right],
@@ -778,6 +810,7 @@ pub fn stereo_levels(channels: &[f32]) -> [f32; 2] {
 /// The gain that brings a render endpoint's loopback back to the level
 /// before its software volume; an error only ever makes it quieter (S480).
 #[derive(Debug)]
+#[cfg(any(windows, test))]
 pub struct VolumeUndo {
     applied: [f32; 2],
     /// The gain of the latest change and when it happened.
@@ -785,6 +818,7 @@ pub struct VolumeUndo {
     floored: bool,
 }
 
+#[cfg(any(windows, test))]
 impl Default for VolumeUndo {
     fn default() -> VolumeUndo {
         VolumeUndo {
@@ -795,6 +829,7 @@ impl Default for VolumeUndo {
     }
 }
 
+#[cfg(any(windows, test))]
 impl VolumeUndo {
     /// The endpoint's volume is `levels` dB per side from `at` on, applied
     /// in software when `software`; in hardware or unknown otherwise, which
@@ -1231,6 +1266,12 @@ mod tests {
         lanes.compensate(1, [2.0, 3.0]);
         let mut mixed: Vec<f32> = Vec::new();
         for tick in 1..=20_u64 {
+            if tick == 10 {
+                lanes.compensate(1, [1.0, 3.0]);
+            }
+            if tick == 15 {
+                lanes.compensate(1, [2.0, 3.0]);
+            }
             script
                 .borrow_mut()
                 .packets
@@ -1244,6 +1285,14 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(mixed[mixed.len() - 2..], [0.5, 0.75]);
+        let left: Vec<f32> = mixed.iter().step_by(2).copied().collect();
+        let start = left.iter().position(|&v| v == 0.5).unwrap();
+        let steepest = left[start..]
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).abs())
+            .fold(0.0, f32::max);
+        assert!(steepest <= 0.25 / FADE_FRAMES + 1e-5, "no step: {steepest}");
+        assert!(left[start..].contains(&0.25), "reached the new gain");
     }
 
     /// Ten ms of app audio at `tick`, as its loopback stamps it.
