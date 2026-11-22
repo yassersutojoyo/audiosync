@@ -296,8 +296,8 @@ pub struct SystemRoute {
 /// else the first listed); and process loopback of each process that plays
 /// on another endpoint. `None`, process loopback without
 /// AudioSync's tree, when one of `local_outputs` (AudioSync's own copies)
-/// is on that endpoint, a tree captured on its own also plays there, or the
-/// trees would not fit one mix.
+/// is on that endpoint, its volume is below full or unknown, a tree
+/// captured on its own also plays there, or the trees would not fit one mix.
 pub fn system_route(
     audio: &[EndpointAudio],
     own_pid: u32,
@@ -345,7 +345,10 @@ pub fn system_route(
                 .find(|endpoint| endpoint.is_default)
         })
         .or_else(|| sounding.first().copied())?;
-    if local_outputs.contains(&endpoint.id) {
+    // Endpoint loopback carries the endpoint's volume but not its mute.
+    if local_outputs.contains(&endpoint.id)
+        || endpoint.volume.is_none_or(|volume| volume.level < 1.0)
+    {
         return None;
     }
     let there = players(endpoint);
