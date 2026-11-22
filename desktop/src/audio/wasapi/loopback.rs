@@ -1618,6 +1618,8 @@ mod tests {
     use super::super::com::{READY_TIMEOUT, StuckThreads, spawn_worker_within};
     use super::*;
 
+    use crate::audio::SESSION_RATE;
+
     // covers: S480
     #[test]
     fn levels_keep_the_loudest_reading_the_mix_has_not_seen() {
@@ -1639,7 +1641,17 @@ mod tests {
         );
         assert_eq!(levels.read(&mut seen), None);
     }
-    use crate::audio::SESSION_RATE;
+
+    // covers: S480
+    #[test]
+    fn a_reading_older_than_the_stored_one_is_dropped() {
+        let levels = EndpointLevels::default();
+        let mut seen = 0;
+        levels.write([0.0, 0.0], true, 20);
+        levels.write([-20.0, -20.0], true, 10);
+        let read = levels.read(&mut seen).unwrap();
+        assert_eq!((read.0, read.1, read.3), ([0.0, 0.0], [0.0, 0.0], 20));
+    }
 
     /// How long the fake Windows audio hangs before it answers again.
     const HANG: Duration = Duration::from_secs(3);
