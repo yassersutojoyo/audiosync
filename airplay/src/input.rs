@@ -231,14 +231,16 @@ impl InputWriter {
 
     fn write_with(&mut self, frames: usize, at: Instant, frame: impl Fn(usize) -> u32) -> usize {
         let shared = &*self.shared;
+        // The floor first: a restart counts itself before it moves the floor.
+        let floor = shared.floor.load(Ordering::Acquire);
         let rebases = shared.rebases.load(Ordering::Acquire);
         if rebases != self.rebases_seen {
             self.rebases_seen = rebases;
             self.fresh = true;
             self.late = None;
         }
+        let fresh = self.fresh;
         let capacity = shared.slots.len() as u64;
-        let floor = shared.floor.load(Ordering::Acquire);
         let start = shared.write.load(Ordering::Relaxed);
         let count = frames as u64;
         let behind = floor.saturating_sub(start);
@@ -251,7 +253,7 @@ impl InputWriter {
         // A capture's first write that is behind started after the stream
         // did, or after the stream filled the switch to it with silence
         // (P143): its frames were never late, so it starts the audio.
-        let resync = behind > 0 && (behind >= RESYNC_FRAMES || paced || self.fresh);
+        let resync = behind > 0 && (behind >= RESYNC_FRAMES || paced || fresh);
         // Otherwise frames whose positions were already cut are late:
         // dropped, their positions kept, so later frames stay where they
         // belong (P112).
@@ -300,10 +302,10 @@ impl InputWriter {
             count + released - self.held_frames as u64,
             Ordering::Release,
         );
-        // A resume re-anchors the stream, so the write after it starts at its
-        // own first frame even if the stream already cut past this one.
+        // A resume re-anchors the stream, so the one write after it starts at
+        // its own first frame even if the stream already cut past this one.
         if count > 0 {
-            self.fresh = resync;
+            self.fresh = resync && !fresh;
         }
         if late > 0 {
             self.late = Some(match self.late {
@@ -435,10 +437,11 @@ impl InputReader {
         let shared = &*self.shared;
         let written = shared.write.load(Ordering::Acquire);
         let floor = shared.floor.load(Ordering::Relaxed);
+        // Counted first: a write that sees the new floor sees the restart too.
+        shared.rebases.fetch_add(1, Ordering::Release);
         if written > floor {
             shared.floor.store(written, Ordering::Release);
         }
-        shared.rebases.fetch_add(1, Ordering::Release);
         let records = shared.arrivals_written.load(Ordering::Acquire);
         shared.arrivals_read.store(records, Ordering::Release);
         written.max(floor)
