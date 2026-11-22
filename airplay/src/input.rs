@@ -99,6 +99,8 @@ struct Shared {
     move_sequence: AtomicU64,
     move_position: AtomicU64,
     move_frames: AtomicI64,
+    /// Timeline restarts so far (P143).
+    rebases: AtomicU64,
 }
 
 /// Creates a ring of `frames` frames (at least [`MIN_INPUT_FRAMES`]), with
@@ -120,6 +122,7 @@ pub(crate) fn ring(frames: usize, origin: Instant) -> (InputWriter, InputReader)
         move_sequence: AtomicU64::new(0),
         move_position: AtomicU64::new(0),
         move_frames: AtomicI64::new(0),
+        rebases: AtomicU64::new(0),
     });
     (
         InputWriter {
@@ -127,6 +130,7 @@ pub(crate) fn ring(frames: usize, origin: Instant) -> (InputWriter, InputReader)
             late: None,
             fresh: true,
             moves_taken: 0,
+            rebases_seen: 0,
             held: vec![0; frames / 2].into_boxed_slice(),
             held_frames: 0,
         },
@@ -153,10 +157,12 @@ pub struct InputWriter {
     /// When the current run of late writes began and the frames it holds
     /// so far, while the last write was late.
     late: Option<(Instant, u64)>,
-    /// No frame of the current capture was handed over yet.
+    /// No frame of the current capture or of a restarted timeline was
+    /// handed over yet, or the last write resumed: the next one is never late.
     fresh: bool,
     /// The sequence of the last [`TimelineMove`] taken.
     moves_taken: u64,
+    rebases_seen: u64,
     /// The current run's wholly late writes, in order (P112).
     held: Box<[u32]>,
     held_frames: usize,
@@ -225,6 +231,12 @@ impl InputWriter {
 
     fn write_with(&mut self, frames: usize, at: Instant, frame: impl Fn(usize) -> u32) -> usize {
         let shared = &*self.shared;
+        let rebases = shared.rebases.load(Ordering::Acquire);
+        if rebases != self.rebases_seen {
+            self.rebases_seen = rebases;
+            self.fresh = true;
+            self.late = None;
+        }
         let capacity = shared.slots.len() as u64;
         let floor = shared.floor.load(Ordering::Acquire);
         let start = shared.write.load(Ordering::Relaxed);
@@ -288,8 +300,10 @@ impl InputWriter {
             count + released - self.held_frames as u64,
             Ordering::Release,
         );
+        // A resume re-anchors the stream, so the write after it starts at its
+        // own first frame even if the stream already cut past this one.
         if count > 0 {
-            self.fresh = false;
+            self.fresh = resync;
         }
         if late > 0 {
             self.late = Some(match self.late {
@@ -424,6 +438,7 @@ impl InputReader {
         if written > floor {
             shared.floor.store(written, Ordering::Release);
         }
+        shared.rebases.fetch_add(1, Ordering::Release);
         let records = shared.arrivals_written.load(Ordering::Acquire);
         shared.arrivals_read.store(records, Ordering::Release);
         written.max(floor)
