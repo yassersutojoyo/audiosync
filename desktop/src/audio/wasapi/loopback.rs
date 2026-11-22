@@ -1109,6 +1109,10 @@ impl EndpointLevels {
             .writing
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // The first read and a notification race; the older reading would undo a newer level.
+        if at < self.at.load(Ordering::Relaxed) {
+            return;
+        }
         let unread = self.taken.load(Ordering::Acquire) != self.version.load(Ordering::Relaxed);
         self.version.fetch_add(1, Ordering::AcqRel);
         for ((slot, loudest), db) in self.db.iter().zip(&self.loudest).zip(db) {
