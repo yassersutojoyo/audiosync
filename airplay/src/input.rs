@@ -874,4 +874,51 @@ mod tests {
             assert_eq!(reader.dropped() - discarded, 941);
         }
     }
+
+    // P248: the host splits one captured packet into writes of at most 1024
+    // frames, all with the packet's arrival time, so a packet after a hole
+    // longer than a write comes as wholly late writes and then a partly late
+    // one; they are one block, judged by the next packet.
+    // covers: P248
+    #[test]
+    fn a_partly_late_packet_split_into_writes_is_judged_as_one() {
+        for resumed in [true, false] {
+            let origin = Instant::now();
+            let (mut writer, mut reader) = ring(2 * MIN_INPUT_FRAMES, origin);
+            writer.write_i16(&[1000i16; 2 * 2971], origin);
+            let mut out = [[0, 0]; FRAMES_PER_PACKET];
+            for packet in 0..14 {
+                reader.cut((packet * FRAMES_PER_PACKET) as i64, &mut out);
+            }
+            assert_eq!(reader.floor() - writer.position(), 1957);
+
+            let at = origin + Duration::from_millis(100);
+            let packet = ramp(2400);
+            for piece in packet.chunks(2 * 1024) {
+                writer.write_i16(piece, at);
+            }
+            let stalled = reader.floor();
+            if resumed {
+                for index in 0..2 {
+                    reader.cut(
+                        (stalled + (index * FRAMES_PER_PACKET) as u64) as i64,
+                        &mut out,
+                    );
+                }
+            }
+            let floor = reader.floor();
+            let next = if resumed { 60 } else { 1 };
+            writer.write_i16(&[5000i16; 2 * 2400], at + Duration::from_millis(next));
+
+            reader.cut(floor as i64, &mut out);
+            if resumed {
+                assert_eq!(out[0], [1, 1]);
+                assert_eq!(reader.dropped(), 0);
+            } else {
+                assert_eq!(writer.position(), floor + 443 + 2400);
+                assert_eq!(out[0], [1958, 1958]);
+                assert_eq!(reader.dropped(), 1957);
+            }
+        }
+    }
 }
