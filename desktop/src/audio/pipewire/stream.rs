@@ -842,6 +842,8 @@ struct Following {
     linker: Rc<RefCell<Linker>>,
     _listener: pw::registry::Listener,
     _clients: Rc<RefCell<HashMap<u32, registry::FollowedClient>>>,
+    /// The `default` metadata, for the output whose monitor it may take.
+    _defaults: Rc<RefCell<Option<(Metadata, MetadataListener)>>>,
 }
 
 /// The top processes of the apps a capture follows, each with its start
@@ -947,13 +949,24 @@ impl Linker {
             dirty: true,
         }));
         let clients: Rc<RefCell<HashMap<u32, registry::FollowedClient>>> = Rc::default();
+        let defaults: Rc<RefCell<Option<(Metadata, MetadataListener)>>> = Rc::default();
         let listener = registry
             .add_listener_local()
             .global({
                 let linker = Rc::clone(&linker);
                 let clients = Rc::clone(&clients);
+                let defaults = Rc::clone(&defaults);
                 let bind = registry.clone();
                 move |global| {
+                    if global.type_ == ObjectType::Metadata {
+                        let wanted = global
+                            .props
+                            .is_some_and(|props| props.get("metadata.name") == Some("default"));
+                        if wanted && defaults.borrow().is_none() {
+                            *defaults.borrow_mut() = follow_default_sink(&bind, global, &linker);
+                        }
+                        return;
+                    }
                     let (Some(kind), Some(props)) = (registry::kind(&global.type_), global.props)
                     else {
                         return;
@@ -993,6 +1006,7 @@ impl Linker {
             linker,
             _listener: listener,
             _clients: clients,
+            _defaults: defaults,
         }
     }
 
@@ -1017,14 +1031,14 @@ impl Linker {
     fn relink(&mut self, processes: &ProcessTable) {
         let capture = self.stream.node_id();
         let (graph, filter) = (&self.graph, &self.filter);
-        let wanted = graph.wanted_links(capture, |id| {
+        let whole_system = matches!(filter, Filter::Except(_));
+        let wanted = graph.capture_links(capture, whole_system, |id| {
             filter.takes(graph.owner_pid(id, processes), processes)
         });
-        self.links.retain(|link, _| wanted.contains(link));
-        // A link in its error state stays, counted as missing, rather than
-        // being made again on every change.
-        let mut missing = self.links.values().any(|made| made.failed.get());
-        for link in wanted {
+        let mut missing = false;
+        // The new links go out before the old ones go, so a change of route
+        // lands in one graph cycle rather than leaving a gap.
+        for &link in &wanted {
             if self.links.contains_key(&link) {
                 continue;
             }
@@ -1047,8 +1061,39 @@ impl Linker {
                 Err(_) => missing = true,
             }
         }
+        self.links.retain(|link, _| wanted.contains(link));
+        // A link in its error state stays, counted as missing, rather than
+        // being made again on every change.
+        missing |= self.links.values().any(|made| made.failed.get());
         self.status.missing_links.store(missing, Ordering::Release);
     }
+}
+
+/// Binds the `default` metadata and keeps the default output's name in
+/// `linker`'s graph.
+fn follow_default_sink(
+    registry: &pw::registry::RegistryRc,
+    global: &pw::registry::GlobalObject<&spa::utils::dict::DictRef>,
+    linker: &Rc<RefCell<Linker>>,
+) -> Option<(Metadata, MetadataListener)> {
+    let metadata: Metadata = registry.bind(global).ok()?;
+    let linker = Rc::downgrade(linker);
+    let listener = metadata
+        .add_listener_local()
+        .property(move |subject, key, _type, value| {
+            if subject != pw::core::PW_ID_CORE || !matches!(key, Some(DEFAULT_SINK_KEY) | None) {
+                return 0;
+            }
+            if let Some(linker) = linker.upgrade()
+                && let Ok(mut linker) = linker.try_borrow_mut()
+            {
+                linker.graph.default_sink = value.and_then(registry::default_name);
+                linker.dirty = true;
+            }
+            0
+        })
+        .register();
+    Some((metadata, listener))
 }
 
 /// Connects `stream` the way `wiring` says, asking for `format`.

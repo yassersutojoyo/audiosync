@@ -99,6 +99,8 @@ struct Shared {
     move_sequence: AtomicU64,
     move_position: AtomicU64,
     move_frames: AtomicI64,
+    /// Timeline restarts so far (P143).
+    rebases: AtomicU64,
 }
 
 /// Creates a ring of `frames` frames (at least [`MIN_INPUT_FRAMES`]), with
@@ -120,6 +122,7 @@ pub(crate) fn ring(frames: usize, origin: Instant) -> (InputWriter, InputReader)
         move_sequence: AtomicU64::new(0),
         move_position: AtomicU64::new(0),
         move_frames: AtomicI64::new(0),
+        rebases: AtomicU64::new(0),
     });
     (
         InputWriter {
@@ -127,6 +130,7 @@ pub(crate) fn ring(frames: usize, origin: Instant) -> (InputWriter, InputReader)
             late: None,
             fresh: true,
             moves_taken: 0,
+            rebases_seen: 0,
             held: vec![0; frames / 2].into_boxed_slice(),
             held_frames: 0,
         },
@@ -153,10 +157,12 @@ pub struct InputWriter {
     /// When the current run of late writes began and the frames it holds
     /// so far, while the last write was late.
     late: Option<(Instant, u64)>,
-    /// No frame of the current capture was handed over yet.
+    /// No frame of the current capture or of a restarted timeline was
+    /// handed over yet, or the last write resumed: the next one is never late.
     fresh: bool,
     /// The sequence of the last [`TimelineMove`] taken.
     moves_taken: u64,
+    rebases_seen: u64,
     /// The current run's wholly late writes, in order (P112).
     held: Box<[u32]>,
     held_frames: usize,
@@ -225,8 +231,16 @@ impl InputWriter {
 
     fn write_with(&mut self, frames: usize, at: Instant, frame: impl Fn(usize) -> u32) -> usize {
         let shared = &*self.shared;
-        let capacity = shared.slots.len() as u64;
+        // The floor first: a restart counts itself before it moves the floor.
         let floor = shared.floor.load(Ordering::Acquire);
+        let rebases = shared.rebases.load(Ordering::Acquire);
+        if rebases != self.rebases_seen {
+            self.rebases_seen = rebases;
+            self.fresh = true;
+            self.late = None;
+        }
+        let fresh = self.fresh;
+        let capacity = shared.slots.len() as u64;
         let start = shared.write.load(Ordering::Relaxed);
         let count = frames as u64;
         let behind = floor.saturating_sub(start);
@@ -239,7 +253,7 @@ impl InputWriter {
         // A capture's first write that is behind started after the stream
         // did, or after the stream filled the switch to it with silence
         // (P143): its frames were never late, so it starts the audio.
-        let resync = behind > 0 && (behind >= RESYNC_FRAMES || paced || self.fresh);
+        let resync = behind > 0 && (behind >= RESYNC_FRAMES || paced || fresh);
         // Otherwise frames whose positions were already cut are late:
         // dropped, their positions kept, so later frames stay where they
         // belong (P112).
@@ -288,8 +302,10 @@ impl InputWriter {
             count + released - self.held_frames as u64,
             Ordering::Release,
         );
+        // A resume re-anchors the stream, so the one write after it starts at
+        // its own first frame even if the stream already cut past this one.
         if count > 0 {
-            self.fresh = false;
+            self.fresh = resync && !fresh;
         }
         if late > 0 {
             self.late = Some(match self.late {
@@ -421,6 +437,8 @@ impl InputReader {
         let shared = &*self.shared;
         let written = shared.write.load(Ordering::Acquire);
         let floor = shared.floor.load(Ordering::Relaxed);
+        // Counted first: a write that sees the new floor sees the restart too.
+        shared.rebases.fetch_add(1, Ordering::Release);
         if written > floor {
             shared.floor.store(written, Ordering::Release);
         }
@@ -570,5 +588,106 @@ mod tests {
         reader.cut((floor + FRAMES_PER_PACKET as u64) as i64, &mut out);
         assert_eq!(out[0], [2500, 2500]);
         assert_eq!(reader.dropped(), 0);
+    }
+
+    fn halves(first: i16, second: i16) -> Vec<i16> {
+        let mut samples = vec![first; 2 * FRAMES_PER_PACKET];
+        samples.extend([second; 2 * FRAMES_PER_PACKET]);
+        samples
+    }
+
+    // A resume re-anchors the stream: the write after the resumed one
+    // starts at its own first frame even when the stream already cut past
+    // the resumed audio, so none of it counts as late.
+    // covers: P112
+    #[test]
+    fn the_write_after_a_resume_is_never_partly_late() {
+        let origin = Instant::now();
+        let (mut writer, mut reader) = ring(2 * MIN_INPUT_FRAMES, origin);
+        let block = [1000i16; 2 * FRAMES_PER_PACKET];
+        writer.write_i16(&block, origin);
+        let mut out = [[0, 0]; FRAMES_PER_PACKET];
+        for packet in 0..10 {
+            reader.cut((packet * FRAMES_PER_PACKET) as i64, &mut out);
+        }
+        let at = origin + Duration::from_millis(100);
+        writer.write_i16(&[2000i16; 2 * FRAMES_PER_PACKET], at);
+        writer.write_i16(
+            &[3000i16; 2 * FRAMES_PER_PACKET],
+            at + Duration::from_millis(8),
+        );
+        let resumed = reader.floor();
+        for packet in 0..3 {
+            reader.cut(
+                (resumed + packet * FRAMES_PER_PACKET as u64) as i64,
+                &mut out,
+            );
+        }
+        let floor = reader.floor();
+        assert!(floor > writer.position());
+
+        writer.write_i16(&halves(4000, 4500), at + Duration::from_millis(16));
+
+        reader.cut(floor as i64, &mut out);
+        assert_eq!(out[0], [4000, 4000]);
+        assert_eq!(reader.dropped(), 0);
+    }
+
+    // P143: a restart starts the timeline over at the host's next frame,
+    // even when the stream sent silence between the restart and that frame.
+    // covers: P143
+    #[test]
+    fn the_first_write_after_a_restart_is_never_partly_late() {
+        let origin = Instant::now();
+        let (mut writer, mut reader) = ring(2 * MIN_INPUT_FRAMES, origin);
+        writer.write_i16(&[1000i16; 20 * FRAMES_PER_PACKET], origin);
+        let mut out = [[0, 0]; FRAMES_PER_PACKET];
+        for packet in 0..10 {
+            reader.cut((packet * FRAMES_PER_PACKET) as i64, &mut out);
+        }
+        let restarted = reader.rebase();
+        let discarded = reader.dropped();
+        reader.cut(restarted as i64, &mut out);
+        let floor = reader.floor();
+        assert!(floor > writer.position());
+
+        writer.write_i16(&halves(4000, 4500), origin + Duration::from_millis(300));
+
+        reader.cut(floor as i64, &mut out);
+        assert_eq!(out[0], [4000, 4000]);
+        assert_eq!(reader.dropped(), discarded);
+    }
+
+    // P112: the re-anchoring covers one write only; a later write that
+    // comes behind is late as before, so jitter cannot move the timeline.
+    // covers: P112
+    #[test]
+    fn only_the_first_write_after_a_restart_is_placed_as_resumed() {
+        let origin = Instant::now();
+        let (mut writer, mut reader) = ring(2 * MIN_INPUT_FRAMES, origin);
+        writer.write_i16(&[1000i16; 20 * FRAMES_PER_PACKET], origin);
+        let mut out = [[0, 0]; FRAMES_PER_PACKET];
+        for packet in 0..10 {
+            reader.cut((packet * FRAMES_PER_PACKET) as i64, &mut out);
+        }
+        let restarted = reader.rebase();
+        reader.cut(restarted as i64, &mut out);
+        let anchored = reader.floor();
+        writer.write_i16(&halves(4000, 4500), origin + Duration::from_millis(300));
+        for packet in 0..3 {
+            reader.cut(
+                (anchored + (packet * FRAMES_PER_PACKET) as u64) as i64,
+                &mut out,
+            );
+        }
+        let floor = reader.floor();
+        assert!(floor > writer.position());
+        let discarded = reader.dropped();
+
+        writer.write_i16(&halves(5000, 5500), origin + Duration::from_millis(316));
+
+        reader.cut(floor as i64, &mut out);
+        assert_eq!(out[0], [5500, 5500]);
+        assert_eq!(reader.dropped() - discarded, FRAMES_PER_PACKET as u64);
     }
 }
