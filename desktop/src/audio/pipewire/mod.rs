@@ -7,8 +7,10 @@
 //! ([`registry`]). Each capture, output and microphone is a PipeWire stream
 //! on a thread of its own, with its own main loop, context and connection.
 //! A capture of the whole system or of apps is linked by AudioSync itself,
-//! stream by stream, so AudioSync's own outputs are never captured
-//! ([`stream`]); each output is pinned to its sink ([`playback`]).
+//! stream by stream or, for the whole system while no output of AudioSync's
+//! plays into it, from the default output's monitor, so AudioSync's own
+//! outputs are never captured ([`stream`]); each output is pinned to its
+//! sink ([`playback`]).
 //!
 //! - [`format`]: the format asked for and the check of the one agreed.
 //! - [`graph`]: the outputs, inputs, app streams and links PipeWire has.
