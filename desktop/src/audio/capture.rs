@@ -293,7 +293,7 @@ pub struct SystemRoute {
 /// a process started playing on since `before` (the last snapshot), other
 /// than `current`; else of `current` while it is listed; else of the one
 /// apps play sound on (with sound on several or none, the default output,
-/// else the first listed); and process loopback of each process that plays
+/// else the first listed), of those it can take; and process loopback of each process that plays
 /// on another endpoint. `None`, process loopback without
 /// AudioSync's tree, when one of `local_outputs` (AudioSync's own copies)
 /// is on that endpoint, its volume is below full or unknown, a tree
@@ -328,7 +328,14 @@ pub fn system_route(
             .iter()
             .any(|pid| earlier.is_none_or(|earlier| !players(earlier).contains(pid)))
     };
-    let candidate = |endpoint: &&EndpointAudio| sounding.is_empty() || sounding.contains(endpoint);
+    // Endpoint loopback carries the endpoint's volume but not its mute.
+    let takeable = |endpoint: &EndpointAudio| {
+        !local_outputs.contains(&endpoint.id)
+            && endpoint.volume.is_some_and(|volume| volume.level >= 1.0)
+    };
+    let candidate = |endpoint: &&EndpointAudio| {
+        takeable(endpoint) && (sounding.is_empty() || sounding.contains(endpoint))
+    };
     let endpoint = audio
         .iter()
         .filter(|endpoint| !before.is_empty() && current != Some(endpoint.id.as_str()))
@@ -344,11 +351,8 @@ pub fn system_route(
                 .filter(candidate)
                 .find(|endpoint| endpoint.is_default)
         })
-        .or_else(|| sounding.first().copied())?;
-    // Endpoint loopback carries the endpoint's volume but not its mute.
-    if local_outputs.contains(&endpoint.id)
-        || endpoint.volume.is_none_or(|volume| volume.level < 1.0)
-    {
+        .or_else(|| sounding.iter().copied().find(|endpoint| takeable(endpoint)))?;
+    if !takeable(endpoint) {
         return None;
     }
     let there = players(endpoint);
