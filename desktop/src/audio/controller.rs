@@ -81,8 +81,9 @@ use super::backend::{
 use super::calibration::{CalibrationTap, Engine, Microphone, MicrophoneError};
 use super::capture::{
     Activation, AppNames, CaptureAttempt, CaptureGlitches, CaptureTarget, Feeds, LoopbackMode,
-    NameReader, SampleType, decide_apps_capture, decide_capture, decide_except_capture,
-    describe_pair, input_sources, name_apps, running_app, source_list, system_endpoint,
+    NameReader, SampleType, SystemRoute, decide_apps_capture, decide_capture,
+    decide_except_capture, describe_pair, input_sources, name_apps, playing_endpoints, running_app,
+    source_list, system_route,
 };
 use super::cast::{CastLink, CastSpeakers, CastTrack};
 use super::cast_address::CastAddress;
@@ -267,11 +268,10 @@ pub trait CaptureHandle {
         false
     }
 
-    /// Captures the whole system from the render endpoint `endpoint` by
-    /// endpoint loopback, or by process loopback without AudioSync's tree
-    /// with `None`, moving between them without a gap (S480). Does nothing
-    /// for any other capture.
-    fn route(&mut self, _endpoint: Option<&str>) {}
+    /// Captures the whole system through `route`, or by process loopback
+    /// without AudioSync's tree with `None`, moving between them without a
+    /// gap (S480). Does nothing for any other capture.
+    fn route(&mut self, _route: Option<&SystemRoute>) {}
 
     /// Whether a mix has a stream for each of its apps; true for any other
     /// capture, and while it can't be told.
@@ -868,9 +868,12 @@ struct RoutingState {
     reported: Vec<DirectPath>,
     /// The last error of the check: an error that repeats is logged once.
     error: Option<BackendError>,
-    /// The render endpoint the whole system is captured from by endpoint
-    /// loopback (S480); `None` while it is captured by process loopback.
-    endpoint: Option<String>,
+    /// How the whole system is captured besides process loopback (S480);
+    /// `None` while process loopback alone is heard.
+    route: Option<SystemRoute>,
+    /// The endpoints apps played on, with their processes, when process
+    /// loopback was last kept for them, for the log.
+    players: Vec<String>,
 }
 
 /// The audio backend over a driver. See the module documentation.
@@ -2265,15 +2268,18 @@ impl<D: Driver> Controller<D> {
         }
         // AudioSync's copy must not reach the endpoint the whole system is
         // captured from: the capture leaves it before the output starts.
-        if let Some(id) = &self.routing.endpoint
-            && plan.attach.iter().any(|endpoint| endpoint.id == *id)
+        if let Some(route) = &self.routing.route
+            && plan
+                .attach
+                .iter()
+                .any(|endpoint| endpoint.id == route.endpoint)
         {
             if let Some(capture) = session.capture.as_mut() {
                 capture.route(None);
             }
             self.log
                 .log(|| "whole system: captured by process loopback without AudioSync".to_owned());
-            self.routing.endpoint = None;
+            self.routing.route = None;
         }
 
         // A switched-off output fades out first, together with any others
@@ -4727,14 +4733,29 @@ impl<D: Driver> Controller<D> {
             && let [activation] = activations.as_slice()
             && activation.mode == LoopbackMode::ExcludeTree
         {
-            let endpoint = system_endpoint(
+            let route = system_route(
                 &endpoints,
                 activation.target_pid,
                 &processes,
                 &rendered,
-                self.routing.endpoint.as_deref(),
+                self.routing
+                    .route
+                    .as_ref()
+                    .map(|route| route.endpoint.as_str()),
             );
-            self.route_system(endpoint);
+            let players: Vec<String> = if route.is_none() {
+                playing_endpoints(&endpoints, activation.target_pid, &processes)
+                    .map(|endpoint| format!("{} {:?}", endpoint.name, endpoint.active_pids))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            if players != self.routing.players {
+                self.log
+                    .log(|| format!("whole system: apps play on {}", players.join("; ")));
+                self.routing.players = players;
+            }
+            self.route_system(route);
         }
         let answer = routing::check(&captured, &endpoints, &rendered, &self.routing.played_on);
         if answer.paths != self.routing.reported {
@@ -4761,23 +4782,24 @@ impl<D: Driver> Controller<D> {
         self.hold_at_start_briefly();
     }
 
-    /// Moves the whole system's capture to `endpoint` (S480).
-    fn route_system(&mut self, endpoint: Option<String>) {
+    /// Moves the whole system's capture to `route` (S480).
+    fn route_system(&mut self, route: Option<SystemRoute>) {
         if let Some(capture) = self
             .session
             .as_mut()
             .and_then(|session| session.capture.as_mut())
         {
-            capture.route(endpoint.as_deref());
+            capture.route(route.as_ref());
         }
-        if endpoint != self.routing.endpoint {
-            self.log.log(|| match &endpoint {
-                Some(id) => {
-                    format!("whole system: captured from endpoint {id} by endpoint loopback")
-                }
+        if route != self.routing.route {
+            self.log.log(|| match &route {
+                Some(route) => format!(
+                    "whole system: captured from endpoint {} by endpoint loopback, and processes                      {:?} on other endpoints by process loopback",
+                    route.endpoint, route.apps
+                ),
                 None => "whole system: captured by process loopback without AudioSync".to_owned(),
             });
-            self.routing.endpoint = endpoint;
+            self.routing.route = route;
         }
     }
 

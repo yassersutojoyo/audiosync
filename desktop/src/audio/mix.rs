@@ -388,9 +388,9 @@ pub struct MixLanes<S> {
     /// Lane 0 is the pace lane; slot `i` is lane `i + 1`.
     mixer: StreamMixer,
     pace: GapFill,
-    /// The stream heard while it is in the mix, the others faded out; every
-    /// stream is heard without one.
-    selected: Option<u32>,
+    /// The stream heard alone, or the one left out, as [`MixLanes::select`]
+    /// set; every stream is heard without one.
+    selected: Option<(u32, bool)>,
 }
 
 impl<S: LaneStream> MixLanes<S> {
@@ -408,18 +408,27 @@ impl<S: LaneStream> MixLanes<S> {
         }
     }
 
-    /// Hears only the stream of `pid` while the mix holds it, and every
-    /// stream while it doesn't. The stream coming in is first lined up in
-    /// time with the one going out, by the positions their gap tracking
-    /// reached, then the two cross-fade over [`FADE_FRAMES`] (S480).
-    pub fn select(&mut self, pid: Option<u32>) {
-        self.selected = pid;
+    /// Hears only the stream of `pid` when `alone`, else every stream but
+    /// it; every stream while that leaves none. Each stream coming in is
+    /// first lined up in time with the one going out that has the highest
+    /// key, by the positions their gap tracking reached, then they
+    /// cross-fade over [`FADE_FRAMES`] (S480).
+    pub fn select(&mut self, pid: u32, alone: bool) {
+        self.selected = Some((pid, alone));
         self.apply_selection();
     }
 
     fn apply_selection(&mut self) {
-        let wanted = self.selected.filter(|&pid| self.holds(pid));
-        let heard = |slot: &Slot<S>| wanted.is_none_or(|pid| slot.opened.pid == pid);
+        let others = self
+            .slots
+            .iter()
+            .flatten()
+            .any(|slot| self.selected.is_some_and(|(pid, _)| slot.opened.pid != pid));
+        let selected = self
+            .selected
+            .filter(|&(pid, alone)| if alone { self.holds(pid) } else { others });
+        let heard =
+            |slot: &Slot<S>| selected.is_none_or(|(pid, alone)| (slot.opened.pid == pid) == alone);
         let head = |lanes: &StreamMixer, index: usize, slot: &Slot<S>| {
             let lane = &lanes.lanes[index + 1];
             let ahead = lane.len as i64 - lane.owed as i64;
@@ -427,12 +436,15 @@ impl<S: LaneStream> MixLanes<S> {
                 .end()
                 .map(|end| end as i64 - ahead * HNS_PER_SECOND as i64 / i64::from(SESSION_RATE))
         };
-        let leaving = (0..self.slots.len()).find_map(|index| {
-            let slot = self.slots[index].as_ref()?;
-            (self.mixer.lanes[index + 1].target > 0.0 && !heard(slot))
-                .then(|| head(&self.mixer, index, slot))
-                .flatten()
-        });
+        let leaving = (0..self.slots.len())
+            .filter_map(|index| {
+                let slot = self.slots[index].as_ref()?;
+                (self.mixer.lanes[index + 1].target > 0.0 && !heard(slot))
+                    .then(|| Some((slot.opened.pid, head(&self.mixer, index, slot)?)))
+                    .flatten()
+            })
+            .max_by_key(|&(pid, _)| pid)
+            .map(|(_, head)| head);
         for index in 0..self.slots.len() {
             let Some(slot) = self.slots[index].as_ref() else {
                 continue;
@@ -955,7 +967,7 @@ mod tests {
             .collect();
         let mut lanes = MixLanes::new(0);
         assert!(lanes.adopt(opened(1, &scripts[0]), 0).is_ok());
-        lanes.select(Some(1));
+        lanes.select(1, true);
         let mut mixed: Vec<f32> = Vec::new();
         for tick in 1..=200_u64 {
             scripts[0]
@@ -972,7 +984,7 @@ mod tests {
                 script.packets.push(((tick - 2) * 100_000, 480, 0.0));
             }
             if tick == 100 {
-                lanes.select(Some(2));
+                lanes.select(1, false);
             }
             lanes
                 .read(

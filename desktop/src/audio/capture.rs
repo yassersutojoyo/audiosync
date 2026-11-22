@@ -279,32 +279,94 @@ pub fn decide_activation(
     })
 }
 
-/// The render endpoint the whole system is captured from by endpoint
-/// loopback (S480): the one every app playing now plays on, or, with none
-/// playing, `current` while it is listed, else the default output. `None`,
-/// process loopback without AudioSync's tree, when apps play on two
-/// endpoints or one of `local_outputs` (AudioSync's own copies) is that one.
-pub fn system_endpoint(
+/// How the whole system is captured besides process loopback (S480).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SystemRoute {
+    /// The render endpoint captured by endpoint loopback.
+    pub endpoint: String,
+    /// The processes playing on other endpoints, each captured with its
+    /// tree by process loopback, in the order found.
+    pub apps: Vec<u32>,
+}
+
+/// The route of the whole system (S480): endpoint loopback of the endpoint
+/// apps play sound on (with sound on several, `current`, else the default
+/// output, else the first listed; with sound on none, `current` while it is
+/// listed, else the default output), and process loopback of each process
+/// that plays on another endpoint. `None`, process loopback without
+/// AudioSync's tree, when one of `local_outputs` (AudioSync's own copies)
+/// is on that endpoint, a tree captured on its own also plays there, or the
+/// trees would not fit one mix.
+pub fn system_route(
     audio: &[EndpointAudio],
     own_pid: u32,
     processes: &ProcessTable,
     local_outputs: &[String],
     current: Option<&str>,
-) -> Option<String> {
-    let mut playing = audio.iter().filter(|endpoint| {
+) -> Option<SystemRoute> {
+    let players = |endpoint: &EndpointAudio| -> Vec<u32> {
+        endpoint
+            .active_pids
+            .iter()
+            .copied()
+            .filter(|&pid| !processes.in_tree(pid, own_pid) && !endpoint.mix_pids.contains(&pid))
+            .collect()
+    };
+    let sounding: Vec<&EndpointAudio> = audio
+        .iter()
+        .filter(|endpoint| {
+            players(endpoint)
+                .iter()
+                .any(|pid| !endpoint.silent_pids.contains(pid))
+        })
+        .collect();
+    let candidate = |endpoint: &&EndpointAudio| sounding.is_empty() || sounding.contains(endpoint);
+    let endpoint = audio
+        .iter()
+        .filter(candidate)
+        .find(|endpoint| current == Some(endpoint.id.as_str()))
+        .or_else(|| {
+            audio
+                .iter()
+                .filter(candidate)
+                .find(|endpoint| endpoint.is_default)
+        })
+        .or_else(|| sounding.first().copied())?;
+    if local_outputs.contains(&endpoint.id) {
+        return None;
+    }
+    let there = players(endpoint);
+    let mut apps: Vec<u32> = Vec::new();
+    for other in audio.iter().filter(|other| other.id != endpoint.id) {
+        for pid in players(other) {
+            if apps.contains(&pid) {
+                continue;
+            }
+            if there.iter().any(|&played| processes.in_tree(played, pid)) {
+                return None;
+            }
+            apps.push(pid);
+        }
+    }
+    (apps.len() + 2 <= MAX_MIX_APPS).then(|| SystemRoute {
+        endpoint: endpoint.id.clone(),
+        apps,
+    })
+}
+
+/// The endpoints of `audio` a process outside AudioSync's tree plays on,
+/// recorders of an endpoint's mix left out (S480).
+pub fn playing_endpoints<'a>(
+    audio: &'a [EndpointAudio],
+    own_pid: u32,
+    processes: &'a ProcessTable,
+) -> impl Iterator<Item = &'a EndpointAudio> {
+    audio.iter().filter(move |endpoint| {
         endpoint
             .active_pids
             .iter()
             .any(|&pid| !processes.in_tree(pid, own_pid) && !endpoint.mix_pids.contains(&pid))
-    });
-    let endpoint = match (playing.next(), playing.next()) {
-        (Some(only), None) => only,
-        (Some(_), Some(_)) => return None,
-        (None, _) => current
-            .and_then(|id| audio.iter().find(|endpoint| endpoint.id == id))
-            .or_else(|| audio.iter().find(|endpoint| endpoint.is_default))?,
-    };
-    (!local_outputs.contains(&endpoint.id)).then(|| endpoint.id.clone())
+    })
 }
 
 /// The name to show for an executable: its file name without `.exe`, with a
@@ -1734,32 +1796,64 @@ mod tests {
     }
 
     fn route(audio: &[EndpointAudio], local: &[&str], current: Option<&str>) -> Option<String> {
+        full_route(audio, local, current).map(|route| route.endpoint)
+    }
+
+    fn full_route(
+        audio: &[EndpointAudio],
+        local: &[&str],
+        current: Option<&str>,
+    ) -> Option<SystemRoute> {
         let local: Vec<String> = local.iter().map(|id| (*id).to_owned()).collect();
-        system_endpoint(audio, OWN_PID, &desktop(), &local, current)
+        system_route(audio, OWN_PID, &desktop(), &local, current)
     }
 
     // covers: S480
     #[test]
-    fn the_whole_system_is_captured_from_the_endpoint_every_app_plays_on() {
+    fn the_whole_system_is_captured_from_the_endpoint_apps_play_sound_on() {
         let speakers = || render("speakers", true, &[]);
         assert_eq!(
-            route(
+            full_route(
                 &[speakers(), render("cable", false, &[200, 201])],
                 &[],
                 None
-            )
-            .as_deref(),
-            Some("cable"),
+            ),
+            Some(SystemRoute {
+                endpoint: "cable".to_owned(),
+                apps: Vec::new(),
+            }),
         );
         let both = [
             render("speakers", true, &[300]),
             render("cable", false, &[200]),
         ];
+        assert_eq!(route(&both, &[], Some("cable")).as_deref(), Some("cable"));
+        assert_eq!(route(&both, &[], None).as_deref(), Some("speakers"));
+    }
+
+    // covers: S480
+    #[test]
+    fn an_app_on_another_endpoint_is_captured_by_its_own_process_loopback() {
+        let mut headphones = render("headphones", false, &[300]);
+        headphones.silent_pids = vec![300];
+        let audio = [
+            render("speakers", true, &[]),
+            render("cable", false, &[200]),
+            headphones,
+        ];
         assert_eq!(
-            route(&both, &[], Some("cable")),
-            None,
-            "apps on two endpoints"
+            full_route(&audio, &[], None),
+            Some(SystemRoute {
+                endpoint: "cable".to_owned(),
+                apps: vec![300],
+            }),
         );
+        // The browser's helper plays on the speakers: its tree can't be
+        // taken on its own without the cable's sound twice.
+        let mut cable = render("cable", false, &[200]);
+        cable.silent_pids = vec![200];
+        let shared = [render("speakers", true, &[202]), cable];
+        assert_eq!(full_route(&shared, &[], None), None);
     }
 
     // covers: S480
@@ -1768,7 +1862,13 @@ mod tests {
         let mut cable = render("cable", false, &[200, 777]);
         cable.mix_pids = vec![777];
         let audio = [render("speakers", true, &[OWN_PID, 401]), cable];
-        assert_eq!(route(&audio, &[], None).as_deref(), Some("cable"));
+        assert_eq!(
+            full_route(&audio, &[], None),
+            Some(SystemRoute {
+                endpoint: "cable".to_owned(),
+                apps: Vec::new(),
+            }),
+        );
     }
 
     // covers: S480

@@ -65,7 +65,7 @@ use crate::audio::backend::{BackendError, TIMED_OUT};
 use crate::audio::capture::{
     Activation, CAPTURE_ATTEMPTS, CaptureAttempt, CaptureConverter, CaptureCounters,
     CaptureGlitches, CaptureTarget, GapFill, LoopbackMode, MAX_MIX_APPS, SampleType, StreamFormat,
-    pair_attempts,
+    SystemRoute, pair_attempts,
 };
 use crate::audio::controller::{CaptureHandle, CaptureState};
 use crate::audio::mix::{LaneInput, LaneStream, MixLanes, MixPlan, Opened, as_bytes};
@@ -151,11 +151,11 @@ impl CaptureHandle for LoopbackCapture {
             .is_none_or(|mix| mix.holds_all(&self.mix_pids))
     }
 
-    fn route(&mut self, endpoint: Option<&str>) {
+    fn route(&mut self, route: Option<&SystemRoute>) {
         let Some(mix) = self.mix.as_ref().filter(|mix| mix.own != 0) else {
             return;
         };
-        let Some(id) = endpoint else {
+        let Some(route) = route else {
             mix.selected.store(mix.own, Ordering::Release);
             return;
         };
@@ -164,17 +164,22 @@ impl CaptureHandle for LoopbackCapture {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let key = match &*held {
-            Some((key, held_id)) if held_id == id => *key,
+            Some((key, id)) if *id == route.endpoint => *key,
             _ => {
                 let key =
                     ENDPOINT_KEY | (held.as_ref().map_or(0, |(key, _)| key + 1) & !ENDPOINT_KEY);
-                *held = Some((key, id.to_owned()));
-                mix.plan.set(&[mix.own, key]);
-                mix.wake.set();
+                *held = Some((key, route.endpoint.clone()));
                 key
             }
         };
-        mix.selected.store(key, Ordering::Release);
+        let mut plan = vec![mix.own, key];
+        plan.extend(&route.apps);
+        if self.mix_pids != plan {
+            mix.plan.set(&plan);
+            mix.wake.set();
+            self.mix_pids = plan;
+        }
+        mix.selected.store(ALL_BUT_OWN, Ordering::Release);
     }
 
     fn glitches(&self) -> CaptureGlitches {
@@ -938,6 +943,10 @@ const MIX_FORMAT: StreamFormat = StreamFormat {
 /// [`MixShare::selected`] of a mix of apps, which hears every lane.
 const NOT_SELECTED: u32 = u32::MAX;
 
+/// [`MixShare::selected`] while the whole system is heard from every lane
+/// but its process loopback.
+const ALL_BUT_OWN: u32 = 0;
+
 /// The bit that marks a whole-system lane's key as its endpoint loopback;
 /// process IDs stay below it.
 const ENDPOINT_KEY: u32 = 1 << 31;
@@ -961,16 +970,16 @@ struct LoopbackLane {
 }
 
 impl LoopbackLane {
-    /// Opens and starts the lane `key` of `share`: app `key`'s tree in a mix
-    /// of apps; for the whole system, everything but AudioSync's tree, or
-    /// the endpoint loopback the key stands for (S480).
+    /// Opens and starts the lane `key` of `share`: app `key`'s tree; for the
+    /// whole system, everything but AudioSync's tree when `key` is
+    /// AudioSync, or the endpoint loopback the key stands for (S480).
     fn open_in(
         share: &MixShare,
         key: u32,
         frequency: i64,
         counters: &Arc<CaptureCounters>,
     ) -> Result<Box<Opened<LoopbackLane>>, BackendError> {
-        if share.own == 0 {
+        if share.own == 0 || key & ENDPOINT_KEY == 0 && key != share.own {
             return LoopbackLane::open(key, LoopbackMode::IncludeTree, None, frequency, counters);
         }
         if key == share.own {
@@ -1078,8 +1087,8 @@ pub(super) struct MixShare {
     /// AudioSync's process for the whole system, whose tree its process
     /// loopback leaves out; 0 for a mix of apps.
     own: u32,
-    /// The lane the whole system is heard from: `own` or the endpoint
-    /// loopback's key ([`MixLanes::select`]).
+    /// What the whole system is heard from: `own` alone, or every lane but
+    /// it ([`ALL_BUT_OWN`]).
     selected: AtomicU32,
     /// The endpoint loopback's key and render endpoint; only the backend
     /// and the opener take the lock.
@@ -1361,7 +1370,7 @@ fn mix_loop(
         }
         let selected = share.selected.load(Ordering::Acquire);
         if selected != NOT_SELECTED {
-            lanes.select(Some(selected));
+            lanes.select(share.own, selected != ALL_BUT_OWN);
         }
         lanes.read(now, &mut sink, &mut handed).map_err(HRESULT)?;
         let has = lanes.held(&mut after);
