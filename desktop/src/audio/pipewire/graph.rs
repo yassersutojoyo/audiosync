@@ -953,7 +953,7 @@ mod tests {
             .collect()
     }
 
-    // covers: S489
+    // covers: S479
     #[test]
     fn the_whole_system_takes_the_default_outputs_monitor_while_audiosync_plays_elsewhere() {
         let (graph, processes) = monitored_graph();
@@ -968,7 +968,7 @@ mod tests {
         assert!(links.iter().all(|link| link.output_node == 1));
     }
 
-    // covers: S489
+    // covers: S479
     #[test]
     fn the_capture_keeps_stream_links_where_the_monitor_would_take_too_much_or_too_little() {
         let filter = Filter::Except(50);
@@ -1000,7 +1000,7 @@ mod tests {
     // AudioSync output pinned to another output keeps the monitor even
     // before it is linked, so neither change moves the default output's
     // audio to another route.
-    // covers: S489
+    // covers: S479
     #[test]
     fn streams_in_other_outputs_are_linked_beside_the_monitor() {
         let filter = Filter::Except(50);
@@ -1028,7 +1028,7 @@ mod tests {
         assert_eq!(routed(&graph, &processes, &filter), BTreeSet::from([1]));
     }
 
-    // covers: S489
+    // covers: S479
     #[test]
     fn links_into_the_capture_itself_keep_the_monitor_route_open() {
         let (mut graph, processes) = monitored_graph();
