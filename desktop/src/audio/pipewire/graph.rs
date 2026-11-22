@@ -451,6 +451,18 @@ impl Graph {
             .collect()
     }
 
+    /// The links a capture keeps: for the whole system (`whole_system`),
+    /// `takes` false for AudioSync's own streams.
+    pub fn capture_links(
+        &self,
+        capture: u32,
+        whole_system: bool,
+        takes: impl Fn(u32) -> bool,
+    ) -> BTreeSet<Link> {
+        let _ = whole_system;
+        self.wanted_links(capture, takes)
+    }
+
     /// The links that bring every stream `takes` accepts into `capture`'s
     /// input ports, channel to channel ([`input_channels`]).
     pub fn wanted_links(&self, capture: u32, takes: impl Fn(u32) -> bool) -> BTreeSet<Link> {
@@ -851,6 +863,109 @@ mod tests {
             .into_iter()
             .map(|link| link.output_node)
             .collect()
+    }
+
+    /// [`playing_graph`] with `as-a` the default output and its monitor
+    /// ports, AudioSync's streams moved to a second output, `as-b`.
+    fn monitored_graph() -> (Graph, ProcessTable) {
+        let (mut graph, processes) = playing_graph();
+        graph.default_sink = Some("as-a".to_owned());
+        sink(&mut graph, 2, &[("node.name", "as-b")]);
+        for (index, channel) in ["FL", "FR"].into_iter().enumerate() {
+            graph.add(
+                10 + index as u32,
+                Kind::Port,
+                props(&[
+                    ("node.id", "1"),
+                    ("port.direction", "out"),
+                    ("port.monitor", "true"),
+                    ("audio.channel", channel),
+                ]),
+            );
+        }
+        for link in graph.links.values_mut() {
+            if link.output_node == 20 || link.output_node == 21 {
+                link.input_node = 2;
+            }
+        }
+        (graph, processes)
+    }
+
+    fn routed(graph: &Graph, processes: &ProcessTable, filter: &Filter) -> BTreeSet<u32> {
+        graph
+            .capture_links(90, matches!(filter, Filter::Except(_)), |id| {
+                filter.takes(graph.owner_pid(id, processes), processes)
+            })
+            .into_iter()
+            .map(|link| link.output_node)
+            .collect()
+    }
+
+    // covers: S489
+    #[test]
+    fn the_whole_system_takes_the_default_outputs_monitor_while_audiosync_plays_elsewhere() {
+        let (graph, processes) = monitored_graph();
+        let links = graph.capture_links(90, true, |id| {
+            Filter::Except(50).takes(graph.owner_pid(id, &processes), &processes)
+        });
+        let pairs: BTreeSet<(u32, u32)> = links
+            .iter()
+            .map(|link| (link.output_port, link.input_port))
+            .collect();
+        assert_eq!(pairs, BTreeSet::from([(10, 900), (11, 901)]));
+        assert!(links.iter().all(|link| link.output_node == 1));
+    }
+
+    // covers: S489
+    #[test]
+    fn the_capture_keeps_stream_links_where_the_monitor_would_take_too_much_or_too_little() {
+        let filter = Filter::Except(50);
+        // AudioSync plays into the default output.
+        let (graph, processes) = playing_graph();
+        let mut with_default = graph.clone();
+        with_default.default_sink = Some("as-a".to_owned());
+        assert_eq!(
+            routed(&with_default, &processes, &filter),
+            BTreeSet::from([22, 23])
+        );
+        // An app plays into another output.
+        let (mut graph, processes) = monitored_graph();
+        for link in graph.links.values_mut() {
+            if link.output_node == 23 {
+                link.input_node = 2;
+            }
+        }
+        assert_eq!(
+            routed(&graph, &processes, &filter),
+            BTreeSet::from([22, 23])
+        );
+        // An output of AudioSync's that is not linked yet may land anywhere.
+        let (mut graph, processes) = monitored_graph();
+        graph.links.retain(|_, link| link.output_node != 21);
+        assert_eq!(
+            routed(&graph, &processes, &filter),
+            BTreeSet::from([22, 23])
+        );
+        // A capture of apps never takes a whole output.
+        let (graph, processes) = monitored_graph();
+        assert_eq!(
+            routed(&graph, &processes, &Filter::Trees(vec![60])),
+            BTreeSet::from([22, 23])
+        );
+    }
+
+    // covers: S489
+    #[test]
+    fn links_into_the_capture_itself_keep_the_monitor_route_open() {
+        let (mut graph, processes) = monitored_graph();
+        let made = graph.wanted_links(90, |id| id == 22 || id == 23);
+        for (index, link) in made.into_iter().enumerate() {
+            graph.links.insert(7000 + index as u32, link);
+        }
+        assert_eq!(
+            routed(&graph, &processes, &Filter::Except(50)),
+            BTreeSet::from([1])
+        );
     }
 
     // covers: S10
