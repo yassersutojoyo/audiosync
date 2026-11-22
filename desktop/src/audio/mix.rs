@@ -766,8 +766,13 @@ pub const UNDO_MARGIN_HNS: u64 = 1_500_000;
 /// each channel of a stereo endpoint, else the loudest one on both sides,
 /// whose gain is the smallest (S480).
 pub fn stereo_levels(channels: &[f32]) -> [f32; 2] {
-    let _ = channels;
-    [0.0, 0.0]
+    match channels {
+        [left, right] => [*left, *right],
+        _ => {
+            let loudest = channels.iter().copied().reduce(f32::max).unwrap_or(0.0);
+            [loudest, loudest]
+        }
+    }
 }
 
 /// The gain that brings a render endpoint's loopback back to the level
@@ -795,13 +800,27 @@ impl VolumeUndo {
     /// in software when `software`; in hardware or unknown otherwise, which
     /// the loopback doesn't carry.
     pub fn change(&mut self, levels: [f32; 2], software: bool, at: u64) {
-        let _ = (levels, software, at);
+        let gains = if software {
+            levels.map(|db| 10_f32.powf(-db / 20.0))
+        } else {
+            [1.0, 1.0]
+        };
+        self.floored = software && levels.iter().any(|&db| db < UNDO_FLOOR_DB);
+        for (applied, gain) in self.applied.iter_mut().zip(gains) {
+            *applied = applied.min(gain);
+        }
+        self.pending = Some((gains, at));
     }
 
     /// The gain per side for frames mixed while the stream has reached
     /// `position`.
     pub fn gains(&mut self, position: Option<u64>) -> [f32; 2] {
-        let _ = position;
+        if let Some((gains, at)) = self.pending
+            && position.is_some_and(|position| position >= at.saturating_add(UNDO_MARGIN_HNS))
+        {
+            self.applied = gains;
+            self.pending = None;
+        }
         self.applied
     }
 
