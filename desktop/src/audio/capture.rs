@@ -1573,6 +1573,7 @@ mod tests {
     use crate::audio::airplay::FeedSlot;
     use crate::audio::outputs::EndpointProperties;
     use crate::audio::process::tests::{desktop, entry};
+    use crate::audio::routing::EndpointVolume;
 
     /// AudioSync's process ID in [`desktop`].
     const OWN_PID: u32 = 400;
@@ -1801,7 +1802,10 @@ mod tests {
             name: id.to_owned(),
             is_default,
             virtual_device: false,
-            volume: None,
+            volume: Some(EndpointVolume {
+                muted: false,
+                level: 1.0,
+            }),
             active_pids: active_pids.to_vec(),
             silent_pids: Vec::new(),
             mix_pids: Vec::new(),
@@ -1940,6 +1944,24 @@ mod tests {
         ];
         assert_eq!(route(&audio, &["speakers"], None), None);
         assert_eq!(route(&audio, &["cable"], None).as_deref(), Some("speakers"));
+    }
+
+    // covers: S480
+    #[test]
+    fn an_endpoint_below_full_volume_keeps_process_loopback_and_its_mute_does_not() {
+        let mut audio = [render("speakers", true, &[200])];
+        audio[0].volume = Some(EndpointVolume {
+            muted: false,
+            level: 0.2,
+        });
+        assert_eq!(route(&audio, &[], None), None);
+        audio[0].volume = None;
+        assert_eq!(route(&audio, &[], None), None);
+        audio[0].volume = Some(EndpointVolume {
+            muted: true,
+            level: 1.0,
+        });
+        assert_eq!(route(&audio, &[], None).as_deref(), Some("speakers"));
     }
 
     // covers: S380
