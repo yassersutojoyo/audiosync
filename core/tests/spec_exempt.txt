@@ -243,3 +243,4 @@ S475 Windows and Linux host only: the test copy's own instance names, data folde
 S476 Windows host only: the apps the source picker offers and their names; the desktop tests check the list and the names with the mock backend.
 S477 Linux host only: AudioSync's own null sink as the default sink while the whole system streams; the desktop tests check the listing and the switch with fakes, the stranger run checks the PC speaker in step.
 S479 Linux host only: the whole-system capture route through the default output's monitor; the desktop graph tests check the route choice.
+S480 Windows host only: the whole system captured by endpoint loopback where it can be; the desktop tests check the endpoint choice and the lined-up switch between the two streams.

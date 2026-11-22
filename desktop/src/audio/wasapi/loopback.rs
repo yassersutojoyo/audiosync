@@ -21,7 +21,8 @@ use std::mem::ManuallyDrop;
 use std::ptr;
 use std::slice;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, Ordering};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, AtomicU32, AtomicU64, Ordering, fence};
 use std::thread;
 
 use audiosync_core::channels::InputPair;
@@ -30,6 +31,10 @@ use audiosync_core::ring::RingWriter;
 
 use crate::audio::capture::Feeds;
 use windows::Win32::Foundation::{E_FAIL, HANDLE, WAIT_EVENT, WAIT_OBJECT_0, WAIT_TIMEOUT};
+use windows::Win32::Media::Audio::AUDIO_VOLUME_NOTIFICATION_DATA;
+use windows::Win32::Media::Audio::Endpoints::{
+    IAudioEndpointVolume, IAudioEndpointVolumeCallback, IAudioEndpointVolumeCallback_Impl,
+};
 use windows::Win32::Media::Audio::{
     AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT,
     AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR, AUDCLNT_SHAREMODE_SHARED,
@@ -64,10 +69,11 @@ use crate::audio::backend::{BackendError, TIMED_OUT};
 use crate::audio::capture::{
     Activation, CAPTURE_ATTEMPTS, CaptureAttempt, CaptureConverter, CaptureCounters,
     CaptureGlitches, CaptureTarget, GapFill, LoopbackMode, MAX_MIX_APPS, SampleType, StreamFormat,
-    pair_attempts,
+    SystemRoute, pair_attempts,
 };
 use crate::audio::controller::{CaptureHandle, CaptureState};
 use crate::audio::mix::{LaneInput, LaneStream, MixLanes, MixPlan, Opened, as_bytes};
+use crate::audio::mix::{VolumeUndo, stereo_levels};
 use crate::audio::outputs::RenderFormat;
 use crate::audio::outputs::{HNS_PER_MS, is_hands_free};
 
@@ -150,6 +156,44 @@ impl CaptureHandle for LoopbackCapture {
             .is_none_or(|mix| mix.holds_all(&self.mix_pids))
     }
 
+    fn route(&mut self, route: Option<&SystemRoute>) {
+        let Some(mix) = self.mix.as_ref().filter(|mix| mix.own != 0) else {
+            return;
+        };
+        let Some(route) = route else {
+            mix.selected.store(mix.own, Ordering::Release);
+            return;
+        };
+        let mut held = mix
+            .endpoint
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let key = match &*held {
+            Some((key, id)) if *id == route.endpoint => *key,
+            _ => {
+                let key =
+                    ENDPOINT_KEY | (held.as_ref().map_or(0, |(key, _)| key + 1) & !ENDPOINT_KEY);
+                *held = Some((key, route.endpoint.clone()));
+                key
+            }
+        };
+        let mut plan = vec![mix.own, key];
+        plan.extend(&route.apps);
+        if self.mix_pids != plan {
+            mix.plan.set(&plan);
+            mix.wake.set();
+            self.mix_pids = plan;
+        }
+        mix.selected.store(ALL_BUT_OWN, Ordering::Release);
+    }
+
+    fn left_route(&self) -> bool {
+        self.mix
+            .as_ref()
+            .filter(|mix| mix.own != 0)
+            .is_none_or(|mix| mix.settled.load(Ordering::Acquire) == mix.own)
+    }
+
     fn glitches(&self) -> CaptureGlitches {
         self.counters.glitches()
     }
@@ -223,8 +267,17 @@ pub(super) fn start(
     };
     let mix = match target {
         CaptureTarget::Mix(_) => {
-            let share = MixShare::new()?;
+            let share = MixShare::new(0)?;
             share.plan.set(&mix_pids);
+            Some(Arc::new(share))
+        }
+        // The whole system: its endpoint loopback joins once routed (S480).
+        CaptureTarget::Loopback(Activation {
+            mode: LoopbackMode::ExcludeTree,
+            target_pid,
+        }) => {
+            let share = MixShare::new(target_pid)?;
+            share.plan.set(&[target_pid]);
             Some(Arc::new(share))
         }
         _ => None,
@@ -314,7 +367,12 @@ fn run(
         Ok(apartment) => apartment,
         Err(error) => return ready.fail(error),
     };
-    if let (CaptureTarget::Mix(activations), Some(share)) = (target, mix) {
+    let activations = match target {
+        CaptureTarget::Mix(activations) => activations.as_slice(),
+        CaptureTarget::Loopback(activation) => slice::from_ref(activation),
+        CaptureTarget::Input { .. } => &[],
+    };
+    if let Some(share) = mix {
         return run_mix(
             activations,
             share,
@@ -387,6 +445,15 @@ struct CaptureStream {
 /// pair other than 1-2 first tries its own channel count
 /// ([`pair_attempts`]); when Windows takes none of those, it plays 1-2.
 fn open_stream(target: &CaptureTarget) -> Result<CaptureStream, BackendError> {
+    open_stream_from(target, None)
+}
+
+/// [`open_stream`], or with `endpoint` the loopback of that render endpoint
+/// (S480), whose failures read as `target`'s.
+fn open_stream_from(
+    target: &CaptureTarget,
+    endpoint: Option<&str>,
+) -> Result<CaptureStream, BackendError> {
     let mut first_error = None;
     let (mut attempts, channel_mask) = match target {
         CaptureTarget::Input { endpoint_id, pair } if *pair != 0 => {
@@ -396,14 +463,18 @@ fn open_stream(target: &CaptureTarget) -> Result<CaptureStream, BackendError> {
     };
     attempts.extend(CAPTURE_ATTEMPTS);
     for attempt in attempts {
-        let (client, mut flags) = match target {
-            CaptureTarget::Loopback(activation) => (
+        let (client, mut flags) = match (endpoint, target) {
+            (Some(id), _) => (
+                activate_render(id)?,
+                AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+            ),
+            (None, CaptureTarget::Loopback(activation)) => (
                 activate(*activation)?,
                 AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
             ),
             // `run_mix` opens each of a mix's loopbacks on its own.
-            CaptureTarget::Mix(_) => return Err(BackendError::NotAnApp),
-            CaptureTarget::Input { endpoint_id, .. } => (
+            (None, CaptureTarget::Mix(_)) => return Err(BackendError::NotAnApp),
+            (None, CaptureTarget::Input { endpoint_id, .. }) => (
                 activate_input(endpoint_id)?,
                 AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
             ),
@@ -540,6 +611,20 @@ fn activate_input(endpoint_id: &str) -> Result<IAudioClient, BackendError> {
         device
             .Activate(CLSCTX_ALL, None)
             .map_err(|error| input_code_error("IMMDevice::Activate", error.code()))
+    }
+}
+
+/// An `IAudioClient` on render endpoint `endpoint_id`, for its loopback.
+fn activate_render(endpoint_id: &str) -> Result<IAudioClient, BackendError> {
+    let enumerator = enumerator()?;
+    // SAFETY: calls on a live enumerator and the device it gives.
+    unsafe {
+        let device = enumerator
+            .GetDevice(&HSTRING::from(endpoint_id))
+            .map_err(|error| device_error("IMMDeviceEnumerator::GetDevice", &error))?;
+        device
+            .Activate(CLSCTX_ALL, None)
+            .map_err(|error| device_error("IMMDevice::Activate", &error))
     }
 }
 
@@ -867,6 +952,17 @@ const MIX_FORMAT: StreamFormat = StreamFormat {
     channels: 2,
 };
 
+/// [`MixShare::selected`] of a mix of apps, which hears every lane.
+const NOT_SELECTED: u32 = u32::MAX;
+
+/// [`MixShare::selected`] while the whole system is heard from every lane
+/// but its process loopback.
+const ALL_BUT_OWN: u32 = 0;
+
+/// The bit that marks a whole-system lane's key as its endpoint loopback;
+/// process IDs stay below it.
+const ENDPOINT_KEY: u32 = 1 << 31;
+
 /// How often the opener looks at the plan when nothing wakes it, in ms.
 const OPENER_WAIT_MS: u32 = 50;
 
@@ -883,20 +979,58 @@ struct LoopbackLane {
     watch: Option<ProcessWatch>,
     frequency: i64,
     counters: Arc<CaptureCounters>,
+    /// The volume of the endpoint an endpoint loopback hears (S480).
+    levels: Option<LevelsWatch>,
 }
 
 impl LoopbackLane {
-    /// Opens and starts the loopback of app `pid`'s tree, ready for a mix.
+    /// Opens and starts the lane `key` of `share`: app `key`'s tree; for the
+    /// whole system, everything but AudioSync's tree when `key` is
+    /// AudioSync, or the endpoint loopback the key stands for (S480).
+    fn open_in(
+        share: &MixShare,
+        key: u32,
+        frequency: i64,
+        counters: &Arc<CaptureCounters>,
+    ) -> Result<Box<Opened<LoopbackLane>>, BackendError> {
+        if share.own == 0 || key & ENDPOINT_KEY == 0 && key != share.own {
+            return LoopbackLane::open(key, LoopbackMode::IncludeTree, None, frequency, counters);
+        }
+        if key == share.own {
+            return LoopbackLane::open(key, LoopbackMode::ExcludeTree, None, frequency, counters);
+        }
+        let endpoint = share
+            .endpoint
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .filter(|(held, _)| *held == key)
+            .ok_or(BackendError::DeviceGone)?;
+        let mut lane = LoopbackLane::open(
+            share.own,
+            LoopbackMode::ExcludeTree,
+            Some(&endpoint.1),
+            frequency,
+            counters,
+        )?;
+        lane.stream.levels = LevelsWatch::open(&endpoint.1, frequency);
+        Ok(Box::new(Opened { pid: key, ..*lane }))
+    }
+
+    /// Opens and starts the loopback of process `pid`'s tree in `mode`, or
+    /// of `endpoint`, ready for a mix.
     fn open(
         pid: u32,
+        mode: LoopbackMode,
+        endpoint: Option<&str>,
         frequency: i64,
         counters: &Arc<CaptureCounters>,
     ) -> Result<Box<Opened<LoopbackLane>>, BackendError> {
         let target = CaptureTarget::Loopback(Activation {
-            mode: LoopbackMode::IncludeTree,
+            mode,
             target_pid: pid,
         });
-        let stream = open_stream(&target)?;
+        let stream = open_stream_from(&target, endpoint)?;
         let format = stream.format;
         let input = LaneInput::new(format)?;
         // SAFETY: starts the stream initialized above; dropping the lane
@@ -907,9 +1041,12 @@ impl LoopbackLane {
             pid,
             stream: LoopbackLane {
                 stream,
-                watch: ProcessWatch::open(pid).ok().and_then(Watch::watching),
+                watch: (mode == LoopbackMode::IncludeTree)
+                    .then(|| ProcessWatch::open(pid).ok().and_then(Watch::watching))
+                    .flatten(),
                 frequency,
                 counters: Arc::clone(counters),
+                levels: None,
             },
             input,
             rate: format.rate,
@@ -944,6 +1081,170 @@ impl LaneStream for LoopbackLane {
     }
 }
 
+/// `ENDPOINT_HARDWARE_SUPPORT_VOLUME` of `endpointvolume.h`, which the
+/// windows crate leaves out.
+const HARDWARE_VOLUME: u32 = 1;
+
+/// A render endpoint's volume as its listener last read it, for the mix
+/// thread to read without a lock.
+#[derive(Default)]
+struct EndpointLevels {
+    /// Odd while a reading is written, raised past each.
+    version: AtomicU64,
+    db: [AtomicU32; 2],
+    /// The loudest level of each side written since the mix last read.
+    loudest: [AtomicU32; 2],
+    /// The version the mix last read.
+    taken: AtomicU64,
+    software: AtomicBool,
+    /// When the volume changed, in 100 ns units.
+    at: AtomicU64,
+    /// Held by a writer; the mix thread never takes it.
+    writing: Mutex<()>,
+}
+
+impl EndpointLevels {
+    fn write(&self, db: [f32; 2], software: bool, at: u64) {
+        let _writing = self
+            .writing
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // The first read and a notification race; the older reading would undo a newer level.
+        if at < self.at.load(Ordering::Relaxed) {
+            return;
+        }
+        let unread = self.taken.load(Ordering::Acquire) != self.version.load(Ordering::Relaxed);
+        self.version.fetch_add(1, Ordering::AcqRel);
+        for ((slot, loudest), db) in self.db.iter().zip(&self.loudest).zip(db) {
+            slot.store(db.to_bits(), Ordering::Relaxed);
+            let before = f32::from_bits(loudest.load(Ordering::Relaxed));
+            let level = if unread { before.max(db) } else { db };
+            loudest.store(level.to_bits(), Ordering::Relaxed);
+        }
+        self.software.store(software, Ordering::Relaxed);
+        self.at.store(at, Ordering::Relaxed);
+        self.version.fetch_add(1, Ordering::Release);
+    }
+
+    /// The reading written after `seen`, which it moves on; called on the
+    /// mix's real-time thread.
+    fn read(&self, seen: &mut u64) -> Option<([f32; 2], [f32; 2], bool, u64)> {
+        let version = self.version.load(Ordering::Acquire);
+        if version == *seen || version % 2 == 1 {
+            return None;
+        }
+        let db = self
+            .db
+            .each_ref()
+            .map(|slot| f32::from_bits(slot.load(Ordering::Relaxed)));
+        let loudest = self
+            .loudest
+            .each_ref()
+            .map(|slot| f32::from_bits(slot.load(Ordering::Relaxed)));
+        let software = self.software.load(Ordering::Relaxed);
+        let at = self.at.load(Ordering::Relaxed);
+        fence(Ordering::Acquire);
+        if self.version.load(Ordering::Relaxed) != version {
+            return None;
+        }
+        *seen = version;
+        self.taken.store(version, Ordering::Release);
+        Some((db, loudest, software, at))
+    }
+}
+
+/// Reads a render endpoint's volume into [`EndpointLevels`]: in software
+/// only when the endpoint has no hardware volume and every call worked.
+struct LevelsReader {
+    control: IAudioEndpointVolume,
+    levels: Arc<EndpointLevels>,
+    frequency: i64,
+}
+
+impl LevelsReader {
+    fn read(&self, at: u64) {
+        let mut channels = Vec::new();
+        let mut software = false;
+        // SAFETY: calls on a live volume control.
+        unsafe {
+            if let (Ok(count), Ok(mask)) = (
+                self.control.GetChannelCount(),
+                self.control.QueryHardwareSupport(),
+            ) {
+                channels = (0..count)
+                    .map_while(|channel| self.control.GetChannelVolumeLevel(channel).ok())
+                    .collect();
+                software = mask & HARDWARE_VOLUME == 0 && channels.len() == count as usize;
+            }
+        }
+        self.levels.write(stereo_levels(&channels), software, at);
+    }
+}
+
+/// A listener on the volume of an endpoint loopback's render endpoint,
+/// unregistered on drop; `None` from [`LevelsWatch::open`] leaves the
+/// stream as captured.
+struct LevelsWatch {
+    control: IAudioEndpointVolume,
+    listener: IAudioEndpointVolumeCallback,
+    levels: Arc<EndpointLevels>,
+}
+
+impl LevelsWatch {
+    fn open(endpoint: &str, frequency: i64) -> Option<LevelsWatch> {
+        let enumerator = enumerator().ok()?;
+        // SAFETY: calls on a live enumerator and the device it gives.
+        let control: IAudioEndpointVolume = unsafe {
+            enumerator
+                .GetDevice(&HSTRING::from(endpoint))
+                .and_then(|device| device.Activate(CLSCTX_ALL, None))
+                .ok()?
+        };
+        let levels = Arc::new(EndpointLevels::default());
+        let reader = LevelsReader {
+            control: control.clone(),
+            levels: Arc::clone(&levels),
+            frequency,
+        };
+        let listener: IAudioEndpointVolumeCallback = LevelsListener { reader }.into();
+        // SAFETY: the listener stays alive and registered until this value
+        // unregisters it on drop.
+        unsafe { control.RegisterControlChangeNotify(&listener) }.ok()?;
+        // Read once registered, so a change in between is never missed.
+        LevelsReader {
+            control: control.clone(),
+            levels: Arc::clone(&levels),
+            frequency,
+        }
+        .read(now_hns(frequency));
+        Some(LevelsWatch {
+            control,
+            listener,
+            levels,
+        })
+    }
+}
+
+impl Drop for LevelsWatch {
+    fn drop(&mut self) {
+        // SAFETY: unregisters the listener registered on this control.
+        let _ = unsafe { self.control.UnregisterControlChangeNotify(&self.listener) };
+    }
+}
+
+/// Reads the volume afresh at each change Windows reports, on its thread.
+#[implement(IAudioEndpointVolumeCallback)]
+struct LevelsListener {
+    reader: LevelsReader,
+}
+
+impl IAudioEndpointVolumeCallback_Impl for LevelsListener_Impl {
+    fn OnNotify(&self, _data: *mut AUDIO_VOLUME_NOTIFICATION_DATA) -> windows_core::Result<()> {
+        self.reader.read(now_hns(self.reader.frequency));
+        Ok(())
+    }
+}
+
 /// An app's loopback on its way into or out of a mix.
 type LanePtr = AtomicPtr<Opened<LoopbackLane>>;
 
@@ -963,11 +1264,26 @@ pub(super) struct MixShare {
     /// Wakes the opener.
     wake: Event,
     quit: AtomicBool,
+    /// AudioSync's process for the whole system, whose tree its process
+    /// loopback leaves out; 0 for a mix of apps.
+    own: u32,
+    /// What the whole system is heard from: `own` alone, or every lane but
+    /// it ([`ALL_BUT_OWN`]).
+    selected: AtomicU32,
+    /// The value of `selected` the mix last played in full.
+    settled: AtomicU32,
+    /// The endpoint loopback's key and render endpoint; only the backend
+    /// and the opener take the lock.
+    endpoint: Mutex<Option<(u32, String)>>,
 }
 
 impl MixShare {
-    fn new() -> Result<MixShare, BackendError> {
+    fn new(own: u32) -> Result<MixShare, BackendError> {
         Ok(MixShare {
+            own,
+            selected: AtomicU32::new(if own == 0 { NOT_SELECTED } else { own }),
+            settled: AtomicU32::new(own),
+            endpoint: Mutex::new(None),
             plan: MixPlan::default(),
             held: MixPlan::default(),
             ready: [const { AtomicPtr::new(ptr::null_mut()) }; MAX_MIX_APPS],
@@ -1110,7 +1426,7 @@ fn run_mix(
     let mut first_error = None;
     let mut opened = Vec::new();
     for activation in activations.iter().take(MAX_MIX_APPS) {
-        match LoopbackLane::open(activation.target_pid, frequency, counters) {
+        match LoopbackLane::open_in(share, activation.target_pid, frequency, counters) {
             Ok(lane) => opened.push(lane),
             Err(error) => {
                 first_error.get_or_insert(error);
@@ -1147,7 +1463,11 @@ fn run_mix(
         let counters = Arc::clone(counters);
         thread::Builder::new()
             .name("audiosync-mix-opener".into())
-            .spawn(move || opener(&share, |pid| LoopbackLane::open(pid, frequency, &counters)))
+            .spawn(move || {
+                opener(&share, |pid| {
+                    LoopbackLane::open_in(&share, pid, frequency, &counters)
+                })
+            })
     };
     let opener_thread = match opener_thread {
         Ok(thread) => thread,
@@ -1199,6 +1519,7 @@ fn mix_loop(
         converter.push_mixed(as_bytes(stereo), frames, filled);
     };
     let mut handed = |lane| retire(&share.retired, lane);
+    let (mut undo, mut undo_key, mut levels_seen) = (VolumeUndo::default(), 0, 0);
     loop {
         // SAFETY: every handle lives as long as its stream, which lives
         // until the handles are taken again below.
@@ -1231,7 +1552,30 @@ fn mix_loop(
                 handed(lane);
             }
         }
+        let mut floored = false;
+        if let Some((key, lane)) = lanes.find(|pid| pid & ENDPOINT_KEY != 0) {
+            if key != undo_key {
+                (undo, undo_key, levels_seen) = (VolumeUndo::default(), key, 0);
+            }
+            let reading = lane
+                .levels
+                .as_ref()
+                .and_then(|watch| watch.levels.read(&mut levels_seen));
+            if let Some((db, loudest, software, at)) = reading {
+                undo.change(db, loudest, software, at);
+            }
+            floored = undo.floored();
+            let gains = undo.gains(lanes.position(key));
+            lanes.compensate(key, gains);
+        }
+        let selected = share.selected.load(Ordering::Acquire);
+        if selected != NOT_SELECTED {
+            lanes.select(share.own, selected != ALL_BUT_OWN || floored, ENDPOINT_KEY);
+        }
         lanes.read(now, &mut sink, &mut handed).map_err(HRESULT)?;
+        if selected != NOT_SELECTED && lanes.settled() {
+            share.settled.store(selected, Ordering::Release);
+        }
         let has = lanes.held(&mut after);
         if before[..had] != after[..has] {
             share.held.set(&after[..has]);
@@ -1277,7 +1621,41 @@ mod tests {
 
     use super::super::com::{READY_TIMEOUT, StuckThreads, spawn_worker_within};
     use super::*;
+
     use crate::audio::SESSION_RATE;
+
+    // covers: S480
+    #[test]
+    fn levels_keep_the_loudest_reading_the_mix_has_not_seen() {
+        let levels = EndpointLevels::default();
+        let mut seen = 0;
+        levels.write([-20.0, -20.0], true, 1);
+        assert_eq!(
+            levels.read(&mut seen).map(|read| read.1),
+            Some([-20.0, -20.0])
+        );
+        levels.write([0.0, -3.0], true, 2);
+        levels.write([-20.0, -30.0], true, 3);
+        let read = levels.read(&mut seen).unwrap();
+        assert_eq!((read.0, read.1), ([-20.0, -30.0], [0.0, -3.0]));
+        levels.write([-30.0, -30.0], true, 4);
+        assert_eq!(
+            levels.read(&mut seen).map(|read| read.1),
+            Some([-30.0, -30.0])
+        );
+        assert_eq!(levels.read(&mut seen), None);
+    }
+
+    // covers: S480
+    #[test]
+    fn a_reading_older_than_the_stored_one_is_dropped() {
+        let levels = EndpointLevels::default();
+        let mut seen = 0;
+        levels.write([0.0, 0.0], true, 20);
+        levels.write([-20.0, -20.0], true, 10);
+        let read = levels.read(&mut seen).unwrap();
+        assert_eq!((read.0, read.1, read.3), ([0.0, 0.0], [0.0, 0.0], 20));
+    }
 
     /// How long the fake Windows audio hangs before it answers again.
     const HANG: Duration = Duration::from_secs(3);
@@ -1343,7 +1721,7 @@ mod tests {
 
     #[test]
     fn a_mix_that_stops_while_an_app_opens_tries_no_other_app() {
-        let share = MixShare::new().expect("a share");
+        let share = MixShare::new(0).expect("a share");
         share.plan.set(&[1, 2, 3]);
         let mut tried = Vec::new();
         opener(&share, |pid| {

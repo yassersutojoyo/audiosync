@@ -81,8 +81,9 @@ use super::backend::{
 use super::calibration::{CalibrationTap, Engine, Microphone, MicrophoneError};
 use super::capture::{
     Activation, AppNames, CaptureAttempt, CaptureGlitches, CaptureTarget, Feeds, LoopbackMode,
-    NameReader, SampleType, decide_apps_capture, decide_capture, decide_except_capture,
-    describe_pair, input_sources, name_apps, running_app, source_list,
+    NameReader, SampleType, SystemRoute, decide_apps_capture, decide_capture,
+    decide_except_capture, describe_pair, input_sources, name_apps, playing_endpoints, running_app,
+    source_list, system_route,
 };
 use super::cast::{CastLink, CastSpeakers, CastTrack};
 use super::cast_address::CastAddress;
@@ -265,6 +266,17 @@ pub trait CaptureHandle {
     /// False when this capture can't: it is then started again.
     fn retarget(&mut self, _target: &CaptureTarget) -> bool {
         false
+    }
+
+    /// Captures the whole system through `route`, or by process loopback
+    /// without AudioSync's tree with `None`, moving between them without a
+    /// gap (S480). Does nothing for any other capture.
+    fn route(&mut self, _route: Option<&SystemRoute>) {}
+
+    /// Whether no endpoint loopback is heard any more since `route(None)`;
+    /// true for any other capture.
+    fn left_route(&self) -> bool {
+        true
     }
 
     /// Whether a mix has a stream for each of its apps; true for any other
@@ -862,6 +874,15 @@ struct RoutingState {
     reported: Vec<DirectPath>,
     /// The last error of the check: an error that repeats is logged once.
     error: Option<BackendError>,
+    /// How the whole system is captured besides process loopback (S480);
+    /// `None` while process loopback alone is heard.
+    route: Option<SystemRoute>,
+    /// The endpoint the capture is leaving for a local output there, which
+    /// starts once it has left.
+    leaving: Option<String>,
+    /// The endpoints apps played on, with their processes, when process
+    /// loopback was last kept for them, for the log.
+    players: Vec<String>,
 }
 
 /// The audio backend over a driver. See the module documentation.
@@ -1003,6 +1024,9 @@ pub struct Controller<D: Driver> {
     /// Set in a test copy (S475): it never moves the default output or an
     /// app's output and never writes an output's own level.
     leaves_system_outputs: bool,
+    /// The endpoint a test copy captures the whole system from in place of
+    /// the default output, by ID or name (S480).
+    system_endpoint: Option<String>,
     /// Where one captured app's own output is moved to the silent endpoint,
     /// and where its restore record is kept (S471); `None` where it isn't.
     app_output: Option<(Box<dyn AppEndpoints>, Box<dyn AppRecordStore>)>,
@@ -1103,6 +1127,7 @@ impl<D: Driver> Controller<D> {
             default_switch: DefaultSwitch::default(),
             holds_out_default_sink: false,
             leaves_system_outputs: false,
+            system_endpoint: None,
             app_output: None,
             app_redirect: AppRedirect::default(),
             app_checked: None,
@@ -1278,6 +1303,7 @@ impl<D: Driver> Controller<D> {
     /// levels as they are: a test copy (S475).
     pub fn leave_system_outputs(&mut self) {
         self.leaves_system_outputs = true;
+        self.system_endpoint = std::env::var("AUDIOSYNC_SYSTEM_ENDPOINT").ok();
     }
 
     /// The driver's own seam for [`Self::set_default_switch`], if it has one.
@@ -2252,6 +2278,32 @@ impl<D: Driver> Controller<D> {
             plan.attach.retain(|endpoint| endpoint.id != *held_out);
             if session.outputs.contains_key(held_out) && !plan.detach.contains(held_out) {
                 plan.detach.push(held_out.clone());
+            }
+        }
+        // AudioSync's copy must not reach the endpoint the whole system is
+        // captured from: the capture leaves it before the output starts.
+        if let Some(route) = &self.routing.route
+            && plan
+                .attach
+                .iter()
+                .any(|endpoint| endpoint.id == route.endpoint)
+        {
+            if let Some(capture) = session.capture.as_mut() {
+                capture.route(None);
+            }
+            self.log
+                .log(|| "whole system: captured by process loopback without AudioSync".to_owned());
+            self.routing.leaving = self.routing.route.take().map(|route| route.endpoint);
+        }
+        if let Some(leaving) = &self.routing.leaving {
+            if session
+                .capture
+                .as_ref()
+                .is_none_or(|capture| capture.left_route())
+            {
+                self.routing.leaving = None;
+            } else {
+                plan.attach.retain(|endpoint| endpoint.id != *leaving);
             }
         }
 
@@ -4293,6 +4345,10 @@ impl<D: Driver> Controller<D> {
         }
         let failures = self.sync_outputs();
         self.report_failures(failures);
+        // Endpoint loopback joins at once, whatever plays (S480).
+        if cfg!(windows) && matches!(source, SourceId::WholeSystem) {
+            self.check_routing(Instant::now());
+        }
         // An output that couldn't start was turned off: the others no
         // longer wait for it (S177).
         self.retime();
@@ -4701,6 +4757,34 @@ impl<D: Driver> Controller<D> {
                     .collect(),
             ),
         };
+        // Endpoint loopback is Windows' route; PipeWire captures its own way.
+        if cfg!(windows)
+            && let [activation] = activations.as_slice()
+            && activation.mode == LoopbackMode::ExcludeTree
+        {
+            let mut local = rendered.clone();
+            local.extend(self.routing.leaving.clone());
+            let route = system_route(
+                &endpoints,
+                activation.target_pid,
+                &processes,
+                &local,
+                self.system_endpoint.as_deref(),
+            );
+            let players: Vec<String> = if route.is_none() {
+                playing_endpoints(&endpoints, activation.target_pid, &processes)
+                    .map(|endpoint| format!("{} {:?}", endpoint.name, endpoint.active_pids))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            if players != self.routing.players {
+                self.log
+                    .log(|| format!("whole system: apps play on {}", players.join("; ")));
+                self.routing.players = players;
+            }
+            self.route_system(route);
+        }
         let answer = routing::check(&captured, &endpoints, &rendered, &self.routing.played_on);
         if answer.paths != self.routing.reported {
             self.log.log(|| {
@@ -4724,6 +4808,28 @@ impl<D: Driver> Controller<D> {
         }
         self.routing.played_on = answer.played_on;
         self.hold_at_start_briefly();
+    }
+
+    /// Moves the whole system's capture to `route` (S480).
+    fn route_system(&mut self, route: Option<SystemRoute>) {
+        if let Some(capture) = self
+            .session
+            .as_mut()
+            .and_then(|session| session.capture.as_mut())
+        {
+            capture.route(route.as_ref());
+        }
+        if route != self.routing.route {
+            self.log.log(|| match &route {
+                Some(route) => format!(
+                    "whole system: captured from endpoint {} by endpoint loopback, and processes {:?} \
+                     on other endpoints by process loopback",
+                    route.endpoint, route.apps
+                ),
+                None => "whole system: captured by process loopback without AudioSync".to_owned(),
+            });
+            self.routing.route = route;
+        }
     }
 
     /// Whether nothing takes the source off the outputs the user hears, so
@@ -13134,6 +13240,82 @@ mod tests {
     }
 
     // covers: S382
+    /// A whole-system session on the speakers, where the player plays,
+    /// with the headphones as its local output.
+    #[cfg(windows)]
+    fn routed_to_the_speakers() -> MockBackend {
+        let mut backend = MockBackend::empty();
+        backend.connect_output(SPEAKERS, "Speakers");
+        backend.connect_output(HEADPHONES, "Headphones");
+        backend.add_app(PLAYER_PID, "player.exe");
+        backend.set_default_output(SPEAKERS);
+        backend.set_output_enabled(HEADPHONES, true).unwrap();
+        backend.list_outputs().unwrap();
+        backend.play_on(PLAYER_PID, SPEAKERS);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(
+            backend.driver().capture_routes().last(),
+            Some(&Some(SPEAKERS.to_owned())),
+            "from the start, before the first poll"
+        );
+        backend
+    }
+
+    // covers: S480
+    #[cfg(windows)]
+    #[test]
+    fn an_app_captured_on_its_own_that_starts_on_the_endpoint_leaves_it_at_once() {
+        let mut backend = MockBackend::empty();
+        backend.connect_output(SPEAKERS, "Speakers");
+        backend.connect_output(HEADPHONES, "Headphones");
+        backend.add_app(PLAYER_PID, "player.exe");
+        backend.set_default_output(SPEAKERS);
+        backend.list_outputs().unwrap();
+        backend.play_on(PLAYER_PID, HEADPHONES);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(
+            backend.driver().capture_routes().last(),
+            Some(&Some(SPEAKERS.to_owned()))
+        );
+        backend.open_session(PLAYER_PID, SPEAKERS);
+        backend.poll();
+        assert_eq!(
+            backend.driver().capture_routes().last(),
+            Some(&None),
+            "its sound would come twice"
+        );
+    }
+
+    // covers: S480
+    #[cfg(windows)]
+    #[test]
+    fn the_whole_system_stays_on_endpoint_loopback_at_any_endpoint_volume() {
+        let mut backend = routed_to_the_speakers();
+        backend.set_output_level(SPEAKERS, 0.2);
+        backend.poll();
+        assert_eq!(
+            backend.driver().capture_routes(),
+            [Some(SPEAKERS.to_owned())]
+        );
+    }
+
+    // covers: S480
+    #[cfg(windows)]
+    #[test]
+    fn a_local_output_switched_on_at_the_endpoint_starts_once_the_capture_moved() {
+        let mut backend = routed_to_the_speakers();
+        backend.driver().hold_capture_move(true);
+        backend.set_output_enabled(SPEAKERS, true).unwrap();
+        backend.poll();
+        assert_eq!(backend.driver().capture_routes().last(), Some(&None));
+        backend.poll();
+        assert!(!backend.playing_ids().contains(&SPEAKERS.to_owned()));
+        backend.driver().hold_capture_move(false);
+        backend.poll();
+        assert!(backend.playing_ids().contains(&SPEAKERS.to_owned()));
+        assert_eq!(backend.driver().capture_routes().last(), Some(&None));
+    }
+
     #[test]
     fn the_whole_system_is_heard_twice_from_the_default_output() {
         let mut backend = backend();
