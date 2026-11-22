@@ -453,7 +453,8 @@ impl Graph {
 
     /// The links a capture keeps, `takes` saying which streams it records:
     /// for the whole system (`whole_system`) the default output's monitor
-    /// when that holds the same streams, else each stream's own links.
+    /// while it holds none of AudioSync's streams, else each stream's own
+    /// links.
     pub fn capture_links(
         &self,
         capture: u32,
@@ -466,13 +467,19 @@ impl Graph {
         self.wanted_links(capture, takes)
     }
 
-    /// The default output's monitor into `capture`, while it holds exactly
-    /// what `takes` accepts: each such stream plays into the default output
-    /// or into no output yet, and each other one into some other output.
-    /// A stream linked there from its first buffer is captured whole.
+    /// The default output's monitor into `capture`, while it holds none of
+    /// AudioSync's streams: each of those plays into another output, or
+    /// names one by `target.object` before it is linked. A taken stream
+    /// that plays only into other outputs is linked beside it. A stream in
+    /// the default output reaches the capture from its first buffer.
     fn monitor_links(&self, capture: u32, takes: &impl Fn(u32) -> bool) -> Option<BTreeSet<Link>> {
-        let (default, _) = self.named(self.default_sink.as_deref()?)?;
+        let (default, node) = self.named(self.default_sink.as_deref()?)?;
+        let serial = node.prop("object.serial");
         let sinks: BTreeSet<u32> = self.sinks().map(|(id, _)| id).collect();
+        let mut links = self.channel_links(default, true, capture);
+        if links.is_empty() {
+            return None;
+        }
         for stream in self.streams().filter(|&id| id != capture) {
             let outputs: BTreeSet<u32> = self
                 .links
@@ -480,17 +487,26 @@ impl Graph {
                 .filter(|link| link.output_node == stream && sinks.contains(&link.input_node))
                 .map(|link| link.input_node)
                 .collect();
-            let held = if takes(stream) {
-                outputs.iter().all(|&output| output == default)
+            if takes(stream) {
+                if !outputs.is_empty() && !outputs.contains(&default) {
+                    links.extend(self.channel_links(stream, false, capture));
+                }
+                continue;
+            }
+            let target = self
+                .nodes
+                .get(&stream)
+                .and_then(|node| node.prop("target.object"));
+            let elsewhere = if outputs.is_empty() {
+                target.is_some() && target != serial
             } else {
-                !outputs.is_empty() && !outputs.contains(&default)
+                !outputs.contains(&default)
             };
-            if !held {
+            if !elsewhere {
                 return None;
             }
         }
-        let links = self.channel_links(default, true, capture);
-        (!links.is_empty()).then_some(links)
+        Some(links)
     }
 
     /// The links that bring every stream `takes` accepts into `capture`'s
