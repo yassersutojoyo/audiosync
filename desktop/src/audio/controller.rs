@@ -13216,6 +13216,52 @@ mod tests {
     }
 
     // covers: S382
+    /// A whole-system session on the speakers, where the player plays,
+    /// with the headphones as its local output.
+    #[cfg(windows)]
+    fn routed_to_the_speakers() -> MockBackend {
+        let mut backend = MockBackend::empty();
+        backend.connect_output(SPEAKERS, "Speakers");
+        backend.connect_output(HEADPHONES, "Headphones");
+        backend.add_app(PLAYER_PID, "player.exe");
+        backend.set_default_output(SPEAKERS);
+        backend.set_output_enabled(HEADPHONES, true).unwrap();
+        backend.list_outputs().unwrap();
+        backend.play_on(PLAYER_PID, SPEAKERS);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.poll();
+        assert_eq!(
+            backend.driver().capture_routes().last(),
+            Some(&Some(SPEAKERS.to_owned()))
+        );
+        backend
+    }
+
+    // covers: S480
+    #[cfg(windows)]
+    #[test]
+    fn the_whole_system_leaves_endpoint_loopback_as_the_endpoint_volume_drops() {
+        let mut backend = routed_to_the_speakers();
+        backend.set_output_level(SPEAKERS, 0.2);
+        backend.poll();
+        assert_eq!(
+            backend.driver().capture_routes().last(),
+            Some(&None),
+            "at the notification, not the next check"
+        );
+    }
+
+    // covers: S480
+    #[cfg(windows)]
+    #[test]
+    fn a_local_output_switched_on_at_the_endpoint_moves_the_capture_first() {
+        let mut backend = routed_to_the_speakers();
+        backend.set_output_enabled(SPEAKERS, true).unwrap();
+        backend.poll();
+        assert_eq!(backend.driver().capture_routes().last(), Some(&None));
+        assert!(backend.playing_ids().contains(&SPEAKERS.to_owned()));
+    }
+
     #[test]
     fn the_whole_system_is_heard_twice_from_the_default_output() {
         let mut backend = backend();

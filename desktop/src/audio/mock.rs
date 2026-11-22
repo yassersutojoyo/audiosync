@@ -34,7 +34,7 @@ use audiosync_core::volume::SharedGain;
 use super::SESSION_RATE;
 use super::backend::{BackendError, OutputKind, UNKNOWN_DEVICE_NAME};
 use super::capture::{
-    CAPTURE_ATTEMPTS, CaptureAttempt, CaptureTarget, Feeds, LoopbackMode, NameReader,
+    CAPTURE_ATTEMPTS, CaptureAttempt, CaptureTarget, Feeds, LoopbackMode, NameReader, SystemRoute,
 };
 use super::controller::{
     CaptureHandle, CaptureState, Controller, Driver, FEED_FADE, PowerNotice, RendererHandle,
@@ -154,6 +154,8 @@ struct CaptureLink {
     missing: bool,
     /// How often a mix was moved onto new apps.
     retargets: u32,
+    /// The endpoints a whole-system capture was routed to, in order.
+    routes: Vec<Option<String>>,
     /// The format it captures in.
     setup: CaptureAttempt,
     /// The error code its app's process refused a wait with, as an app
@@ -218,6 +220,14 @@ impl CaptureHandle for MockCapture {
 
     fn holds_all(&self) -> bool {
         !lock(&self.link).missing
+    }
+
+    fn route(&mut self, route: Option<&SystemRoute>) {
+        let endpoint = route.map(|route| route.endpoint.clone());
+        let mut link = lock(&self.link);
+        if link.routes.last() != Some(&endpoint) {
+            link.routes.push(endpoint);
+        }
     }
 
     fn watch_refused(&self) -> Option<i32> {
@@ -526,6 +536,14 @@ impl MockDriver {
         if let Some(link) = &self.capture {
             lock(link).missing = true;
         }
+    }
+
+    /// The endpoints the running whole-system capture was routed to, each
+    /// change once.
+    pub fn capture_routes(&self) -> Vec<Option<String>> {
+        self.capture
+            .as_ref()
+            .map_or_else(Vec::new, |link| lock(link).routes.clone())
     }
 
     /// How often the running mix was moved onto new apps.
@@ -895,6 +913,7 @@ impl Driver for MockDriver {
             feeds,
             missing: false,
             retargets: 0,
+            routes: Vec::new(),
             setup: self.capture_setup,
             watch_refused,
             unwatchable: self.unwatchable.clone(),
