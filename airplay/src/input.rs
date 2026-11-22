@@ -762,8 +762,7 @@ mod tests {
     }
 
     // P112: the re-anchoring covers one write only; a later write that
-    // comes behind is late as before, so jitter cannot move the timeline
-    // (the write after it comes at once, so P248 doesn't take it as resumed).
+    // comes behind is late as before, so jitter cannot move the timeline.
     // covers: P112
     #[test]
     fn only_the_first_write_after_a_restart_is_placed_as_resumed() {
@@ -789,8 +788,42 @@ mod tests {
         let discarded = reader.dropped();
 
         writer.write_i16(&halves(5000, 5500), origin + Duration::from_millis(316));
-        writer.write_i16(&halves(6000, 6500), origin + Duration::from_millis(316));
 
+        reader.cut(floor as i64, &mut out);
+        assert_eq!(out[0], [5500, 5500]);
+        assert_eq!(reader.dropped() - discarded, FRAMES_PER_PACKET as u64);
+    }
+
+    // P112, P248: the restart re-anchored the stream once, so a partly late
+    // write right after its first write is late even when the next write
+    // comes at real-time pace; holding it would move the timeline again.
+    // covers: P248
+    #[test]
+    fn a_partly_late_write_after_a_restart_is_not_held_as_resumed() {
+        let origin = Instant::now();
+        let (mut writer, mut reader) = ring(2 * MIN_INPUT_FRAMES, origin);
+        writer.write_i16(&[1000i16; 20 * FRAMES_PER_PACKET], origin);
+        let mut out = [[0, 0]; FRAMES_PER_PACKET];
+        for packet in 0..10 {
+            reader.cut((packet * FRAMES_PER_PACKET) as i64, &mut out);
+        }
+        let restarted = reader.rebase();
+        reader.cut(restarted as i64, &mut out);
+        let anchored = reader.floor();
+        writer.write_i16(&halves(4000, 4500), origin + Duration::from_millis(300));
+        for packet in 0..3 {
+            reader.cut(
+                (anchored + (packet * FRAMES_PER_PACKET) as u64) as i64,
+                &mut out,
+            );
+        }
+        let floor = reader.floor();
+        let discarded = reader.dropped();
+
+        writer.write_i16(&halves(5000, 5500), origin + Duration::from_millis(316));
+        writer.write_i16(&halves(6000, 6500), origin + Duration::from_millis(336));
+
+        assert_eq!(writer.position(), floor + 3 * FRAMES_PER_PACKET as u64);
         reader.cut(floor as i64, &mut out);
         assert_eq!(out[0], [5500, 5500]);
         assert_eq!(reader.dropped() - discarded, FRAMES_PER_PACKET as u64);
