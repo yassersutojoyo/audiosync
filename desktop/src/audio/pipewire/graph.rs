@@ -964,18 +964,8 @@ mod tests {
             routed(&with_default, &processes, &filter),
             BTreeSet::from([22, 23])
         );
-        // An app plays into another output.
-        let (mut graph, processes) = monitored_graph();
-        for link in graph.links.values_mut() {
-            if link.output_node == 23 {
-                link.input_node = 2;
-            }
-        }
-        assert_eq!(
-            routed(&graph, &processes, &filter),
-            BTreeSet::from([22, 23])
-        );
-        // An output of AudioSync's that is not linked yet may land anywhere.
+        // An output of AudioSync's that is not linked yet and names no
+        // output may land on the default one.
         let (mut graph, processes) = monitored_graph();
         graph.links.retain(|_, link| link.output_node != 21);
         assert_eq!(
@@ -988,6 +978,38 @@ mod tests {
             routed(&graph, &processes, &Filter::Trees(vec![60])),
             BTreeSet::from([22, 23])
         );
+    }
+
+    // An app in another output is linked beside the monitor, and an
+    // AudioSync output pinned to another output keeps the monitor even
+    // before it is linked, so neither change moves the default output's
+    // audio to another route.
+    // covers: S489
+    #[test]
+    fn streams_in_other_outputs_are_linked_beside_the_monitor() {
+        let filter = Filter::Except(50);
+        let (mut graph, processes) = monitored_graph();
+        for link in graph.links.values_mut() {
+            if link.output_node == 23 {
+                link.input_node = 2;
+            }
+        }
+        assert_eq!(routed(&graph, &processes, &filter), BTreeSet::from([1, 23]));
+        let (mut graph, processes) = monitored_graph();
+        graph
+            .nodes
+            .get_mut(&2)
+            .unwrap()
+            .props
+            .insert("object.serial".to_owned(), "202".to_owned());
+        graph
+            .nodes
+            .get_mut(&21)
+            .unwrap()
+            .props
+            .insert("target.object".to_owned(), "202".to_owned());
+        graph.links.retain(|_, link| link.output_node != 21);
+        assert_eq!(routed(&graph, &processes, &filter), BTreeSet::from([1]));
     }
 
     // covers: S489
