@@ -289,23 +289,20 @@ pub struct SystemRoute {
     pub apps: Vec<u32>,
 }
 
-/// The route of the whole system (S480): endpoint loopback of the endpoint
-/// a process started playing on since `before` (the last snapshot), other
-/// than `current`; else of `current` while it is listed; else of the one
-/// apps play sound on (with sound on several or none, the default output,
-/// else the first listed), of those it can take; and process loopback of each process that plays
-/// on another endpoint. `None`, process loopback without
-/// AudioSync's tree, when one of `local_outputs` (AudioSync's own copies)
-/// is on that endpoint, its volume is below full or unknown, a tree
+/// The route of the whole system (S480): endpoint loopback of the default
+/// render endpoint, or of `named` (an endpoint's ID or name) when given,
+/// whatever plays where and at any volume, which the capture undoes; and
+/// process loopback of each process that plays on another endpoint. `None`,
+/// process loopback without AudioSync's tree, when that endpoint isn't
+/// listed, one of `local_outputs` (AudioSync's own copies) is on it, a tree
 /// captured on its own also plays there, or the trees would not fit one mix.
 pub fn system_route(
     audio: &[EndpointAudio],
     own_pid: u32,
     processes: &ProcessTable,
     local_outputs: &[String],
-    endpoint: Option<&str>,
+    named: Option<&str>,
 ) -> Option<SystemRoute> {
-    let (current, before) = (endpoint, &[] as &[EndpointAudio]);
     let players = |endpoint: &EndpointAudio| -> Vec<u32> {
         endpoint
             .active_pids
@@ -314,45 +311,11 @@ pub fn system_route(
             .filter(|&pid| !processes.in_tree(pid, own_pid) && !endpoint.mix_pids.contains(&pid))
             .collect()
     };
-    let sounding: Vec<&EndpointAudio> = audio
-        .iter()
-        .filter(|endpoint| {
-            players(endpoint)
-                .iter()
-                .any(|pid| !endpoint.silent_pids.contains(pid))
-        })
-        .collect();
-    let started = |endpoint: &&EndpointAudio| {
-        let earlier = before.iter().find(|earlier| earlier.id == endpoint.id);
-        players(endpoint)
-            .iter()
-            .any(|pid| earlier.is_none_or(|earlier| !players(earlier).contains(pid)))
-    };
-    // Endpoint loopback carries the endpoint's volume but not its mute.
-    let takeable = |endpoint: &EndpointAudio| {
-        !local_outputs.contains(&endpoint.id)
-            && endpoint.volume.is_some_and(|volume| volume.level >= 1.0)
-    };
-    let candidate = |endpoint: &&EndpointAudio| {
-        takeable(endpoint) && (sounding.is_empty() || sounding.contains(endpoint))
-    };
-    let endpoint = audio
-        .iter()
-        .filter(|endpoint| !before.is_empty() && current != Some(endpoint.id.as_str()))
-        .find(started)
-        .or_else(|| {
-            audio
-                .iter()
-                .find(|endpoint| current == Some(endpoint.id.as_str()))
-        })
-        .or_else(|| {
-            audio
-                .iter()
-                .filter(candidate)
-                .find(|endpoint| endpoint.is_default)
-        })
-        .or_else(|| sounding.iter().copied().find(|endpoint| takeable(endpoint)))?;
-    if !takeable(endpoint) {
+    let endpoint = audio.iter().find(|endpoint| match named {
+        Some(named) => endpoint.id == named || endpoint.name == named,
+        None => endpoint.is_default,
+    })?;
+    if local_outputs.contains(&endpoint.id) {
         return None;
     }
     let there = players(endpoint);

@@ -178,15 +178,11 @@ impl<D: Driver> Controller<D> {
     /// (S195, S202): both parts, whatever the notification said. A new
     /// reading that changes what the row shows is reported as
     /// [`BackendEvent::DeviceVolumeChanged`]; one whose decision changed
-    /// gets a line in the log, others none (S201). True when the endpoint
-    /// the whole system was last routed to is among them (S480).
-    pub(super) fn read_device_volume_changes(&mut self) -> bool {
-        let mut routed = false;
+    /// gets a line in the log, others none (S201).
+    pub(super) fn read_device_volume_changes(&mut self) {
         for id in self.driver.endpoint_volume_changes() {
-            routed |= self.routing.watched.as_deref() == Some(id.as_str());
             self.read_device_volume_again(id);
         }
-        routed
     }
 
     /// Whether `result`, of a call on output `id`'s own volume, is Windows

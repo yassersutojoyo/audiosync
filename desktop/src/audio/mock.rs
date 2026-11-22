@@ -156,6 +156,8 @@ struct CaptureLink {
     retargets: u32,
     /// The endpoints a whole-system capture was routed to, in order.
     routes: Vec<Option<String>>,
+    /// Whether it still hears its endpoint loopback after `route(None)`.
+    unmoved: bool,
     /// The format it captures in.
     setup: CaptureAttempt,
     /// The error code its app's process refused a wait with, as an app
@@ -228,6 +230,10 @@ impl CaptureHandle for MockCapture {
         if link.routes.last() != Some(&endpoint) {
             link.routes.push(endpoint);
         }
+    }
+
+    fn left_route(&self) -> bool {
+        !lock(&self.link).unmoved
     }
 
     fn watch_refused(&self) -> Option<i32> {
@@ -544,6 +550,14 @@ impl MockDriver {
         self.capture
             .as_ref()
             .map_or_else(Vec::new, |link| lock(link).routes.clone())
+    }
+
+    /// Keeps the running capture on its endpoint loopback after it is
+    /// routed away, while `hold`.
+    pub fn hold_capture_move(&self, hold: bool) {
+        if let Some(link) = &self.capture {
+            lock(link).unmoved = hold;
+        }
     }
 
     /// How often the running mix was moved onto new apps.
@@ -914,6 +928,7 @@ impl Driver for MockDriver {
             missing: false,
             retargets: 0,
             routes: Vec::new(),
+            unmoved: false,
             setup: self.capture_setup,
             watch_refused,
             unwatchable: self.unwatchable.clone(),

@@ -273,6 +273,12 @@ pub trait CaptureHandle {
     /// gap (S480). Does nothing for any other capture.
     fn route(&mut self, _route: Option<&SystemRoute>) {}
 
+    /// Whether no endpoint loopback is heard any more since `route(None)`;
+    /// true for any other capture.
+    fn left_route(&self) -> bool {
+        true
+    }
+
     /// Whether a mix has a stream for each of its apps; true for any other
     /// capture, and while it can't be told.
     fn holds_all(&self) -> bool {
@@ -871,14 +877,9 @@ struct RoutingState {
     /// How the whole system is captured besides process loopback (S480);
     /// `None` while process loopback alone is heard.
     route: Option<SystemRoute>,
-    /// The endpoints as the last check of the whole system found them.
-    before: Vec<EndpointAudio>,
     /// The endpoints apps played on, with their processes, when process
     /// loopback was last kept for them, for the log.
     players: Vec<String>,
-    /// The endpoint last routed to, whose volume changes run the check at
-    /// once.
-    watched: Option<String>,
 }
 
 /// The audio backend over a driver. See the module documentation.
@@ -1020,6 +1021,9 @@ pub struct Controller<D: Driver> {
     /// Set in a test copy (S475): it never moves the default output or an
     /// app's output and never writes an output's own level.
     leaves_system_outputs: bool,
+    /// The endpoint a test copy captures the whole system from in place of
+    /// the default output, by ID or name (S480).
+    system_endpoint: Option<String>,
     /// Where one captured app's own output is moved to the silent endpoint,
     /// and where its restore record is kept (S471); `None` where it isn't.
     app_output: Option<(Box<dyn AppEndpoints>, Box<dyn AppRecordStore>)>,
@@ -1120,6 +1124,7 @@ impl<D: Driver> Controller<D> {
             default_switch: DefaultSwitch::default(),
             holds_out_default_sink: false,
             leaves_system_outputs: false,
+            system_endpoint: None,
             app_output: None,
             app_redirect: AppRedirect::default(),
             app_checked: None,
@@ -1295,6 +1300,7 @@ impl<D: Driver> Controller<D> {
     /// levels as they are: a test copy (S475).
     pub fn leave_system_outputs(&mut self) {
         self.leaves_system_outputs = true;
+        self.system_endpoint = std::env::var("AUDIOSYNC_SYSTEM_ENDPOINT").ok();
     }
 
     /// The driver's own seam for [`Self::set_default_switch`], if it has one.
@@ -4743,10 +4749,7 @@ impl<D: Driver> Controller<D> {
                 activation.target_pid,
                 &processes,
                 &rendered,
-                self.routing
-                    .route
-                    .as_ref()
-                    .map(|route| route.endpoint.as_str()),
+                self.system_endpoint.as_deref(),
             );
             let players: Vec<String> = if route.is_none() {
                 playing_endpoints(&endpoints, activation.target_pid, &processes)
@@ -4795,20 +4798,6 @@ impl<D: Driver> Controller<D> {
             .and_then(|session| session.capture.as_mut())
         {
             capture.route(route.as_ref());
-        }
-        if let Some(route) = &route
-            && self.routing.watched.as_deref() != Some(route.endpoint.as_str())
-        {
-            // Outputs whose volume the device-volume code follows stay followed.
-            if let Some(old) = self.routing.watched.take()
-                && self.device_volumes.reading(&old).is_none()
-            {
-                self.driver.unwatch_endpoint_volume(&old);
-            }
-            if self.device_volumes.reading(&route.endpoint).is_none() {
-                let _ = self.driver.watch_endpoint_volume(&route.endpoint);
-            }
-            self.routing.watched = Some(route.endpoint.clone());
         }
         if route != self.routing.route {
             self.log.log(|| match &route {
@@ -5960,9 +5949,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         // Outputs that couldn't start were turned off; then what Windows
         // reported of the followed outputs' own volumes.
         self.follow_device_volumes();
-        if self.read_device_volume_changes() {
-            self.check_routing(now);
-        }
+        self.read_device_volume_changes();
         self.follow_mix_apps(now);
         self.log_status_if_due(now);
         self.log_levels_if_due(now);
@@ -13246,10 +13233,10 @@ mod tests {
         backend.list_outputs().unwrap();
         backend.play_on(PLAYER_PID, SPEAKERS);
         backend.start(&SourceId::WholeSystem).unwrap();
-        backend.poll();
         assert_eq!(
             backend.driver().capture_routes().last(),
-            Some(&Some(SPEAKERS.to_owned()))
+            Some(&Some(SPEAKERS.to_owned())),
+            "from the start, before the first poll"
         );
         backend
     }
@@ -13257,26 +13244,31 @@ mod tests {
     // covers: S480
     #[cfg(windows)]
     #[test]
-    fn the_whole_system_leaves_endpoint_loopback_as_the_endpoint_volume_drops() {
+    fn the_whole_system_stays_on_endpoint_loopback_at_any_endpoint_volume() {
         let mut backend = routed_to_the_speakers();
         backend.set_output_level(SPEAKERS, 0.2);
         backend.poll();
         assert_eq!(
-            backend.driver().capture_routes().last(),
-            Some(&None),
-            "at the notification, not the next check"
+            backend.driver().capture_routes(),
+            [Some(SPEAKERS.to_owned())]
         );
     }
 
     // covers: S480
     #[cfg(windows)]
     #[test]
-    fn a_local_output_switched_on_at_the_endpoint_moves_the_capture_first() {
+    fn a_local_output_switched_on_at_the_endpoint_starts_once_the_capture_moved() {
         let mut backend = routed_to_the_speakers();
+        backend.driver().hold_capture_move(true);
         backend.set_output_enabled(SPEAKERS, true).unwrap();
         backend.poll();
         assert_eq!(backend.driver().capture_routes().last(), Some(&None));
+        backend.poll();
+        assert!(!backend.playing_ids().contains(&SPEAKERS.to_owned()));
+        backend.driver().hold_capture_move(false);
+        backend.poll();
         assert!(backend.playing_ids().contains(&SPEAKERS.to_owned()));
+        assert_eq!(backend.driver().capture_routes().last(), Some(&None));
     }
 
     #[test]
