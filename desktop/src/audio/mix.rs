@@ -446,6 +446,11 @@ impl<S: LaneStream> MixLanes<S> {
         selection.is_none_or(|(pid, alone)| (slot.opened.pid == pid) == alone)
     }
 
+    /// Whether the mix plays the selection, past any wait or fade out.
+    pub fn settled(&self) -> bool {
+        self.heard == self.effective()
+    }
+
     /// Moves the mix toward the selection, as [`MixLanes::select`] says.
     fn switch(&mut self, now: u64) {
         let wanted = self.effective();
@@ -1213,7 +1218,9 @@ mod tests {
                     &mut |_| panic!("no stream fails"),
                 )
                 .unwrap();
+            assert!(tick != switch_at || !lanes.settled(), "the switch waits");
         }
+        assert!(lanes.settled());
         mixed
     }
 

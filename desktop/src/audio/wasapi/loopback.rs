@@ -187,6 +187,13 @@ impl CaptureHandle for LoopbackCapture {
         mix.selected.store(ALL_BUT_OWN, Ordering::Release);
     }
 
+    fn left_route(&self) -> bool {
+        self.mix
+            .as_ref()
+            .filter(|mix| mix.own != 0)
+            .is_none_or(|mix| mix.settled.load(Ordering::Acquire) == mix.own)
+    }
+
     fn glitches(&self) -> CaptureGlitches {
         self.counters.glitches()
     }
@@ -1241,6 +1248,8 @@ pub(super) struct MixShare {
     /// What the whole system is heard from: `own` alone, or every lane but
     /// it ([`ALL_BUT_OWN`]).
     selected: AtomicU32,
+    /// The value of `selected` the mix last played in full.
+    settled: AtomicU32,
     /// The endpoint loopback's key and render endpoint; only the backend
     /// and the opener take the lock.
     endpoint: Mutex<Option<(u32, String)>>,
@@ -1251,6 +1260,7 @@ impl MixShare {
         Ok(MixShare {
             own,
             selected: AtomicU32::new(if own == 0 { NOT_SELECTED } else { own }),
+            settled: AtomicU32::new(own),
             endpoint: Mutex::new(None),
             plan: MixPlan::default(),
             held: MixPlan::default(),
@@ -1541,6 +1551,9 @@ fn mix_loop(
             lanes.select(share.own, selected != ALL_BUT_OWN || floored);
         }
         lanes.read(now, &mut sink, &mut handed).map_err(HRESULT)?;
+        if selected != NOT_SELECTED && lanes.settled() {
+            share.settled.store(selected, Ordering::Release);
+        }
         let has = lanes.held(&mut after);
         if before[..had] != after[..has] {
             share.held.set(&after[..has]);

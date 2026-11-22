@@ -877,6 +877,9 @@ struct RoutingState {
     /// How the whole system is captured besides process loopback (S480);
     /// `None` while process loopback alone is heard.
     route: Option<SystemRoute>,
+    /// The endpoint the capture is leaving for a local output there, which
+    /// starts once it has left.
+    leaving: Option<String>,
     /// The endpoints apps played on, with their processes, when process
     /// loopback was last kept for them, for the log.
     players: Vec<String>,
@@ -2290,7 +2293,18 @@ impl<D: Driver> Controller<D> {
             }
             self.log
                 .log(|| "whole system: captured by process loopback without AudioSync".to_owned());
-            self.routing.route = None;
+            self.routing.leaving = self.routing.route.take().map(|route| route.endpoint);
+        }
+        if let Some(leaving) = &self.routing.leaving {
+            if session
+                .capture
+                .as_ref()
+                .is_none_or(|capture| capture.left_route())
+            {
+                self.routing.leaving = None;
+            } else {
+                plan.attach.retain(|endpoint| endpoint.id != *leaving);
+            }
         }
 
         // A switched-off output fades out first, together with any others
@@ -4331,6 +4345,10 @@ impl<D: Driver> Controller<D> {
         }
         let failures = self.sync_outputs();
         self.report_failures(failures);
+        // Endpoint loopback joins at once, whatever plays (S480).
+        if cfg!(windows) && matches!(source, SourceId::WholeSystem) {
+            self.check_routing(Instant::now());
+        }
         // An output that couldn't start was turned off: the others no
         // longer wait for it (S177).
         self.retime();
@@ -4744,11 +4762,13 @@ impl<D: Driver> Controller<D> {
             && let [activation] = activations.as_slice()
             && activation.mode == LoopbackMode::ExcludeTree
         {
+            let mut local = rendered.clone();
+            local.extend(self.routing.leaving.clone());
             let route = system_route(
                 &endpoints,
                 activation.target_pid,
                 &processes,
-                &rendered,
+                &local,
                 self.system_endpoint.as_deref(),
             );
             let players: Vec<String> = if route.is_none() {
