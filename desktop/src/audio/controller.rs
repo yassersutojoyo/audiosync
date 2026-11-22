@@ -876,6 +876,9 @@ struct RoutingState {
     /// The endpoints apps played on, with their processes, when process
     /// loopback was last kept for them, for the log.
     players: Vec<String>,
+    /// The endpoint last routed to, whose volume changes run the check at
+    /// once.
+    watched: Option<String>,
 }
 
 /// The audio backend over a driver. See the module documentation.
@@ -4795,6 +4798,20 @@ impl<D: Driver> Controller<D> {
         {
             capture.route(route.as_ref());
         }
+        if let Some(route) = &route
+            && self.routing.watched.as_deref() != Some(route.endpoint.as_str())
+        {
+            // Outputs whose volume the device-volume code follows stay followed.
+            if let Some(old) = self.routing.watched.take()
+                && self.device_volumes.reading(&old).is_none()
+            {
+                self.driver.unwatch_endpoint_volume(&old);
+            }
+            if self.device_volumes.reading(&route.endpoint).is_none() {
+                let _ = self.driver.watch_endpoint_volume(&route.endpoint);
+            }
+            self.routing.watched = Some(route.endpoint.clone());
+        }
         if route != self.routing.route {
             self.log.log(|| match &route {
                 Some(route) => format!(
@@ -5945,7 +5962,9 @@ impl<D: Driver> AudioBackend for Controller<D> {
         // Outputs that couldn't start were turned off; then what Windows
         // reported of the followed outputs' own volumes.
         self.follow_device_volumes();
-        self.read_device_volume_changes();
+        if self.read_device_volume_changes() {
+            self.check_routing(now);
+        }
         self.follow_mix_apps(now);
         self.log_status_if_due(now);
         self.log_levels_if_due(now);
