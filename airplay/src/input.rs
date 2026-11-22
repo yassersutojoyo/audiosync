@@ -571,4 +571,72 @@ mod tests {
         assert_eq!(out[0], [2500, 2500]);
         assert_eq!(reader.dropped(), 0);
     }
+
+    fn halves(first: i16, second: i16) -> Vec<i16> {
+        let mut samples = vec![first; 2 * FRAMES_PER_PACKET];
+        samples.extend([second; 2 * FRAMES_PER_PACKET]);
+        samples
+    }
+
+    // A resume re-anchors the stream: the write after the resumed one
+    // starts at its own first frame even when the stream already cut past
+    // the resumed audio, so none of it counts as late.
+    // covers: P112
+    #[test]
+    fn the_write_after_a_resume_is_never_partly_late() {
+        let origin = Instant::now();
+        let (mut writer, mut reader) = ring(2 * MIN_INPUT_FRAMES, origin);
+        let block = [1000i16; 2 * FRAMES_PER_PACKET];
+        writer.write_i16(&block, origin);
+        let mut out = [[0, 0]; FRAMES_PER_PACKET];
+        for packet in 0..10 {
+            reader.cut((packet * FRAMES_PER_PACKET) as i64, &mut out);
+        }
+        let at = origin + Duration::from_millis(100);
+        writer.write_i16(&[2000i16; 2 * FRAMES_PER_PACKET], at);
+        writer.write_i16(
+            &[3000i16; 2 * FRAMES_PER_PACKET],
+            at + Duration::from_millis(8),
+        );
+        let resumed = reader.floor();
+        for packet in 0..3 {
+            reader.cut(
+                (resumed + packet * FRAMES_PER_PACKET as u64) as i64,
+                &mut out,
+            );
+        }
+        let floor = reader.floor();
+        assert!(floor > writer.position());
+
+        writer.write_i16(&halves(4000, 4500), at + Duration::from_millis(16));
+
+        reader.cut(floor as i64, &mut out);
+        assert_eq!(out[0], [4000, 4000]);
+        assert_eq!(reader.dropped(), 0);
+    }
+
+    // P143: a restart starts the timeline over at the host's next frame,
+    // even when the stream sent silence between the restart and that frame.
+    // covers: P143
+    #[test]
+    fn the_first_write_after_a_restart_is_never_partly_late() {
+        let origin = Instant::now();
+        let (mut writer, mut reader) = ring(2 * MIN_INPUT_FRAMES, origin);
+        writer.write_i16(&[1000i16; 20 * FRAMES_PER_PACKET], origin);
+        let mut out = [[0, 0]; FRAMES_PER_PACKET];
+        for packet in 0..10 {
+            reader.cut((packet * FRAMES_PER_PACKET) as i64, &mut out);
+        }
+        let restarted = reader.rebase();
+        let discarded = reader.dropped();
+        reader.cut(restarted as i64, &mut out);
+        let floor = reader.floor();
+        assert!(floor > writer.position());
+
+        writer.write_i16(&halves(4000, 4500), origin + Duration::from_millis(300));
+
+        reader.cut(floor as i64, &mut out);
+        assert_eq!(out[0], [4000, 4000]);
+        assert_eq!(reader.dropped(), discarded);
+    }
 }
