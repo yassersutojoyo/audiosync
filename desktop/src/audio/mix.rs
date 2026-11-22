@@ -31,6 +31,18 @@ const TARGET_LAG_FRAMES: usize = MAX_LAG_FRAMES / 2;
 /// Room in a lane: the lag it may reach plus one piece of input.
 const LANE_FRAMES: usize = MAX_LAG_FRAMES + CONVERT_CHUNK;
 
+/// How long a lane fades in or out when [`MixLanes::select`] moves the mix
+/// from one stream to another, 5 ms (S480).
+const FADE_FRAMES: f32 = SESSION_RATE as f32 * 0.005;
+
+/// How long a switch of streams waits for silence before it fades out and
+/// back in instead, in 100 ns units (S480).
+const SILENCE_WAIT_HNS: u64 = 2_000_000;
+
+/// The silence a switch waits for: 10 ms of the mix below [`QUIET_LEVEL`].
+const QUIET_FRAMES: usize = SESSION_RATE as usize / 100;
+const QUIET_LEVEL: f32 = 1e-4;
+
 /// One stream's frames waiting to be mixed, stereo, in a ring buffer.
 struct Lane {
     samples: Box<[f32]>,
@@ -47,6 +59,15 @@ struct Lane {
     /// Whether its stream is in the mix. A closed lane still hands on what
     /// it holds, but no longer sets the pace.
     open: bool,
+    /// The level its frames are mixed at, moving to `target` by one
+    /// [`FADE_FRAMES`] step per frame.
+    gain: f32,
+    target: f32,
+    /// What each channel is multiplied by besides `gain`, moving in a
+    /// straight line to `comp_target` over the `comp_left` frames left.
+    comp: [f32; 2],
+    comp_target: [f32; 2],
+    comp_left: usize,
 }
 
 impl Lane {
@@ -58,6 +79,11 @@ impl Lane {
             len: 0,
             owed: 0,
             open: true,
+            gain: 1.0,
+            target: 1.0,
+            comp: [1.0, 1.0],
+            comp_target: [1.0, 1.0],
+            comp_left: 0,
         }
     }
 
@@ -98,8 +124,23 @@ impl Lane {
         let pairs = out.as_chunks_mut::<2>().0.iter_mut().zip(filled.iter_mut());
         for (frame, filled) in pairs.take(frames) {
             let at = self.start * 2;
-            frame[0] += self.samples[at];
-            frame[1] += self.samples[at + 1];
+            if self.gain != self.target {
+                let step = 1.0 / FADE_FRAMES;
+                self.gain = if self.gain < self.target {
+                    (self.gain + step).min(self.target)
+                } else {
+                    (self.gain - step).max(self.target)
+                };
+            }
+            if self.comp_left > 0 {
+                let left = self.comp_left as f32;
+                for (comp, target) in self.comp.iter_mut().zip(self.comp_target) {
+                    *comp += (target - *comp) / left;
+                }
+                self.comp_left -= 1;
+            }
+            frame[0] += self.samples[at] * self.gain * self.comp[0];
+            frame[1] += self.samples[at + 1] * self.gain * self.comp[1];
             *filled &= self.filled[self.start];
             self.start = (self.start + 1) % LANE_FRAMES;
             self.len -= 1;
@@ -181,6 +222,9 @@ impl StreamMixer {
         joining.len = 0;
         joining.owed = 0;
         joining.open = true;
+        joining.comp = [1.0, 1.0];
+        joining.comp_target = [1.0, 1.0];
+        joining.comp_left = 0;
         joining.append_silence(level);
     }
 
@@ -348,6 +392,21 @@ pub struct MixLanes<S> {
     /// Lane 0 is the pace lane; slot `i` is lane `i + 1`.
     mixer: StreamMixer,
     pace: GapFill,
+    /// The stream heard alone, or the one left out, as [`MixLanes::select`]
+    /// set; every stream is heard without one.
+    selected: Option<(u32, bool)>,
+    /// The bits one of the other streams' apps must have for them to be
+    /// heard instead of `pid`'s.
+    needs: u32,
+    /// The selection the mix plays now, as [`MixLanes::effective`] gives it.
+    heard: Option<(u32, bool)>,
+    /// When the switch to a new selection was asked for, while it waits.
+    switch_since: Option<u64>,
+    /// Whether the streams heard are fading out for a switch.
+    fading: bool,
+    /// The frames of the mix below [`QUIET_LEVEL`] in a row, up to
+    /// [`QUIET_FRAMES`].
+    quiet: usize,
 }
 
 impl<S: LaneStream> MixLanes<S> {
@@ -361,7 +420,91 @@ impl<S: LaneStream> MixLanes<S> {
             slots: (0..MAX_MIX_APPS).map(|_| None).collect(),
             mixer,
             pace: GapFill::started(SESSION_RATE, now),
+            selected: None,
+            needs: 0,
+            heard: None,
+            switch_since: None,
+            fading: false,
+            quiet: QUIET_FRAMES,
         }
+    }
+
+    /// Hears only the stream of `pid` when `alone`, else every stream but
+    /// it while one of them is an app with every bit of `needs`; `pid`'s
+    /// alone otherwise, which is silence while it isn't in the mix. The mix
+    /// moves at a read: at once in 10 ms of silence that comes within
+    /// [`SILENCE_WAIT_HNS`], else, and always toward `pid` alone, by fading
+    /// out to nothing, then the new streams in, over [`FADE_FRAMES`] each;
+    /// two live streams are never cross-faded (S480).
+    pub fn select(&mut self, pid: u32, alone: bool, needs: u32) {
+        self.selected = Some((pid, alone));
+        self.needs = needs;
+    }
+
+    /// The selection as it can be heard with the streams in the mix.
+    fn effective(&self) -> Option<(u32, bool)> {
+        let (pid, alone) = self.selected?;
+        let needed = self
+            .slots
+            .iter()
+            .flatten()
+            .any(|slot| slot.opened.pid != pid && slot.opened.pid & self.needs == self.needs);
+        Some((pid, alone || !needed))
+    }
+
+    fn heard_by(selection: Option<(u32, bool)>, slot: &Slot<S>) -> bool {
+        selection.is_none_or(|(pid, alone)| (slot.opened.pid == pid) == alone)
+    }
+
+    /// Whether the mix plays the selection, past any wait or fade out.
+    pub fn settled(&self) -> bool {
+        self.heard == self.effective()
+    }
+
+    /// Moves the mix toward the selection, as [`MixLanes::select`] says.
+    fn switch(&mut self, now: u64) {
+        let wanted = self.effective();
+        if wanted == self.heard {
+            self.switch_since = None;
+            self.fading = false;
+            return;
+        }
+        let since = *self.switch_since.get_or_insert(now);
+        if self.fading {
+            let sounding = (0..self.slots.len())
+                .any(|index| self.slots[index].is_some() && self.mixer.lanes[index + 1].gain > 0.0);
+            if sounding {
+                return;
+            }
+        } else if self.quiet < QUIET_FRAMES {
+            // Its own stream alone shuts out sound that may come twice: no wait.
+            let alone = wanted.is_some_and(|(_, alone)| alone);
+            if alone || now.saturating_sub(since) >= SILENCE_WAIT_HNS {
+                self.fading = true;
+                for index in 0..self.slots.len() {
+                    if let Some(slot) = &self.slots[index]
+                        && Self::heard_by(self.heard, slot)
+                    {
+                        self.mixer.lanes[index + 1].target = 0.0;
+                    }
+                }
+            }
+            return;
+        }
+        for index in 0..self.slots.len() {
+            if let Some(slot) = &self.slots[index] {
+                let lane = &mut self.mixer.lanes[index + 1];
+                lane.gain = 0.0;
+                lane.target = if Self::heard_by(wanted, slot) {
+                    1.0
+                } else {
+                    0.0
+                };
+            }
+        }
+        self.heard = wanted;
+        self.switch_since = None;
+        self.fading = false;
     }
 
     /// Takes `opened` into the mix from `now` on, in a free lane that has
@@ -383,6 +526,14 @@ impl<S: LaneStream> MixLanes<S> {
         let gaps = GapFill::started(opened.rate, now);
         self.slots[index] = Some(Slot { opened, gaps });
         self.mixer.open_lane(index + 1);
+        if self.selected.is_some() {
+            let heard = self.slots[index]
+                .as_ref()
+                .is_some_and(|slot| Self::heard_by(self.heard, slot));
+            let lane = &mut self.mixer.lanes[index + 1];
+            lane.gain = 0.0;
+            lane.target = if heard && !self.fading { 1.0 } else { 0.0 };
+        }
         Ok(())
     }
 
@@ -403,6 +554,34 @@ impl<S: LaneStream> MixLanes<S> {
         }
     }
 
+    /// Mixes app `pid`'s stream at `gains`, per channel, reached over
+    /// [`FADE_FRAMES`].
+    #[cfg(any(windows, test))]
+    pub fn compensate(&mut self, pid: u32, gains: [f32; 2]) {
+        for index in 0..self.slots.len() {
+            if self.slots[index]
+                .as_ref()
+                .is_some_and(|slot| slot.opened.pid == pid)
+            {
+                let lane = &mut self.mixer.lanes[index + 1];
+                if lane.comp_target != gains {
+                    lane.comp_target = gains;
+                    lane.comp_left = FADE_FRAMES as usize;
+                }
+            }
+        }
+    }
+
+    /// Where app `pid`'s stream has reached, in 100 ns units.
+    #[cfg(windows)]
+    pub fn position(&self, pid: u32) -> Option<u64> {
+        self.slots
+            .iter()
+            .flatten()
+            .find(|slot| slot.opened.pid == pid)
+            .and_then(|slot| slot.gaps.end())
+    }
+
     /// Whether app `pid`'s stream is in the mix.
     pub fn holds(&self, pid: u32) -> bool {
         self.slots
@@ -419,6 +598,16 @@ impl<S: LaneStream> MixLanes<S> {
             count += 1;
         }
         count
+    }
+
+    /// The first open stream whose app `pick` takes, with its app.
+    #[cfg(windows)]
+    pub fn find(&self, pick: impl Fn(u32) -> bool) -> Option<(u32, &S)> {
+        self.slots
+            .iter()
+            .flatten()
+            .find(|slot| pick(slot.opened.pid))
+            .map(|slot| (slot.opened.pid, &slot.opened.stream))
     }
 
     /// The open streams, in lane order.
@@ -442,6 +631,18 @@ impl<S: LaneStream> MixLanes<S> {
         sink: &mut impl FnMut(&[f32], usize, &[bool]),
         retired: &mut impl FnMut(Box<Opened<S>>),
     ) -> Result<(), i32> {
+        self.switch(now);
+        let mut quiet = self.quiet;
+        let sink = &mut |out: &[f32], frames: usize, filled: &[bool]| {
+            for frame in out[..frames * 2].as_chunks::<2>().0 {
+                quiet = if frame[0].abs() < QUIET_LEVEL && frame[1].abs() < QUIET_LEVEL {
+                    (quiet + 1).min(QUIET_FRAMES)
+                } else {
+                    0
+                };
+            }
+            sink(out, frames, filled);
+        };
         if self.any_open() {
             // Level with what the streams' own fills reach.
             self.pace = GapFill::started(SESSION_RATE, now.saturating_sub(IDLE_LAG_HNS));
@@ -478,6 +679,7 @@ impl<S: LaneStream> MixLanes<S> {
                 }
             }
         }
+        self.quiet = quiet;
         match failure {
             Some(code) if !self.any_open() => Err(code),
             _ => Ok(()),
@@ -597,6 +799,92 @@ pub fn as_bytes(samples: &[f32]) -> &[u8] {
     }
 }
 
+/// Below this level of a render endpoint's volume, in dB, its loopback is
+/// too quiet to bring back up cleanly (S480).
+#[cfg(any(windows, test))]
+pub const UNDO_FLOOR_DB: f32 = -40.0;
+
+/// How far past a volume change a stream must have reached before frames
+/// mixed from it surely carry the new volume: the mix's lag bound plus the
+/// audio engine's lead, in 100 ns units.
+#[cfg(any(windows, test))]
+pub const UNDO_MARGIN_HNS: u64 = 1_500_000;
+
+/// The stereo levels, in dB, of a render endpoint with `channels` levels:
+/// each channel of a stereo endpoint, else the loudest one on both sides,
+/// whose gain is the smallest (S480).
+#[cfg(any(windows, test))]
+pub fn stereo_levels(channels: &[f32]) -> [f32; 2] {
+    match channels {
+        [left, right] => [*left, *right],
+        _ => {
+            let loudest = channels.iter().copied().reduce(f32::max).unwrap_or(0.0);
+            [loudest, loudest]
+        }
+    }
+}
+
+/// The gain that brings a render endpoint's loopback back to the level
+/// before its software volume; an error only ever makes it quieter (S480).
+#[derive(Debug)]
+#[cfg(any(windows, test))]
+pub struct VolumeUndo {
+    applied: [f32; 2],
+    /// The gain of the latest change and when it happened.
+    pending: Option<([f32; 2], u64)>,
+    floored: bool,
+}
+
+#[cfg(any(windows, test))]
+impl Default for VolumeUndo {
+    fn default() -> VolumeUndo {
+        VolumeUndo {
+            applied: [1.0, 1.0],
+            pending: None,
+            floored: false,
+        }
+    }
+}
+
+#[cfg(any(windows, test))]
+impl VolumeUndo {
+    /// The endpoint's volume is `levels` dB per side from `at` on, applied
+    /// in software when `software`; in hardware or unknown otherwise, which
+    /// the loopback doesn't carry.
+    pub fn change(&mut self, levels: [f32; 2], loudest: [f32; 2], software: bool, at: u64) {
+        let gain = |levels: [f32; 2]| {
+            if software {
+                levels.map(|db| 10_f32.powf(-db / 20.0))
+            } else {
+                [1.0, 1.0]
+            }
+        };
+        let gains = gain(levels);
+        self.floored = software && levels.iter().any(|&db| db < UNDO_FLOOR_DB);
+        for ((applied, gain), passed) in self.applied.iter_mut().zip(gains).zip(gain(loudest)) {
+            *applied = applied.min(gain).min(passed);
+        }
+        self.pending = Some((gains, at));
+    }
+
+    /// The gain per side for frames mixed while the stream has reached
+    /// `position`.
+    pub fn gains(&mut self, position: Option<u64>) -> [f32; 2] {
+        if let Some((gains, at)) = self.pending
+            && position.is_some_and(|position| position >= at.saturating_add(UNDO_MARGIN_HNS))
+        {
+            self.applied = gains;
+            self.pending = None;
+        }
+        self.applied
+    }
+
+    /// Whether the volume is below [`UNDO_FLOOR_DB`].
+    pub fn floored(&self) -> bool {
+        self.floored
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
@@ -604,6 +892,94 @@ mod tests {
 
     use super::*;
     use crate::audio::capture::SampleType;
+
+    fn close(gains: [f32; 2], expected: [f32; 2]) -> bool {
+        gains
+            .iter()
+            .zip(expected)
+            .all(|(g, e)| (g - e).abs() < 1e-3)
+    }
+
+    // covers: S480
+    #[test]
+    fn a_software_volume_is_undone_per_side() {
+        let mut undo = VolumeUndo::default();
+        undo.change([-6.0206, -12.0412], [-6.0206, -12.0412], true, 0);
+        assert!(close(undo.gains(Some(UNDO_MARGIN_HNS)), [2.0, 4.0]));
+        assert!(!undo.floored());
+    }
+
+    // covers: S480
+    #[test]
+    fn a_hardware_or_unknown_volume_is_left_alone() {
+        let mut undo = VolumeUndo::default();
+        undo.change([-45.0, -20.0], [-45.0, -20.0], false, 0);
+        assert_eq!(undo.gains(Some(UNDO_MARGIN_HNS)), [1.0, 1.0]);
+        assert!(!undo.floored());
+    }
+
+    // covers: S480
+    #[test]
+    fn a_lowered_volume_keeps_the_old_gain_until_the_stream_is_surely_past_it() {
+        let mut undo = VolumeUndo::default();
+        let at = 10_000_000;
+        undo.change([-20.0, -20.0], [-20.0, -20.0], true, at);
+        assert_eq!(undo.gains(None), [1.0, 1.0]);
+        assert_eq!(undo.gains(Some(at)), [1.0, 1.0]);
+        assert_eq!(undo.gains(Some(at + UNDO_MARGIN_HNS - 1)), [1.0, 1.0]);
+        assert!(close(undo.gains(Some(at + UNDO_MARGIN_HNS)), [10.0, 10.0]));
+    }
+
+    // covers: S480
+    #[test]
+    fn a_raised_volume_takes_the_smaller_gain_at_once() {
+        let mut undo = VolumeUndo::default();
+        undo.change([-20.0, -20.0], [-20.0, -20.0], true, 0);
+        undo.gains(Some(UNDO_MARGIN_HNS));
+        let at = 10_000_000;
+        undo.change([-6.0206, -6.0206], [-6.0206, -6.0206], true, at);
+        assert!(close(undo.gains(Some(at)), [2.0, 2.0]));
+        // Two changes in a row hold the smallest gain of the three.
+        undo.change([-20.0, -20.0], [-20.0, -20.0], true, at + 1);
+        undo.change([-12.0412, -12.0412], [-12.0412, -12.0412], true, at + 2);
+        assert!(close(undo.gains(Some(at + 2)), [2.0, 2.0]));
+        assert!(close(
+            undo.gains(Some(at + 2 + UNDO_MARGIN_HNS)),
+            [4.0, 4.0]
+        ));
+    }
+
+    // covers: S480
+    #[test]
+    fn a_raise_missed_between_two_readings_still_lowers_the_gain_at_once() {
+        let mut undo = VolumeUndo::default();
+        undo.change([-20.0, -20.0], [-20.0, -20.0], true, 0);
+        assert!(close(undo.gains(Some(UNDO_MARGIN_HNS)), [10.0, 10.0]));
+        // Raised to 0 dB and cut back to -20 dB before the mix read either.
+        let at = 10_000_000;
+        undo.change([-20.0, -20.0], [0.0, 0.0], true, at);
+        assert_eq!(undo.gains(Some(at)), [1.0, 1.0]);
+        assert!(close(undo.gains(Some(at + UNDO_MARGIN_HNS)), [10.0, 10.0]));
+    }
+
+    // covers: S480
+    #[test]
+    fn a_volume_below_the_floor_is_not_brought_back_up() {
+        let mut undo = VolumeUndo::default();
+        undo.change([-45.0, -10.0], [-45.0, -10.0], true, 0);
+        assert!(undo.floored());
+        undo.change([-35.0, -35.0], [-35.0, -35.0], true, 1);
+        assert!(!undo.floored());
+    }
+
+    // covers: S480
+    #[test]
+    fn an_endpoint_past_stereo_takes_its_loudest_channel_on_both_sides() {
+        assert_eq!(stereo_levels(&[-3.0, -9.0]), [-3.0, -9.0]);
+        assert_eq!(stereo_levels(&[-6.0]), [-6.0, -6.0]);
+        assert_eq!(stereo_levels(&[-9.0, -3.0, -12.0, -6.0]), [-3.0, -3.0]);
+        assert_eq!(stereo_levels(&[]), [0.0, 0.0]);
+    }
 
     /// Every frame `mixer` hands on, left channel only.
     fn run(mixer: &mut StreamMixer, pushes: &[(usize, f32, usize)]) -> Vec<f32> {
@@ -768,7 +1144,7 @@ mod tests {
                 if fill > 0 {
                     deliver(&[], fill, true);
                 }
-                let samples = vec![value; (frames - skip) * 2];
+                let samples: Vec<f32> = (0..frames - skip).flat_map(|_| [value, value]).collect();
                 deliver(as_bytes(&samples), frames - skip, false);
             }
             Ok(packets.len())
@@ -829,6 +1205,231 @@ mod tests {
             let count = self.lanes.held(&mut pids);
             pids[..count].to_vec()
         }
+    }
+
+    /// The first channel of a mix of two streams over `ticks` wakes: stream
+    /// 1 plays `first(tick)` and stream 2 `second(tick)`, stream 1 alone is
+    /// heard, and at `switch_at` the mix moves to every stream but it.
+    fn switched(
+        ticks: u64,
+        switch_at: u64,
+        first: impl Fn(u64) -> f32,
+        second: impl Fn(u64) -> f32,
+    ) -> Vec<f32> {
+        let scripts: Vec<Rc<RefCell<Script>>> = (0..2)
+            .map(|_| Rc::new(RefCell::new(Script::default())))
+            .collect();
+        let mut lanes = MixLanes::new(0);
+        assert!(lanes.adopt(opened(1, &scripts[0]), 0).is_ok());
+        lanes.select(1, true, 0);
+        assert!(lanes.adopt(opened(2, &scripts[1]), 0).is_ok());
+        let mut mixed: Vec<f32> = Vec::new();
+        for tick in 1..=ticks {
+            let start = (tick - 1) * 100_000;
+            scripts[0]
+                .borrow_mut()
+                .packets
+                .push((start, 480, first(tick)));
+            scripts[1]
+                .borrow_mut()
+                .packets
+                .push((start, 480, second(tick)));
+            if tick == switch_at {
+                lanes.select(1, false, 0);
+            }
+            lanes
+                .read(
+                    tick * 100_000,
+                    &mut |out: &[f32], n: usize, _: &[bool]| {
+                        mixed.extend(out[..n * 2].iter().step_by(2));
+                    },
+                    &mut |_| panic!("no stream fails"),
+                )
+                .unwrap();
+            assert!(tick != switch_at || !lanes.settled(), "the switch waits");
+        }
+        assert!(lanes.settled());
+        mixed
+    }
+
+    // covers: S480
+    #[test]
+    fn a_switch_with_no_silence_fades_out_to_nothing_then_fades_the_other_stream_in() {
+        let mixed = switched(150, 50, |_| 0.5, |_| 0.25);
+        let start = mixed.iter().position(|&v| v > 0.0).unwrap();
+        let mixed = &mixed[start..];
+        assert!(mixed.iter().all(|&v| v <= 0.5 + 1e-6), "never both streams");
+        let steepest = mixed
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).abs())
+            .fold(0.0, f32::max);
+        assert!(steepest <= 0.5 / FADE_FRAMES + 1e-5, "no step: {steepest}");
+        let silent = mixed.iter().position(|&v| v == 0.0).expect("faded out");
+        assert!(mixed[..silent].iter().all(|&v| v > 0.0 && v <= 0.5));
+        assert!(mixed[silent..].iter().all(|&v| v <= 0.25 + 1e-6));
+        assert!(
+            mixed[mixed.len() - 480..]
+                .iter()
+                .all(|&v| (v - 0.25).abs() < 1e-6)
+        );
+    }
+
+    // covers: S480
+    #[test]
+    fn a_switch_waits_for_silence_and_changes_streams_there_without_a_fade() {
+        let loud = |tick: u64| !(40..60).contains(&tick);
+        let mixed = switched(
+            100,
+            30,
+            |tick| if loud(tick) { 0.5 } else { 0.0 },
+            |tick| if loud(tick) { 0.25 } else { 0.0 },
+        );
+        // Past the fade-in of the first stream at the start.
+        let start = mixed.iter().position(|&v| v == 0.5).unwrap();
+        let quiet = start + mixed[start..].iter().position(|&v| v == 0.0).unwrap();
+        assert!(mixed[start..quiet].iter().all(|&v| (v - 0.5).abs() < 1e-6));
+        let back = quiet + mixed[quiet..].iter().position(|&v| v > 0.0).unwrap();
+        assert!(mixed[back..].iter().all(|&v| (v - 0.25).abs() < 1e-6));
+    }
+
+    // covers: S480
+    #[test]
+    fn a_stream_is_mixed_at_its_compensation_per_channel() {
+        let script = Rc::new(RefCell::new(Script::default()));
+        let mut lanes = MixLanes::new(0);
+        assert!(lanes.adopt(opened(1, &script), 0).is_ok());
+        lanes.compensate(1, [2.0, 3.0]);
+        let mut mixed: Vec<f32> = Vec::new();
+        for tick in 1..=20_u64 {
+            if tick == 10 {
+                lanes.compensate(1, [1.0, 3.0]);
+            }
+            if tick == 15 {
+                lanes.compensate(1, [2.0, 3.0]);
+            }
+            script
+                .borrow_mut()
+                .packets
+                .push(((tick - 1) * 100_000, 480, 0.25));
+            lanes
+                .read(
+                    tick * 100_000,
+                    &mut |out: &[f32], n: usize, _: &[bool]| mixed.extend(&out[..n * 2]),
+                    &mut |_| panic!("no stream fails"),
+                )
+                .unwrap();
+        }
+        assert_eq!(mixed[mixed.len() - 2..], [0.5, 0.75]);
+        let left: Vec<f32> = mixed.iter().step_by(2).copied().collect();
+        let start = left.iter().position(|&v| v == 0.5).unwrap();
+        let steepest = left[start..]
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).abs())
+            .fold(0.0, f32::max);
+        assert!(steepest <= 0.25 / FADE_FRAMES + 1e-5, "no step: {steepest}");
+        assert!(left[start..].contains(&0.25), "reached the new gain");
+    }
+
+    /// Mixes `ticks` of 10 ms from each lane's script at its value, calling
+    /// `at` before each tick's read; returns the left channel.
+    fn mix_ticks(
+        lanes: &mut MixLanes<FakeStream>,
+        scripts: &[(u32, Rc<RefCell<Script>>, f32)],
+        ticks: std::ops::RangeInclusive<u64>,
+        mut at: impl FnMut(&mut MixLanes<FakeStream>, u64),
+    ) -> Vec<f32> {
+        let mut mixed: Vec<f32> = Vec::new();
+        for tick in ticks {
+            at(lanes, tick);
+            for (pid, script, value) in scripts {
+                if lanes.holds(*pid) {
+                    script
+                        .borrow_mut()
+                        .packets
+                        .push(((tick - 1) * 100_000, 480, *value));
+                }
+            }
+            lanes
+                .read(
+                    tick * 100_000,
+                    &mut |out: &[f32], n: usize, _: &[bool]| {
+                        mixed.extend(out[..n * 2].iter().step_by(2));
+                    },
+                    &mut |_| {},
+                )
+                .unwrap();
+        }
+        mixed
+    }
+
+    // covers: S480
+    #[test]
+    fn a_stream_taking_a_slot_over_starts_without_the_last_ones_compensation() {
+        let script = |_| Rc::new(RefCell::new(Script::default()));
+        let scripts = [(1, script(1), 0.25), (2, script(2), 0.25)];
+        let mut lanes = MixLanes::new(0);
+        assert!(lanes.adopt(opened(1, &scripts[0].1), 0).is_ok());
+        lanes.compensate(1, [10.0, 10.0]);
+        mix_ticks(&mut lanes, &scripts, 1..=10, |_, _| {});
+        lanes.retire_unless(|pid| pid != 1, &mut |_| {});
+        mix_ticks(&mut lanes, &scripts, 11..=20, |_, _| {});
+        assert!(lanes.adopt(opened(2, &scripts[1].1), 2_000_000).is_ok());
+        let mixed = mix_ticks(&mut lanes, &scripts, 21..=40, |_, _| {});
+        assert!(mixed.iter().all(|&v| v <= 0.25 + 1e-6), "never louder");
+        assert!((mixed[mixed.len() - 1] - 0.25).abs() < 1e-6);
+    }
+
+    const ENDPOINT: u32 = 1 << 31;
+
+    // covers: S480
+    #[test]
+    fn without_an_endpoint_stream_the_whole_system_is_heard_from_its_own_stream() {
+        let script = |_| Rc::new(RefCell::new(Script::default()));
+        let scripts = [(1, script(1), 0.5), (5, script(5), 0.25)];
+        let mut lanes = MixLanes::new(0);
+        assert!(lanes.adopt(opened(1, &scripts[0].1), 0).is_ok());
+        assert!(lanes.adopt(opened(5, &scripts[1].1), 0).is_ok());
+        let mixed = mix_ticks(&mut lanes, &scripts, 1..=60, |lanes, _| {
+            lanes.select(1, false, ENDPOINT);
+        });
+        assert!(
+            (mixed[mixed.len() - 1] - 0.5).abs() < 1e-6,
+            "{}",
+            mixed[mixed.len() - 1]
+        );
+    }
+
+    // covers: S480
+    #[test]
+    fn without_its_own_stream_the_whole_system_hears_nothing_rather_than_the_endpoint() {
+        let script = |_| Rc::new(RefCell::new(Script::default()));
+        let scripts = [(ENDPOINT | 2, script(2), 0.5), (5, script(5), 0.25)];
+        let mut lanes = MixLanes::new(0);
+        assert!(lanes.adopt(opened(ENDPOINT | 2, &scripts[0].1), 0).is_ok());
+        assert!(lanes.adopt(opened(5, &scripts[1].1), 0).is_ok());
+        let mixed = mix_ticks(&mut lanes, &scripts, 1..=60, |lanes, _| {
+            lanes.select(1, true, ENDPOINT);
+        });
+        assert_eq!(mixed[mixed.len() - 1], 0.0);
+        assert!(lanes.settled());
+    }
+
+    // covers: S480
+    #[test]
+    fn a_switch_to_its_own_stream_alone_fades_at_once_without_waiting_for_silence() {
+        let script = |_| Rc::new(RefCell::new(Script::default()));
+        let scripts = [(1, script(1), 0.5), (ENDPOINT | 2, script(2), 0.25)];
+        let mut lanes = MixLanes::new(0);
+        assert!(lanes.adopt(opened(1, &scripts[0].1), 0).is_ok());
+        assert!(lanes.adopt(opened(ENDPOINT | 2, &scripts[1].1), 0).is_ok());
+        let mixed = mix_ticks(&mut lanes, &scripts, 1..=60, |lanes, tick| {
+            lanes.select(1, tick > 40, ENDPOINT);
+        });
+        assert!((mixed[39 * 480] - 0.25).abs() < 1e-6, "the endpoint before");
+        assert!(
+            mixed[43 * 480..].iter().all(|&v| (v - 0.5).abs() < 1e-6),
+            "within 30 ms"
+        );
     }
 
     /// Ten ms of app audio at `tick`, as its loopback stamps it.
