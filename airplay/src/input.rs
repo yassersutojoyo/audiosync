@@ -134,6 +134,7 @@ pub(crate) fn ring(frames: usize, origin: Instant) -> (InputWriter, InputReader)
             held: vec![0; frames / 2].into_boxed_slice(),
             held_frames: 0,
             carried: 0,
+            resumed: false,
         },
         InputReader {
             shared,
@@ -170,6 +171,8 @@ pub struct InputWriter {
     /// The frames of a held partly late write whose positions weren't cut
     /// when it came: the last ones held (P248).
     carried: usize,
+    /// The last write was placed as resumed: the stream re-anchored on it.
+    resumed: bool,
 }
 
 impl InputWriter {
@@ -273,8 +276,11 @@ impl InputWriter {
         };
         // A partly late write after writes in time is held whole until the
         // next one shows whether it resumed a stalled capture (P248).
-        let hold_head =
-            late > 0 && late < total && self.late.is_none() && frames <= self.held.len();
+        let hold_head = late > 0
+            && late < total
+            && self.late.is_none()
+            && !self.resumed
+            && frames <= self.held.len();
         // A write held back as late was the resumed capture's first: it
         // starts the audio, ahead of this one.
         let released = self.held_frames as u64;
@@ -338,6 +344,7 @@ impl InputWriter {
         // its own first frame even if the stream already cut past this one.
         if count > 0 {
             self.fresh = resync && !fresh;
+            self.resumed = resync;
         }
         if late > 0 {
             self.late = Some(match self.late {
