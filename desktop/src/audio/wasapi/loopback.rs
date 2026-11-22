@@ -1540,7 +1540,7 @@ fn mix_loop(
                 .as_ref()
                 .and_then(|watch| watch.levels.read(&mut levels_seen));
             if let Some((db, software, at)) = reading {
-                undo.change(db, software, at);
+                undo.change(db, db, software, at);
             }
             floored = undo.floored();
             let gains = undo.gains(lanes.position(key));
@@ -1548,7 +1548,7 @@ fn mix_loop(
         }
         let selected = share.selected.load(Ordering::Acquire);
         if selected != NOT_SELECTED {
-            lanes.select(share.own, selected != ALL_BUT_OWN || floored);
+            lanes.select(share.own, selected != ALL_BUT_OWN || floored, ENDPOINT_KEY);
         }
         lanes.read(now, &mut sink, &mut handed).map_err(HRESULT)?;
         if selected != NOT_SELECTED && lanes.settled() {

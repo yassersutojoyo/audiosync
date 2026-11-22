@@ -427,7 +427,8 @@ impl<S: LaneStream> MixLanes<S> {
     /// once in 10 ms of silence that comes within [`SILENCE_WAIT_HNS`], else
     /// by fading out to nothing, then the new streams in, over
     /// [`FADE_FRAMES`] each; two live streams are never cross-faded (S480).
-    pub fn select(&mut self, pid: u32, alone: bool) {
+    pub fn select(&mut self, pid: u32, alone: bool, needs: u32) {
+        let _ = needs;
         self.selected = Some((pid, alone));
     }
 
@@ -839,7 +840,8 @@ impl VolumeUndo {
     /// The endpoint's volume is `levels` dB per side from `at` on, applied
     /// in software when `software`; in hardware or unknown otherwise, which
     /// the loopback doesn't carry.
-    pub fn change(&mut self, levels: [f32; 2], software: bool, at: u64) {
+    pub fn change(&mut self, levels: [f32; 2], loudest: [f32; 2], software: bool, at: u64) {
+        let _ = loudest;
         let gains = if software {
             levels.map(|db| 10_f32.powf(-db / 20.0))
         } else {
@@ -889,7 +891,7 @@ mod tests {
     #[test]
     fn a_software_volume_is_undone_per_side() {
         let mut undo = VolumeUndo::default();
-        undo.change([-6.0206, -12.0412], true, 0);
+        undo.change([-6.0206, -12.0412], [-6.0206, -12.0412], true, 0);
         assert!(close(undo.gains(Some(UNDO_MARGIN_HNS)), [2.0, 4.0]));
         assert!(!undo.floored());
     }
@@ -898,7 +900,7 @@ mod tests {
     #[test]
     fn a_hardware_or_unknown_volume_is_left_alone() {
         let mut undo = VolumeUndo::default();
-        undo.change([-45.0, -20.0], false, 0);
+        undo.change([-45.0, -20.0], [-45.0, -20.0], false, 0);
         assert_eq!(undo.gains(Some(UNDO_MARGIN_HNS)), [1.0, 1.0]);
         assert!(!undo.floored());
     }
@@ -908,7 +910,7 @@ mod tests {
     fn a_lowered_volume_keeps_the_old_gain_until_the_stream_is_surely_past_it() {
         let mut undo = VolumeUndo::default();
         let at = 10_000_000;
-        undo.change([-20.0, -20.0], true, at);
+        undo.change([-20.0, -20.0], [-20.0, -20.0], true, at);
         assert_eq!(undo.gains(None), [1.0, 1.0]);
         assert_eq!(undo.gains(Some(at)), [1.0, 1.0]);
         assert_eq!(undo.gains(Some(at + UNDO_MARGIN_HNS - 1)), [1.0, 1.0]);
@@ -919,14 +921,14 @@ mod tests {
     #[test]
     fn a_raised_volume_takes_the_smaller_gain_at_once() {
         let mut undo = VolumeUndo::default();
-        undo.change([-20.0, -20.0], true, 0);
+        undo.change([-20.0, -20.0], [-20.0, -20.0], true, 0);
         undo.gains(Some(UNDO_MARGIN_HNS));
         let at = 10_000_000;
-        undo.change([-6.0206, -6.0206], true, at);
+        undo.change([-6.0206, -6.0206], [-6.0206, -6.0206], true, at);
         assert!(close(undo.gains(Some(at)), [2.0, 2.0]));
         // Two changes in a row hold the smallest gain of the three.
-        undo.change([-20.0, -20.0], true, at + 1);
-        undo.change([-12.0412, -12.0412], true, at + 2);
+        undo.change([-20.0, -20.0], [-20.0, -20.0], true, at + 1);
+        undo.change([-12.0412, -12.0412], [-12.0412, -12.0412], true, at + 2);
         assert!(close(undo.gains(Some(at + 2)), [2.0, 2.0]));
         assert!(close(
             undo.gains(Some(at + 2 + UNDO_MARGIN_HNS)),
@@ -936,11 +938,24 @@ mod tests {
 
     // covers: S480
     #[test]
+    fn a_raise_missed_between_two_readings_still_lowers_the_gain_at_once() {
+        let mut undo = VolumeUndo::default();
+        undo.change([-20.0, -20.0], [-20.0, -20.0], true, 0);
+        assert!(close(undo.gains(Some(UNDO_MARGIN_HNS)), [10.0, 10.0]));
+        // Raised to 0 dB and cut back to -20 dB before the mix read either.
+        let at = 10_000_000;
+        undo.change([-20.0, -20.0], [0.0, 0.0], true, at);
+        assert_eq!(undo.gains(Some(at)), [1.0, 1.0]);
+        assert!(close(undo.gains(Some(at + UNDO_MARGIN_HNS)), [10.0, 10.0]));
+    }
+
+    // covers: S480
+    #[test]
     fn a_volume_below_the_floor_is_not_brought_back_up() {
         let mut undo = VolumeUndo::default();
-        undo.change([-45.0, -10.0], true, 0);
+        undo.change([-45.0, -10.0], [-45.0, -10.0], true, 0);
         assert!(undo.floored());
-        undo.change([-35.0, -35.0], true, 1);
+        undo.change([-35.0, -35.0], [-35.0, -35.0], true, 1);
         assert!(!undo.floored());
     }
 
@@ -1193,7 +1208,7 @@ mod tests {
             .collect();
         let mut lanes = MixLanes::new(0);
         assert!(lanes.adopt(opened(1, &scripts[0]), 0).is_ok());
-        lanes.select(1, true);
+        lanes.select(1, true, 0);
         assert!(lanes.adopt(opened(2, &scripts[1]), 0).is_ok());
         let mut mixed: Vec<f32> = Vec::new();
         for tick in 1..=ticks {
@@ -1207,7 +1222,7 @@ mod tests {
                 .packets
                 .push((start, 480, second(tick)));
             if tick == switch_at {
-                lanes.select(1, false);
+                lanes.select(1, false, 0);
             }
             lanes
                 .read(
@@ -1300,6 +1315,108 @@ mod tests {
             .fold(0.0, f32::max);
         assert!(steepest <= 0.25 / FADE_FRAMES + 1e-5, "no step: {steepest}");
         assert!(left[start..].contains(&0.25), "reached the new gain");
+    }
+
+    /// Mixes `ticks` of 10 ms from each lane's script at its value, calling
+    /// `at` before each tick's read; returns the left channel.
+    fn mix_ticks(
+        lanes: &mut MixLanes<FakeStream>,
+        scripts: &[(u32, Rc<RefCell<Script>>, f32)],
+        ticks: std::ops::RangeInclusive<u64>,
+        mut at: impl FnMut(&mut MixLanes<FakeStream>, u64),
+    ) -> Vec<f32> {
+        let mut mixed: Vec<f32> = Vec::new();
+        for tick in ticks {
+            at(lanes, tick);
+            for (pid, script, value) in scripts {
+                if lanes.holds(*pid) {
+                    script
+                        .borrow_mut()
+                        .packets
+                        .push(((tick - 1) * 100_000, 480, *value));
+                }
+            }
+            lanes
+                .read(
+                    tick * 100_000,
+                    &mut |out: &[f32], n: usize, _: &[bool]| {
+                        mixed.extend(out[..n * 2].iter().step_by(2));
+                    },
+                    &mut |_| {},
+                )
+                .unwrap();
+        }
+        mixed
+    }
+
+    // covers: S480
+    #[test]
+    fn a_stream_taking_a_slot_over_starts_without_the_last_ones_compensation() {
+        let script = |_| Rc::new(RefCell::new(Script::default()));
+        let scripts = [(1, script(1), 0.25), (2, script(2), 0.25)];
+        let mut lanes = MixLanes::new(0);
+        assert!(lanes.adopt(opened(1, &scripts[0].1), 0).is_ok());
+        lanes.compensate(1, [10.0, 10.0]);
+        mix_ticks(&mut lanes, &scripts, 1..=10, |_, _| {});
+        lanes.retire_unless(|pid| pid != 1, &mut |_| {});
+        mix_ticks(&mut lanes, &scripts, 11..=20, |_, _| {});
+        assert!(lanes.adopt(opened(2, &scripts[1].1), 2_000_000).is_ok());
+        let mixed = mix_ticks(&mut lanes, &scripts, 21..=40, |_, _| {});
+        assert!(mixed.iter().all(|&v| v <= 0.25 + 1e-6), "never louder");
+        assert!((mixed[mixed.len() - 1] - 0.25).abs() < 1e-6);
+    }
+
+    const ENDPOINT: u32 = 1 << 31;
+
+    // covers: S480
+    #[test]
+    fn without_an_endpoint_stream_the_whole_system_is_heard_from_its_own_stream() {
+        let script = |_| Rc::new(RefCell::new(Script::default()));
+        let scripts = [(1, script(1), 0.5), (5, script(5), 0.25)];
+        let mut lanes = MixLanes::new(0);
+        assert!(lanes.adopt(opened(1, &scripts[0].1), 0).is_ok());
+        assert!(lanes.adopt(opened(5, &scripts[1].1), 0).is_ok());
+        let mixed = mix_ticks(&mut lanes, &scripts, 1..=60, |lanes, _| {
+            lanes.select(1, false, ENDPOINT);
+        });
+        assert!(
+            (mixed[mixed.len() - 1] - 0.5).abs() < 1e-6,
+            "{}",
+            mixed[mixed.len() - 1]
+        );
+    }
+
+    // covers: S480
+    #[test]
+    fn without_its_own_stream_the_whole_system_hears_nothing_rather_than_the_endpoint() {
+        let script = |_| Rc::new(RefCell::new(Script::default()));
+        let scripts = [(ENDPOINT | 2, script(2), 0.5), (5, script(5), 0.25)];
+        let mut lanes = MixLanes::new(0);
+        assert!(lanes.adopt(opened(ENDPOINT | 2, &scripts[0].1), 0).is_ok());
+        assert!(lanes.adopt(opened(5, &scripts[1].1), 0).is_ok());
+        let mixed = mix_ticks(&mut lanes, &scripts, 1..=60, |lanes, _| {
+            lanes.select(1, true, ENDPOINT);
+        });
+        assert_eq!(mixed[mixed.len() - 1], 0.0);
+        assert!(lanes.settled());
+    }
+
+    // covers: S480
+    #[test]
+    fn a_switch_to_its_own_stream_alone_fades_at_once_without_waiting_for_silence() {
+        let script = |_| Rc::new(RefCell::new(Script::default()));
+        let scripts = [(1, script(1), 0.5), (ENDPOINT | 2, script(2), 0.25)];
+        let mut lanes = MixLanes::new(0);
+        assert!(lanes.adopt(opened(1, &scripts[0].1), 0).is_ok());
+        assert!(lanes.adopt(opened(ENDPOINT | 2, &scripts[1].1), 0).is_ok());
+        let mixed = mix_ticks(&mut lanes, &scripts, 1..=60, |lanes, tick| {
+            lanes.select(1, tick > 40, ENDPOINT);
+        });
+        assert!((mixed[39 * 480] - 0.25).abs() < 1e-6, "the endpoint before");
+        assert!(
+            mixed[43 * 480..].iter().all(|&v| (v - 0.5).abs() < 1e-6),
+            "within 30 ms"
+        );
     }
 
     /// Ten ms of app audio at `tick`, as its loopback stamps it.

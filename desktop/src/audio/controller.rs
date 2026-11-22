@@ -13264,6 +13264,31 @@ mod tests {
     // covers: S480
     #[cfg(windows)]
     #[test]
+    fn an_app_captured_on_its_own_that_starts_on_the_endpoint_leaves_it_at_once() {
+        let mut backend = MockBackend::empty();
+        backend.connect_output(SPEAKERS, "Speakers");
+        backend.connect_output(HEADPHONES, "Headphones");
+        backend.add_app(PLAYER_PID, "player.exe");
+        backend.set_default_output(SPEAKERS);
+        backend.list_outputs().unwrap();
+        backend.play_on(PLAYER_PID, HEADPHONES);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(
+            backend.driver().capture_routes().last(),
+            Some(&Some(SPEAKERS.to_owned()))
+        );
+        backend.open_session(PLAYER_PID, SPEAKERS);
+        backend.poll();
+        assert_eq!(
+            backend.driver().capture_routes().last(),
+            Some(&None),
+            "its sound would come twice"
+        );
+    }
+
+    // covers: S480
+    #[cfg(windows)]
+    #[test]
     fn the_whole_system_stays_on_endpoint_loopback_at_any_endpoint_volume() {
         let mut backend = routed_to_the_speakers();
         backend.set_output_level(SPEAKERS, 0.2);
