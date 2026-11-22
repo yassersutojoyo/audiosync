@@ -451,49 +451,85 @@ impl Graph {
             .collect()
     }
 
-    /// The links a capture keeps: for the whole system (`whole_system`),
-    /// `takes` false for AudioSync's own streams.
+    /// The links a capture keeps, `takes` saying which streams it records:
+    /// for the whole system (`whole_system`) the default output's monitor
+    /// when that holds the same streams, else each stream's own links.
     pub fn capture_links(
         &self,
         capture: u32,
         whole_system: bool,
         takes: impl Fn(u32) -> bool,
     ) -> BTreeSet<Link> {
-        let _ = whole_system;
+        if whole_system && let Some(links) = self.monitor_links(capture, &takes) {
+            return links;
+        }
         self.wanted_links(capture, takes)
+    }
+
+    /// The default output's monitor into `capture`, while it holds exactly
+    /// what `takes` accepts: each such stream plays into the default output
+    /// or into no output yet, and each other one into some other output.
+    /// A stream linked there from its first buffer is captured whole.
+    fn monitor_links(&self, capture: u32, takes: &impl Fn(u32) -> bool) -> Option<BTreeSet<Link>> {
+        let (default, _) = self.named(self.default_sink.as_deref()?)?;
+        let sinks: BTreeSet<u32> = self.sinks().map(|(id, _)| id).collect();
+        for stream in self.streams().filter(|&id| id != capture) {
+            let outputs: BTreeSet<u32> = self
+                .links
+                .values()
+                .filter(|link| link.output_node == stream && sinks.contains(&link.input_node))
+                .map(|link| link.input_node)
+                .collect();
+            let held = if takes(stream) {
+                outputs.iter().all(|&output| output == default)
+            } else {
+                !outputs.is_empty() && !outputs.contains(&default)
+            };
+            if !held {
+                return None;
+            }
+        }
+        let links = self.channel_links(default, true, capture);
+        (!links.is_empty()).then_some(links)
     }
 
     /// The links that bring every stream `takes` accepts into `capture`'s
     /// input ports, channel to channel ([`input_channels`]).
     pub fn wanted_links(&self, capture: u32, takes: impl Fn(u32) -> bool) -> BTreeSet<Link> {
+        self.streams()
+            .filter(|&id| id != capture && takes(id))
+            .flat_map(|stream| self.channel_links(stream, false, capture))
+            .collect()
+    }
+
+    /// The links from `source`'s output ports, its monitor ports for
+    /// `monitor`, into `capture`'s input ports, channel to channel.
+    fn channel_links(&self, source: u32, monitor: bool, capture: u32) -> BTreeSet<Link> {
         let inputs: Vec<(u32, &Port)> = self
             .ports
             .iter()
             .filter(|(_, port)| port.node == capture && !port.output)
             .map(|(&id, port)| (id, port))
             .collect();
-        let mut wanted = BTreeSet::new();
-        for stream in self.streams().filter(|&id| id != capture && takes(id)) {
-            let outputs = self
-                .ports
-                .iter()
-                .filter(|(_, port)| port.node == stream && port.output && !port.monitor);
-            for (&output_port, port) in outputs {
-                for channel in input_channels(&port.channel) {
-                    for &(input_port, _) in
-                        inputs.iter().filter(|(_, input)| input.channel == *channel)
-                    {
-                        wanted.insert(Link {
-                            output_node: stream,
-                            output_port,
-                            input_node: capture,
-                            input_port,
-                        });
-                    }
+        let mut links = BTreeSet::new();
+        let outputs = self
+            .ports
+            .iter()
+            .filter(|(_, port)| port.node == source && port.output && port.monitor == monitor);
+        for (&output_port, port) in outputs {
+            for channel in input_channels(&port.channel) {
+                for &(input_port, _) in inputs.iter().filter(|(_, input)| input.channel == *channel)
+                {
+                    links.insert(Link {
+                        output_node: source,
+                        output_port,
+                        input_node: capture,
+                        input_port,
+                    });
                 }
             }
         }
-        wanted
+        links
     }
 }
 
