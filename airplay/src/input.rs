@@ -133,6 +133,9 @@ pub(crate) fn ring(frames: usize, origin: Instant) -> (InputWriter, InputReader)
             rebases_seen: 0,
             held: vec![0; frames / 2].into_boxed_slice(),
             held_frames: 0,
+            carried: 0,
+            resumed: false,
+            last_at: None,
         },
         InputReader {
             shared,
@@ -166,6 +169,13 @@ pub struct InputWriter {
     /// The current run's wholly late writes, in order (P112).
     held: Box<[u32]>,
     held_frames: usize,
+    /// The frames of a held partly late write whose positions weren't cut
+    /// when it came: the last ones held (P248).
+    carried: usize,
+    /// The last write was placed as resumed: the stream re-anchored on it.
+    resumed: bool,
+    /// When the last write arrived: writes at the same time are one block.
+    last_at: Option<Instant>,
 }
 
 impl InputWriter {
@@ -253,16 +263,35 @@ impl InputWriter {
         // A capture's first write that is behind started after the stream
         // did, or after the stream filled the switch to it with silence
         // (P143): its frames were never late, so it starts the audio.
-        let resync = behind > 0 && (behind >= RESYNC_FRAMES || paced || fresh);
+        let tail = self.carried as u64;
+        let resync = (behind > 0 || tail > 0) && (behind >= RESYNC_FRAMES || paced || fresh);
         // Otherwise frames whose positions were already cut are late:
         // dropped, their positions kept, so later frames stay where they
-        // belong (P112).
+        // belong (P112). A held partly late write's frames not cut when it
+        // came go first: the host is catching up (P248).
+        let carried = if resync { 0 } else { tail };
+        let total = carried + count;
         let (late, first) = if resync {
             (0, floor)
         } else {
-            let late = behind.min(count);
+            let late = behind.min(total);
             (late, start + late)
         };
+        // A partly late write after writes in time is held whole until the
+        // next one shows whether it resumed a stalled capture (P248). The
+        // host's later writes of the same block join it, and a partly late
+        // one after the block's wholly late writes makes the block one hold.
+        let continued = self.last_at == Some(at);
+        let base = if self.late.is_none() {
+            0
+        } else {
+            self.held_frames
+        };
+        let opens = late > 0 && (self.late.is_none() || continued) && !self.resumed;
+        let hold_head = !resync
+            && late < total
+            && (opens || continued && tail > 0)
+            && base + frames <= self.held.len();
         // A write held back as late was the resumed capture's first: it
         // starts the audio, ahead of this one.
         let released = self.held_frames as u64;
@@ -276,15 +305,25 @@ impl InputWriter {
             let slot = ((first + index) % capacity) as usize;
             shared.slots[slot].store(self.held[index as usize], Ordering::Relaxed);
         }
-        let keep = (count - late).min(room - held);
+        let keep = if hold_head {
+            0
+        } else {
+            (total - late).min(room - held)
+        };
         for index in 0..keep {
             let slot = ((first + held + index) % capacity) as usize;
-            shared.slots[slot].store(frame((late + index) as usize), Ordering::Relaxed);
+            let source = late + index;
+            let word = if source < carried {
+                self.held[(self.held_frames as u64 - carried + source) as usize]
+            } else {
+                frame((source - carried) as usize)
+            };
+            shared.slots[slot].store(word, Ordering::Relaxed);
         }
         // Writes wholly behind are held, in order, until a later one shows
         // whether the host is catching up (they are dropped then) or resumed
         // at real-time pace.
-        if late > 0 && late == count {
+        if late > 0 && late == total {
             if self.held_frames + frames > self.held.len() {
                 self.held_frames = 0;
             }
@@ -293,9 +332,19 @@ impl InputWriter {
                 self.held[self.held_frames + index] = frame(frames - hold + index);
             }
             self.held_frames += hold;
+        } else if hold_head {
+            for index in 0..frames {
+                self.held[base + index] = frame(index);
+            }
+            self.held_frames = base + frames;
         } else {
             self.held_frames = 0;
         }
+        self.carried = if hold_head {
+            (total - late) as usize
+        } else {
+            0
+        };
         let end = first + held + keep;
         shared.write.store(end.max(start), Ordering::Release);
         shared.received.fetch_add(
@@ -306,13 +355,16 @@ impl InputWriter {
         // its own first frame even if the stream already cut past this one.
         if count > 0 {
             self.fresh = resync && !fresh;
+            self.resumed = resync;
+            self.last_at = Some(at);
         }
-        if late > 0 {
+        if late > 0 || hold_head {
             self.late = Some(match self.late {
-                Some((since, size)) if late == count => (since, size + count),
+                Some((since, size)) if late == total || hold_head => (since, size + count),
                 _ => (at, count),
             });
-            self.record_arrival(start, end, at, LATE_BIT);
+            let reach = if hold_head { start + count } else { end };
+            self.record_arrival(start, reach, at, LATE_BIT);
         } else {
             self.late = None;
             if keep > 0 {
@@ -590,6 +642,76 @@ mod tests {
         assert_eq!(reader.dropped(), 0);
     }
 
+    fn ramp(frames: usize) -> Vec<i16> {
+        (1..=frames as i16)
+            .flat_map(|value| [value, value])
+            .collect()
+    }
+
+    // A player that closed its stream between tracks reopens it after a
+    // short hole: its first write lands partly behind the floor (549 of 941
+    // frames, measured live) with no resume before it, and the next write
+    // comes in real time, so that first write is the next track's head.
+    // covers: P248
+    #[test]
+    fn a_partly_late_first_write_after_a_short_stall_keeps_its_head() {
+        let origin = Instant::now();
+        let (mut writer, mut reader) = ring(2 * MIN_INPUT_FRAMES, origin);
+        writer.write_i16(&[1000i16; 2 * 2971], origin);
+        let mut out = [[0, 0]; FRAMES_PER_PACKET];
+        for packet in 0..10 {
+            reader.cut((packet * FRAMES_PER_PACKET) as i64, &mut out);
+        }
+        assert_eq!(reader.floor() - writer.position(), 549);
+
+        let at = origin + Duration::from_millis(100);
+        writer.write_i16(&ramp(941), at);
+        let stalled = reader.floor();
+        for packet in 0..2 {
+            reader.cut(
+                (stalled + (packet * FRAMES_PER_PACKET) as u64) as i64,
+                &mut out,
+            );
+        }
+        let floor = reader.floor();
+        writer.write_i16(&[5000i16; 2 * 941], at + Duration::from_millis(21));
+
+        reader.cut(floor as i64, &mut out);
+        assert_eq!(out[0], [1, 1]);
+        assert_eq!(reader.dropped(), 0);
+    }
+
+    // P248: a partly late write followed at once by the next one is a host
+    // catching up: the late head is dropped, the rest stays in place and
+    // the timeline doesn't move.
+    // covers: P248
+    #[test]
+    fn a_partly_late_write_followed_at_once_drops_only_its_late_head() {
+        let origin = Instant::now();
+        let (mut writer, mut reader) = ring(2 * MIN_INPUT_FRAMES, origin);
+        writer.write_i16(&[1000i16; 2 * 2971], origin);
+        let mut out = [[0, 0]; FRAMES_PER_PACKET];
+        for packet in 0..10 {
+            reader.cut((packet * FRAMES_PER_PACKET) as i64, &mut out);
+        }
+        let floor = reader.floor();
+
+        let at = origin + Duration::from_millis(100);
+        writer.write_i16(&ramp(941), at);
+        writer.write_i16(&[5000i16; 2 * 941], at + Duration::from_millis(2));
+
+        assert_eq!(writer.position(), floor + 392 + 941);
+        reader.cut(floor as i64, &mut out);
+        assert_eq!(out[0], [550, 550]);
+        for packet in 1..4 {
+            reader.cut(
+                (floor + (packet * FRAMES_PER_PACKET) as u64) as i64,
+                &mut out,
+            );
+        }
+        assert_eq!(reader.dropped(), 549);
+    }
+
     fn halves(first: i16, second: i16) -> Vec<i16> {
         let mut samples = vec![first; 2 * FRAMES_PER_PACKET];
         samples.extend([second; 2 * FRAMES_PER_PACKET]);
@@ -689,5 +811,126 @@ mod tests {
         reader.cut(floor as i64, &mut out);
         assert_eq!(out[0], [5500, 5500]);
         assert_eq!(reader.dropped() - discarded, FRAMES_PER_PACKET as u64);
+    }
+
+    // P112, P248: the restart re-anchored the stream once, so a partly late
+    // write right after its first write is late even when the next write
+    // comes at real-time pace; holding it would move the timeline again.
+    // covers: P248
+    #[test]
+    fn a_partly_late_write_after_a_restart_is_not_held_as_resumed() {
+        let origin = Instant::now();
+        let (mut writer, mut reader) = ring(2 * MIN_INPUT_FRAMES, origin);
+        writer.write_i16(&[1000i16; 20 * FRAMES_PER_PACKET], origin);
+        let mut out = [[0, 0]; FRAMES_PER_PACKET];
+        for packet in 0..10 {
+            reader.cut((packet * FRAMES_PER_PACKET) as i64, &mut out);
+        }
+        let restarted = reader.rebase();
+        reader.cut(restarted as i64, &mut out);
+        let anchored = reader.floor();
+        writer.write_i16(&halves(4000, 4500), origin + Duration::from_millis(300));
+        for packet in 0..3 {
+            reader.cut(
+                (anchored + (packet * FRAMES_PER_PACKET) as u64) as i64,
+                &mut out,
+            );
+        }
+        let floor = reader.floor();
+        let discarded = reader.dropped();
+
+        writer.write_i16(&halves(5000, 5500), origin + Duration::from_millis(316));
+        writer.write_i16(&halves(6000, 6500), origin + Duration::from_millis(336));
+
+        assert_eq!(writer.position(), floor + 3 * FRAMES_PER_PACKET as u64);
+        reader.cut(floor as i64, &mut out);
+        assert_eq!(out[0], [5500, 5500]);
+        assert_eq!(reader.dropped() - discarded, FRAMES_PER_PACKET as u64);
+    }
+
+    // P248, P143: a restart or a new capture while a partly late write is
+    // held drops it; the next write starts the audio and nothing stale plays,
+    // even when that write comes at real-time pace.
+    // covers: P248
+    #[test]
+    fn a_restart_or_new_capture_drops_a_held_partly_late_write() {
+        for restart in [true, false] {
+            let origin = Instant::now();
+            let (mut writer, mut reader) = ring(2 * MIN_INPUT_FRAMES, origin);
+            writer.write_i16(&[1000i16; 2 * 2971], origin);
+            let mut out = [[0, 0]; FRAMES_PER_PACKET];
+            for packet in 0..10 {
+                reader.cut((packet * FRAMES_PER_PACKET) as i64, &mut out);
+            }
+            let discarded = reader.dropped();
+            writer.write_i16(&ramp(941), origin + Duration::from_millis(100));
+            if restart {
+                reader.rebase();
+            } else {
+                writer.new_capture();
+            }
+            let floor = reader.floor();
+            writer.write_i16(&[5000i16; 2 * 941], origin + Duration::from_millis(121));
+
+            assert_eq!(writer.position(), floor + 941);
+            for packet in 0..3 {
+                reader.cut(
+                    (floor + (packet * FRAMES_PER_PACKET) as u64) as i64,
+                    &mut out,
+                );
+                assert!(
+                    out.iter()
+                        .all(|frame| *frame == [5000, 5000] || *frame == [0, 0])
+                );
+            }
+            assert_eq!(reader.dropped() - discarded, 941);
+        }
+    }
+
+    // P248: the host splits one captured packet into writes of at most 1024
+    // frames, all with the packet's arrival time, so a packet after a hole
+    // longer than a write comes as wholly late writes and then a partly late
+    // one; they are one block, judged by the next packet.
+    // covers: P248
+    #[test]
+    fn a_partly_late_packet_split_into_writes_is_judged_as_one() {
+        for resumed in [true, false] {
+            let origin = Instant::now();
+            let (mut writer, mut reader) = ring(2 * MIN_INPUT_FRAMES, origin);
+            writer.write_i16(&[1000i16; 2 * 2971], origin);
+            let mut out = [[0, 0]; FRAMES_PER_PACKET];
+            for packet in 0..14 {
+                reader.cut((packet * FRAMES_PER_PACKET) as i64, &mut out);
+            }
+            assert_eq!(reader.floor() - writer.position(), 1957);
+
+            let at = origin + Duration::from_millis(100);
+            let packet = ramp(2400);
+            for piece in packet.chunks(2 * 1024) {
+                writer.write_i16(piece, at);
+            }
+            let stalled = reader.floor();
+            if resumed {
+                for index in 0..2 {
+                    reader.cut(
+                        (stalled + (index * FRAMES_PER_PACKET) as u64) as i64,
+                        &mut out,
+                    );
+                }
+            }
+            let floor = reader.floor();
+            let next = if resumed { 60 } else { 1 };
+            writer.write_i16(&[5000i16; 2 * 2400], at + Duration::from_millis(next));
+
+            reader.cut(floor as i64, &mut out);
+            if resumed {
+                assert_eq!(out[0], [1, 1]);
+                assert_eq!(reader.dropped(), 0);
+            } else {
+                assert_eq!(writer.position(), floor + 443 + 2400);
+                assert_eq!(out[0], [1958, 1958]);
+                assert_eq!(reader.dropped(), 1957);
+            }
+        }
     }
 }

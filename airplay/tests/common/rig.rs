@@ -130,6 +130,10 @@ impl Host {
                 }
             }
             at = at.max(self.held_until);
+            if at == self.held_until {
+                // A real host stamps each packet of a burst with its own time; equal stamps mean one packet (P248).
+                self.held_until += 1e-6;
+            }
             self.next_at = Some(at);
         }
         self.next_at
