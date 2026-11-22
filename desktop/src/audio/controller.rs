@@ -4747,9 +4747,7 @@ impl<D: Driver> Controller<D> {
                     .route
                     .as_ref()
                     .map(|route| route.endpoint.as_str()),
-                &self.routing.before,
             );
-            self.routing.before.clone_from(&endpoints);
             let players: Vec<String> = if route.is_none() {
                 playing_endpoints(&endpoints, activation.target_pid, &processes)
                     .map(|endpoint| format!("{} {:?}", endpoint.name, endpoint.active_pids))

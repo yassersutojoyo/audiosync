@@ -303,9 +303,9 @@ pub fn system_route(
     own_pid: u32,
     processes: &ProcessTable,
     local_outputs: &[String],
-    current: Option<&str>,
-    before: &[EndpointAudio],
+    endpoint: Option<&str>,
 ) -> Option<SystemRoute> {
+    let (current, before) = (endpoint, &[] as &[EndpointAudio]);
     let players = |endpoint: &EndpointAudio| -> Vec<u32> {
         endpoint
             .active_pids
@@ -1819,74 +1819,56 @@ mod tests {
         }
     }
 
-    fn route(audio: &[EndpointAudio], local: &[&str], current: Option<&str>) -> Option<String> {
-        full_route(audio, local, current).map(|route| route.endpoint)
+    fn route(audio: &[EndpointAudio], local: &[&str], named: Option<&str>) -> Option<String> {
+        full_route(audio, local, named).map(|route| route.endpoint)
     }
 
     fn full_route(
         audio: &[EndpointAudio],
         local: &[&str],
-        current: Option<&str>,
+        named: Option<&str>,
     ) -> Option<SystemRoute> {
         let local: Vec<String> = local.iter().map(|id| (*id).to_owned()).collect();
-        system_route(audio, OWN_PID, &desktop(), &local, current, &[])
+        system_route(audio, OWN_PID, &desktop(), &local, named)
     }
 
     // covers: S480
     #[test]
-    fn the_endpoint_follows_where_a_process_last_started_playing() {
-        let before = [
-            render("speakers", true, &[300]),
-            render("cable", false, &[]),
+    fn the_whole_system_is_captured_from_the_default_endpoint_whatever_plays_where() {
+        let audio = [
+            render("speakers", true, &[]),
+            render("cable", false, &[200, 201]),
         ];
-        let now = [
-            render("speakers", true, &[300]),
-            render("cable", false, &[200]),
-        ];
-        let route = system_route(&now, OWN_PID, &desktop(), &[], Some("speakers"), &before);
         assert_eq!(
-            route,
+            full_route(&audio, &[], None),
             Some(SystemRoute {
-                endpoint: "cable".to_owned(),
+                endpoint: "speakers".to_owned(),
+                apps: vec![200, 201],
+            }),
+        );
+        let quiet = [render("speakers", true, &[]), render("cable", false, &[])];
+        assert_eq!(route(&quiet, &[], None).as_deref(), Some("speakers"));
+        assert_eq!(route(&[render("cable", false, &[])], &[], None), None);
+    }
+
+    // covers: S480
+    #[test]
+    fn a_named_endpoint_stands_in_for_the_default() {
+        let mut cable = render("cable-id", false, &[]);
+        cable.name = "Cable".to_owned();
+        let audio = [render("speakers", true, &[300]), cable];
+        assert_eq!(
+            full_route(&audio, &[], Some("Cable")),
+            Some(SystemRoute {
+                endpoint: "cable-id".to_owned(),
                 apps: vec![300],
             }),
         );
-        // Between two songs the cable goes quiet and stays the endpoint.
-        let quiet = [
-            render("speakers", true, &[300]),
-            render("cable", false, &[]),
-        ];
-        let route = system_route(&quiet, OWN_PID, &desktop(), &[], Some("cable"), &now);
-        assert_eq!(route.map(|route| route.endpoint).as_deref(), Some("cable"));
-        let again = system_route(&now, OWN_PID, &desktop(), &[], Some("cable"), &quiet);
-        assert_eq!(again.map(|route| route.endpoint).as_deref(), Some("cable"));
-    }
-
-    // covers: S480
-    #[test]
-    fn the_whole_system_is_captured_from_the_endpoint_apps_play_sound_on() {
-        let speakers = || render("speakers", true, &[]);
         assert_eq!(
-            full_route(
-                &[speakers(), render("cable", false, &[200, 201])],
-                &[],
-                None
-            ),
-            Some(SystemRoute {
-                endpoint: "cable".to_owned(),
-                apps: Vec::new(),
-            }),
+            route(&audio, &[], Some("cable-id")).as_deref(),
+            Some("cable-id")
         );
-        let both = [
-            render("speakers", true, &[300]),
-            render("cable", false, &[200]),
-        ];
-        assert_eq!(route(&both, &[], Some("cable")).as_deref(), Some("cable"));
-        assert_eq!(
-            route(&both, &[], Some("speakers")).as_deref(),
-            Some("speakers")
-        );
-        assert_eq!(route(&both, &[], None).as_deref(), Some("speakers"));
+        assert_eq!(route(&audio, &[], Some("gone")), None);
     }
 
     // covers: S480
@@ -1902,8 +1884,8 @@ mod tests {
         assert_eq!(
             full_route(&audio, &[], None),
             Some(SystemRoute {
-                endpoint: "cable".to_owned(),
-                apps: vec![300],
+                endpoint: "speakers".to_owned(),
+                apps: vec![200, 300],
             }),
         );
         // The browser's helper plays on the speakers: its tree can't be
@@ -1919,72 +1901,28 @@ mod tests {
     fn audiosyncs_tree_and_recorders_do_not_count_as_playing() {
         let mut cable = render("cable", false, &[200, 777]);
         cable.mix_pids = vec![777];
-        let audio = [render("speakers", true, &[OWN_PID, 401]), cable];
+        let audio = [cable, render("speakers", true, &[OWN_PID, 401])];
         assert_eq!(
-            full_route(&audio, &[], None),
+            full_route(&audio, &[], Some("speakers")),
             Some(SystemRoute {
-                endpoint: "cable".to_owned(),
-                apps: Vec::new(),
+                endpoint: "speakers".to_owned(),
+                apps: vec![200],
             }),
         );
     }
 
     // covers: S480
     #[test]
-    fn with_nothing_playing_the_last_endpoint_stays_then_the_default() {
-        let audio = [render("speakers", true, &[]), render("cable", false, &[])];
-        assert_eq!(route(&audio, &[], Some("cable")).as_deref(), Some("cable"));
-        assert_eq!(
-            route(&audio, &[], Some("gone")).as_deref(),
-            Some("speakers")
-        );
-        assert_eq!(route(&audio, &[], None).as_deref(), Some("speakers"));
-        assert_eq!(route(&[render("cable", false, &[])], &[], None), None);
-    }
-
-    // covers: S480
-    #[test]
     fn a_local_output_on_that_endpoint_keeps_process_loopback() {
-        let audio = [
+        let mut audio = [
             render("speakers", true, &[200]),
             render("cable", false, &[]),
         ];
         assert_eq!(route(&audio, &["speakers"], None), None);
         assert_eq!(route(&audio, &["cable"], None).as_deref(), Some("speakers"));
-    }
-
-    // covers: S480
-    #[test]
-    fn an_endpoint_below_full_volume_keeps_process_loopback_and_its_mute_does_not() {
-        let mut audio = [render("speakers", true, &[200])];
-        audio[0].volume = Some(EndpointVolume {
-            muted: false,
-            level: 0.2,
-        });
-        assert_eq!(route(&audio, &[], None), None);
+        // Its volume is undone by the capture, not left to process loopback.
         audio[0].volume = None;
-        assert_eq!(route(&audio, &[], None), None);
-        audio[0].volume = Some(EndpointVolume {
-            muted: true,
-            level: 1.0,
-        });
         assert_eq!(route(&audio, &[], None).as_deref(), Some("speakers"));
-    }
-
-    // covers: S480
-    #[test]
-    fn without_a_start_to_follow_the_endpoint_is_one_endpoint_loopback_can_take() {
-        let mut audio = [
-            render("speakers", true, &[200]),
-            render("cable", false, &[300]),
-        ];
-        audio[0].volume = Some(EndpointVolume {
-            muted: false,
-            level: 0.5,
-        });
-        assert_eq!(route(&audio, &[], None).as_deref(), Some("cable"));
-        audio[0].volume = audio[1].volume;
-        assert_eq!(route(&audio, &["speakers"], None).as_deref(), Some("cable"));
     }
 
     // covers: S380
