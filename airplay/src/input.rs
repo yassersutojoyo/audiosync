@@ -590,6 +590,45 @@ mod tests {
         assert_eq!(reader.dropped(), 0);
     }
 
+    fn ramp(frames: usize) -> Vec<i16> {
+        (1..=frames as i16)
+            .flat_map(|value| [value, value])
+            .collect()
+    }
+
+    // A player that closed its stream between tracks reopens it after a
+    // short hole: its first write lands partly behind the floor (549 of 941
+    // frames, measured live) with no resume before it, and the next write
+    // comes in real time, so that first write is the next track's head.
+    // covers: P112
+    #[test]
+    fn a_partly_late_first_write_after_a_short_stall_keeps_its_head() {
+        let origin = Instant::now();
+        let (mut writer, mut reader) = ring(2 * MIN_INPUT_FRAMES, origin);
+        writer.write_i16(&[1000i16; 2 * 2971], origin);
+        let mut out = [[0, 0]; FRAMES_PER_PACKET];
+        for packet in 0..10 {
+            reader.cut((packet * FRAMES_PER_PACKET) as i64, &mut out);
+        }
+        assert_eq!(reader.floor() - writer.position(), 549);
+
+        let at = origin + Duration::from_millis(100);
+        writer.write_i16(&ramp(941), at);
+        let stalled = reader.floor();
+        for packet in 0..2 {
+            reader.cut(
+                (stalled + (packet * FRAMES_PER_PACKET) as u64) as i64,
+                &mut out,
+            );
+        }
+        let floor = reader.floor();
+        writer.write_i16(&[5000i16; 2 * 941], at + Duration::from_millis(21));
+
+        reader.cut(floor as i64, &mut out);
+        assert_eq!(out[0], [1, 1]);
+        assert_eq!(reader.dropped(), 0);
+    }
+
     fn halves(first: i16, second: i16) -> Vec<i16> {
         let mut samples = vec![first; 2 * FRAMES_PER_PACKET];
         samples.extend([second; 2 * FRAMES_PER_PACKET]);
