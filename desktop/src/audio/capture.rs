@@ -34,6 +34,7 @@ use super::calibration::{CalibrationTap, Route};
 use super::cast::CastLease;
 use super::outputs::{EndpointReading, is_hands_free};
 use super::process::{IDLE_PID, ProcessTable, SYSTEM_PID};
+use super::routing::EndpointAudio;
 use crate::adapter::compare_app_names;
 
 /// The name of the whole-system source in English, as the macOS app shows
@@ -276,6 +277,22 @@ pub fn decide_activation(
         mode: LoopbackMode::IncludeTree,
         target_pid: root_pid,
     })
+}
+
+/// The render endpoint the whole system is captured from by endpoint
+/// loopback (S496): the one every app playing now plays on, or, with none
+/// playing, `current` while it is listed, else the default output. `None`,
+/// process loopback without AudioSync's tree, when apps play on two
+/// endpoints or one of `local_outputs` (AudioSync's own copies) is that one.
+pub fn system_endpoint(
+    audio: &[EndpointAudio],
+    own_pid: u32,
+    processes: &ProcessTable,
+    local_outputs: &[String],
+    current: Option<&str>,
+) -> Option<String> {
+    let _ = (audio, own_pid, processes, local_outputs, current);
+    None
 }
 
 /// The name to show for an executable: its file name without `.exe`, with a
@@ -1689,6 +1706,81 @@ mod tests {
                 target_pid: 7,
             })
         );
+    }
+
+    fn render(id: &str, is_default: bool, active_pids: &[u32]) -> EndpointAudio {
+        EndpointAudio {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            is_default,
+            virtual_device: false,
+            volume: None,
+            active_pids: active_pids.to_vec(),
+            silent_pids: Vec::new(),
+            mix_pids: Vec::new(),
+        }
+    }
+
+    fn route(audio: &[EndpointAudio], local: &[&str], current: Option<&str>) -> Option<String> {
+        let local: Vec<String> = local.iter().map(|id| (*id).to_owned()).collect();
+        system_endpoint(audio, OWN_PID, &desktop(), &local, current)
+    }
+
+    // covers: S496
+    #[test]
+    fn the_whole_system_is_captured_from_the_endpoint_every_app_plays_on() {
+        let speakers = || render("speakers", true, &[]);
+        assert_eq!(
+            route(
+                &[speakers(), render("cable", false, &[200, 201])],
+                &[],
+                None
+            )
+            .as_deref(),
+            Some("cable"),
+        );
+        let both = [
+            render("speakers", true, &[300]),
+            render("cable", false, &[200]),
+        ];
+        assert_eq!(
+            route(&both, &[], Some("cable")),
+            None,
+            "apps on two endpoints"
+        );
+    }
+
+    // covers: S496
+    #[test]
+    fn audiosyncs_tree_and_recorders_do_not_count_as_playing() {
+        let mut cable = render("cable", false, &[200, 777]);
+        cable.mix_pids = vec![777];
+        let audio = [render("speakers", true, &[OWN_PID, 401]), cable];
+        assert_eq!(route(&audio, &[], None).as_deref(), Some("cable"));
+    }
+
+    // covers: S496
+    #[test]
+    fn with_nothing_playing_the_last_endpoint_stays_then_the_default() {
+        let audio = [render("speakers", true, &[]), render("cable", false, &[])];
+        assert_eq!(route(&audio, &[], Some("cable")).as_deref(), Some("cable"));
+        assert_eq!(
+            route(&audio, &[], Some("gone")).as_deref(),
+            Some("speakers")
+        );
+        assert_eq!(route(&audio, &[], None).as_deref(), Some("speakers"));
+        assert_eq!(route(&[render("cable", false, &[])], &[], None), None);
+    }
+
+    // covers: S496
+    #[test]
+    fn a_local_output_on_that_endpoint_keeps_process_loopback() {
+        let audio = [
+            render("speakers", true, &[200]),
+            render("cable", false, &[]),
+        ];
+        assert_eq!(route(&audio, &["speakers"], None), None);
+        assert_eq!(route(&audio, &["cable"], None).as_deref(), Some("speakers"));
     }
 
     // covers: S380
