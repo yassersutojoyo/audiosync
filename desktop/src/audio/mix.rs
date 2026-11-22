@@ -857,6 +857,10 @@ mod tests {
         exited: bool,
         /// Whether each frame carries its own time instead of the value.
         ramp: bool,
+        /// Whether each frame carries [`wave`] at its time, `skew` frames
+        /// earlier than its stamp says.
+        wavy: bool,
+        skew: i64,
     }
 
     struct FakeStream(Rc<RefCell<Script>>);
@@ -880,7 +884,9 @@ mod tests {
                 let first = start * u64::from(SESSION_RATE) / 10_000_000 + skip as u64;
                 let samples: Vec<f32> = (0..(frames - skip) as u64)
                     .flat_map(|i| {
-                        let v = if script.ramp {
+                        let v = if script.wavy {
+                            wave((first + i) as i64 - script.skew)
+                        } else if script.ramp {
                             ramp_value(first + i)
                         } else {
                             value
@@ -1006,6 +1012,63 @@ mod tests {
             );
         }
         assert!(mixed.len() - start > 150 * 480, "the mix kept running");
+    }
+
+    fn wave(frame: i64) -> f32 {
+        let t = frame as f64;
+        ((t * 0.07).sin() * 0.5 + (t * 0.0131).sin() * 0.3) as f32
+    }
+
+    // covers: S480
+    #[test]
+    fn a_stream_taking_over_is_lined_up_by_its_sound_when_its_stamps_are_off() {
+        let scripts: Vec<Rc<RefCell<Script>>> = [0, 22]
+            .into_iter()
+            .map(|skew| {
+                Rc::new(RefCell::new(Script {
+                    wavy: true,
+                    skew,
+                    ..Script::default()
+                }))
+            })
+            .collect();
+        let mut lanes = MixLanes::new(0);
+        assert!(lanes.adopt(opened(1, &scripts[0]), 0).is_ok());
+        lanes.select(1, true);
+        assert!(lanes.adopt(opened(2, &scripts[1]), 0).is_ok());
+        let mut mixed: Vec<f32> = Vec::new();
+        for tick in 1..=100_u64 {
+            for script in &scripts {
+                script
+                    .borrow_mut()
+                    .packets
+                    .push(((tick - 1) * 100_000, 480, 0.0));
+            }
+            if tick == 50 {
+                lanes.select(1, false);
+            }
+            lanes
+                .read(
+                    tick * 100_000,
+                    &mut |out: &[f32], n: usize, _: &[bool]| {
+                        mixed.extend(out[..n * 2].iter().step_by(2));
+                    },
+                    &mut |_| panic!("no stream fails"),
+                )
+                .unwrap();
+        }
+        let start = mixed.iter().position(|&v| v != 0.0).unwrap();
+        let first = (0..10_000_i64)
+            .find(|&at| (0..8).all(|i| (mixed[start + i] - wave(at + i as i64)).abs() < 1e-4))
+            .unwrap();
+        for (offset, &value) in mixed[start..].iter().enumerate() {
+            let expected = wave(first + offset as i64);
+            assert!(
+                (value - expected).abs() < 1e-3,
+                "frame {offset}: {value} vs {expected}"
+            );
+        }
+        assert!(mixed.len() - start > 90 * 480, "the mix kept running");
     }
 
     /// Ten ms of app audio at `tick`, as its loopback stamps it.
