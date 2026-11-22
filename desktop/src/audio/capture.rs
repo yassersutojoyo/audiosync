@@ -1967,6 +1967,22 @@ mod tests {
         assert_eq!(route(&audio, &[], None).as_deref(), Some("speakers"));
     }
 
+    // covers: S480
+    #[test]
+    fn without_a_start_to_follow_the_endpoint_is_one_endpoint_loopback_can_take() {
+        let mut audio = [
+            render("speakers", true, &[200]),
+            render("cable", false, &[300]),
+        ];
+        audio[0].volume = Some(EndpointVolume {
+            muted: false,
+            level: 0.5,
+        });
+        assert_eq!(route(&audio, &[], None).as_deref(), Some("cable"));
+        audio[0].volume = audio[1].volume;
+        assert_eq!(route(&audio, &["speakers"], None).as_deref(), Some("cable"));
+    }
+
     // covers: S380
     #[test]
     fn an_app_includes_its_own_tree() {
