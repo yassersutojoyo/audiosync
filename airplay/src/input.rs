@@ -135,6 +135,7 @@ pub(crate) fn ring(frames: usize, origin: Instant) -> (InputWriter, InputReader)
             held_frames: 0,
             carried: 0,
             resumed: false,
+            last_at: None,
         },
         InputReader {
             shared,
@@ -173,6 +174,8 @@ pub struct InputWriter {
     carried: usize,
     /// The last write was placed as resumed: the stream re-anchored on it.
     resumed: bool,
+    /// When the last write arrived: writes at the same time are one block.
+    last_at: Option<Instant>,
 }
 
 impl InputWriter {
@@ -275,12 +278,20 @@ impl InputWriter {
             (late, start + late)
         };
         // A partly late write after writes in time is held whole until the
-        // next one shows whether it resumed a stalled capture (P248).
-        let hold_head = late > 0
+        // next one shows whether it resumed a stalled capture (P248). The
+        // host's later writes of the same block join it, and a partly late
+        // one after the block's wholly late writes makes the block one hold.
+        let continued = self.last_at == Some(at);
+        let base = if self.late.is_none() {
+            0
+        } else {
+            self.held_frames
+        };
+        let opens = late > 0 && (self.late.is_none() || continued) && !self.resumed;
+        let hold_head = !resync
             && late < total
-            && self.late.is_none()
-            && !self.resumed
-            && frames <= self.held.len();
+            && (opens || continued && tail > 0)
+            && base + frames <= self.held.len();
         // A write held back as late was the resumed capture's first: it
         // starts the audio, ahead of this one.
         let released = self.held_frames as u64;
@@ -323,14 +334,14 @@ impl InputWriter {
             self.held_frames += hold;
         } else if hold_head {
             for index in 0..frames {
-                self.held[index] = frame(index);
+                self.held[base + index] = frame(index);
             }
-            self.held_frames = frames;
+            self.held_frames = base + frames;
         } else {
             self.held_frames = 0;
         }
         self.carried = if hold_head {
-            (count - late) as usize
+            (total - late) as usize
         } else {
             0
         };
@@ -345,10 +356,11 @@ impl InputWriter {
         if count > 0 {
             self.fresh = resync && !fresh;
             self.resumed = resync;
+            self.last_at = Some(at);
         }
-        if late > 0 {
+        if late > 0 || hold_head {
             self.late = Some(match self.late {
-                Some((since, size)) if late == total => (since, size + count),
+                Some((since, size)) if late == total || hold_head => (since, size + count),
                 _ => (at, count),
             });
             let reach = if hold_head { start + count } else { end };
