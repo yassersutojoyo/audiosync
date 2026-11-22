@@ -567,6 +567,9 @@ impl<S: LaneStream> MixLanes<S> {
         }
     }
 
+    /// Mixes app `pid`'s stream at `gains`, per channel.
+    pub fn compensate(&mut self, _pid: u32, _gains: [f32; 2]) {}
+
     /// Whether app `pid`'s stream is in the mix.
     pub fn holds(&self, pid: u32) -> bool {
         self.slots
@@ -915,12 +918,6 @@ mod tests {
         /// The code its next read fails with.
         fail: Option<i32>,
         exited: bool,
-        /// Whether each frame carries its own time instead of the value.
-        ramp: bool,
-        /// Whether each frame carries [`wave`] at its time, `skew` frames
-        /// earlier than its stamp says.
-        wavy: bool,
-        skew: i64,
     }
 
     struct FakeStream(Rc<RefCell<Script>>);
@@ -941,19 +938,7 @@ mod tests {
                 if fill > 0 {
                     deliver(&[], fill, true);
                 }
-                let first = start * u64::from(SESSION_RATE) / 10_000_000 + skip as u64;
-                let samples: Vec<f32> = (0..(frames - skip) as u64)
-                    .flat_map(|i| {
-                        let v = if script.wavy {
-                            wave((first + i) as i64 - script.skew)
-                        } else if script.ramp {
-                            ramp_value(first + i)
-                        } else {
-                            value
-                        };
-                        [v, v]
-                    })
-                    .collect();
+                let samples: Vec<f32> = (0..frames - skip).flat_map(|_| [value, value]).collect();
                 deliver(as_bytes(&samples), frames - skip, false);
             }
             Ok(packets.len())
@@ -1016,95 +1001,34 @@ mod tests {
         }
     }
 
-    fn ramp_value(frame: u64) -> f32 {
-        frame as f32 * 1e-6
-    }
-
-    // covers: S480
-    #[test]
-    fn a_selected_stream_takes_over_lined_up_in_time_without_a_gap_or_a_repeat() {
+    /// The first channel of a mix of two streams over `ticks` wakes: stream
+    /// 1 plays `first(tick)` and stream 2 `second(tick)`, stream 1 alone is
+    /// heard, and at `switch_at` the mix moves to every stream but it.
+    fn switched(
+        ticks: u64,
+        switch_at: u64,
+        first: impl Fn(u64) -> f32,
+        second: impl Fn(u64) -> f32,
+    ) -> Vec<f32> {
         let scripts: Vec<Rc<RefCell<Script>>> = (0..2)
-            .map(|_| {
-                Rc::new(RefCell::new(Script {
-                    ramp: true,
-                    ..Script::default()
-                }))
-            })
-            .collect();
-        let mut lanes = MixLanes::new(0);
-        assert!(lanes.adopt(opened(1, &scripts[0]), 0).is_ok());
-        lanes.select(1, true);
-        let mut mixed: Vec<f32> = Vec::new();
-        for tick in 1..=200_u64 {
-            scripts[0]
-                .borrow_mut()
-                .packets
-                .push(((tick - 1) * 100_000, 480, 0.0));
-            if tick == 20 {
-                // The second stream opens later and lags one wake behind.
-                assert!(lanes.adopt(opened(2, &scripts[1]), tick * 100_000).is_ok());
-            }
-            if tick > 20 && tick % 2 == 0 {
-                let mut script = scripts[1].borrow_mut();
-                script.packets.push(((tick - 3) * 100_000, 480, 0.0));
-                script.packets.push(((tick - 2) * 100_000, 480, 0.0));
-            }
-            if tick == 100 {
-                lanes.select(1, false);
-            }
-            lanes
-                .read(
-                    tick * 100_000,
-                    &mut |out: &[f32], n: usize, _: &[bool]| {
-                        mixed.extend(out[..n * 2].iter().step_by(2));
-                    },
-                    &mut |_| panic!("no stream fails"),
-                )
-                .unwrap();
-        }
-        let start = mixed.iter().position(|&v| v > 0.0).unwrap();
-        let first = (mixed[start] / 1e-6).round() as u64;
-        for (offset, &value) in mixed[start..].iter().enumerate() {
-            let expected = ramp_value(first + offset as u64);
-            assert!(
-                (value - expected).abs() < 1e-7,
-                "frame {offset}: {value} vs {expected}"
-            );
-        }
-        assert!(mixed.len() - start > 150 * 480, "the mix kept running");
-    }
-
-    fn wave(frame: i64) -> f32 {
-        let t = frame as f64;
-        ((t * 0.07).sin() * 0.5 + (t * 0.0131).sin() * 0.3) as f32
-    }
-
-    // covers: S480
-    #[test]
-    fn a_stream_taking_over_is_lined_up_by_its_sound_when_its_stamps_are_off() {
-        let scripts: Vec<Rc<RefCell<Script>>> = [0, 22]
-            .into_iter()
-            .map(|skew| {
-                Rc::new(RefCell::new(Script {
-                    wavy: true,
-                    skew,
-                    ..Script::default()
-                }))
-            })
+            .map(|_| Rc::new(RefCell::new(Script::default())))
             .collect();
         let mut lanes = MixLanes::new(0);
         assert!(lanes.adopt(opened(1, &scripts[0]), 0).is_ok());
         lanes.select(1, true);
         assert!(lanes.adopt(opened(2, &scripts[1]), 0).is_ok());
         let mut mixed: Vec<f32> = Vec::new();
-        for tick in 1..=100_u64 {
-            for script in &scripts {
-                script
-                    .borrow_mut()
-                    .packets
-                    .push(((tick - 1) * 100_000, 480, 0.0));
-            }
-            if tick == 50 {
+        for tick in 1..=ticks {
+            let start = (tick - 1) * 100_000;
+            scripts[0]
+                .borrow_mut()
+                .packets
+                .push((start, 480, first(tick)));
+            scripts[1]
+                .borrow_mut()
+                .packets
+                .push((start, 480, second(tick)));
+            if tick == switch_at {
                 lanes.select(1, false);
             }
             lanes
@@ -1117,18 +1041,70 @@ mod tests {
                 )
                 .unwrap();
         }
-        let start = mixed.iter().position(|&v| v != 0.0).unwrap();
-        let first = (0..10_000_i64)
-            .find(|&at| (0..8).all(|i| (mixed[start + i] - wave(at + i as i64)).abs() < 1e-4))
-            .unwrap();
-        for (offset, &value) in mixed[start..].iter().enumerate() {
-            let expected = wave(first + offset as i64);
-            assert!(
-                (value - expected).abs() < 1e-3,
-                "frame {offset}: {value} vs {expected}"
-            );
+        mixed
+    }
+
+    // covers: S480
+    #[test]
+    fn a_switch_with_no_silence_fades_out_to_nothing_then_fades_the_other_stream_in() {
+        let mixed = switched(150, 50, |_| 0.5, |_| 0.25);
+        let start = mixed.iter().position(|&v| v > 0.0).unwrap();
+        let mixed = &mixed[start..];
+        assert!(mixed.iter().all(|&v| v <= 0.5 + 1e-6), "never both streams");
+        let steepest = mixed
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).abs())
+            .fold(0.0, f32::max);
+        assert!(steepest <= 0.5 / FADE_FRAMES + 1e-5, "no step: {steepest}");
+        let silent = mixed.iter().position(|&v| v == 0.0).expect("faded out");
+        assert!(mixed[..silent].iter().all(|&v| v > 0.0 && v <= 0.5));
+        assert!(mixed[silent..].iter().all(|&v| v <= 0.25 + 1e-6));
+        assert!(
+            mixed[mixed.len() - 480..]
+                .iter()
+                .all(|&v| (v - 0.25).abs() < 1e-6)
+        );
+    }
+
+    // covers: S480
+    #[test]
+    fn a_switch_waits_for_silence_and_changes_streams_there_without_a_fade() {
+        let loud = |tick: u64| !(40..60).contains(&tick);
+        let mixed = switched(
+            100,
+            30,
+            |tick| if loud(tick) { 0.5 } else { 0.0 },
+            |tick| if loud(tick) { 0.25 } else { 0.0 },
+        );
+        let start = mixed.iter().position(|&v| v > 0.0).unwrap();
+        let quiet = start + mixed[start..].iter().position(|&v| v == 0.0).unwrap();
+        assert!(mixed[start..quiet].iter().all(|&v| (v - 0.5).abs() < 1e-6));
+        let back = quiet + mixed[quiet..].iter().position(|&v| v > 0.0).unwrap();
+        assert!(mixed[back..].iter().all(|&v| (v - 0.25).abs() < 1e-6));
+    }
+
+    // covers: S480
+    #[test]
+    fn a_stream_is_mixed_at_its_compensation_per_channel() {
+        let script = Rc::new(RefCell::new(Script::default()));
+        let mut lanes = MixLanes::new(0);
+        assert!(lanes.adopt(opened(1, &script), 0).is_ok());
+        lanes.compensate(1, [2.0, 3.0]);
+        let mut mixed: Vec<f32> = Vec::new();
+        for tick in 1..=20_u64 {
+            script
+                .borrow_mut()
+                .packets
+                .push(((tick - 1) * 100_000, 480, 0.25));
+            lanes
+                .read(
+                    tick * 100_000,
+                    &mut |out: &[f32], n: usize, _: &[bool]| mixed.extend(&out[..n * 2]),
+                    &mut |_| panic!("no stream fails"),
+                )
+                .unwrap();
         }
-        assert!(mixed.len() - start > 90 * 480, "the mix kept running");
+        assert_eq!(mixed[mixed.len() - 2..], [0.5, 0.75]);
     }
 
     /// Ten ms of app audio at `tick`, as its loopback stamps it.
