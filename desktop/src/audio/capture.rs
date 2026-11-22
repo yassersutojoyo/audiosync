@@ -280,7 +280,7 @@ pub fn decide_activation(
 }
 
 /// The render endpoint the whole system is captured from by endpoint
-/// loopback (S496): the one every app playing now plays on, or, with none
+/// loopback (S480): the one every app playing now plays on, or, with none
 /// playing, `current` while it is listed, else the default output. `None`,
 /// process loopback without AudioSync's tree, when apps play on two
 /// endpoints or one of `local_outputs` (AudioSync's own copies) is that one.
@@ -291,8 +291,20 @@ pub fn system_endpoint(
     local_outputs: &[String],
     current: Option<&str>,
 ) -> Option<String> {
-    let _ = (audio, own_pid, processes, local_outputs, current);
-    None
+    let mut playing = audio.iter().filter(|endpoint| {
+        endpoint
+            .active_pids
+            .iter()
+            .any(|&pid| !processes.in_tree(pid, own_pid) && !endpoint.mix_pids.contains(&pid))
+    });
+    let endpoint = match (playing.next(), playing.next()) {
+        (Some(only), None) => only,
+        (Some(_), Some(_)) => return None,
+        (None, _) => current
+            .and_then(|id| audio.iter().find(|endpoint| endpoint.id == id))
+            .or_else(|| audio.iter().find(|endpoint| endpoint.is_default))?,
+    };
+    (!local_outputs.contains(&endpoint.id)).then(|| endpoint.id.clone())
 }
 
 /// The name to show for an executable: its file name without `.exe`, with a
@@ -1031,7 +1043,7 @@ impl CaptureConverter {
 }
 
 /// 100 ns units per second: the unit of packet positions.
-const HNS_PER_SECOND: u64 = 10_000_000;
+pub(crate) const HNS_PER_SECOND: u64 = 10_000_000;
 
 /// Packets whose positions are further apart than this, 5 ms, have a gap
 /// between them; closer, it is the positions' own jitter.
@@ -1108,7 +1120,7 @@ impl GapFill {
     }
 
     /// When the frame after the last one written is due.
-    fn end(&self) -> Option<u64> {
+    pub(crate) fn end(&self) -> Option<u64> {
         self.anchor
             .map(|anchor| anchor.saturating_add(self.length(self.written)))
     }
@@ -1726,7 +1738,7 @@ mod tests {
         system_endpoint(audio, OWN_PID, &desktop(), &local, current)
     }
 
-    // covers: S496
+    // covers: S480
     #[test]
     fn the_whole_system_is_captured_from_the_endpoint_every_app_plays_on() {
         let speakers = || render("speakers", true, &[]);
@@ -1750,7 +1762,7 @@ mod tests {
         );
     }
 
-    // covers: S496
+    // covers: S480
     #[test]
     fn audiosyncs_tree_and_recorders_do_not_count_as_playing() {
         let mut cable = render("cable", false, &[200, 777]);
@@ -1759,7 +1771,7 @@ mod tests {
         assert_eq!(route(&audio, &[], None).as_deref(), Some("cable"));
     }
 
-    // covers: S496
+    // covers: S480
     #[test]
     fn with_nothing_playing_the_last_endpoint_stays_then_the_default() {
         let audio = [render("speakers", true, &[]), render("cable", false, &[])];
@@ -1772,7 +1784,7 @@ mod tests {
         assert_eq!(route(&[render("cable", false, &[])], &[], None), None);
     }
 
-    // covers: S496
+    // covers: S480
     #[test]
     fn a_local_output_on_that_endpoint_keeps_process_loopback() {
         let audio = [

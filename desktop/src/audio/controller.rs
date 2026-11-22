@@ -82,7 +82,7 @@ use super::calibration::{CalibrationTap, Engine, Microphone, MicrophoneError};
 use super::capture::{
     Activation, AppNames, CaptureAttempt, CaptureGlitches, CaptureTarget, Feeds, LoopbackMode,
     NameReader, SampleType, decide_apps_capture, decide_capture, decide_except_capture,
-    describe_pair, input_sources, name_apps, running_app, source_list,
+    describe_pair, input_sources, name_apps, running_app, source_list, system_endpoint,
 };
 use super::cast::{CastLink, CastSpeakers, CastTrack};
 use super::cast_address::CastAddress;
@@ -266,6 +266,12 @@ pub trait CaptureHandle {
     fn retarget(&mut self, _target: &CaptureTarget) -> bool {
         false
     }
+
+    /// Captures the whole system from the render endpoint `endpoint` by
+    /// endpoint loopback, or by process loopback without AudioSync's tree
+    /// with `None`, moving between them without a gap (S480). Does nothing
+    /// for any other capture.
+    fn route(&mut self, _endpoint: Option<&str>) {}
 
     /// Whether a mix has a stream for each of its apps; true for any other
     /// capture, and while it can't be told.
@@ -862,6 +868,9 @@ struct RoutingState {
     reported: Vec<DirectPath>,
     /// The last error of the check: an error that repeats is logged once.
     error: Option<BackendError>,
+    /// The render endpoint the whole system is captured from by endpoint
+    /// loopback (S480); `None` while it is captured by process loopback.
+    endpoint: Option<String>,
 }
 
 /// The audio backend over a driver. See the module documentation.
@@ -2253,6 +2262,18 @@ impl<D: Driver> Controller<D> {
             if session.outputs.contains_key(held_out) && !plan.detach.contains(held_out) {
                 plan.detach.push(held_out.clone());
             }
+        }
+        // AudioSync's copy must not reach the endpoint the whole system is
+        // captured from: the capture leaves it before the output starts.
+        if let Some(id) = &self.routing.endpoint
+            && plan.attach.iter().any(|endpoint| endpoint.id == *id)
+        {
+            if let Some(capture) = session.capture.as_mut() {
+                capture.route(None);
+            }
+            self.log
+                .log(|| "whole system: captured by process loopback without AudioSync".to_owned());
+            self.routing.endpoint = None;
         }
 
         // A switched-off output fades out first, together with any others
@@ -4701,6 +4722,20 @@ impl<D: Driver> Controller<D> {
                     .collect(),
             ),
         };
+        // Endpoint loopback is Windows' route; PipeWire captures its own way.
+        if cfg!(windows)
+            && let [activation] = activations.as_slice()
+            && activation.mode == LoopbackMode::ExcludeTree
+        {
+            let endpoint = system_endpoint(
+                &endpoints,
+                activation.target_pid,
+                &processes,
+                &rendered,
+                self.routing.endpoint.as_deref(),
+            );
+            self.route_system(endpoint);
+        }
         let answer = routing::check(&captured, &endpoints, &rendered, &self.routing.played_on);
         if answer.paths != self.routing.reported {
             self.log.log(|| {
@@ -4724,6 +4759,26 @@ impl<D: Driver> Controller<D> {
         }
         self.routing.played_on = answer.played_on;
         self.hold_at_start_briefly();
+    }
+
+    /// Moves the whole system's capture to `endpoint` (S480).
+    fn route_system(&mut self, endpoint: Option<String>) {
+        if let Some(capture) = self
+            .session
+            .as_mut()
+            .and_then(|session| session.capture.as_mut())
+        {
+            capture.route(endpoint.as_deref());
+        }
+        if endpoint != self.routing.endpoint {
+            self.log.log(|| match &endpoint {
+                Some(id) => {
+                    format!("whole system: captured from endpoint {id} by endpoint loopback")
+                }
+                None => "whole system: captured by process loopback without AudioSync".to_owned(),
+            });
+            self.routing.endpoint = endpoint;
+        }
     }
 
     /// Whether nothing takes the source off the outputs the user hears, so
