@@ -18,9 +18,7 @@ use audiosync_core::ring::is_supported_rate;
 
 use super::SESSION_RATE;
 use super::backend::BackendError;
-use super::capture::{
-    CONVERT_CHUNK, GapFill, HNS_PER_SECOND, IDLE_LAG_HNS, MAX_MIX_APPS, StreamFormat, decode,
-};
+use super::capture::{CONVERT_CHUNK, GapFill, IDLE_LAG_HNS, MAX_MIX_APPS, StreamFormat, decode};
 
 /// How far a lane may run ahead of the slowest one, 60 ms: more than a
 /// quiet loopback waits before its silence is filled (25 ms, then 10 ms
@@ -37,11 +35,13 @@ const LANE_FRAMES: usize = MAX_LAG_FRAMES + CONVERT_CHUNK;
 /// from one stream to another, 5 ms (S480).
 const FADE_FRAMES: f32 = SESSION_RATE as f32 * 0.005;
 
-/// How far the sound may move a stream taking over from where the stamps
-/// put it, and the frames compared: stamps of the two loopbacks were
-/// measured about half a millisecond apart (S480).
-const ALIGN_FRAMES: i64 = 240;
-const ALIGN_WINDOW: i64 = 1024;
+/// How long a switch of streams waits for silence before it fades out and
+/// back in instead, in 100 ns units (S480).
+const SILENCE_WAIT_HNS: u64 = 2_000_000;
+
+/// The silence a switch waits for: 10 ms of the mix below [`QUIET_LEVEL`].
+const QUIET_FRAMES: usize = SESSION_RATE as usize / 100;
+const QUIET_LEVEL: f32 = 1e-4;
 
 /// One stream's frames waiting to be mixed, stereo, in a ring buffer.
 struct Lane {
@@ -63,6 +63,8 @@ struct Lane {
     /// [`FADE_FRAMES`] step per frame.
     gain: f32,
     target: f32,
+    /// What each channel is multiplied by besides `gain`.
+    comp: [f32; 2],
 }
 
 impl Lane {
@@ -76,73 +78,8 @@ impl Lane {
             open: true,
             gain: 1.0,
             target: 1.0,
+            comp: [1.0, 1.0],
         }
-    }
-
-    /// Moves its waiting frames `frames` later in time (silence in front,
-    /// as far as there is room) or, when negative, earlier (its first
-    /// frames dropped, the rest owed).
-    fn shift(&mut self, frames: i64) {
-        if frames >= 0 {
-            let added = (frames as usize).min(LANE_FRAMES - self.len);
-            for _ in 0..added {
-                self.start = (self.start + LANE_FRAMES - 1) % LANE_FRAMES;
-                self.samples[self.start * 2..self.start * 2 + 2].fill(0.0);
-                self.filled[self.start] = true;
-                self.len += 1;
-            }
-        } else {
-            let dropped = (frames.unsigned_abs() as usize).min(self.len);
-            self.start = (self.start + dropped) % LANE_FRAMES;
-            self.len -= dropped;
-            self.owed += frames.unsigned_abs() as usize - dropped;
-        }
-    }
-
-    /// Its sample `k` frames after the first waiting one, both channels
-    /// summed; a negative `k` reaches back into frames already mixed, as far
-    /// as the ring still holds them.
-    fn mono(&self, k: i64) -> Option<f32> {
-        if k < self.len as i64 - LANE_FRAMES as i64 || k >= self.len as i64 {
-            return None;
-        }
-        let at = (self.start as i64 + k).rem_euclid(LANE_FRAMES as i64) as usize * 2;
-        Some(self.samples[at] + self.samples[at + 1])
-    }
-
-    /// The shift, within [`ALIGN_FRAMES`] of `guess`, that lines its sound up
-    /// best with `going`'s: `guess` itself when neither is loud enough or
-    /// nothing matches well. Ties go to the shift nearest `guess`.
-    fn shift_by_sound(&self, going: &Lane, guess: i64) -> i64 {
-        let (mut best, mut best_score) = (guess, 0.9_f32);
-        for distance in 0..=ALIGN_FRAMES {
-            for shift in [guess - distance, guess + distance] {
-                let low = (self.len as i64 - LANE_FRAMES as i64)
-                    .max(going.len as i64 - LANE_FRAMES as i64 - shift);
-                let high = (self.len as i64).min(going.len as i64 - shift);
-                if high - low < ALIGN_WINDOW {
-                    continue;
-                }
-                let (mut dot, mut own, mut other) = (0.0_f32, 0.0_f32, 0.0_f32);
-                for k in high - ALIGN_WINDOW..high {
-                    let (Some(a), Some(b)) = (self.mono(k), going.mono(k + shift)) else {
-                        continue;
-                    };
-                    dot += a * b;
-                    own += a * a;
-                    other += b * b;
-                }
-                let floor = ALIGN_WINDOW as f32 * 1e-6;
-                if own < floor || other < floor {
-                    continue;
-                }
-                let score = dot / (own * other).sqrt();
-                if score > best_score + 1e-4 {
-                    (best, best_score) = (shift, score);
-                }
-            }
-        }
-        best
     }
 
     /// How many of `frames` incoming frames pay off what the lane owes.
@@ -190,8 +127,8 @@ impl Lane {
                     (self.gain - step).max(self.target)
                 };
             }
-            frame[0] += self.samples[at] * self.gain;
-            frame[1] += self.samples[at + 1] * self.gain;
+            frame[0] += self.samples[at] * self.gain * self.comp[0];
+            frame[1] += self.samples[at + 1] * self.gain * self.comp[1];
             *filled &= self.filled[self.start];
             self.start = (self.start + 1) % LANE_FRAMES;
             self.len -= 1;
@@ -443,6 +380,15 @@ pub struct MixLanes<S> {
     /// The stream heard alone, or the one left out, as [`MixLanes::select`]
     /// set; every stream is heard without one.
     selected: Option<(u32, bool)>,
+    /// The selection the mix plays now, as [`MixLanes::effective`] gives it.
+    heard: Option<(u32, bool)>,
+    /// When the switch to a new selection was asked for, while it waits.
+    switch_since: Option<u64>,
+    /// Whether the streams heard are fading out for a switch.
+    fading: bool,
+    /// The frames of the mix below [`QUIET_LEVEL`] in a row, up to
+    /// [`QUIET_FRAMES`].
+    quiet: usize,
 }
 
 impl<S: LaneStream> MixLanes<S> {
@@ -457,69 +403,79 @@ impl<S: LaneStream> MixLanes<S> {
             mixer,
             pace: GapFill::started(SESSION_RATE, now),
             selected: None,
+            heard: None,
+            switch_since: None,
+            fading: false,
+            quiet: QUIET_FRAMES,
         }
     }
 
     /// Hears only the stream of `pid` when `alone`, else every stream but
-    /// it; every stream while that leaves none. Each stream coming in is
-    /// first lined up in time with the one going out that has the highest
-    /// key, by the positions their gap tracking reached and then by their
-    /// sound, then they cross-fade over [`FADE_FRAMES`] (S480).
+    /// it; every stream while that leaves none. The mix moves at a read: at
+    /// once in 10 ms of silence that comes within [`SILENCE_WAIT_HNS`], else
+    /// by fading out to nothing, then the new streams in, over
+    /// [`FADE_FRAMES`] each; two live streams are never cross-faded (S480).
     pub fn select(&mut self, pid: u32, alone: bool) {
         self.selected = Some((pid, alone));
-        self.apply_selection();
     }
 
-    fn apply_selection(&mut self) {
+    /// The selection as it can be heard with the streams in the mix.
+    fn effective(&self) -> Option<(u32, bool)> {
         let others = self
             .slots
             .iter()
             .flatten()
             .any(|slot| self.selected.is_some_and(|(pid, _)| slot.opened.pid != pid));
-        let selected = self
-            .selected
-            .filter(|&(pid, alone)| if alone { self.holds(pid) } else { others });
-        let heard =
-            |slot: &Slot<S>| selected.is_none_or(|(pid, alone)| (slot.opened.pid == pid) == alone);
-        let head = |lanes: &StreamMixer, index: usize, slot: &Slot<S>| {
-            let lane = &lanes.lanes[index + 1];
-            let ahead = lane.len as i64 - lane.owed as i64;
-            slot.gaps
-                .end()
-                .map(|end| end as i64 - ahead * HNS_PER_SECOND as i64 / i64::from(SESSION_RATE))
-        };
-        let leaving = (0..self.slots.len())
-            .filter_map(|index| {
-                let slot = self.slots[index].as_ref()?;
-                (self.mixer.lanes[index + 1].target > 0.0 && !heard(slot))
-                    .then(|| (slot.opened.pid, index, head(&self.mixer, index, slot)))
-            })
-            .max_by_key(|&(pid, _, _)| pid)
-            .map(|(_, index, head)| (index, head));
-        for index in 0..self.slots.len() {
-            let Some(slot) = self.slots[index].as_ref() else {
-                continue;
-            };
-            let target = if heard(slot) { 1.0 } else { 0.0 };
-            let coming = head(&self.mixer, index, slot);
-            let joining = target > 0.0 && self.mixer.lanes[index + 1].target == 0.0;
-            if joining && let Some((out, out_head)) = leaving {
-                let guess = match (out_head, coming) {
-                    (Some(out_head), Some(coming)) => {
-                        (coming - out_head) * i64::from(SESSION_RATE) / HNS_PER_SECOND as i64
-                    }
-                    _ => 0,
-                };
-                let lanes = &self.mixer.lanes;
-                let shift = lanes[index + 1].shift_by_sound(&lanes[out + 1], guess);
-                self.mixer.lanes[index + 1].shift(shift);
-            }
-            let lane = &mut self.mixer.lanes[index + 1];
-            if joining {
-                lane.gain = 0.0;
-            }
-            lane.target = target;
+        self.selected
+            .filter(|&(pid, alone)| if alone { self.holds(pid) } else { others })
+    }
+
+    fn heard_by(selection: Option<(u32, bool)>, slot: &Slot<S>) -> bool {
+        selection.is_none_or(|(pid, alone)| (slot.opened.pid == pid) == alone)
+    }
+
+    /// Moves the mix toward the selection, as [`MixLanes::select`] says.
+    fn switch(&mut self, now: u64) {
+        let wanted = self.effective();
+        if wanted == self.heard {
+            self.switch_since = None;
+            self.fading = false;
+            return;
         }
+        let since = *self.switch_since.get_or_insert(now);
+        if self.fading {
+            let sounding = (0..self.slots.len())
+                .any(|index| self.slots[index].is_some() && self.mixer.lanes[index + 1].gain > 0.0);
+            if sounding {
+                return;
+            }
+        } else if self.quiet < QUIET_FRAMES {
+            if now.saturating_sub(since) >= SILENCE_WAIT_HNS {
+                self.fading = true;
+                for index in 0..self.slots.len() {
+                    if let Some(slot) = &self.slots[index]
+                        && Self::heard_by(self.heard, slot)
+                    {
+                        self.mixer.lanes[index + 1].target = 0.0;
+                    }
+                }
+            }
+            return;
+        }
+        for index in 0..self.slots.len() {
+            if let Some(slot) = &self.slots[index] {
+                let lane = &mut self.mixer.lanes[index + 1];
+                lane.gain = 0.0;
+                lane.target = if Self::heard_by(wanted, slot) {
+                    1.0
+                } else {
+                    0.0
+                };
+            }
+        }
+        self.heard = wanted;
+        self.switch_since = None;
+        self.fading = false;
     }
 
     /// Takes `opened` into the mix from `now` on, in a free lane that has
@@ -542,10 +498,12 @@ impl<S: LaneStream> MixLanes<S> {
         self.slots[index] = Some(Slot { opened, gaps });
         self.mixer.open_lane(index + 1);
         if self.selected.is_some() {
-            // Joins unheard, so the selection fades it in, lined up.
-            self.mixer.lanes[index + 1].gain = 0.0;
-            self.mixer.lanes[index + 1].target = 0.0;
-            self.apply_selection();
+            let heard = self.slots[index]
+                .as_ref()
+                .is_some_and(|slot| Self::heard_by(self.heard, slot));
+            let lane = &mut self.mixer.lanes[index + 1];
+            lane.gain = 0.0;
+            lane.target = if heard && !self.fading { 1.0 } else { 0.0 };
         }
         Ok(())
     }
@@ -568,7 +526,25 @@ impl<S: LaneStream> MixLanes<S> {
     }
 
     /// Mixes app `pid`'s stream at `gains`, per channel.
-    pub fn compensate(&mut self, _pid: u32, _gains: [f32; 2]) {}
+    pub fn compensate(&mut self, pid: u32, gains: [f32; 2]) {
+        for index in 0..self.slots.len() {
+            if self.slots[index]
+                .as_ref()
+                .is_some_and(|slot| slot.opened.pid == pid)
+            {
+                self.mixer.lanes[index + 1].comp = gains;
+            }
+        }
+    }
+
+    /// Where app `pid`'s stream has reached, in 100 ns units.
+    pub fn position(&self, pid: u32) -> Option<u64> {
+        self.slots
+            .iter()
+            .flatten()
+            .find(|slot| slot.opened.pid == pid)
+            .and_then(|slot| slot.gaps.end())
+    }
 
     /// Whether app `pid`'s stream is in the mix.
     pub fn holds(&self, pid: u32) -> bool {
@@ -609,6 +585,18 @@ impl<S: LaneStream> MixLanes<S> {
         sink: &mut impl FnMut(&[f32], usize, &[bool]),
         retired: &mut impl FnMut(Box<Opened<S>>),
     ) -> Result<(), i32> {
+        self.switch(now);
+        let mut quiet = self.quiet;
+        let sink = &mut |out: &[f32], frames: usize, filled: &[bool]| {
+            for frame in out[..frames * 2].as_chunks::<2>().0 {
+                quiet = if frame[0].abs() < QUIET_LEVEL && frame[1].abs() < QUIET_LEVEL {
+                    (quiet + 1).min(QUIET_FRAMES)
+                } else {
+                    0
+                };
+            }
+            sink(out, frames, filled);
+        };
         if self.any_open() {
             // Level with what the streams' own fills reach.
             self.pace = GapFill::started(SESSION_RATE, now.saturating_sub(IDLE_LAG_HNS));
@@ -645,6 +633,7 @@ impl<S: LaneStream> MixLanes<S> {
                 }
             }
         }
+        self.quiet = quiet;
         match failure {
             Some(code) if !self.any_open() => Err(code),
             _ => Ok(()),
@@ -656,9 +645,6 @@ impl<S: LaneStream> MixLanes<S> {
             retired(slot.opened);
         }
         self.mixer.close_lane(index + 1);
-        if self.selected.is_some() {
-            self.apply_selection();
-        }
         if !self.any_open() {
             // The pace lane keeps time again, level with what is left.
             self.mixer.open_lane(0);
@@ -1076,7 +1062,8 @@ mod tests {
             |tick| if loud(tick) { 0.5 } else { 0.0 },
             |tick| if loud(tick) { 0.25 } else { 0.0 },
         );
-        let start = mixed.iter().position(|&v| v > 0.0).unwrap();
+        // Past the fade-in of the first stream at the start.
+        let start = mixed.iter().position(|&v| v == 0.5).unwrap();
         let quiet = start + mixed[start..].iter().position(|&v| v == 0.0).unwrap();
         assert!(mixed[start..quiet].iter().all(|&v| (v - 0.5).abs() < 1e-6));
         let back = quiet + mixed[quiet..].iter().position(|&v| v > 0.0).unwrap();
