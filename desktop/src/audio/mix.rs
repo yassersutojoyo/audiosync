@@ -753,6 +753,64 @@ pub fn as_bytes(samples: &[f32]) -> &[u8] {
     }
 }
 
+/// Below this level of a render endpoint's volume, in dB, its loopback is
+/// too quiet to bring back up cleanly (S480).
+pub const UNDO_FLOOR_DB: f32 = -40.0;
+
+/// How far past a volume change a stream must have reached before frames
+/// mixed from it surely carry the new volume: the mix's lag bound plus the
+/// audio engine's lead, in 100 ns units.
+pub const UNDO_MARGIN_HNS: u64 = 1_500_000;
+
+/// The stereo levels, in dB, of a render endpoint with `channels` levels:
+/// each channel of a stereo endpoint, else the loudest one on both sides,
+/// whose gain is the smallest (S480).
+pub fn stereo_levels(channels: &[f32]) -> [f32; 2] {
+    let _ = channels;
+    [0.0, 0.0]
+}
+
+/// The gain that brings a render endpoint's loopback back to the level
+/// before its software volume; an error only ever makes it quieter (S480).
+#[derive(Debug)]
+pub struct VolumeUndo {
+    applied: [f32; 2],
+    /// The gain of the latest change and when it happened.
+    pending: Option<([f32; 2], u64)>,
+    floored: bool,
+}
+
+impl Default for VolumeUndo {
+    fn default() -> VolumeUndo {
+        VolumeUndo {
+            applied: [1.0, 1.0],
+            pending: None,
+            floored: false,
+        }
+    }
+}
+
+impl VolumeUndo {
+    /// The endpoint's volume is `levels` dB per side from `at` on, applied
+    /// in software when `software`; in hardware or unknown otherwise, which
+    /// the loopback doesn't carry.
+    pub fn change(&mut self, levels: [f32; 2], software: bool, at: u64) {
+        let _ = (levels, software, at);
+    }
+
+    /// The gain per side for frames mixed while the stream has reached
+    /// `position`.
+    pub fn gains(&mut self, position: Option<u64>) -> [f32; 2] {
+        let _ = position;
+        self.applied
+    }
+
+    /// Whether the volume is below [`UNDO_FLOOR_DB`].
+    pub fn floored(&self) -> bool {
+        self.floored
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
@@ -760,6 +818,81 @@ mod tests {
 
     use super::*;
     use crate::audio::capture::SampleType;
+
+    fn close(gains: [f32; 2], expected: [f32; 2]) -> bool {
+        gains
+            .iter()
+            .zip(expected)
+            .all(|(g, e)| (g - e).abs() < 1e-3)
+    }
+
+    // covers: S480
+    #[test]
+    fn a_software_volume_is_undone_per_side() {
+        let mut undo = VolumeUndo::default();
+        undo.change([-6.0206, -12.0412], true, 0);
+        assert!(close(undo.gains(Some(UNDO_MARGIN_HNS)), [2.0, 4.0]));
+        assert!(!undo.floored());
+    }
+
+    // covers: S480
+    #[test]
+    fn a_hardware_or_unknown_volume_is_left_alone() {
+        let mut undo = VolumeUndo::default();
+        undo.change([-45.0, -20.0], false, 0);
+        assert_eq!(undo.gains(Some(UNDO_MARGIN_HNS)), [1.0, 1.0]);
+        assert!(!undo.floored());
+    }
+
+    // covers: S480
+    #[test]
+    fn a_lowered_volume_keeps_the_old_gain_until_the_stream_is_surely_past_it() {
+        let mut undo = VolumeUndo::default();
+        let at = 10_000_000;
+        undo.change([-20.0, -20.0], true, at);
+        assert_eq!(undo.gains(None), [1.0, 1.0]);
+        assert_eq!(undo.gains(Some(at)), [1.0, 1.0]);
+        assert_eq!(undo.gains(Some(at + UNDO_MARGIN_HNS - 1)), [1.0, 1.0]);
+        assert!(close(undo.gains(Some(at + UNDO_MARGIN_HNS)), [10.0, 10.0]));
+    }
+
+    // covers: S480
+    #[test]
+    fn a_raised_volume_takes_the_smaller_gain_at_once() {
+        let mut undo = VolumeUndo::default();
+        undo.change([-20.0, -20.0], true, 0);
+        undo.gains(Some(UNDO_MARGIN_HNS));
+        let at = 10_000_000;
+        undo.change([-6.0206, -6.0206], true, at);
+        assert!(close(undo.gains(Some(at)), [2.0, 2.0]));
+        // Two changes in a row hold the smallest gain of the three.
+        undo.change([-20.0, -20.0], true, at + 1);
+        undo.change([-12.0412, -12.0412], true, at + 2);
+        assert!(close(undo.gains(Some(at + 2)), [2.0, 2.0]));
+        assert!(close(
+            undo.gains(Some(at + 2 + UNDO_MARGIN_HNS)),
+            [4.0, 4.0]
+        ));
+    }
+
+    // covers: S480
+    #[test]
+    fn a_volume_below_the_floor_is_not_brought_back_up() {
+        let mut undo = VolumeUndo::default();
+        undo.change([-45.0, -10.0], true, 0);
+        assert!(undo.floored());
+        undo.change([-35.0, -35.0], true, 1);
+        assert!(!undo.floored());
+    }
+
+    // covers: S480
+    #[test]
+    fn an_endpoint_past_stereo_takes_its_loudest_channel_on_both_sides() {
+        assert_eq!(stereo_levels(&[-3.0, -9.0]), [-3.0, -9.0]);
+        assert_eq!(stereo_levels(&[-6.0]), [-6.0, -6.0]);
+        assert_eq!(stereo_levels(&[-9.0, -3.0, -12.0, -6.0]), [-3.0, -3.0]);
+        assert_eq!(stereo_levels(&[]), [0.0, 0.0]);
+    }
 
     /// Every frame `mixer` hands on, left channel only.
     fn run(mixer: &mut StreamMixer, pushes: &[(usize, f32, usize)]) -> Vec<f32> {
