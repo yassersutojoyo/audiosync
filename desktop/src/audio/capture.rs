@@ -290,10 +290,11 @@ pub struct SystemRoute {
 }
 
 /// The route of the whole system (S480): endpoint loopback of the endpoint
-/// apps play sound on (with sound on several, `current`, else the default
-/// output, else the first listed; with sound on none, `current` while it is
-/// listed, else the default output), and process loopback of each process
-/// that plays on another endpoint. `None`, process loopback without
+/// a process started playing on since `before` (the last snapshot), other
+/// than `current`; else of `current` while it is listed; else of the one
+/// apps play sound on (with sound on several or none, the default output,
+/// else the first listed); and process loopback of each process that plays
+/// on another endpoint. `None`, process loopback without
 /// AudioSync's tree, when one of `local_outputs` (AudioSync's own copies)
 /// is on that endpoint, a tree captured on its own also plays there, or the
 /// trees would not fit one mix.
@@ -303,6 +304,7 @@ pub fn system_route(
     processes: &ProcessTable,
     local_outputs: &[String],
     current: Option<&str>,
+    before: &[EndpointAudio],
 ) -> Option<SystemRoute> {
     let players = |endpoint: &EndpointAudio| -> Vec<u32> {
         endpoint
@@ -320,11 +322,22 @@ pub fn system_route(
                 .any(|pid| !endpoint.silent_pids.contains(pid))
         })
         .collect();
+    let started = |endpoint: &&EndpointAudio| {
+        let earlier = before.iter().find(|earlier| earlier.id == endpoint.id);
+        players(endpoint)
+            .iter()
+            .any(|pid| earlier.is_none_or(|earlier| !players(earlier).contains(pid)))
+    };
     let candidate = |endpoint: &&EndpointAudio| sounding.is_empty() || sounding.contains(endpoint);
     let endpoint = audio
         .iter()
-        .filter(candidate)
-        .find(|endpoint| current == Some(endpoint.id.as_str()))
+        .filter(|endpoint| !before.is_empty() && current != Some(endpoint.id.as_str()))
+        .find(started)
+        .or_else(|| {
+            audio
+                .iter()
+                .find(|endpoint| current == Some(endpoint.id.as_str()))
+        })
         .or_else(|| {
             audio
                 .iter()
@@ -1805,7 +1818,37 @@ mod tests {
         current: Option<&str>,
     ) -> Option<SystemRoute> {
         let local: Vec<String> = local.iter().map(|id| (*id).to_owned()).collect();
-        system_route(audio, OWN_PID, &desktop(), &local, current)
+        system_route(audio, OWN_PID, &desktop(), &local, current, &[])
+    }
+
+    // covers: S480
+    #[test]
+    fn the_endpoint_follows_where_a_process_last_started_playing() {
+        let before = [
+            render("speakers", true, &[300]),
+            render("cable", false, &[]),
+        ];
+        let now = [
+            render("speakers", true, &[300]),
+            render("cable", false, &[200]),
+        ];
+        let route = system_route(&now, OWN_PID, &desktop(), &[], Some("speakers"), &before);
+        assert_eq!(
+            route,
+            Some(SystemRoute {
+                endpoint: "cable".to_owned(),
+                apps: vec![300],
+            }),
+        );
+        // Between two songs the cable goes quiet and stays the endpoint.
+        let quiet = [
+            render("speakers", true, &[300]),
+            render("cable", false, &[]),
+        ];
+        let route = system_route(&quiet, OWN_PID, &desktop(), &[], Some("cable"), &now);
+        assert_eq!(route.map(|route| route.endpoint).as_deref(), Some("cable"));
+        let again = system_route(&now, OWN_PID, &desktop(), &[], Some("cable"), &quiet);
+        assert_eq!(again.map(|route| route.endpoint).as_deref(), Some("cable"));
     }
 
     // covers: S480
@@ -1828,6 +1871,10 @@ mod tests {
             render("cable", false, &[200]),
         ];
         assert_eq!(route(&both, &[], Some("cable")).as_deref(), Some("cable"));
+        assert_eq!(
+            route(&both, &[], Some("speakers")).as_deref(),
+            Some("speakers")
+        );
         assert_eq!(route(&both, &[], None).as_deref(), Some("speakers"));
     }
 

@@ -871,6 +871,8 @@ struct RoutingState {
     /// How the whole system is captured besides process loopback (S480);
     /// `None` while process loopback alone is heard.
     route: Option<SystemRoute>,
+    /// The endpoints as the last check of the whole system found them.
+    before: Vec<EndpointAudio>,
     /// The endpoints apps played on, with their processes, when process
     /// loopback was last kept for them, for the log.
     players: Vec<String>,
@@ -4742,7 +4744,9 @@ impl<D: Driver> Controller<D> {
                     .route
                     .as_ref()
                     .map(|route| route.endpoint.as_str()),
+                &self.routing.before,
             );
+            self.routing.before.clone_from(&endpoints);
             let players: Vec<String> = if route.is_none() {
                 playing_endpoints(&endpoints, activation.target_pid, &processes)
                     .map(|endpoint| format!("{} {:?}", endpoint.name, endpoint.active_pids))
@@ -4794,7 +4798,8 @@ impl<D: Driver> Controller<D> {
         if route != self.routing.route {
             self.log.log(|| match &route {
                 Some(route) => format!(
-                    "whole system: captured from endpoint {} by endpoint loopback, and processes                      {:?} on other endpoints by process loopback",
+                    "whole system: captured from endpoint {} by endpoint loopback, and processes {:?} \
+                     on other endpoints by process loopback",
                     route.endpoint, route.apps
                 ),
                 None => "whole system: captured by process loopback without AudioSync".to_owned(),
