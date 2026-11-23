@@ -12,6 +12,11 @@ name: Call microphone probe (Windows)
 # permission prompt answered by Chrome's own flag. Chrome stands for the
 # engine Electron and WebView apps share, not for those apps.
 #
+# `route` then compares two ways to bring that call to the recorded output,
+# 10 runs each, with a 3 kHz default-path tone standing for the music: the
+# default flipped to the recorded output and straight back with the pin in
+# place, or the default moved to the recorded output for the call.
+#
 # VB-CABLE is donationware (https://vb-audio.com/Services/licensing.htm) and
 # Scream (MS-PL) only supplies devcon here: the job downloads both, checked by
 # hash, and installs them on the runner only. Neither is bundled, vendored or
@@ -21,6 +26,7 @@ on:
     branches:
       - '*/call-mic-probe-1124'
       - '*/call-mic-rule-1124'
+      - '*/browser-call-route-1124'
   workflow_dispatch:
 
 concurrency:
@@ -142,10 +148,12 @@ jobs:
           if (Test-Path $chrome) {
             & bin/call_mic_probe.exe chrome $chrome 2>&1 | Tee-Object -FilePath $log -Append
             if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+            & bin/call_mic_probe.exe route $chrome 2>&1 | Tee-Object -FilePath $log -Append
+            if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
           } else {
             'RESULT Q5 untested: no Chrome on the runner' | Tee-Object -FilePath $log -Append
           }
-          Select-String -Path $log -Pattern '^(RESULT|READBACK)' | ForEach-Object { "- $($_.Line)" } |
+          Select-String -Path $log -Pattern '^(RESULT|READBACK|ROUTE)' | ForEach-Object { "- $($_.Line)" } |
             Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
           exit $code
 

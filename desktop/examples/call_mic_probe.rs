@@ -16,7 +16,10 @@
 //! silence on the console default, opened through the default-device
 //! interface path (streams that follow a routing change) or through the
 //! endpoint itself; `mic <id>` opens a capture stream on endpoint `id`;
-//! `list` prints endpoints, defaults and sessions.
+//! `list` prints endpoints, defaults and sessions; `tone signal` plays a
+//! 3 kHz tone through the default-device path; `route <chrome>` compares
+//! two ways to bring a browser call to the recorded output (runner only: it
+//! moves the system default).
 
 #[cfg(windows)]
 fn main() -> std::process::ExitCode {
@@ -108,7 +111,8 @@ mod probe {
             Some("--no-mic") => control(false),
             Some("tone") => match args.get(1).map(String::as_str) {
                 Some("reopen") => tone_reopen(),
-                mode => tone(mode == Some("default")),
+                Some("signal") => tone(true, true),
+                mode => tone(mode == Some("default"), false),
             },
             Some("chrome") => match args.get(1) {
                 Some(path) => chrome(path),
@@ -117,6 +121,10 @@ mod probe {
             Some("mic") => match args.get(1) {
                 Some(id) => mic(id),
                 None => Err("`mic` needs an endpoint ID".into()),
+            },
+            Some("route") => match args.get(1) {
+                Some(path) => route(path),
+                None => Err("`route` needs the browser's path".into()),
             },
             Some("list") => list(),
             Some(other) => Err(format!("unknown role {other:?}")),
@@ -732,8 +740,9 @@ mod probe {
         let _ = stdout.flush();
     }
 
-    /// Renders silent buffers until standard input closes.
-    fn tone(default_path: bool) -> Fallible<()> {
+    /// Renders silent buffers, or [`SIGNAL_HZ`] when `signal`, until
+    /// standard input closes.
+    fn tone(default_path: bool, signal: bool) -> Fallible<()> {
         let closed = input_closed();
         let client = if default_path {
             activate_default_render()?
@@ -753,9 +762,17 @@ mod probe {
             let format = client
                 .GetMixFormat()
                 .map_err(|e| failed("GetMixFormat", &e))?;
+            let (channels, rate, bits) = (
+                usize::from((*format).nChannels),
+                (*format).nSamplesPerSec as f32,
+                (*format).wBitsPerSample,
+            );
             let init = client.Initialize(AUDCLNT_SHAREMODE_SHARED, 0, BUFFER_HNS, 0, format, None);
             CoTaskMemFree(Some(format.cast_const().cast()));
             init.map_err(|e| failed("Initialize", &e))?;
+            if signal && bits != 32 {
+                return Err(format!("the mix format has {bits}-bit samples, not float"));
+            }
             let render = client
                 .GetService::<IAudioRenderClient>()
                 .map_err(|e| failed("GetService(IAudioRenderClient)", &e))?;
@@ -764,13 +781,30 @@ mod probe {
                 .map_err(|e| failed("GetBufferSize", &e))?;
             client.Start().map_err(|e| failed("Start", &e))?;
             say("started");
+            let step = std::f32::consts::TAU * SIGNAL_HZ / rate;
+            let mut phase = 0f32;
             while !closed.load(Ordering::Relaxed) {
                 // A stream that was re-routed reports a failure until it is
                 // reopened; the session move is what is measured, not this.
                 let padding = client.GetCurrentPadding().unwrap_or(size);
                 let frames = size.saturating_sub(padding);
-                if frames > 0 && render.GetBuffer(frames).is_ok() {
-                    let _ = render.ReleaseBuffer(frames, AUDCLNT_BUFFERFLAGS_SILENT.0 as u32);
+                if frames > 0
+                    && let Ok(data) = render.GetBuffer(frames)
+                {
+                    let flags = if signal {
+                        let samples = std::slice::from_raw_parts_mut(
+                            data.cast::<f32>(),
+                            frames as usize * channels,
+                        );
+                        for frame in samples.chunks_mut(channels) {
+                            frame.fill(SIGNAL_LEVEL * phase.sin());
+                            phase = (phase + step) % std::f32::consts::TAU;
+                        }
+                        0
+                    } else {
+                        AUDCLNT_BUFFERFLAGS_SILENT.0 as u32
+                    };
+                    let _ = render.ReleaseBuffer(frames, flags);
                 }
                 thread::sleep(Duration::from_millis(10));
             }
@@ -1215,6 +1249,479 @@ navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
                 None => "no endpoint".to_owned(),
             }
         ))
+    }
+
+    // MARK: Browser call routes: flip the default, or move it for the call
+
+    const SIGNAL_HZ: f32 = 3000.0;
+    const SIGNAL_LEVEL: f32 = 0.1;
+    /// Detection blocks of 5 ms; a block carries the signal above a tenth
+    /// of its level.
+    const BLOCK_MS: u64 = 5;
+    const RUNS: usize = 10;
+    const LEAK_MAX_MS: u64 = 30;
+    const GAP_MAX_MS: u64 = 100;
+    const LOOK_AT: Duration = Duration::from_millis(500);
+    const WINDOW: Duration = Duration::from_secs(3);
+
+    /// `CPolicyConfigClient` and `IPolicyConfig`, as the app sets defaults
+    /// (src/audio/wasapi/default_output.rs).
+    const POLICY_CONFIG_CLIENT: GUID = GUID::from_u128(0x870af99c_171d_4f9e_af0d_e63df40c2bc9);
+    const POLICY_CONFIG: GUID = GUID::from_u128(0xf8679f50_850a_41cf_9c72_430f290290c8);
+    const SET_DEFAULT_SLOT: usize = 13;
+    type SetDefault = unsafe extern "system" fn(*mut c_void, PCWSTR, ERole) -> HRESULT;
+
+    type Heard = Arc<Mutex<Vec<(Instant, bool)>>>;
+
+    struct Defaults(IUnknown);
+
+    impl Defaults {
+        fn new() -> Fallible<Self> {
+            // SAFETY: creates an in-process object and asks it for the
+            // interface; `raw` holds one reference on success, which the
+            // result takes.
+            unsafe {
+                let client: IUnknown = CoCreateInstance(&POLICY_CONFIG_CLIENT, None, CLSCTX_ALL)
+                    .map_err(|e| failed("CoCreateInstance(CPolicyConfigClient)", &e))?;
+                let mut raw = std::ptr::null_mut();
+                client
+                    .query(&POLICY_CONFIG, &mut raw)
+                    .ok()
+                    .map_err(|e| failed("QueryInterface(IPolicyConfig)", &e))?;
+                Ok(Self(IUnknown::from_raw(raw)))
+            }
+        }
+
+        fn set(&self, id: &str, roles: &[ERole]) -> Fallible<()> {
+            let id = HSTRING::from(id);
+            for role in roles {
+                // SAFETY: slot 13 is SetDefaultEndpoint, which takes the
+                // object, a NUL-terminated ID alive through the call and a role.
+                unsafe {
+                    let table = *(self.0.as_raw() as *const *const *const c_void);
+                    let call: SetDefault = std::mem::transmute(*table.add(SET_DEFAULT_SLOT));
+                    call(self.0.as_raw(), PCWSTR(id.as_ptr()), *role)
+                        .ok()
+                        .map_err(|e| failed("SetDefaultEndpoint", &e))?;
+                }
+            }
+            Ok(())
+        }
+    }
+
+    fn carries_signal(block: &[f32], rate: f32) -> bool {
+        let coeff = 2.0 * (std::f32::consts::TAU * SIGNAL_HZ / rate).cos();
+        let (mut s1, mut s2) = (0f32, 0f32);
+        for x in block {
+            let s = x + coeff * s1 - s2;
+            s2 = s1;
+            s1 = s;
+        }
+        let power = (s1 * s1 + s2 * s2 - coeff * s1 * s2).max(0.0);
+        2.0 * power.sqrt() / block.len() as f32 > SIGNAL_LEVEL / 10.0
+    }
+
+    /// Captures endpoint `id` until `stop` and logs, per block, when it
+    /// arrived and whether it carried the signal.
+    fn listen(id: String, heard: Heard, stop: Arc<AtomicBool>) -> thread::JoinHandle<Fallible<()>> {
+        thread::spawn(move || {
+            init_com()?;
+            // SAFETY: calls on the stream this thread owns; each packet is
+            // read as `frames` float frames before it is released.
+            unsafe {
+                let client = enumerator()?
+                    .GetDevice(&HSTRING::from(id.as_str()))
+                    .map_err(|e| failed("GetDevice", &e))?
+                    .Activate::<IAudioClient>(CLSCTX_ALL, None)
+                    .map_err(|e| failed("Activate(IAudioClient)", &e))?;
+                let format = client
+                    .GetMixFormat()
+                    .map_err(|e| failed("GetMixFormat", &e))?;
+                let (channels, rate, bits) = (
+                    usize::from((*format).nChannels),
+                    (*format).nSamplesPerSec as f32,
+                    (*format).wBitsPerSample,
+                );
+                let init =
+                    client.Initialize(AUDCLNT_SHAREMODE_SHARED, 0, BUFFER_HNS, 0, format, None);
+                CoTaskMemFree(Some(format.cast_const().cast()));
+                init.map_err(|e| failed("Initialize", &e))?;
+                if bits != 32 {
+                    return Err(format!("capture has {bits}-bit samples, not float"));
+                }
+                let capture = client
+                    .GetService::<IAudioCaptureClient>()
+                    .map_err(|e| failed("GetService(IAudioCaptureClient)", &e))?;
+                client.Start().map_err(|e| failed("Start", &e))?;
+                let block = (rate as u64 * BLOCK_MS / 1000) as usize;
+                let mut pending: Vec<f32> = Vec::new();
+                while !stop.load(Ordering::Relaxed) {
+                    while capture.GetNextPacketSize().is_ok_and(|frames| frames > 0) {
+                        let mut data = std::ptr::null_mut();
+                        let (mut frames, mut flags) = (0, 0);
+                        if capture
+                            .GetBuffer(&mut data, &mut frames, &mut flags, None, None)
+                            .is_err()
+                        {
+                            break;
+                        }
+                        let at = Instant::now();
+                        if flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 != 0 {
+                            pending.extend(std::iter::repeat_n(0.0, frames as usize));
+                        } else {
+                            let samples = std::slice::from_raw_parts(
+                                data.cast::<f32>(),
+                                frames as usize * channels,
+                            );
+                            pending.extend(samples.iter().step_by(channels));
+                        }
+                        let _ = capture.ReleaseBuffer(frames);
+                        while pending.len() >= block {
+                            let has = carries_signal(&pending[..block], rate);
+                            pending.drain(..block);
+                            if let Ok(mut heard) = heard.lock() {
+                                heard.push((at, has));
+                            }
+                        }
+                    }
+                    thread::sleep(Duration::from_millis(5));
+                }
+                let _ = client.Stop();
+            }
+            Ok(())
+        })
+    }
+
+    /// Milliseconds of blocks in `[from, from + WINDOW)` whose signal
+    /// equals `signal`.
+    fn blocks_ms(heard: &Heard, from: Instant, signal: bool) -> u64 {
+        let heard = heard.lock().map(|h| h.clone()).unwrap_or_default();
+        let count = heard
+            .iter()
+            .filter(|(at, has)| *at >= from && *at < from + WINDOW && *has == signal)
+            .count();
+        count as u64 * BLOCK_MS
+    }
+
+    struct Chrome {
+        child: Child,
+        player: u32,
+        listener: u32,
+    }
+
+    impl Drop for Chrome {
+        fn drop(&mut self) {
+            let _ = Command::new("taskkill")
+                .args(["/T", "/F", "/PID", &self.child.id().to_string()])
+                .output();
+            let _ = self.child.wait();
+        }
+    }
+
+    struct Route<'a> {
+        enumerator: IMMDeviceEnumerator,
+        chrome_path: &'a str,
+        cable: String,
+        recorded: String,
+        cable_heard: Heard,
+        recorded_heard: Heard,
+        music: u32,
+        defaults: Defaults,
+        policy: Policy,
+    }
+
+    impl Route<'_> {
+        fn on(&self, id: &str, pid: u32) -> Fallible<bool> {
+            Ok(sessions_on(&self.enumerator, id)?
+                .iter()
+                .any(|s| s.pid == pid && s.active))
+        }
+
+        fn where_is(&self, pid: u32) -> Fallible<&'static str> {
+            Ok(
+                match (self.on(&self.cable, pid)?, self.on(&self.recorded, pid)?) {
+                    (true, false) => "cable",
+                    (false, true) => "recorded",
+                    (true, true) => "both",
+                    (false, false) => "none",
+                },
+            )
+        }
+
+        /// Chrome on [`PAGE`] in a new profile, once its tone plays and it
+        /// listens; `None` when either never shows within 30 s.
+        fn chrome(&self, run: &str) -> Fallible<Option<Chrome>> {
+            let own = std::process::id();
+            let before: Vec<u32> = sessions_of(&self.enumerator, eRender)?
+                .iter()
+                .chain(sessions_of(&self.enumerator, eCapture)?.iter())
+                .map(|session| session.pid)
+                .collect();
+            let dir = std::env::temp_dir().join("call-mic-chrome");
+            std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            let page = dir.join("call.html");
+            std::fs::write(&page, PAGE).map_err(|e| format!("{}: {e}", page.display()))?;
+            let child = Command::new(self.chrome_path)
+                .arg(format!(
+                    "--user-data-dir={}",
+                    dir.join(format!("profile-{run}")).display()
+                ))
+                .args([
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    "--use-fake-ui-for-media-stream",
+                    "--autoplay-policy=no-user-gesture-required",
+                    "--allow-file-access-from-files",
+                ])
+                .arg(format!(
+                    "file:///{}",
+                    page.display().to_string().replace('\\', "/")
+                ))
+                .spawn()
+                .map_err(|e| format!("starting Chrome failed: {e}"))?;
+            let mut chrome = Chrome {
+                child,
+                player: 0,
+                listener: 0,
+            };
+            let fresh = |flow: EDataFlow| -> Fallible<u32> {
+                Ok(sessions_of(&self.enumerator, flow)?
+                    .iter()
+                    .find(|s| s.active && s.pid != own && !before.contains(&s.pid))
+                    .map_or(0, |s| s.pid))
+            };
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while Instant::now() < deadline && (chrome.player == 0 || chrome.listener == 0) {
+                if chrome.player == 0 {
+                    chrome.player = fresh(eRender)?;
+                }
+                if chrome.listener == 0 {
+                    chrome.listener = fresh(eCapture)?;
+                }
+                thread::sleep(POLL);
+            }
+            Ok((chrome.player != 0 && chrome.listener != 0).then_some(chrome))
+        }
+
+        fn pin(&self, pid: u32, to: &str) -> Fallible<()> {
+            for role in [eConsole, eMultimedia] {
+                self.policy.set(pid, role, to)?;
+            }
+            Ok(())
+        }
+
+        /// Pins Chrome's player to the recorded output and reports whether
+        /// it still plays on the cable at the rule's 250 ms read-back.
+        fn pin_and_read_back(&self, chrome: &Chrome) -> Fallible<bool> {
+            let at = Instant::now();
+            self.pin(chrome.player, &render_interface(&self.recorded))?;
+            thread::sleep(STAYED.saturating_sub(at.elapsed()));
+            self.on(&self.cable, chrome.player)
+        }
+
+        /// Route (d): with the pin in place, console and multimedia go to the
+        /// recorded output and straight back.
+        fn flip(&self, run: usize) -> Fallible<bool> {
+            let reopen = q2_move(&self.enumerator, "reopen")?;
+            let notice = yes_no(!reopen.contains("notices to the app 0"));
+            let Some(chrome) = self.chrome(&format!("d{run}"))? else {
+                println!("ROUTE d run {run}: untested, Chrome's tone or listening never showed");
+                return Ok(false);
+            };
+            let start = self.where_is(chrome.player)?;
+            let stayed = self.pin_and_read_back(&chrome)?;
+            // The app writes its S469 restore record here; the probe keeps
+            // the cable in `self.cable` and puts it back after every run.
+            let flip = Instant::now();
+            self.defaults
+                .set(&self.recorded, &[eConsole, eMultimedia])?;
+            self.defaults.set(&self.cable, &[eConsole, eMultimedia])?;
+            let flipped_in = flip.elapsed().as_millis();
+            thread::sleep(LOOK_AT.saturating_sub(flip.elapsed()));
+            let chrome_at = self.where_is(chrome.player)?;
+            let music_at = self.where_is(self.music)?;
+            thread::sleep((WINDOW + Duration::from_millis(100)).saturating_sub(flip.elapsed()));
+            let leak = blocks_ms(&self.recorded_heard, flip, true);
+            let gap = blocks_ms(&self.cable_heard, flip, false);
+            let baseline = blocks_ms(&self.cable_heard, flip - WINDOW, true);
+            let ends = self.where_is(chrome.player)?;
+            self.pin(chrome.player, "")?;
+            let pass = chrome_at == "recorded"
+                && music_at == "cable"
+                && leak <= LEAK_MAX_MS
+                && gap <= GAP_MAX_MS;
+            println!(
+                "ROUTE d run {run}: pin-only notice to the reopening helper {notice}; Chrome \
+                 started on {start}, stayed at 250 ms {}; flip took {flipped_in} ms; at 500 ms \
+                 Chrome on {chrome_at}, tone on {music_at}; leak {leak} ms, cable gap {gap} ms \
+                 (tone on the cable {baseline} ms of the 3 s before); Chrome at 3 s on {ends}; \
+                 pass {}",
+                yes_no(stayed),
+                yes_no(pass)
+            );
+            Ok(pass)
+        }
+
+        /// Route (b): the default moves to the recorded output for the
+        /// call and returns 3 s after Chrome stops listening.
+        fn move_for_call(&self, run: usize) -> Fallible<bool> {
+            let Some(chrome) = self.chrome(&format!("b{run}"))? else {
+                println!("ROUTE b run {run}: untested, Chrome's tone or listening never showed");
+                return Ok(false);
+            };
+            let stayed = self.pin_and_read_back(&chrome)?;
+            let moved = Instant::now();
+            self.defaults
+                .set(&self.recorded, &[eConsole, eMultimedia])?;
+            let arrived = poll(|| self.on(&self.recorded, chrome.player))?;
+            // SAFETY: reads the console default render endpoint.
+            let read_back = unsafe { self.enumerator.GetDefaultAudioEndpoint(eRender, eConsole) }
+                .is_ok_and(|device| device_id(&device) == self.recorded);
+            let deadline = Instant::now() + Duration::from_secs(30);
+            let mut quiet = None;
+            while Instant::now() < deadline {
+                if !sessions_of(&self.enumerator, eCapture)?
+                    .iter()
+                    .any(|s| s.pid == chrome.listener && s.active)
+                {
+                    quiet = Some(Instant::now());
+                    break;
+                }
+                thread::sleep(POLL);
+            }
+            if let Some(quiet) = quiet {
+                thread::sleep(HOLD.saturating_sub(quiet.elapsed()));
+            }
+            self.pin(chrome.player, "")?;
+            let returned = Instant::now();
+            self.defaults.set(&self.cable, &[eConsole, eMultimedia])?;
+            let chrome_back = poll(|| Ok(self.where_is(chrome.player)? == "cable"))?;
+            let music_back = poll(|| Ok(self.where_is(self.music)? == "cable"))?;
+            let ms = |at: Option<Instant>, since: Instant| {
+                at.map_or("never".to_owned(), |at| {
+                    format!("{} ms", at.duration_since(since).as_millis())
+                })
+            };
+            let pass = arrived.is_some() && chrome_back.is_some() && music_back.is_some();
+            println!(
+                "ROUTE b run {run}: stayed at 250 ms {}; Chrome on the recorded output after {}, \
+                 default read back {}; listening stopped {}; after the return Chrome on the \
+                 cable after {}, tone after {}; pass {}",
+                yes_no(stayed),
+                ms(arrived, moved),
+                yes_no(read_back),
+                yes_no(quiet.is_some()),
+                ms(chrome_back, returned),
+                ms(music_back, returned),
+                yes_no(pass)
+            );
+            Ok(pass)
+        }
+    }
+
+    /// Both routes, [`RUNS`] times each, with a default-path tone standing
+    /// for the music. The console default at the start stands for the
+    /// cable, another render endpoint for the recorded output.
+    fn route(chrome_path: &str) -> Fallible<()> {
+        let enumerator = enumerator()?;
+        // SAFETY: reads the console and multimedia defaults.
+        let (console, multimedia) = unsafe {
+            (
+                enumerator.GetDefaultAudioEndpoint(eRender, eConsole),
+                enumerator.GetDefaultAudioEndpoint(eRender, eMultimedia),
+            )
+        };
+        let console = console.map_err(|e| failed("GetDefaultAudioEndpoint", &e))?;
+        let multimedia = multimedia
+            .map(|device| device_id(&device))
+            .unwrap_or_default();
+        let Some((cable, cable_name)) = usable(&console) else {
+            println!("RESULT ROUTE untested: the console default is a device the probe never uses");
+            return Ok(());
+        };
+        let Some((recorded, recorded_name)) = pick_render(&enumerator, &cable)? else {
+            println!("RESULT ROUTE untested: no second render endpoint");
+            return Ok(());
+        };
+        println!("ROUTE: cable {cable_name:?}, recorded output {recorded_name:?}");
+        let defaults = Defaults::new()?;
+        defaults.set(&cable, &[eConsole, eMultimedia])?;
+        let mut music = Helper::start(&["tone", "signal"])?;
+        music.wait_for("started")?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut ears = Vec::new();
+        for (id, name) in active_devices(&enumerator, eCapture)?
+            .iter()
+            .filter_map(usable)
+        {
+            let heard = Heard::default();
+            let handle = listen(id, Arc::clone(&heard), Arc::clone(&stop));
+            ears.push((name, heard, handle));
+        }
+        thread::sleep(Duration::from_secs(1));
+        let since = Instant::now() - LOOK_AT;
+        let toned: Vec<bool> = ears
+            .iter()
+            .map(|(_, heard, _)| {
+                heard
+                    .lock()
+                    .is_ok_and(|h| h.iter().any(|(at, has)| *at >= since && *has))
+            })
+            .collect();
+        let names: Vec<&String> = ears.iter().map(|(name, _, _)| name).collect();
+        println!("ROUTE: capture endpoints {names:?}, carrying the tone {toned:?}");
+        let result = if ears.len() == 2 && toned.iter().filter(|t| **t).count() == 1 {
+            let cable_at = usize::from(!toned[0]);
+            let route = Route {
+                enumerator: enumerator.clone(),
+                chrome_path,
+                cable: cable.clone(),
+                recorded,
+                cable_heard: Arc::clone(&ears[cable_at].1),
+                recorded_heard: Arc::clone(&ears[1 - cable_at].1),
+                music: music.pid(),
+                defaults: Defaults::new()?,
+                policy: Policy::new()?,
+            };
+            let mut passed = [0; 2];
+            for (leg, count) in passed.iter_mut().enumerate() {
+                for run in 1..=RUNS {
+                    let pass = if leg == 0 {
+                        route.flip(run)
+                    } else {
+                        route.move_for_call(run)
+                    };
+                    match pass {
+                        Ok(true) => *count += 1,
+                        Ok(false) => {}
+                        Err(error) => println!("ROUTE run {run}: error {error}"),
+                    }
+                    let _ = route.defaults.set(&cable, &[eConsole, eMultimedia]);
+                    thread::sleep(Duration::from_secs(1));
+                }
+            }
+            format!(
+                "winner {}: (d) flip passed {}/{RUNS}, (b) move for the call passed {}/{RUNS}",
+                if passed[0] == RUNS { "d" } else { "b" },
+                passed[0],
+                passed[1]
+            )
+        } else {
+            "untested: no capture endpoint pairs with the cable alone".to_owned()
+        };
+        stop.store(true, Ordering::Relaxed);
+        for (name, _, handle) in ears {
+            if let Ok(Err(error)) = handle.join() {
+                println!("ROUTE: capture of {name:?}: {error}");
+            }
+        }
+        music.finish();
+        let _ = defaults.set(&cable, &[eConsole]);
+        if !multimedia.is_empty() {
+            let _ = defaults.set(&multimedia, &[eMultimedia]);
+        }
+        println!("RESULT ROUTE {result}");
+        Ok(())
     }
 
     // MARK: Small readers
