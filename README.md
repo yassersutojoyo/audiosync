@@ -106,7 +106,6 @@ Each install script checks the download against the release's SHA-256 checksums;
 - For video, a player with an audio delay setting (mpv, VLC, IINA) can hold the picture back to match.
 - HomePods: in Allow Speaker & TV Access, pick “Anyone on the Same Network” on a network you trust.
 - On the Mac, leave the sound output on a local device, not a HomePod. The window doesn't open at login; click the Dock icon.
-- On Linux, hear the source twice with no output to spare? [desktop/README.md](desktop/README.md#linux-a-silent-output) shows how to add a silent one.
 - The rest is in the AudioSync Guide, under Help on the Mac and in the gear menu on Windows and Linux.
 
 ## Good to know
