@@ -91,6 +91,15 @@ jobs:
           New-Item -ItemType Directory -Force -Path probe-log | Out-Null
           $log = 'probe-log/probe.txt'
           foreach ($name in 'AudioEndpointBuilder', 'Audiosrv') { Set-Service -Name $name -StartupType Automatic; Start-Service -Name $name }
+          # The image denies desktop apps the microphone (Initialize gave 0x80070005), as a
+          # user's privacy switch would; the helper needs it allowed to open the cable's capture side.
+          foreach ($hive in 'HKLM:', 'HKCU:') {
+            foreach ($key in 'microphone', 'microphone\NonPackaged') {
+              $path = "$hive\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\$key"
+              if (-not (Test-Path $path)) { New-Item -Force -Path $path | Out-Null }
+              Set-ItemProperty -Path $path -Name Value -Value 'Allow'
+            }
+          }
           $fixture = (New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'call-mic-driver')).FullName
           function Get-Checked([string] $Url, [string] $Name, [string] $Sha256) {
             $zip = Join-Path $fixture $Name

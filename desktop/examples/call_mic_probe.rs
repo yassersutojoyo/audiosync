@@ -129,7 +129,7 @@ mod probe {
 
         let q1 = q1_read_only(&enumerator, own)?;
         let q3 = if with_mic {
-            Some(q3_detection(&enumerator, own)?)
+            Some(q3_detection(&enumerator, own).unwrap_or_else(|error| format!("error: {error}")))
         } else {
             println!("Q3: skipped (--no-mic)");
             None
