@@ -46,6 +46,7 @@ use crate::session::{
     Output, Session, SessionConfig, SessionEvent, State, TEARDOWN_TIMEOUT, UdpSendResult,
 };
 use crate::stream::{self, SpeakerConfig, SpeakerCounters, Stream, StreamEvent, Transmit};
+use crate::takeover::TakeoverReport;
 use crate::targets::{Target, TargetId, Targets};
 use crate::transport::{self, IoEvent, RtspIo, SessionIo, SessionKey};
 use crate::volume::Volume;
@@ -314,6 +315,12 @@ struct Speaker {
     /// Its AirPlay 2 setup failed, so its sessions go over AirPlay 1 until
     /// the host adds it again (P231).
     airplay1_fallback: bool,
+    /// The receiver closed its session: the end of the evidence window and
+    /// the `gid` it advertised then (P249).
+    evidence: Option<(Instant, Option<String>)>,
+    /// The receiver closed its session and it hasn't played since, so a
+    /// Busy answer means it was taken (P249).
+    after_close: bool,
 }
 
 impl Speaker {
@@ -344,6 +351,8 @@ impl Speaker {
             restarting: false,
             receiver_wait: false,
             airplay1_fallback: false,
+            evidence: None,
+            after_close: false,
         }
     }
 
@@ -430,6 +439,10 @@ pub(crate) struct Driver {
     held_for: Duration,
     /// What one second of a speaker's retry schedule lasts (P142).
     retry_unit: Duration,
+    /// How long no retry starts after a receiver's close (P249).
+    evidence_window: Option<Duration>,
+    /// Every `groupUUID` this sender used, lowercased (P249).
+    own_groups: BTreeSet<String>,
     /// How often an AirPlay 2 session posts its feedback (P132).
     feedback_interval: Duration,
     /// AirPlay 2 sessions at once (P204).
@@ -540,6 +553,8 @@ impl Driver {
             held: BTreeMap::new(),
             held_for: super::PAIRING_HOLD,
             retry_unit: Duration::from_secs(1),
+            evidence_window: Some(crate::takeover::EVIDENCE_WINDOW),
+            own_groups: BTreeSet::new(),
             feedback_interval: crate::ap2::session::FEEDBACK_INTERVAL,
             ap2_sessions: super::AIRPLAY2_SESSIONS,
             stream_ids: HashMap::new(),
@@ -604,6 +619,11 @@ impl Driver {
 
     pub(crate) fn dacp_counters(&self) -> Arc<super::DacpCounters> {
         self.dacp.counters()
+    }
+
+    pub(crate) fn with_evidence_window(mut self, window: Option<Duration>) -> Driver {
+        self.evidence_window = window;
+        self
     }
 
     pub(crate) fn with_retry_unit(mut self, unit: Duration) -> Driver {
@@ -877,6 +897,9 @@ impl Driver {
                 Phase::Waiting(at) => next = next.min(*at),
                 Phase::Queued { .. } | Phase::Unannounced | Phase::Failed | Phase::Idle => {}
             }
+            if let Some((until, _)) = &speaker.evidence {
+                next = next.min(*until);
+            }
         }
         if let Some(at) = self.connects.poll_timeout() {
             next = next.min(at);
@@ -944,6 +967,7 @@ impl Driver {
         }
         due.sort_by_key(|(_, _, at)| *at);
         self.start_sessions(due, now);
+        self.end_evidence_windows(now);
         for run in self.pairings.values_mut() {
             if run.pairing.poll_timeout().is_some_and(|at| at <= now) {
                 run.pairing.handle_timeout(now);
@@ -1480,6 +1504,7 @@ impl Driver {
             .add_speaker_with_counters(config, speaker.counters.clone(), now);
         active.stream_id = Some(id);
         speaker.backoff.on_playing();
+        speaker.after_close = false;
         self.stream_ids.insert(id, key.clone());
         self.emit_speaker(key, SpeakerEvent::State(SpeakerState::Playing));
         self.send_now_playing(key, now);
@@ -1493,6 +1518,13 @@ impl Driver {
             return;
         };
         let was_ap2 = matches!(speaker.phase, Phase::Ap2(_));
+        // Only a session that played was taken; a close during its setup
+        // is retried as before.
+        let played = match &speaker.phase {
+            Phase::Active(active) => active.stream_id.is_some(),
+            Phase::Ap2(active) => active.stream_id.is_some(),
+            _ => false,
+        };
         let closing = speaker.removing || self.stopping.is_some();
         let alac_retry = error.fallback == Some(Codec::Alac) && !closing;
         // An AirPlay 1 attempt that ended in Unsupported or Refused moves
@@ -1528,7 +1560,10 @@ impl Driver {
         };
         speaker.receiver_wait = false;
         speaker.airplay1_fallback |= fallback;
-        let retry_at = if closing {
+        let plain = !closing && !alac_retry && !path_switch && !fallback && !settling;
+        let held = plain && played && self.evidence_window.is_some() && error.closed_by_receiver();
+        let taken = plain && error.kind == ErrorKind::Busy && speaker.after_close;
+        let retry_at = if closing || held || taken {
             None
         } else if alac_retry || path_switch || fallback {
             Some(now)
@@ -1555,7 +1590,9 @@ impl Driver {
         } else {
             error.kind.user_reason()
         };
-        if fallback {
+        if held || taken {
+            self.yield_speaker(key, held, now);
+        } else if fallback {
             self.log_fallback(key, error.kind);
         } else {
             self.emit_speaker(
@@ -1577,7 +1614,7 @@ impl Driver {
                 self.move_target_to_airplay2(id, key, now);
             }
             self.start_session(key, StartKind::Host, now);
-        } else {
+        } else if !held && !taken {
             let state = retry_at.map_or(SpeakerState::Failed, |at| SpeakerState::Retrying { at });
             self.emit_speaker(key, SpeakerEvent::State(state));
         }
@@ -1585,6 +1622,61 @@ impl Driver {
         if was_ap2 && (retry_at.is_none() || fallback) {
             self.wake_ap2_waiter(now);
         }
+    }
+
+    /// The receiver closed the session (`held`): no attempt until the
+    /// evidence window ends. Otherwise a retry after that close was
+    /// answered Busy: another sender has it (P249).
+    fn yield_speaker(&mut self, key: &DeviceKey, held: bool, now: Instant) {
+        let window = self.evidence_window.unwrap_or_default();
+        let Some(speaker) = self.speakers.get_mut(key) else {
+            return;
+        };
+        let report = if held {
+            let gid = speaker.device.group_keys().gid.clone();
+            speaker.evidence = Some((now + window, gid));
+            speaker.after_close = true;
+            TakeoverReport::ClosedByReceiver
+        } else {
+            TakeoverReport::Taken { group: None }
+        };
+        self.emit_speaker(key, SpeakerEvent::Takeover(report));
+    }
+
+    /// Evidence windows that ended with no evidence (P249).
+    fn end_evidence_windows(&mut self, now: Instant) {
+        let mut ended = Vec::new();
+        for (key, speaker) in &mut self.speakers {
+            if speaker
+                .evidence
+                .as_ref()
+                .is_some_and(|(until, _)| *until <= now)
+            {
+                speaker.evidence = None;
+                ended.push(key.clone());
+            }
+        }
+        for key in ended {
+            self.emit_speaker(&key, SpeakerEvent::Takeover(TakeoverReport::NoEvidence));
+        }
+    }
+
+    /// A TXT update during a speaker's evidence window that shows another
+    /// sender's group (P249).
+    fn check_evidence(&mut self, device: &Device) {
+        let Some(speaker) = self.speakers.get_mut(&device.key) else {
+            return;
+        };
+        let Some((_, gid)) = &speaker.evidence else {
+            return;
+        };
+        let Some(group) = crate::takeover::foreign_group(device, gid.as_deref(), &self.own_groups)
+        else {
+            return;
+        };
+        speaker.evidence = None;
+        let report = TakeoverReport::Taken { group: Some(group) };
+        self.emit_speaker(&device.key, SpeakerEvent::Takeover(report));
     }
 
     /// A teardown finished.
@@ -2037,6 +2129,7 @@ impl Driver {
         speaker.counters = counters;
         speaker.removing = false;
         speaker.airplay1_fallback = false;
+        speaker.evidence = None;
         // Its target went while it tore down: the host owns it alone now.
         if speaker
             .target
@@ -2684,6 +2777,7 @@ impl Driver {
                     // The next session uses the new records; a running one
                     // is untouched (P18, P19).
                     let mut changed = false;
+                    self.check_evidence(&device);
                     if let Some(speaker) = self.speakers.get_mut(&device.key) {
                         changed = ConnectInputs::of(&speaker.device) != ConnectInputs::of(&device);
                         speaker.device = (*device).clone();
@@ -3718,6 +3812,8 @@ mod tests {
                 restarting: false,
                 receiver_wait: false,
                 airplay1_fallback: false,
+                evidence: None,
+                after_close: false,
             },
         );
 
@@ -3879,6 +3975,8 @@ mod tests {
                 restarting: false,
                 receiver_wait: false,
                 airplay1_fallback: false,
+                evidence: None,
+                after_close: false,
             },
         );
 

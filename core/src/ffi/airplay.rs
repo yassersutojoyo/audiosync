@@ -2585,6 +2585,8 @@ fn sender_config(switch: Option<&str>, auto: Option<&str>) -> SenderConfig {
     SenderConfig {
         on_driver_thread: Some(raise_driver_thread),
         host_answers_latency: true,
+        // The Mac doesn't run the yield rule (S482) yet.
+        evidence_window: None,
         ..SenderConfig::default()
     }
     .with_airplay2_switch(airplay2_auto(auto), airplay2_switch(switch))

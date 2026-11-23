@@ -279,6 +279,7 @@ impl Driver {
                 (session_key, session, 0, None, verifying)
             }
         };
+        let group = session.group_uuid().to_ascii_lowercase();
         let remote = session.ids().active_remote;
         speaker.phase = Phase::Ap2(Box::new(Ap2Active {
             key: session_key,
@@ -296,6 +297,7 @@ impl Driver {
             ntp_chosen: false,
             ptp_restart: restart,
         }));
+        self.own_groups.insert(group);
         self.sessions.insert(session_key, key.clone());
         self.sessions.insert(events_key, key.clone());
         self.remote_open(key, remote, now);
@@ -1042,6 +1044,7 @@ impl Driver {
                 self.ap2_ready(key, now);
                 if let Some(speaker) = self.speakers.get_mut(key) {
                     speaker.backoff.on_playing();
+                    speaker.after_close = false;
                 }
                 self.emit_speaker(key, SpeakerEvent::State(SpeakerState::Playing));
                 // Ready follows the stream SETUP answer and FLUSH (P123).

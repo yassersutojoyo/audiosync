@@ -54,12 +54,15 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
+use audiosync_airplay::takeover::TakeoverReport;
 use audiosync_core::channels::InputPair;
 use audiosync_core::eq::{self, EqControl, EqProcessor, EqSettings};
 use audiosync_core::fade::FADE_MS;
 use audiosync_core::lead::HeldLead;
+use audiosync_core::policy::Seconds;
 use audiosync_core::policy::airplay_reconnect::{SENDER_RETRY_SECONDS, SenderRestart, SenderStart};
 use audiosync_core::policy::delay::{BRIEF_LOSS_HOLD, native_airplay_latency_ms};
+use audiosync_core::policy::on_demand::{self, Action, OnDemand};
 use audiosync_core::policy::source::AudioSource;
 use audiosync_core::policy::source_quit::{
     SourceQuitAction, SourceQuitWatch, Streaming, WhenSourceQuits,
@@ -1066,9 +1069,89 @@ pub struct Controller<D: Driver> {
     resume_after_sleep: bool,
     /// What the last sleep noted, until the wake decides (S465).
     wake_resume: Option<Pending>,
+    /// Lasting sound, yielded and released AirPlay speakers (S481 to
+    /// S483), on seconds since `on_demand_origin`.
+    on_demand: OnDemand<String>,
+    on_demand_origin: Instant,
+    /// When the policy last took the capture's peak.
+    on_demand_fed: Option<Instant>,
 }
 
 impl<D: Driver> Controller<D> {
+    fn on_demand_now(&self, now: Instant) -> Seconds {
+        now.saturating_duration_since(self.on_demand_origin)
+            .as_secs_f64()
+    }
+
+    /// Feeds the policy the speakers switched on, the AirPlay sender's
+    /// takeover reports and the capture's peak in windows of
+    /// [`on_demand::WINDOW`] since the last feed, and carries out what it
+    /// decides (S481 to S483). The poll is slower than a window, so each
+    /// window of a poll gets that poll's peak.
+    fn feed_on_demand(&mut self, at: Instant) {
+        let now = self.on_demand_now(at);
+        let Some(airplay) = self.airplay.as_mut() else {
+            return;
+        };
+        let on: BTreeSet<String> = airplay.enabled_ids().into_iter().collect();
+        for id in self.on_demand.switched_on_keys() {
+            if !on.contains(&id) {
+                self.on_demand.switched_off(&id);
+                airplay.set_let_go(&id, false);
+            }
+        }
+        for id in &on {
+            if self.on_demand.status(id).is_none() {
+                self.on_demand.switched_on(id.clone());
+            }
+        }
+        let mut actions = Vec::new();
+        for (id, report) in airplay.take_takeovers() {
+            match report {
+                TakeoverReport::ClosedByReceiver => self.on_demand.closed_by_receiver(&id),
+                TakeoverReport::Taken { .. } => {
+                    self.on_demand.taken(&id, now);
+                    airplay.set_let_go(&id, true);
+                }
+                TakeoverReport::NoEvidence => match self.on_demand.no_evidence(&id, now) {
+                    Some(action) => actions.push(action),
+                    None => airplay.set_let_go(&id, true),
+                },
+            }
+        }
+        let peak = self
+            .session
+            .as_ref()
+            .map_or(0.0, |session| session.ring.take_demand_peak());
+        let since = self
+            .on_demand_fed
+            .replace(at)
+            .map_or(0.0, |fed| at.saturating_duration_since(fed).as_secs_f64());
+        let windows = (since / on_demand::WINDOW).round().min(100.0) as u32;
+        for n in (0..windows).rev() {
+            let window_at = now - f64::from(n) * on_demand::WINDOW;
+            actions.extend(self.on_demand.window(peak, window_at));
+        }
+        self.apply_on_demand(actions);
+    }
+
+    fn apply_on_demand(&mut self, actions: Vec<Action<String>>) {
+        let Some(airplay) = self.airplay.as_mut() else {
+            return;
+        };
+        for action in actions {
+            match action {
+                Action::Release(id) => airplay.set_let_go(&id, true),
+                // A speaker the sender still holds after a close starts
+                // again from a removal, as a switch off and on does.
+                Action::Start(id) => {
+                    airplay.set_let_go(&id, true);
+                    airplay.set_let_go(&id, false);
+                }
+            }
+        }
+    }
+
     /// A stopped backend over `driver`, with no output set, the equalizer
     /// off and the debug log off.
     pub fn with_driver(driver: D) -> Controller<D> {
@@ -1145,6 +1228,9 @@ impl<D: Driver> Controller<D> {
             power: PowerState::default(),
             resume_after_sleep: false,
             wake_resume: None,
+            on_demand: OnDemand::new(0.0),
+            on_demand_origin: Instant::now(),
+            on_demand_fed: None,
         }
     }
 
@@ -5722,6 +5808,12 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.resume_after_sleep = on;
     }
 
+    fn set_release_when_quiet(&mut self, minutes: Option<u32>) {
+        let now = self.on_demand_now(Instant::now());
+        let actions = self.on_demand.set_release(minutes, now);
+        self.apply_on_demand(actions);
+    }
+
     fn set_input_pair(&mut self, endpoint_id: &str, pair: u16) {
         if pair == 0 {
             self.input_pairs.remove(endpoint_id);
@@ -5886,6 +5978,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
             self.pending.extend(events);
             self.sync_airplay_rule();
         }
+        self.feed_on_demand(Instant::now());
         if let Some(cast) = self.cast.as_mut() {
             let events = cast.poll();
             self.pending.extend(events);

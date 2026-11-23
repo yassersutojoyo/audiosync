@@ -127,6 +127,11 @@ pub struct SenderConfig {
     /// What one second of a speaker's retry schedule lasts, 1 s (P142); a
     /// test picks a shorter one.
     pub retry_unit: Duration,
+    /// How long after a receiver closed the connection no retry starts
+    /// while evidence of a takeover may arrive, 10 s (P249); a test picks a
+    /// shorter one. `None` retries such a close at once as P142 did before,
+    /// for a host that doesn't run the yield rule (S482) yet.
+    pub evidence_window: Option<Duration>,
     /// How long the remote-control server outlives the last session, 10 s
     /// (P189); a test picks a shorter one.
     pub dacp_linger: Duration,
@@ -270,6 +275,7 @@ impl Default for SenderConfig {
             ptp_receiver_ports: PtpPorts::default(),
             pairing_hold: PAIRING_HOLD,
             retry_unit: Duration::from_secs(1),
+            evidence_window: Some(crate::takeover::EVIDENCE_WINDOW),
             dacp_linger: crate::dacp::LINGER,
             dacp_idle: crate::dacp::IDLE_TIMEOUT,
             dacp_strike_window: remote::STRIKE_WINDOW,
@@ -611,6 +617,10 @@ pub enum SpeakerEvent {
     TimingForgotten,
     /// A line for the host's debug log, only with [`SpeakerOptions::trace`].
     Trace(String),
+    /// The receiver closed our connection, another sender took it, or no
+    /// evidence came (P249). Sent instead of an error: the host's yield
+    /// rule decides what follows (S482).
+    Takeover(crate::takeover::TakeoverReport),
 }
 
 /// What the sender reports.
@@ -737,6 +747,7 @@ impl Sender {
         .with_ptp_ports(config.ptp_ports, config.ptp_receiver_ports)
         .with_pairing_hold(config.pairing_hold)
         .with_retry_unit(config.retry_unit)
+        .with_evidence_window(config.evidence_window)
         .with_dacp_linger(config.dacp_linger)
         .with_dacp_timeouts(config.dacp_idle, config.dacp_strike_window)
         .with_feedback_interval(config.feedback_interval)

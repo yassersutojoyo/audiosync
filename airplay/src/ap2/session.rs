@@ -605,6 +605,11 @@ impl Ap2Session {
         &self.ids
     }
 
+    /// The `groupUUID` its session SETUP sends.
+    pub fn group_uuid(&self) -> &str {
+        &self.group_uuid
+    }
+
     /// Volume reads and artwork requests given up on whose answers may
     /// still come.
     #[doc(hidden)]

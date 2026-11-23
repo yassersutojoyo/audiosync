@@ -10,7 +10,10 @@ use std::time::{Duration, Instant};
 use audiosync_airplay::discovery::{
     BrowseEvent, Browser, Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
 };
-use audiosync_airplay::sender::{Sender, SenderConfig, SenderEvent, SpeakerEvent, SpeakerState};
+use audiosync_airplay::sender::{
+    Sender, SenderConfig, SenderEvent, SpeakerEvent, SpeakerOptions, SpeakerState,
+};
+use audiosync_airplay::takeover::TakeoverReport;
 use audiosync_airplay::volume::Volume;
 
 use common::net::{Behavior, Events, HostAudio, NetReceiver, serial};
@@ -81,28 +84,62 @@ fn retries_or_connects(events: &Events, key: &DeviceKey, skip: usize) -> Vec<Spe
         .collect()
 }
 
-// T1: the receiver closes our connection with no TEARDOWN and republishes
-// its TXT with another sender's group within 0.5 s: no attempt follows.
-// covers: P249
-#[test]
-fn a_receiver_taken_by_another_sender_is_not_connected_again() {
-    let _serial = serial();
-    let a = NetReceiver::start(Behavior::default());
-    let (sender, writer) = Sender::start(SenderConfig::default()).expect("the sender starts");
-    let _host = HostAudio::start(writer);
+fn takeovers(events: &Events, key: &DeviceKey) -> Vec<TakeoverReport> {
+    events
+        .of(key)
+        .into_iter()
+        .filter_map(|event| match event {
+            SpeakerEvent::Takeover(report) => Some(report),
+            _ => None,
+        })
+        .collect()
+}
+
+fn stopped(events: &Events, key: &DeviceKey) -> bool {
+    events.seen.iter().any(|(_, event)| {
+        matches!(event, SenderEvent::Speaker { key: k, event: SpeakerEvent::State(SpeakerState::Stopped) }
+            if k == key)
+    })
+}
+
+/// Drains events until `until`.
+fn watch(events: &mut Events, sender: &Sender, until: Instant) {
+    while Instant::now() < until {
+        thread::sleep(Duration::from_millis(50));
+        events.drain(sender);
+    }
+}
+
+struct Rig {
+    receiver: NetReceiver,
+    sender: Sender,
+    _host: HostAudio,
+    events: Events,
+    script: Script,
+    key: DeviceKey,
+    device: Device,
+}
+
+/// A speaker playing over AirPlay 1 whose `_airplay._tcp` record advertises
+/// its own `pi` as `gid`, with the evidence window `window`.
+fn playing(window: Duration) -> Rig {
+    let receiver = NetReceiver::start(Behavior::default());
+    let config = SenderConfig {
+        evidence_window: Some(window),
+        ..SenderConfig::default()
+    };
+    let (sender, writer) = Sender::start(config).expect("the sender starts");
+    let host = HostAudio::start(writer);
     let mut events = Events::default();
     let script = Script::default();
     sender.start_discovery_with(Box::new(script.clone()));
     let key = DeviceKey::Id(DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, 1]));
-    let raop = a.record(1, PCM_TXT);
-    let airplay = airplay_record(&a, 1, PI);
+    let raop = receiver.record(1, PCM_TXT);
+    let airplay = airplay_record(&receiver, 1, PI);
     script.push(BrowseEvent::Resolved(raop.clone()));
     script.push(BrowseEvent::Resolved(airplay.clone()));
     let device = Device::from_records(key.clone(), Some(&raop), Some(&airplay)).expect("device");
-    sender.add_speaker(
-        device,
-        audiosync_airplay::sender::SpeakerOptions::new(Volume::Db(-20.0)),
-    );
+    sender.add_speaker(device.clone(), SpeakerOptions::new(Volume::Db(-20.0)));
     assert!(
         events
             .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Playing)
@@ -110,6 +147,33 @@ fn a_receiver_taken_by_another_sender_is_not_connected_again() {
         "{:?}",
         events.of(&key)
     );
+    Rig {
+        receiver,
+        sender,
+        _host: host,
+        events,
+        script,
+        key,
+        device,
+    }
+}
+
+// T1 and T10: the receiver closes our connection with no TEARDOWN and
+// republishes its TXT with another sender's group within 0.5 s: Taken, and
+// no attempt follows, also after the window and once it shows free again.
+// covers: P249
+#[test]
+fn a_receiver_taken_by_another_sender_is_not_connected_again() {
+    let _serial = serial();
+    let Rig {
+        receiver: a,
+        sender,
+        _host,
+        mut events,
+        script,
+        key,
+        ..
+    } = playing(Duration::from_secs(2));
     let seen = events.of(&key).len();
     let connections = a.log().connections.len();
 
@@ -117,17 +181,67 @@ fn a_receiver_taken_by_another_sender_is_not_connected_again() {
     let closed = Instant::now();
     thread::sleep(Duration::from_millis(200));
     script.push(BrowseEvent::Resolved(airplay_record(&a, 1, FOREIGN)));
-    while Instant::now() < closed + Duration::from_secs(3) {
-        thread::sleep(Duration::from_millis(50));
-        events.drain(&sender);
-    }
+    watch(&mut events, &sender, closed + Duration::from_secs(3));
+    script.push(BrowseEvent::Resolved(airplay_record(&a, 1, PI)));
+    watch(&mut events, &sender, closed + Duration::from_secs(5));
     assert_eq!(retries_or_connects(&events, &key, seen), []);
     assert_eq!(a.log().connections.len(), connections);
-    assert!(
-        !events.seen.iter().any(|(_, event)| matches!(
-            event,
-            SenderEvent::Speaker { key: k, event: SpeakerEvent::State(SpeakerState::Stopped) } if *k == key
-        ))
+    assert_eq!(
+        takeovers(&events, &key),
+        [
+            TakeoverReport::ClosedByReceiver,
+            TakeoverReport::Taken {
+                group: Some(FOREIGN.to_owned())
+            }
+        ]
     );
+    assert!(!stopped(&events, &key));
+    sender.shutdown();
+}
+
+// T4 and T6: a close with no evidence makes no attempt inside the window
+// and reports no evidence at its end. The host's word starts a session no
+// earlier; a Busy answer to it is Taken, with no further attempt.
+// covers: P249, P137
+#[test]
+fn a_close_with_no_evidence_waits_for_the_host_and_a_busy_retry_is_taken() {
+    let _serial = serial();
+    let window = Duration::from_millis(1500);
+    let Rig {
+        receiver: a,
+        sender,
+        _host,
+        mut events,
+        key,
+        device,
+        ..
+    } = playing(window);
+    let seen = events.of(&key).len();
+    let connections = a.log().connections.len();
+
+    a.kill();
+    let closed = Instant::now();
+    watch(
+        &mut events,
+        &sender,
+        closed + window + Duration::from_secs(1),
+    );
+    assert_eq!(retries_or_connects(&events, &key, seen), []);
+    assert_eq!(a.log().connections.len(), connections);
+    assert_eq!(
+        takeovers(&events, &key),
+        [TakeoverReport::ClosedByReceiver, TakeoverReport::NoEvidence]
+    );
+
+    a.behavior().status.insert("ANNOUNCE".to_owned(), 453);
+    sender.add_speaker(device, SpeakerOptions::new(Volume::Db(-20.0)));
+    let asked = Instant::now();
+    watch(&mut events, &sender, asked + Duration::from_secs(4));
+    assert_eq!(a.log().connections.len(), connections + 1);
+    assert_eq!(
+        takeovers(&events, &key).last(),
+        Some(&TakeoverReport::Taken { group: None })
+    );
+    assert!(!stopped(&events, &key));
     sender.shutdown();
 }
