@@ -116,8 +116,22 @@ pub fn decide(
                 ),
                 Some(Entry::Pin(verified.key)),
             ),
-            _ => (
-                decision(Verdict::Refused, false, format!("{outcome}, refused")),
+            // A group has no pin to match, and refusing it would protect no
+            // one: a group that declines already plays with one notice.
+            None => (
+                decision(
+                    Verdict::Proceed,
+                    true,
+                    format!("{outcome}, unauthenticated, warned"),
+                ),
+                Some(Entry::Unauthenticated),
+            ),
+            Some(_) => (
+                decision(
+                    Verdict::Proceed,
+                    false,
+                    format!("{outcome}, unauthenticated"),
+                ),
                 None,
             ),
         },
