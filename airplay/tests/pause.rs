@@ -411,7 +411,20 @@ fn a_delay_change_behind_artwork_sends_nothing_new_before_its_flush() {
     const ARTWORK: Duration = Duration::from_millis(1500);
     let _serial = serial();
     let receiver = NetReceiver::start(Behavior::default());
-    let (sender, _host, _events, key) = play(&receiver, 1);
+    let (sender, writer) = Sender::start(SenderConfig::default()).expect("the sender starts");
+    // At an Lf of 100 ms a loaded runner stalling the sender restarts the
+    // timeline (P143), and that FLUSH passes for the delay's; 2 s rules it out.
+    sender.set_latency(88_200);
+    let _host = HostAudio::start(writer);
+    let device = receiver.device(1, PCM_TXT);
+    let key = device.key.clone();
+    sender.add_speaker(device, SpeakerOptions::new(Volume::Db(-20.0)));
+    assert!(
+        Events::default()
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Playing)
+            .is_some()
+    );
+    assert!(wait_until(LONG, || receiver.log().audio.len() >= 50));
     receiver
         .behavior()
         .answer_delay
