@@ -1129,18 +1129,24 @@ impl<D: Driver> Controller<D> {
                 },
             }
         }
-        let peak = self
-            .session
-            .as_ref()
-            .map_or(0.0, |session| session.ring.take_demand_peak());
-        let since = self
-            .on_demand_fed
-            .replace(at)
-            .map_or(0.0, |fed| at.saturating_duration_since(fed).as_secs_f64());
-        let windows = (since / on_demand::WINDOW).round().min(100.0) as u32;
-        for n in (0..windows).rev() {
-            let window_at = now - f64::from(n) * on_demand::WINDOW;
-            actions.extend(self.on_demand.window(peak, window_at));
+        let fed = *self.on_demand_fed.get_or_insert(at);
+        let windows = (at.saturating_duration_since(fed).as_secs_f64() / on_demand::WINDOW) as u32;
+        // A poll inside one window keeps the peak and the start of the
+        // window for the next poll.
+        if windows > 0 {
+            let peak = self
+                .session
+                .as_ref()
+                .map_or(0.0, |session| session.ring.take_demand_peak());
+            self.on_demand_fed = Some(if windows > 100 {
+                at
+            } else {
+                fed + Duration::from_secs_f64(f64::from(windows) * on_demand::WINDOW)
+            });
+            for n in (0..windows.min(100)).rev() {
+                let window_at = now - f64::from(n) * on_demand::WINDOW;
+                actions.extend(self.on_demand.window(peak, window_at));
+            }
         }
         self.apply_on_demand(actions);
     }
