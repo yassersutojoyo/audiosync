@@ -2120,6 +2120,10 @@ impl<D: Driver> Controller<D> {
         if notified {
             self.log
                 .log(|| format!("{AUDIO_SYSTEM} reported a change of the outputs"));
+            // A new default takes the apps' streams along with no new session (S480).
+            if matches!(self.running_source(), Some(SourceId::WholeSystem)) {
+                self.check_routing_as(Instant::now(), false);
+            }
         }
         if force || notified || !self.listing_ok {
             let (changed, listed) = self.refresh_outputs();
@@ -4706,6 +4710,12 @@ impl<D: Driver> Controller<D> {
     /// queues [`BackendEvent::HeardTwice`] when the answer changed. A
     /// snapshot that fails keeps the last answer.
     fn check_routing(&mut self, now: Instant) {
+        self.check_routing_as(now, true);
+    }
+
+    /// [`Self::check_routing`], or with `report` false only the whole
+    /// system's route, leaving the heard-twice checks and their count alone.
+    fn check_routing_as(&mut self, now: Instant, report: bool) {
         let Some(session) = &self.session else {
             return;
         };
@@ -4715,7 +4725,9 @@ impl<D: Driver> Controller<D> {
             CaptureTarget::Mix(activations) => activations.clone(),
             CaptureTarget::Input { .. } => return,
         };
-        self.routing.last_check = Some(now);
+        if report {
+            self.routing.last_check = Some(now);
+        }
         let rendered: Vec<String> = session.outputs.keys().cloned().collect();
         let snapshot = self
             .driver
@@ -4783,7 +4795,14 @@ impl<D: Driver> Controller<D> {
                     .log(|| format!("whole system: apps play on {}", players.join("; ")));
                 self.routing.players = players;
             }
-            self.route_system(route);
+            // Off the regular check a stream may not have moved yet, and an
+            // app taken by process loopback could then reach the endpoint too.
+            if report || route.as_ref().is_some_and(|route| route.apps.is_empty()) {
+                self.route_system(route);
+            }
+        }
+        if !report {
+            return;
         }
         let answer = routing::check(&captured, &endpoints, &rendered, &self.routing.played_on);
         if answer.paths != self.routing.reported {
@@ -13314,6 +13333,57 @@ mod tests {
         backend.poll();
         assert!(backend.playing_ids().contains(&SPEAKERS.to_owned()));
         assert_eq!(backend.driver().capture_routes().last(), Some(&None));
+    }
+
+    /// The default output changed mid-song moves the player's stream with no
+    /// new session: the capture follows at that poll, not up to 3 s later.
+    // covers: S480
+    #[cfg(windows)]
+    #[test]
+    fn a_default_output_changed_mid_song_moves_the_capture_at_once() {
+        let mut backend = routed_to_the_speakers();
+        backend.connect_output_as(TV, "TV", OutputKind::Hdmi);
+        backend.list_outputs().unwrap();
+        backend.poll();
+        for (from, to) in [(SPEAKERS, TV), (TV, SPEAKERS)] {
+            backend.set_default_output(to);
+            backend.move_session(PLAYER_PID, from, to);
+            backend.poll();
+            assert_eq!(
+                backend.driver().capture_routes().last(),
+                Some(&Some(to.to_owned())),
+                "{:?}",
+                backend.driver().capture_routes()
+            );
+        }
+    }
+
+    /// Windows' notice of a new default can come before the player's stream
+    /// moves: the capture keeps its route rather than take the player twice,
+    /// by the new endpoint and by process loopback.
+    // covers: S480
+    #[cfg(windows)]
+    #[test]
+    fn a_default_output_noticed_before_the_stream_moves_never_takes_the_player_twice() {
+        let mut backend = routed_to_the_speakers();
+        backend.connect_output_as(TV, "TV", OutputKind::Hdmi);
+        backend.list_outputs().unwrap();
+        backend.poll();
+        backend.set_default_output(TV);
+        backend.poll();
+        assert_eq!(
+            backend.driver().capture_routes().last(),
+            Some(&Some(SPEAKERS.to_owned())),
+            "{:?}",
+            backend.driver().capture_routes()
+        );
+        backend.move_session(PLAYER_PID, SPEAKERS, TV);
+        backend.check_routing_now();
+        backend.poll();
+        assert_eq!(
+            backend.driver().capture_routes().last(),
+            Some(&Some(TV.to_owned()))
+        );
     }
 
     #[test]
