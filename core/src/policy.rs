@@ -9,6 +9,7 @@
 //!
 //! - [`airplay_pairing`]: the host's side of pairing AirPlay speakers, their PIN and password prompts and the pairings file's notices, with the switches where the hosts still differ (S222 to S224, S349).
 //! - [`airplay_reconnect`]: the host's side of AirPlay speakers the sender retries or makes wait, and of a sender that couldn't start (S101, S222, S285, S412).
+//! - [`airplay_volume`]: the host's side of an AirPlay speaker's own volume: its reads, their echo window, the held slider, the level kept for the next session and the explicit pause's timing, with the switch where the hosts still differ (S271, S291, P213).
 //! - [`delay`]: local output delays and the local delay model (S3, S79, S124, S172 to S179).
 //! - [`device_volume`]: an output device's own volume and mute, and the fix (S192 to S202).
 //! - [`source`]: capture sources, the microphone permission and app quits (S12, S15, S164).
@@ -27,6 +28,7 @@ pub type Seconds = f64;
 
 pub mod airplay_pairing;
 pub mod airplay_reconnect;
+pub mod airplay_volume;
 pub mod capture;
 pub mod delay;
 pub mod device_volume;

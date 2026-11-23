@@ -84,7 +84,6 @@ use audiosync_airplay::input::InputWriter;
 use audiosync_airplay::latency::session_latency_frames;
 use audiosync_airplay::metadata::{Artwork, TrackInfo};
 use audiosync_airplay::pairing::{Credentials, PairingEvent};
-use audiosync_airplay::rtsp::Method;
 use audiosync_airplay::secret::Secret;
 use audiosync_airplay::sender::{
     AIRPLAY2_AUTO_ENV, AIRPLAY2_SWITCH_ENV, NowPlaying, Progress, ReceiverEvent, ReceiverInfo,
@@ -104,6 +103,9 @@ use crate::airplay2_identity::IdentityStore;
 use crate::airplay2_timing::{self, TimingStore};
 use crate::eq::{self, BAND_COUNT, EqSettings};
 use crate::fade::InputFade;
+use crate::policy::airplay_volume::{
+    MAC, Reads, kept_volume, refuses_reads, slider_held, within_echo_window,
+};
 use crate::policy::remote::{
     Action, App, Command, Control, Event as RemoteEvent, MUTED_DB, OwnVolume, Playback, Remote,
 };
@@ -537,12 +539,10 @@ struct Added {
     key: DeviceKey,
     /// Its slider position, 0 to 100.
     position: f64,
-    /// A volume read was asked since the host last set the volume.
-    reading: bool,
+    /// Its volume reads (S291, P184).
+    reads: Reads,
     /// When the host last set the volume, its own or the zone's.
     volume_set_at: Option<Instant>,
-    /// It turned a volume read down: it isn't asked again.
-    unreadable: bool,
     /// The user drags its own slider, so read-backs are ignored (S271).
     dragging: bool,
     /// Another speaker is measured: it stays muted, and a level set on it
@@ -581,9 +581,8 @@ impl Added {
             target,
             members,
             counters,
-            reading: false,
+            reads: Reads::default(),
             volume_set_at: Some(Instant::now()),
-            unreadable: false,
             dragging: false,
             silenced: false,
             read_back: ReadBack::default(),
@@ -643,9 +642,15 @@ impl Added {
         }
     }
 
+    /// The slider is held, so a reading must not move the row (S271).
+    fn held(&self) -> bool {
+        // The Mac keeps no move time: its rule holds until the release.
+        slider_held(MAC.held_slider, self.dragging, Duration::ZERO)
+    }
+
     /// The host set the volume: an answer to a read asked before is old.
     fn volume_set(&mut self) {
-        self.reading = false;
+        self.reads.set();
         self.volume_set_at = Some(Instant::now());
     }
 }
@@ -1014,10 +1019,6 @@ fn speaker_volume(position: f64, zone: f64) -> Volume {
     device_volume(device_level(position, zone))
 }
 
-/// How long after the host sets a volume a DACP volume on the row sent is
-/// the speaker's echo, not a person's change (S271, S276).
-const VOLUME_SETTLE: Duration = Duration::from_secs(3);
-
 /// What [`AscAirPlayEvent::warning`] says for a sender warning.
 fn warning_code(warning: &Warning) -> i32 {
     match warning {
@@ -1281,7 +1282,7 @@ impl AscAirPlay {
                     && let Some(owner) = self.reporting_for(&id)
                     && let Some(added) = self.added.get_mut(&owner)
                 {
-                    added.unreadable = false;
+                    added.reads.session_stopped();
                 }
                 if let SpeakerEvent::VolumeReported(db) = event {
                     self.volume_reported(&id, db);
@@ -1454,8 +1455,8 @@ impl AscAirPlay {
         let Some(added) = self.added.get_mut(&owner) else {
             return;
         };
-        let asked = std::mem::take(&mut added.reading);
-        if !asked || added.dragging || !added.read_back.set_on_speaker(db, grid) {
+        let asked = added.reads.answered();
+        if !asked || added.held() || !added.read_back.set_on_speaker(db, grid) {
             return;
         }
         let Some(RowMove {
@@ -1469,12 +1470,7 @@ impl AscAirPlay {
         // The sender keeps the level as read too, past the wire range its
         // nearest, for a reconnect or a target member that starts late
         // (P119, P180).
-        let kept = if db <= MUTED_DB {
-            Volume::Muted
-        } else {
-            Volume::from_db(db).unwrap_or(Volume::Muted)
-        };
-        added.keep_volume(&self.sender, kept);
+        added.keep_volume(&self.sender, kept_volume(db));
         self.queue_event(Pending::Volume(owner, position, level));
     }
 
@@ -1557,11 +1553,11 @@ impl AscAirPlay {
         // s × k can't give (S290).
         let level = device_level(added.position, zone);
         own.level = if level == 0.0 { added.level } else { level };
-        own.dragging = added.dragging;
+        own.dragging = added.held();
         if let Command::DeviceVolume(db) = command {
             let recent = added
                 .volume_set_at
-                .is_some_and(|at| at.elapsed() < VOLUME_SETTLE);
+                .is_some_and(|at| within_echo_window(at.elapsed()));
             // The level the speaker has, the held one with k at 0 (S290).
             let sent = if added.silenced {
                 Volume::Muted
@@ -1606,19 +1602,11 @@ impl AscAirPlay {
     /// down, or whose AirPlay 2 reads stopped (P184), isn't asked again, so
     /// its log doesn't fill with the same line.
     fn warned(&mut self, id: String, warning: Warning) {
-        let unreadable = matches!(
-            warning,
-            Warning::RequestFailed {
-                method: Method::GetParameter,
-                ..
-            } | Warning::VolumeReadsStopped
-        );
-        if unreadable
+        if refuses_reads(&warning)
             && let Some(owner) = self.reporting_for(&id)
             && let Some(added) = self.added.get_mut(&owner)
         {
-            added.unreadable = true;
-            added.reading = false;
+            added.reads.refused();
         }
         self.queue_event(Pending::Warning(id, warning));
     }
@@ -1641,11 +1629,9 @@ impl AscAirPlay {
                 .and_then(|info| info.device.raop_txt.as_ref())
                 .and_then(|txt| txt.software_volume)
                 == Some(true);
-            if software || added.unreadable {
-                continue;
+            if added.reads.ask(playing, software) {
+                added.read_volume(&self.sender);
             }
-            added.reading = true;
-            added.read_volume(&self.sender);
         }
     }
 
@@ -3156,7 +3142,7 @@ pub unsafe extern "C" fn asc_airplay_set_volume_dragging(
             };
             added.dragging = dragging;
             // A read asked before this answers with a level from the drag.
-            added.reading = false;
+            added.reads.set();
             true
         })
     }
@@ -6688,11 +6674,11 @@ mod tests {
         inside(handle).take_in(state(SpeakerState::Stopped));
         // SAFETY: a live handle, used by this thread only.
         unsafe { asc_airplay_read_volumes(handle) };
-        assert!(!inside(handle).added[id].reading);
+        assert!(!inside(handle).added[id].reads.reading);
         inside(handle).take_in(state(SpeakerState::Playing));
         // SAFETY: as above.
         unsafe { asc_airplay_read_volumes(handle) };
-        assert!(inside(handle).added[id].reading);
+        assert!(inside(handle).added[id].reads.reading);
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }
@@ -6985,7 +6971,7 @@ mod tests {
         add_for_volume(handle, id, key.clone(), 50.0);
         // SAFETY: a live handle, used by this thread only.
         unsafe { asc_airplay_read_volumes(handle) };
-        assert!(inside(handle).added[id].reading);
+        assert!(inside(handle).added[id].reads.reading);
         inside(handle).take_in(SenderEvent::Speaker {
             key: key.clone(),
             event: SpeakerEvent::Warning(Warning::VolumeReadsStopped),
@@ -7001,7 +6987,7 @@ mod tests {
         report_volume(handle, &key, -6.0);
         // SAFETY: as above.
         unsafe { asc_airplay_read_volumes(handle) };
-        assert!(!inside(handle).added[id].reading);
+        assert!(!inside(handle).added[id].reads.reading);
         assert_eq!(inside(handle).added[id].position, 50.0);
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
@@ -7041,7 +7027,7 @@ mod tests {
             }
             // SAFETY: a live handle, used by this thread only.
             unsafe { asc_airplay_read_volumes(handle) };
-            assert!(inside(handle).added[id].reading, "{warning:?}");
+            assert!(inside(handle).added[id].reads.reading, "{warning:?}");
             // SAFETY: destroyed once, by this thread.
             unsafe { asc_airplay_destroy(&mut handle) };
         }
@@ -8743,7 +8729,7 @@ mod tests {
         assert_eq!(speaker_events(handle), 0);
         // SAFETY: a live handle, used by this thread only.
         unsafe { asc_airplay_read_volumes(handle) };
-        assert!(inside(handle).added["02005E005360"].reading);
+        assert!(inside(handle).added["02005E005360"].reads.reading);
         // Its own level back (−15 dB at 50 with the master at 100), within
         // the speaker's rounding: nothing moved.
         report_volume(handle, &key, -14.95);
@@ -8794,7 +8780,7 @@ mod tests {
         let key = {
             let added = inside(handle).added.get_mut(id).expect("added");
             added.volume_set_at = None;
-            added.reading = true;
+            added.reads.reading = true;
             added.key.clone()
         };
         // Turned up to −6 dB on the speaker: slider 80 with the master at 100.
@@ -8836,7 +8822,7 @@ mod tests {
         let key = {
             let added = inside(handle).added.get_mut(id).expect("added");
             added.volume_set_at = None;
-            added.reading = true;
+            added.reads.reading = true;
             added.key.clone()
         };
         // −40 dB, below the wire range: row 0, kept as −30 dB as on Windows.
@@ -8900,9 +8886,9 @@ mod tests {
     fn read_once(handle: *mut AscAirPlay, id: &str) -> Vec<Event> {
         // SAFETY: a live handle, used by this thread only.
         unsafe { asc_airplay_read_volumes(handle) };
-        assert!(inside(handle).added[id].reading, "not asked");
-        let mut events = events_until(handle, |_| !inside(handle).added[id].reading);
-        assert!(!inside(handle).added[id].reading, "no answer");
+        assert!(inside(handle).added[id].reads.reading, "not asked");
+        let mut events = events_until(handle, |_| !inside(handle).added[id].reads.reading);
+        assert!(!inside(handle).added[id].reads.reading, "no answer");
         events.extend(std::iter::from_fn(|| take_event(handle)));
         events
             .into_iter()
@@ -9354,7 +9340,7 @@ mod tests {
         // A stopped target isn't asked (S291).
         // SAFETY: a live handle, used by this thread only.
         unsafe { asc_airplay_read_volumes(handle) };
-        assert!(!inside(handle).added["pair:volume-pair"].reading);
+        assert!(!inside(handle).added["pair:volume-pair"].reads.reading);
         inside(handle)
             .target_states
             .insert("pair:volume-pair".to_owned(), SpeakerState::Playing);
@@ -9458,7 +9444,7 @@ mod tests {
         // It turned a volume read down: it isn't asked again.
         // SAFETY: as above.
         unsafe { asc_airplay_read_volumes(handle) };
-        assert!(!inside(handle).added["02005E005363"].reading);
+        assert!(!inside(handle).added["02005E005363"].reads.reading);
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }
