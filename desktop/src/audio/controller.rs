@@ -1517,7 +1517,12 @@ impl<D: Driver> Controller<D> {
         let mut running: Vec<Process> = record
             .apps
             .iter()
-            .chain(&record.calls)
+            .chain(
+                record
+                    .calls
+                    .iter()
+                    .filter(|app| !self.call_listeners.left_out().any(|out| *out == app.exe)),
+            )
             .flat_map(|app| {
                 table.running(&app.exe).map(|pid| Process {
                     pid,
@@ -1760,21 +1765,11 @@ impl<D: Driver> Controller<D> {
     fn sync_call_listeners(&mut self) {
         let whole_system = self.default_switch.switched()
             && (self.app_output.is_some() || self.driver.targets_streams());
-        // A pin the rule no longer holds (an earlier run's, or one whose app
-        // quit before it rejoined) is put back once the app runs.
-        let leftover: Vec<String> = self
+        let pinned = self
             .app_redirect
             .record()
-            .map(|record| {
-                record
-                    .calls
-                    .iter()
-                    .map(|app| app.exe.clone())
-                    .filter(|exe| !self.call_listeners.left_out().any(|out| out == exe))
-                    .collect()
-            })
-            .unwrap_or_default();
-        if !whole_system && self.call_listeners.left_out().next().is_none() && leftover.is_empty() {
+            .is_some_and(|record| !record.calls.is_empty());
+        if !whole_system && self.call_listeners.left_out().next().is_none() && !pinned {
             return;
         }
         let Ok(table) = self.driver.processes() else {
@@ -1798,11 +1793,7 @@ impl<D: Driver> Controller<D> {
         };
         listening.sort();
         listening.dedup();
-        let audio = if whole_system {
-            self.driver.endpoint_audio().unwrap_or_default()
-        } else {
-            Vec::new()
-        };
+        let audio = self.driver.endpoint_audio().unwrap_or_default();
         let silent = self
             .default_switch
             .record()
@@ -1821,6 +1812,20 @@ impl<D: Driver> Controller<D> {
             },
             now,
         );
+        // A pin the rule no longer holds (an earlier run's, or one whose app
+        // quit before it rejoined) is put back once the app runs.
+        let leftover: Vec<String> = self
+            .app_redirect
+            .record()
+            .map(|record| {
+                record
+                    .calls
+                    .iter()
+                    .map(|app| app.exe.clone())
+                    .filter(|exe| !self.call_listeners.left_out().any(|out| out == exe))
+                    .collect()
+            })
+            .unwrap_or_default();
         let sessions: Vec<u32> = audio
             .iter()
             .flat_map(|endpoint| endpoint.active_pids.iter().copied())
@@ -1871,7 +1876,8 @@ impl<D: Driver> Controller<D> {
         }
         if let Some((endpoints, store)) = self.app_output.as_mut() {
             for exe in leftover {
-                let running = running(&exe);
+                let mut running = running(&exe);
+                running.retain(|process| sessions.contains(&process.pid));
                 if !running.is_empty() {
                     lines.extend(self.app_redirect.unpin(
                         endpoints.as_mut(),
