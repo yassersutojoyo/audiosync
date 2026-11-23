@@ -93,6 +93,8 @@ fn start_limited(airplay2: bool, sessions: usize) -> (Sender, HostAudio) {
     let config = SenderConfig {
         airplay2,
         airplay2_sessions: sessions,
+        // A receiver's close stands for any loss (P142), not a takeover (P249).
+        evidence_window: None,
         ..SenderConfig::default()
     };
     let (sender, writer) = Sender::start(config).expect("the sender starts");
@@ -1005,6 +1007,8 @@ fn ptp_sender(listener: &PtpListener) -> (Sender, HostAudio) {
         airplay2: true,
         ptp_ports: free_ptp_ports(),
         ptp_receiver_ports: listener.ports(),
+        // A receiver's close stands for any loss (P142), not a takeover (P249).
+        evidence_window: None,
         ..SenderConfig::default()
     };
     let (sender, writer) = Sender::start(config).expect("the sender starts");

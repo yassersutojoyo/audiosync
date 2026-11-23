@@ -184,7 +184,12 @@ fn a_receiver_taken_by_another_sender_is_not_connected_again() {
     watch(&mut events, &sender, closed + Duration::from_secs(3));
     script.push(BrowseEvent::Resolved(airplay_record(&a, 1, PI)));
     watch(&mut events, &sender, closed + Duration::from_secs(5));
-    assert_eq!(retries_or_connects(&events, &key, seen), []);
+    assert_eq!(
+        retries_or_connects(&events, &key, seen),
+        [],
+        "{:?}",
+        &events.of(&key)[seen..]
+    );
     assert_eq!(a.log().connections.len(), connections);
     assert_eq!(
         takeovers(&events, &key),
@@ -226,7 +231,12 @@ fn a_close_with_no_evidence_waits_for_the_host_and_a_busy_retry_is_taken() {
         &sender,
         closed + window + Duration::from_secs(1),
     );
-    assert_eq!(retries_or_connects(&events, &key, seen), []);
+    assert_eq!(
+        retries_or_connects(&events, &key, seen),
+        [],
+        "{:?}",
+        &events.of(&key)[seen..]
+    );
     assert_eq!(a.log().connections.len(), connections);
     assert_eq!(
         takeovers(&events, &key),

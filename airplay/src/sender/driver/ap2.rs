@@ -79,6 +79,8 @@ pub(super) struct Ap2Active {
     pub(super) events_io: Option<RtspIo>,
     /// The speaker in the stream once the stream is set up and flushed.
     pub(super) stream_id: Option<stream::SpeakerId>,
+    /// The session reached the stream; kept after its sockets close.
+    pub(super) played: bool,
     /// The session started with stored HomeKit credentials, so a
     /// PairingRequired from it means the receiver no longer takes them (P154).
     pub(super) verifying: bool,
@@ -290,6 +292,7 @@ impl Driver {
             io,
             events_io: None,
             stream_id: None,
+            played: false,
             verifying,
             outranked_told: false,
             ptp_configured,
@@ -933,6 +936,7 @@ impl Driver {
             .stream
             .add_speaker_with_counters(config, speaker.counters.clone(), now);
         active.stream_id = Some(id);
+        active.played = true;
         self.stream_ids.insert(id, key.clone());
     }
 

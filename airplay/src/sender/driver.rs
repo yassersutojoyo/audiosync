@@ -148,6 +148,8 @@ struct Active {
     attempt: u32,
     io: Option<SessionIo>,
     stream_id: Option<stream::SpeakerId>,
+    /// The session reached the stream; kept after its sockets close.
+    played: bool,
 }
 
 enum Phase {
@@ -1503,6 +1505,7 @@ impl Driver {
             .stream
             .add_speaker_with_counters(config, speaker.counters.clone(), now);
         active.stream_id = Some(id);
+        active.played = true;
         speaker.backoff.on_playing();
         speaker.after_close = false;
         self.stream_ids.insert(id, key.clone());
@@ -1521,8 +1524,8 @@ impl Driver {
         // Only a session that played was taken; a close during its setup
         // is retried as before.
         let played = match &speaker.phase {
-            Phase::Active(active) => active.stream_id.is_some(),
-            Phase::Ap2(active) => active.stream_id.is_some(),
+            Phase::Active(active) => active.played,
+            Phase::Ap2(active) => active.played,
             _ => false,
         };
         let closing = speaker.removing || self.stopping.is_some();
@@ -2549,6 +2552,7 @@ impl Driver {
             attempt: 0,
             io: None,
             stream_id: None,
+            played: false,
         }));
         self.sessions.insert(session_key, key.clone());
         self.remote_open(key, remote, now);
@@ -3797,6 +3801,7 @@ mod tests {
                     attempt: 1,
                     io: None,
                     stream_id: None,
+                    played: false,
                 })),
                 removing: false,
                 airplay1_outcome: None,
@@ -3960,6 +3965,7 @@ mod tests {
                     attempt: 1,
                     io: None,
                     stream_id: None,
+                    played: false,
                 })),
                 removing: false,
                 airplay1_outcome: None,
