@@ -100,7 +100,7 @@ use crate::audio::backend::{
 use crate::audio::backend::{AirPlayPinPrompt, PairingPhase};
 use crate::audio::cast_address::{self, CastAddress};
 use audiosync_core::calibrate_all::{
-    Applied, Class, EndReason, RowState, Sheet, Take, Target, airplay_moves,
+    AirPlayShared, Applied, Class, EndReason, RowState, Sheet, Take, Target, airplay_moves,
 };
 
 use crate::audio::calibrate_all::{self, AllRun, Finished, Member, Progress, ZoneScope};
@@ -1844,6 +1844,24 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
     }
 
+    /// The core reads and writes L; the sheet names A, the number the
+    /// AirPlay Delay field shows (S181), as the Mac's `CalibrateAllFlow.shown`.
+    fn shown_airplay(shared: AirPlayShared, members: &[Member]) -> AirPlayShared {
+        let Some(member) = members
+            .iter()
+            .find(|member| member.class == Class::AirPlay && member.offset_ms == shared.old_ms)
+        else {
+            return shared;
+        };
+        AirPlayShared {
+            old_ms: Some(member.adjustment_ms),
+            new_ms: shared
+                .new_ms
+                .and_then(|ms| native_airplay_adjustment_ms(ms, member.sender_ms)),
+            ..shared
+        }
+    }
+
     fn sheet_state(&self, kept: &KeptSheet, busy: bool) -> SheetState {
         let sheet = &kept.sheet;
         // A failure ends the sheet too, as the Mac reads it (CalibrateAllFlow.swift:174).
@@ -1861,7 +1879,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     can_measure_again: open && row.state != RowState::Reference,
                 })
                 .collect(),
-            airplay: sheet.airplay().copied(),
+            airplay: sheet
+                .airplay()
+                .map(|shared| Self::shown_airplay(*shared, &kept.members)),
             ended: sheet.ended(),
             failure: kept.failure,
             again_ended: kept.again_ended.clone(),
