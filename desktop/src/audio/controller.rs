@@ -1083,21 +1083,26 @@ impl<D: Driver> Controller<D> {
             .as_secs_f64()
     }
 
-    /// Feeds the policy the speakers switched on, the AirPlay sender's
+    /// Feeds the policy the speakers switched on, the AirPlay and Cast
     /// takeover reports and the capture's peak in windows of
     /// [`on_demand::WINDOW`] since the last feed, and carries out what it
     /// decides (S481 to S483). The poll is slower than a window, so each
     /// window of a poll gets that poll's peak.
     fn feed_on_demand(&mut self, at: Instant) {
         let now = self.on_demand_now(at);
-        let Some(airplay) = self.airplay.as_mut() else {
-            return;
-        };
-        let on: BTreeSet<String> = airplay.enabled_ids().into_iter().collect();
+        let mut on: BTreeSet<String> = self
+            .airplay
+            .as_ref()
+            .map(|airplay| airplay.enabled_ids().into_iter().collect())
+            .unwrap_or_default();
+        let cast_on = self.cast.as_ref().and_then(CastSpeakers::enabled_id);
+        on.extend(cast_on.clone());
         for id in self.on_demand.switched_on_keys() {
             if !on.contains(&id) {
                 self.on_demand.switched_off(&id);
-                airplay.set_let_go(&id, false);
+                if let Some(airplay) = self.airplay.as_mut() {
+                    airplay.set_let_go(&id, false);
+                }
             }
         }
         for id in &on {
@@ -1106,18 +1111,28 @@ impl<D: Driver> Controller<D> {
             }
         }
         let mut actions = Vec::new();
-        for (id, report) in airplay.take_takeovers() {
+        let takeovers = self
+            .airplay
+            .as_mut()
+            .map(AirPlaySpeakers::take_takeovers)
+            .unwrap_or_default();
+        for (id, report) in takeovers {
             match report {
                 TakeoverReport::ClosedByReceiver => self.on_demand.closed_by_receiver(&id),
                 TakeoverReport::Taken { .. } => {
                     self.on_demand.taken(&id, now);
-                    airplay.set_let_go(&id, true);
+                    self.let_go(&id, true);
                 }
                 TakeoverReport::NoEvidence => match self.on_demand.no_evidence(&id, now) {
                     Some(action) => actions.push(action),
-                    None => airplay.set_let_go(&id, true),
+                    None => self.let_go(&id, true),
                 },
             }
+        }
+        if let Some(id) = cast_on
+            && self.cast.as_mut().is_some_and(CastSpeakers::take_taken)
+        {
+            self.on_demand.taken(&id, now);
         }
         let peak = self
             .session
@@ -1136,19 +1151,30 @@ impl<D: Driver> Controller<D> {
     }
 
     fn apply_on_demand(&mut self, actions: Vec<Action<String>>) {
-        let Some(airplay) = self.airplay.as_mut() else {
-            return;
-        };
         for action in actions {
             match action {
-                Action::Release(id) => airplay.set_let_go(&id, true),
+                Action::Release(id) => self.let_go(&id, true),
                 // A speaker the sender still holds after a close starts
                 // again from a removal, as a switch off and on does.
                 Action::Start(id) => {
-                    airplay.set_let_go(&id, true);
-                    airplay.set_let_go(&id, false);
+                    self.let_go(&id, true);
+                    self.let_go(&id, false);
                 }
             }
+        }
+    }
+
+    /// Lets the speaker `id` go or takes it back, on the Cast side when it is
+    /// the Cast speaker that is on, else on the AirPlay side.
+    fn let_go(&mut self, id: &str, let_go: bool) {
+        if let Some(cast) = self
+            .cast
+            .as_mut()
+            .filter(|cast| cast.enabled_id().as_deref() == Some(id))
+        {
+            cast.set_let_go(let_go);
+        } else if let Some(airplay) = self.airplay.as_mut() {
+            airplay.set_let_go(id, let_go);
         }
     }
 

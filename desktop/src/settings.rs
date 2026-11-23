@@ -2703,6 +2703,8 @@ mod tests {
             default_output,
             app_output,
             local_volumes,
+            release_when_quiet,
+            release_minutes,
             other_fields: _,
         } = every_field();
         assert_ne!(source, default.source);
@@ -2747,6 +2749,8 @@ mod tests {
         assert_ne!(default_output, default.default_output);
         assert_ne!(app_output, default.app_output);
         assert_ne!(local_volumes, default.local_volumes);
+        assert_ne!(release_when_quiet, default.release_when_quiet);
+        assert_ne!(release_minutes, default.release_minutes);
     }
 
     // covers: S212
