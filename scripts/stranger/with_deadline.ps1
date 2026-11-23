@@ -43,10 +43,15 @@ $harness = [int] (Get-Content $pidFile)
 $hp = Get-Process -Id $harness -ErrorAction SilentlyContinue
 if ($hp) { $null = $hp.Handle }
 function Test-Running { $hp -and -not $hp.HasExited }
+if ($env:GH_TOKEN -and $env:HEARTBEAT_NAME) {
+  $beat = "& '$((Resolve-Path (Join-Path $PSScriptRoot 'heartbeat.ps1')).Path)' -Work '$Work' -Name '$($env:HEARTBEAT_NAME -replace "'", "''")' -Minutes $($Minutes + 3)"
+  $null = Start-Hidden "`$env:RUNNER_TRACKING_ID = ''; Start-Process -FilePath '$shell' -WindowStyle Hidden -ArgumentList '-NoProfile', '-EncodedCommand', '$([Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($beat)))'"
+}
 $stop = (Get-Date).AddMinutes($Minutes)
 $shown = 0
 while (-not (Test-Path $done) -and (Test-Running) -and (Get-Date) -lt $stop) {
   Start-Sleep -Seconds 5
+  "$((Get-Date).ToUniversalTime().ToString('HH:mm:ss'))Z" | Set-Content (Join-Path $Work 'deadline-poll.txt')
   $lines = @(Get-Content $out -ErrorAction SilentlyContinue)
   if ($lines.Count -gt $shown) { $lines[$shown..($lines.Count - 1)]; $shown = $lines.Count }
 }
