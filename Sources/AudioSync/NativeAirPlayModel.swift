@@ -873,6 +873,10 @@ struct NativeAirPlayModel {
     /// until they leave and appear again.
     mutating func appearanceSeen(_ ids: [String]) { cantPlayAppeared.subtract(ids) }
 
+    /// Auto-connect turned the receiver `id` off as it appeared asking for a
+    /// PIN: it stays off with no new notice until the user turns it on (S349).
+    mutating func turnedOffAsking(_ id: String) {}
+
     /// Whether the listed receiver asks for a code every time it connects.
     func asksEveryTime(_ receiver: String) -> Bool {
         receivers[receiver]?.codeEveryTime == true

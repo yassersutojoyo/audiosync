@@ -3865,6 +3865,14 @@ do {
     check(returned.joinable(returned.rows(enabled: []), after: ["native:A1"], stopped: false) == ["native:C3"],
           "native airplay: a new auto-connect row asking for a password given this run is joinable",
           "\(returned.joinable(returned.rows(enabled: []), after: ["native:A1"], stopped: false))")
+    var pinRefusedBack = model
+    pinRefusedBack.turnedOffAsking("B2")
+    pinRefusedBack.apply(.gone(id: "B2", name: nil))
+    pinRefusedBack.apply(.appeared(receiver("B2", "Den TV", .needsPin)))
+    // covers: S349
+    check(appearedAsking(pinRefusedBack) == ["C3"] && pinRefusedBack.refusedOff == ["B2"],
+          "native airplay: an auto-connect Apple TV turned off for its PIN stays off with no new notice when it appears again this run, as on Windows",
+          "\(appearedAsking(pinRefusedBack)) \(pinRefusedBack.refusedOff)")
     var cantPlayModel = NativeAirPlayModel()
     for r in [receiver("A1", "kitchen", .available), receiver("D4", "HomePod", .airPlay2Only),
               receiver("E5", "Old", .unsupported), receiver("F6", "Attic", .needsPairing)] {
