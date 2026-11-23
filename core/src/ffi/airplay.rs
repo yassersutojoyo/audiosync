@@ -305,7 +305,8 @@ pub const AIRPLAY_EVENT_STORED: i32 = 15;
 /// The host lets the speaker go while it stays switched on: another sender
 /// took it, or nothing played for the idle time (S482, S483). It removes
 /// the speaker and adds it again only on [`AIRPLAY_EVENT_TAKE_BACK`] or the
-/// user's switch; that removal keeps it switched on for the policy.
+/// user's switch. A removal never switches a speaker off for the policy: the
+/// host passes over events for one the user switched off.
 pub const AIRPLAY_EVENT_LET_GO: i32 = 16;
 /// The host starts the speaker again from a removal and an add, as a switch
 /// off and on does (S482, S483).
@@ -842,9 +843,6 @@ pub struct AscAirPlay {
     /// peak handed over since.
     demand_fed: Option<Instant>,
     demand_peak: f32,
-    /// Speakers the host was told to let go or take back: their removal
-    /// keeps them switched on for the policy, until they are added.
-    demand_let_go: HashSet<String>,
 }
 
 /// Opens the browser discovery runs on; `None` when it can't start.
@@ -1906,13 +1904,11 @@ impl AscAirPlay {
     /// The host added `id`: switched on for the policy, as a user's switch
     /// (S482, S483).
     fn demand_switched_on(&mut self, id: &str) {
-        self.demand_let_go.remove(id);
         self.on_demand.switched_on(id.to_owned());
     }
 
     /// Asks the host to let `id` go, or to start it again (S482, S483).
     fn let_go(&mut self, id: String, let_go: bool) {
-        self.demand_let_go.insert(id.clone());
         self.queue_event(Pending::Demand(id, let_go));
     }
 
@@ -2788,7 +2784,6 @@ pub(crate) fn create_with(open_browser: OpenBrowser) -> *mut AscAirPlay {
                 on_demand: OnDemand::new(0.0),
                 demand_fed: None,
                 demand_peak: 0.0,
-                demand_let_go: HashSet::new(),
             })),
             Err(_) => ptr::null_mut(),
         }
@@ -3135,9 +3130,6 @@ pub unsafe extern "C" fn asc_airplay_remove_speaker(
                 return false;
             };
             added.remove(&airplay.sender);
-            if !airplay.demand_let_go.contains(id) {
-                airplay.on_demand.switched_off(&id.to_owned());
-            }
             if airplay.paired_for_session.remove(id) {
                 airplay.relist(id);
             }
