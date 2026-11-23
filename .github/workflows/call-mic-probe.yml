@@ -1,0 +1,134 @@
+name: Call microphone probe (Windows)
+
+# desktop/examples/call_mic_probe.rs on a clean runner: whether a process
+# listening to a microphone shows in the capture session lists without the
+# reader opening anything, and whether a per-app output move carries a
+# playing stream. The runner has no sound card, so two VB-CABLE instances
+# give it two render endpoints and a capture endpoint.
+#
+# VB-CABLE is donationware (https://vb-audio.com/Services/licensing.htm) and
+# Scream (MS-PL) only supplies devcon here: the job downloads both, checked by
+# hash, and installs them on the runner only. Neither is bundled, vendored or
+# a dependency of AudioSync.
+on:
+  push:
+    branches:
+      - 'fadhil/call-mic-probe-1124'
+  workflow_dispatch:
+
+concurrency:
+  group: call-mic-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  SKIA_BINARIES_URL: file://${{ github.workspace }}/skia-cache/{tag}/skia-binaries-{key}.tar.gz
+
+jobs:
+  skia:
+    uses: ./.github/workflows/skia.yml
+
+  build:
+    name: Build the probe
+    needs: skia
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Rust toolchain (1.99.1)
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal
+          rustup default 1.99.1
+          rustup target add x86_64-pc-windows-msvc
+
+      - name: Skia cache key
+        id: skia
+        run: echo "key=$(bash scripts/skia_cache_key.sh x86_64-pc-windows-msvc)" >> "$GITHUB_OUTPUT"
+
+      - name: Skia (stored by skia.yml)
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: skia-cache
+          key: ${{ steps.skia.outputs.key }}
+          fail-on-cache-miss: true
+
+      - name: Build
+        working-directory: desktop
+        run: |
+          cargo build --locked --release --example call_mic_probe --target x86_64-pc-windows-msvc
+          mkdir -p ../bin
+          cp target/x86_64-pc-windows-msvc/release/examples/call_mic_probe.exe ../bin/
+
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: call-mic-probe-bin
+          path: bin
+          retention-days: 1
+
+  probe:
+    name: Probe
+    needs: build
+    # Same image as the silent-output proof, where the VB-CABLE install is known to work.
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: call-mic-probe-bin
+          path: bin
+
+      - name: Two VB-CABLE instances, then the probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path probe-log | Out-Null
+          $log = 'probe-log/probe.txt'
+          foreach ($name in 'AudioEndpointBuilder', 'Audiosrv') { Set-Service -Name $name -StartupType Automatic; Start-Service -Name $name }
+          $fixture = (New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'call-mic-driver')).FullName
+          function Get-Checked([string] $Url, [string] $Name, [string] $Sha256) {
+            $zip = Join-Path $fixture $Name
+            Invoke-WebRequest -Uri $Url -OutFile $zip
+            $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash
+            if ($hash -ne $Sha256) { throw "$Name hash $hash" }
+            $into = Join-Path $fixture ([IO.Path]::GetFileNameWithoutExtension($Name))
+            Expand-Archive -Force $zip $into
+            $into
+          }
+          $scream = Get-Checked 'https://github.com/duncanthrax/scream/releases/download/4.0/Scream4.0.zip' 'Scream4.0.zip' `
+            'FA33E25F9A46C61E4E0CD83362C51C3D2A45C6FE4091AAD7507E240E40F1A520'
+          $devcon = Join-Path $scream 'Install/helpers/devcon-x64.exe'
+          $cable = Get-Checked 'https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack46.zip' 'VBCABLE_Driver_Pack46.zip' `
+            'BC44E8974191A5A2427D6C979E2DAB08DBB09925F3F435DFA2F0BA3E45B6EB90'
+          $signer = (Get-AuthenticodeSignature (Join-Path $cable 'vbaudio_cable64_win10.cat')).SignerCertificate
+          if ($signer) {
+            $vbCer = Join-Path $fixture 'vbcable.cer'
+            [IO.File]::WriteAllBytes($vbCer, $signer.Export('Cert'))
+            Import-Certificate -FilePath $vbCer -CertStoreLocation Cert:\LocalMachine\TrustedPublisher | Out-Null
+          }
+          $inf = Join-Path $cable 'vbMmeCable64_win10.inf'
+          pnputil /add-driver $inf /install | Out-File -Append $log
+          foreach ($i in 1, 2) { & $devcon install $inf 'VBAudioVACWDM' | Out-File -Append $log }
+          Start-Sleep -Seconds 15
+          Get-PnpDevice -PresentOnly -Class AudioEndpoint -ErrorAction SilentlyContinue |
+            Format-Table -AutoSize Status, FriendlyName | Out-String -Width 200 | Out-File -Append $log
+          $ErrorActionPreference = 'Continue'
+          & bin/call_mic_probe.exe list 2>&1 | Tee-Object -FilePath $log -Append
+          & bin/call_mic_probe.exe 2>&1 | Tee-Object -FilePath $log -Append
+          $code = $LASTEXITCODE
+          Select-String -Path $log -Pattern '^(RESULT|READBACK)' | ForEach-Object { "- $($_.Line)" } |
+            Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          exit $code
+
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        if: ${{ !cancelled() }}
+        with:
+          name: call-mic-probe-log
+          path: probe-log
+          retention-days: 7
