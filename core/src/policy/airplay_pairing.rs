@@ -78,18 +78,31 @@ pub fn tell_unreadable_pairings(rule: UnreadablePairingsNotice, moment: Pairings
     )
 }
 
+/// Which members of a stereo pair or home theater the user's switch-on
+/// asks for their passwords (P176).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PasswordMembers {
+    /// Every member that needs one, the prompts queued at once.
+    AllUpFront,
+    /// The first that needs one; the next once its session turns the
+    /// password down.
+    FirstThenNext,
+}
+
 /// What one host does where the hosts still differ.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HostRules {
     pub pin_format: PinFormat,
     pub open_pairing_at_sender_stop: OpenPairingAtSenderStop,
     pub unreadable_pairings_notice: UnreadablePairingsNotice,
+    pub password_members: PasswordMembers,
 }
 
 pub const MAC: HostRules = HostRules {
     pin_format: PinFormat::FourDigits,
     open_pairing_at_sender_stop: OpenPairingAtSenderStop::StayOn,
     unreadable_pairings_notice: UnreadablePairingsNotice::AtLaunch,
+    password_members: PasswordMembers::AllUpFront,
 };
 
 /// The Windows and Linux app.
@@ -97,6 +110,7 @@ pub const DESKTOP: HostRules = HostRules {
     pin_format: PinFormat::Digits,
     open_pairing_at_sender_stop: OpenPairingAtSenderStop::TurnOff,
     unreadable_pairings_notice: UnreadablePairingsNotice::OnceKeptAside,
+    password_members: PasswordMembers::FirstThenNext,
 };
 
 /// What a speaker that is on but hasn't joined would ask the user for.
@@ -254,11 +268,20 @@ pub fn off_at_stream_end(on: bool, every_time: bool, prompt_open: bool) -> bool 
     on && every_time && !prompt_open
 }
 
-/// The group member asked for its password when the user switches a stereo
-/// pair or home theater on: the first that needs one; the next is asked
-/// once its session turns the password down (P176).
-pub fn member_to_ask(needs_password: impl IntoIterator<Item = bool>) -> Option<usize> {
-    needs_password.into_iter().position(|needs| needs)
+/// The members asked for their passwords when the user switches a stereo
+/// pair or home theater on, by their places in `needs_password`.
+pub fn members_to_ask(
+    rule: PasswordMembers,
+    needs_password: impl IntoIterator<Item = bool>,
+) -> Vec<usize> {
+    let needing = needs_password
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, needs)| needs.then_some(index));
+    match rule {
+        PasswordMembers::AllUpFront => needing.collect(),
+        PasswordMembers::FirstThenNext => needing.take(1).collect(),
+    }
 }
 
 /// Whether writes of the pairings file fail, so the user is told once when
@@ -348,6 +371,8 @@ mod tests {
             MAC.unreadable_pairings_notice,
             UnreadablePairingsNotice::AtLaunch
         );
+        assert_eq!(DESKTOP.password_members, PasswordMembers::FirstThenNext);
+        assert_eq!(MAC.password_members, PasswordMembers::AllUpFront);
     }
 
     const ASKS_PIN: Unjoined = Unjoined {
@@ -532,10 +557,14 @@ mod tests {
     }
 
     #[test]
-    fn a_group_asks_its_first_member_needing_a_password() {
+    fn a_group_asks_its_first_member_needing_a_password_or_all_by_rule() {
         // covers: P176
-        assert_eq!(member_to_ask([false, true, true]), Some(1));
-        assert_eq!(member_to_ask([false, false]), None);
+        use PasswordMembers::{AllUpFront, FirstThenNext};
+        assert_eq!(members_to_ask(FirstThenNext, [false, true, true]), [1]);
+        assert_eq!(members_to_ask(AllUpFront, [false, true, true]), [1, 2]);
+        for rule in [FirstThenNext, AllUpFront] {
+            assert!(members_to_ask(rule, [false, false]).is_empty());
+        }
     }
 
     #[test]

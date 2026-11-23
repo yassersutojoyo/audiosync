@@ -2636,15 +2636,20 @@ impl AirPlaySpeakers {
                 .iter()
                 .map(|member| speaker_id(&member.key))
                 .collect();
-            let asked = pairing_rules::member_to_ask(members.iter().map(|member| {
-                self.listed_availability(member) == Some(AirPlayAvailability::NeedsPassword)
-                    && !self.passwords.contains_key(member)
-            }));
-            let Some(member) = asked.map(|index| members[index].clone()) else {
+            let asked = pairing_rules::members_to_ask(
+                DESKTOP.password_members,
+                members.iter().map(|member| {
+                    self.listed_availability(member) == Some(AirPlayAvailability::NeedsPassword)
+                        && !self.passwords.contains_key(member)
+                }),
+            );
+            if asked.is_empty() {
                 return Err(AirPlayProblem::Unsupported);
-            };
-            let pair = self.store.homekit(&member).is_some();
-            self.queue_password_ask(&member, false, pair, Some(id));
+            }
+            for member in asked.into_iter().map(|index| &members[index]) {
+                let pair = self.store.homekit(member).is_some();
+                self.queue_password_ask(member, false, pair, Some(id));
+            }
             self.entry(id).enabled = true;
             return Ok(());
         }
