@@ -30,21 +30,6 @@ pub fn check_pin(pin: &str, format: PinFormat) -> PinCheck {
     }
 }
 
-/// A speaker whose PIN pairing is open when the sender stops by itself.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OpenPairingAtSenderStop {
-    /// It goes off with the needs-a-PIN notice.
-    TurnOff,
-    /// It stays on, silent until Retry; one asking for a code every time
-    /// still goes off, as its PIN session ended with the stream.
-    StayOn,
-}
-
-/// Whether the speaker goes off with the needs-a-PIN notice.
-pub fn off_at_sender_stop(rule: OpenPairingAtSenderStop, every_time: bool) -> bool {
-    every_time || rule == OpenPairingAtSenderStop::TurnOff
-}
-
 /// When the user hears that the pairings file couldn't be read at launch
 /// (S224). Both hosts keep a copy of the file aside before writing over it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,27 +70,21 @@ pub enum PasswordMembers {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HostRules {
     pub pin_format: PinFormat,
-    pub open_pairing_at_sender_stop: OpenPairingAtSenderStop,
     pub unreadable_pairings_notice: UnreadablePairingsNotice,
     pub password_members: PasswordMembers,
-    pub refused_reappears: RefusedReappears,
 }
 
 pub const MAC: HostRules = HostRules {
     pin_format: PinFormat::FourDigits,
-    open_pairing_at_sender_stop: OpenPairingAtSenderStop::TurnOff,
     unreadable_pairings_notice: UnreadablePairingsNotice::AtLaunch,
     password_members: PasswordMembers::AllUpFront,
-    refused_reappears: RefusedReappears::Quiet,
 };
 
 /// The Windows and Linux app.
 pub const DESKTOP: HostRules = HostRules {
     pin_format: PinFormat::FourDigits,
-    open_pairing_at_sender_stop: OpenPairingAtSenderStop::TurnOff,
     unreadable_pairings_notice: UnreadablePairingsNotice::OnceKeptAside,
     password_members: PasswordMembers::AllUpFront,
-    refused_reappears: RefusedReappears::Quiet,
 };
 
 /// What a speaker that is on but hasn't joined would ask the user for.
@@ -223,23 +202,6 @@ pub fn auto_connects(speaker: Appeared) -> bool {
     speaker.auto_connect && !speaker.hidden && !speaker.refused && !speaker.every_time
 }
 
-/// What auto-connect does with a speaker it turned off for a code earlier
-/// this run (S349) once it leaves the network and appears again.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RefusedReappears {
-    /// Switched on and off again with why: the notice comes each time.
-    NoticeAgain,
-    /// It stays off with no notice for the rest of the run.
-    Quiet,
-}
-
-/// Whether a refusal kept this run still holds a speaker that appears again,
-/// so auto-connect passes it over in silence; `asks_code`: it went off
-/// because it asks for a PIN or a password (S349).
-pub fn refusal_holds(rule: RefusedReappears, asks_code: bool) -> bool {
-    rule == RefusedReappears::Quiet || !asks_code
-}
-
 /// A listed speaker that asks for a code every time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EveryTimeListed {
@@ -329,24 +291,6 @@ mod tests {
     }
 
     #[test]
-    fn an_open_pin_pairing_at_a_sender_stop_goes_off_or_stays_on_by_rule() {
-        // covers: S223
-        assert!(off_at_sender_stop(OpenPairingAtSenderStop::TurnOff, false));
-        assert!(off_at_sender_stop(OpenPairingAtSenderStop::TurnOff, true));
-        assert!(!off_at_sender_stop(OpenPairingAtSenderStop::StayOn, false));
-        assert!(off_at_sender_stop(OpenPairingAtSenderStop::StayOn, true));
-    }
-
-    #[test]
-    fn the_mac_turns_an_open_pin_pairing_off_at_a_sender_stop_as_desktop_does() {
-        // covers: S223
-        assert_eq!(
-            MAC.open_pairing_at_sender_stop,
-            DESKTOP.open_pairing_at_sender_stop
-        );
-    }
-
-    #[test]
     fn an_unreadable_pairings_file_is_told_at_launch_or_once_kept_aside_by_rule() {
         // covers: S224
         use PairingsMoment::{KeptAside, Launch};
@@ -360,10 +304,6 @@ mod tests {
     #[test]
     fn each_host_keeps_what_it_does_today() {
         assert_eq!(DESKTOP.pin_format, PinFormat::FourDigits);
-        assert_eq!(
-            DESKTOP.open_pairing_at_sender_stop,
-            OpenPairingAtSenderStop::TurnOff
-        );
         assert_eq!(
             DESKTOP.unreadable_pairings_notice,
             UnreadablePairingsNotice::OnceKeptAside
@@ -466,21 +406,6 @@ mod tests {
         assert!(password_marked_wrong(true, false));
         assert!(password_marked_wrong(false, true));
         assert!(!password_marked_wrong(false, false));
-    }
-
-    #[test]
-    fn the_mac_keeps_a_reappearing_code_refusal_quiet_as_desktop_does() {
-        // covers: S349
-        assert_eq!(MAC.refused_reappears, DESKTOP.refused_reappears);
-    }
-
-    #[test]
-    fn a_code_refusal_reappearing_posts_again_or_stays_quiet_by_rule() {
-        // covers: S349
-        assert!(!refusal_holds(RefusedReappears::NoticeAgain, true));
-        assert!(refusal_holds(RefusedReappears::NoticeAgain, false));
-        assert!(refusal_holds(DESKTOP.refused_reappears, true));
-        assert!(refusal_holds(DESKTOP.refused_reappears, false));
     }
 
     #[test]
