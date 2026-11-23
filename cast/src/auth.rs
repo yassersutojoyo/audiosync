@@ -324,14 +324,6 @@ fn check(
     }
     let peer = peer.ok_or(Failure::NoPeerCertificate)?;
     let tls = parse(peer)?;
-    let validity = tls.validity();
-    let (from, until) = (
-        validity.not_before.timestamp(),
-        validity.not_after.timestamp(),
-    );
-    if from > now || until < now || until - now > TLS_CERTIFICATE_SPAN {
-        return Err(Failure::TlsCertificateWindow);
-    }
     if response.intermediate_certificate.len() > MAX_INTERMEDIATES {
         return Err(Failure::TooManyIntermediates);
     }
@@ -358,6 +350,16 @@ fn check(
         .verify(&signed, signature)
         .map_err(|_| Failure::Signature)?;
     let (audio_only, lapsed) = chain(&device, &intermediates, &roots, now)?;
+    // Last, so only a device that passed every other check reads as a clock
+    // fault and is retried rather than refused (C124).
+    let validity = tls.validity();
+    let (from, until) = (
+        validity.not_before.timestamp(),
+        validity.not_after.timestamp(),
+    );
+    if from > now || until < now || until - now > TLS_CERTIFICATE_SPAN {
+        return Err(Failure::TlsCertificateWindow);
+    }
     let verified = Verified {
         key: KeyPin::of_spki(device.public_key().raw),
         sha1,
