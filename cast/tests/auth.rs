@@ -587,10 +587,10 @@ fn the_device_and_intermediates_must_be_valid_now_but_the_root_need_not() {
     let mut expired = ca("Test Intermediate", None);
     expired.not_after = rcgen::date_time_ymd(2029, 1, 1);
     let chain = chain_with(ca("Test Root", None), expired, device_params());
-    assert_eq!(
+    assert!(matches!(
         judge(&chain, response(&chain)),
-        Outcome::Failed(Failure::Chain)
-    );
+        Outcome::IntermediateExpired(_)
+    ));
 
     let mut early = device_params();
     early.not_before = rcgen::date_time_ymd(2031, 1, 1);

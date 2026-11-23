@@ -291,6 +291,7 @@ extern "C" {
 #define ASC_CAST_ERROR_INTERNAL 11    /* a fault inside the sender; the next start runs (C107) */
 #define ASC_CAST_ERROR_NO_ADDRESS 12  /* no address to try: a group waits for its records (C81), a single device counts toward the give-up (C80) */
 #define ASC_CAST_ERROR_REFUSED 13     /* the device failed device authentication: turn it off, no retry (C130) */
+#define ASC_CAST_ERROR_CLOCK 14       /* the device's TLS certificate is outside its dates by this computer's clock: retried (C124) */
 
 /* A Cast stream's format (AscCastEvent.format). */
 #define ASC_CAST_FORMAT_WAV 1

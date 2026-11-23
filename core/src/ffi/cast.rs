@@ -208,6 +208,9 @@ pub const CAST_ERROR_NO_ADDRESS: i32 = 12;
 /// The device's answer to device authentication failed its checks; the
 /// target goes off and is not retried (C130).
 pub const CAST_ERROR_REFUSED: i32 = 13;
+/// The device's TLS certificate is outside its dates by this host's clock;
+/// retried as any connect failure (C124).
+pub const CAST_ERROR_CLOCK: i32 = 14;
 
 /// A stream's format ([`AscCastEvent::format`]): live WAV.
 pub const CAST_FORMAT_WAV: i32 = 1;
@@ -689,6 +692,7 @@ fn connect_code(error: &ConnectError) -> i32 {
     match error {
         ConnectError::NoAddress => CAST_ERROR_NO_ADDRESS,
         ConnectError::Refused(_) => CAST_ERROR_REFUSED,
+        ConnectError::Clock(_) => CAST_ERROR_CLOCK,
         _ => CAST_ERROR_CONNECT,
     }
 }

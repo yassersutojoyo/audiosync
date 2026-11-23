@@ -18,7 +18,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use native_tls::{HandshakeError, Protocol, TlsConnector, TlsStream};
 use sha2::{Digest, Sha256};
 
-use crate::auth::{self, Outcome};
+use crate::auth::{self, Failure, Outcome};
 use crate::channel::{Channel, Event, STOP_STEP_TIMEOUT};
 use crate::device_keys::{Decision, DeviceKeyBook, Verdict, auth_wait, decide};
 use crate::discovery::{CastDevice, DeviceId, DeviceKind};
@@ -648,6 +648,11 @@ impl CastClient {
         };
         match decision.verdict {
             Verdict::Proceed => {}
+            Verdict::ConnectFailed
+                if matches!(outcome, Outcome::Failed(Failure::TlsCertificateWindow)) =>
+            {
+                return Err(ConnectError::Clock(decision.line));
+            }
             Verdict::ConnectFailed => return Err(ConnectError::Unauthenticated(decision.line)),
             Verdict::Refused => {
                 let _ = stream.shutdown();

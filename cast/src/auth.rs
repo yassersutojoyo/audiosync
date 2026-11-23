@@ -204,10 +204,13 @@ pub struct Verified {
     pub crl: Option<usize>,
 }
 
-/// The four outcomes of a challenge (C122).
+/// The outcomes of a challenge (C122).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
     Verified(Verified),
+    /// Every check passed except that an intermediate is past its not-after
+    /// date, as the March 2025 lapse left older devices.
+    IntermediateExpired(Verified),
     Failed(Failure),
     /// The device answered with `error`, of this `error_type`.
     Declined(i32),
@@ -219,7 +222,7 @@ impl fmt::Display for Outcome {
     /// The outcome as C132 logs it.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Outcome::Verified(verified) => {
+            Outcome::Verified(verified) | Outcome::IntermediateExpired(verified) => {
                 let digest = if verified.sha1 { "sha1" } else { "sha256" };
                 let nonce = if verified.nonce_echoed {
                     "echoed"
@@ -239,7 +242,11 @@ impl fmt::Display for Outcome {
                     Some(length) => write!(f, "{length} bytes")?,
                     None => f.write_str("none")?,
                 }
-                write!(f, ", key {}", verified.key.short())
+                write!(f, ", key {}", verified.key.short())?;
+                if matches!(self, Outcome::IntermediateExpired(_)) {
+                    f.write_str(", intermediate expired")?;
+                }
+                Ok(())
             }
             Outcome::Failed(failure) => write!(f, "failed, {}", failure.reason()),
             Outcome::Declined(error_type) => match error_type {
@@ -280,7 +287,8 @@ pub fn judge(
         return Outcome::Failed(Failure::Malformed);
     };
     match check(&response, nonce, peer, now, roots) {
-        Ok(verified) => Outcome::Verified(verified),
+        Ok((verified, false)) => Outcome::Verified(verified),
+        Ok((verified, true)) => Outcome::IntermediateExpired(verified),
         Err(failure) => Outcome::Failed(failure),
     }
 }
@@ -291,7 +299,7 @@ fn check(
     peer: Option<&[u8]>,
     now: i64,
     roots: &[&[u8]],
-) -> Result<Verified, Failure> {
+) -> Result<(Verified, bool), Failure> {
     if response
         .sender_nonce
         .as_deref()
@@ -349,14 +357,15 @@ fn check(
     UnparsedPublicKey::new(digest, device_key)
         .verify(&signed, signature)
         .map_err(|_| Failure::Signature)?;
-    let audio_only = chain(&device, &intermediates, &roots, now)?;
-    Ok(Verified {
+    let (audio_only, lapsed) = chain(&device, &intermediates, &roots, now)?;
+    let verified = Verified {
         key: KeyPin::of_spki(device.public_key().raw),
         sha1,
         nonce_echoed: response.sender_nonce.is_some(),
         audio_only,
         crl: response.crl.as_ref().map(Vec::len),
-    })
+    };
+    Ok((verified, lapsed))
 }
 
 fn parse(der: &[u8]) -> Result<X509Certificate<'_>, Failure> {
@@ -383,13 +392,13 @@ fn rsa_key<'a>(certificate: &'a X509Certificate<'_>) -> Option<&'a [u8]> {
 
 /// Builds the path from `device` to a root by issuer and subject names and
 /// checks it (C125); whether a certificate on it marks the device
-/// audio-only.
+/// audio-only, and whether an intermediate on it is past its not-after date.
 fn chain(
     device: &X509Certificate<'_>,
     intermediates: &[X509Certificate<'_>],
     roots: &[X509Certificate<'_>],
     now: i64,
-) -> Result<bool, Failure> {
+) -> Result<(bool, bool), Failure> {
     let mut path = vec![device];
     let mut used = vec![false; intermediates.len()];
     loop {
@@ -407,6 +416,7 @@ fn chain(
         path.push(intermediate);
     }
     let mut audio_only = false;
+    let mut lapsed = false;
     for (index, certificate) in path.iter().enumerate() {
         let is_root = index == path.len() - 1;
         for extension in certificate.extensions() {
@@ -446,12 +456,18 @@ fn chain(
         }
         if !is_root {
             let validity = certificate.validity();
-            if validity.not_before.timestamp() > now || validity.not_after.timestamp() < now {
+            if validity.not_before.timestamp() > now {
                 return Err(Failure::Chain);
+            }
+            if validity.not_after.timestamp() < now {
+                if index == 0 {
+                    return Err(Failure::Chain);
+                }
+                lapsed = true;
             }
         }
     }
-    Ok(audio_only)
+    Ok((audio_only, lapsed))
 }
 
 /// Checks `certificate`'s signature with its issuer's `key` (C125).

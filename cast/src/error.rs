@@ -30,6 +30,9 @@ pub enum ConnectError {
     /// A device with a pinned key declined or did not answer the challenge
     /// (C129); retried as any connect failure. Holds the C132 line.
     Unauthenticated(String),
+    /// The device's TLS certificate is outside its dates by this host's
+    /// clock (C124); retried as any connect failure. Holds the C132 line.
+    Clock(String),
     /// The device's answer failed its checks (C130); never retried. Holds
     /// the C132 line.
     Refused(String),
@@ -47,7 +50,9 @@ impl fmt::Display for ConnectError {
             }
             ConnectError::NoStatus => f.write_str("the device did not report its status"),
             ConnectError::Ended(reason) => write!(f, "the connection ended: {reason}"),
-            ConnectError::Unauthenticated(line) | ConnectError::Refused(line) => f.write_str(line),
+            ConnectError::Unauthenticated(line)
+            | ConnectError::Clock(line)
+            | ConnectError::Refused(line) => f.write_str(line),
         }
     }
 }
