@@ -912,3 +912,37 @@ fn a_new_tls_certificate_under_the_same_device_key_goes_ahead_quietly() {
         Some(Entry::Pin(pin))
     );
 }
+
+// covers: C124, C130
+#[test]
+fn a_tls_certificate_outside_the_clock_is_judged_only_after_the_signature_and_chain() {
+    let mut chain = chain();
+    chain.tls = tls_certificate((2030, 1, 4), (2030, 1, 5));
+    let mut forged = response(&chain);
+    forged.signature = Some(sign(&key().0, false, b"another TLS certificate"));
+    assert_eq!(judge(&chain, forged), Outcome::Failed(Failure::Signature));
+    let mut lapsed_device = device_params();
+    lapsed_device.not_after = rcgen::date_time_ymd(2030, 1, 1);
+    let mut broken = chain_with(
+        ca("Test Root", None),
+        ca("Test Intermediate", None),
+        lapsed_device,
+    );
+    broken.tls = chain.tls.clone();
+    assert_eq!(
+        judge(&broken, response(&broken)),
+        Outcome::Failed(Failure::Chain)
+    );
+}
+
+// covers: C129, C131
+#[test]
+fn a_marked_device_with_a_lapsed_intermediate_is_pinned_without_a_second_notice() {
+    let chain = lapsed_chain();
+    let pin = device_pin(&chain);
+    let outcome = judge(&chain, response(&chain));
+    let (decision, after) = decide("dev", Some(Entry::Unauthenticated), &outcome, false);
+    assert_eq!(decision.verdict, Verdict::Proceed);
+    assert!(!decision.warn);
+    assert_eq!(after, Some(Entry::Pin(pin)));
+}
