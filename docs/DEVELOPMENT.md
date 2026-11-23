@@ -238,6 +238,20 @@ AudioSync's own AirPlay sender (`airplay/`, the one the Windows app uses) is the
 
 The AppImage is built by `.github/workflows/linux.yml` on ubuntu-24.04, so glibc 2.39 is the oldest it runs on (the floor: this job and `stranger.yml` fail when `objdump -T` shows the program needs a newer glibc symbol, as one built on a newer image does); the same job builds the `.deb` with `scripts/build_deb.sh` and, on x86_64, the `.rpm` for Fedora 40 or newer with `scripts/build_rpm.sh`. `scripts/build_appimage.sh` lays out the AppDir from `desktop/linux/` (`AppRun`, the `.desktop` file and the AppStream metadata, all named `io.github.yassersutojoyo.audiosync`, the Wayland app id the app sets) and packs it with appimagetool 1.9.1 and type2-runtime 20251108, both pinned by SHA-256. Nothing is bundled: fontconfig, PipeWire, OpenSSL and the display libraries come from the system, and the job fails if the program links a library outside its list (`readelf -d`) or the AppDir gets a `usr/lib`. `AppRun` checks for `libpipewire-0.3.so.0` first and says so on stderr (and through `notify-send` where it exists) instead of letting the loader fail without a window. The job validates the `.desktop` and AppStream files, then runs `Tests/linux-tray-smoke.sh` on a mock-backend AppImage under Xvfb: once next to `desktop/examples/sni_watcher_stub.rs`, a stand-in watcher the icon must register with, once without one, where the app must run window-only, and once with the stand-in starting 3 s after the app, where the icon must still register. The license texts of the runtime and the libraries it links statically live in `desktop/linux/RUNTIME-NOTICES.txt`, which the AppImage carries in `usr/share/doc/audiosync/`; a new runtime release means checking that file against the runtime's LICENSE. Each release that ships the AppImage attaches the runtime's source and that of the libfuse it links statically, which the job uploads as the `appimage-runtime-sources` artifact (see `RELEASE.md`).
 
+#### Building on Linux
+
+This is what `.github/workflows/linux.yml` does, on Ubuntu 24.04 with Rust 1.99.1 (`desktop/` needs 1.99 or newer). First the libraries for Slint, the Cast sender's OpenSSL and the PipeWire client, whose bindings need libclang:
+
+```bash
+sudo apt-get install libfontconfig1-dev libxkbcommon-dev libwayland-dev libx11-dev \
+  libssl-dev pkg-config libpipewire-0.3-dev clang libclang-dev
+cd desktop
+cargo build --locked --release
+./target/release/audiosync
+```
+
+The app needs PipeWire running. To package it, the workflow writes the notices with `python3 -I ../scripts/windows_notices.py x86_64-unknown-linux-gnu --output target/release/THIRD-PARTY-NOTICES.txt` (or `aarch64-unknown-linux-gnu`), then calls `scripts/build_appimage.sh`, `scripts/build_deb.sh` and `scripts/build_rpm.sh`; its "AppImage and .deb" step shows the arguments, and the AppImage also needs the pinned appimagetool and runtime it downloads.
+
 ## Logo, icons and screenshots
 
 The logo, app icon and wordmark are generated from the sources in `brand/` by `scripts/brand/build-brand.sh`; [`brand/README.md`](../brand/README.md) explains how. Don't edit `AppIcon.icns`, `icon-source.png`, the `site/` icons, `site/wordmark.svg`, `BrandMark.swift` or the Windows icons in `desktop/res/` (from `scripts/brand/windows-icons.sh`) by hand.

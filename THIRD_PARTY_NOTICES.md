@@ -211,11 +211,11 @@ POSSIBILITY OF SUCH DAMAGE.
 
 The wordmark SVGs in `brand/` are outlined from Poppins Medium.
 
-## Windows app (preview)
+## Windows app
 
 `desktop/` is the Windows 11 version of AudioSync. None of it is in the macOS
-app. Windows builds go out only as an unsigned preview attached to a macOS
-release.
+app. Each release carries Windows builds for x64 and ARM64, as a zip and as
+an installer; neither is code-signed.
 
 | Component | License |
 |---|---|
