@@ -1,41 +1,9 @@
 //! The host's side of AirPlay rows and groups: which receiver gets a row
 //! (S222, P176), when a stereo pair or home theater group holds its member
 //! (P176), how a target reads from its members (P176, P181), why an Apple TV
-//! and its home theater group never play at once (P177, P229), and how many
-//! receivers one announced address lists.
+//! and its home theater group never play at once (P177, P229).
 //!
 //! Plain data in and out; the Mac host keeps its own copy in Swift for now.
-//! Where the hosts still differ, a [`HostRules`] field names the difference
-//! and each host's constant holds what it does today.
-
-/// The most receivers the Windows and Linux app lists under one announced
-/// address, a bridge that fronts many speakers from one host included. The
-/// announcer picks that address, so this bounds one address, not one host.
-pub const MAX_LISTED_PER_ADDRESS: usize = 64;
-
-/// What one host does where the hosts still differ.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct HostRules {
-    /// The most receivers listed under one announced address, or no limit.
-    pub listed_per_address: Option<usize>,
-}
-
-pub const MAC: HostRules = HostRules {
-    listed_per_address: None,
-};
-
-/// The Windows and Linux app.
-pub const DESKTOP: HostRules = HostRules {
-    listed_per_address: Some(MAX_LISTED_PER_ADDRESS),
-};
-
-/// Whether a receiver not listed yet, at an address that lists `listed_at`
-/// already, is left out.
-pub fn address_full(rules: HostRules, listed_at: usize) -> bool {
-    rules
-        .listed_per_address
-        .is_some_and(|limit| listed_at >= limit)
-}
 
 /// Whether a receiver gets a row: a target keeps its row with the reason it
 /// can't play; a single receiver that can't play has none (S222, P176).
@@ -103,13 +71,6 @@ pub fn home_theater_conflict(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn only_the_desktop_app_stops_listing_an_address_at_64() {
-        assert!(!address_full(DESKTOP, 63));
-        assert!(address_full(DESKTOP, 64));
-        assert!(!address_full(MAC, 10_000));
-    }
 
     #[test]
     fn a_single_receiver_that_cant_play_has_no_row_and_a_target_keeps_its() {

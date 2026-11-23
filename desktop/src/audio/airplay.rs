@@ -61,7 +61,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
-use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -93,7 +92,7 @@ use audiosync_core::eq::{self, EqSettings};
 use audiosync_core::fade::InputFade;
 use audiosync_core::ffi::airplay::{latest_panic_since, panic_mark};
 use audiosync_core::policy::airplay_groups::{
-    self as group_rules, HomeTheaterConflict, MAX_LISTED_PER_ADDRESS, TargetReads,
+    self as group_rules, HomeTheaterConflict, TargetReads,
 };
 use audiosync_core::policy::airplay_latency::{estimate_free, keeps_held_estimate, largest_ms};
 use audiosync_core::policy::airplay_pairing::{
@@ -827,17 +826,6 @@ fn held_level(level: f64, zone: f64) -> Option<f64> {
     }
 }
 
-/// The address a receiver announces first, AirPlay service before RAOP.
-fn first_address(device: &Device) -> Option<IpAddr> {
-    device
-        .airplay
-        .iter()
-        .chain(&device.raop)
-        .flat_map(|endpoint| &endpoint.addresses)
-        .map(|address| address.ip)
-        .next()
-}
-
 /// The volume reads of one row in the sender.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct VolumeRead {
@@ -868,11 +856,9 @@ impl VolumeRead {
     }
 
     /// The slider is held, so a reading must not move the row: it started
-    /// editing and, under the desktop's rule, moved within
-    /// [`volume_rules::DRAG_IDLE`] (S271).
-    fn held(&self, now: Instant) -> bool {
-        let since_move = now.saturating_duration_since(self.set_at);
-        slider_held(volume_rules::DESKTOP.held_slider, self.dragging, since_move)
+    /// editing and wasn't released (S271).
+    fn held(&self) -> bool {
+        slider_held(volume_rules::DESKTOP.held_slider, self.dragging)
     }
 
     /// The held slider moved without a set, so its hold restarts.
@@ -1130,9 +1116,6 @@ pub struct AirPlaySpeakers {
     gone_targets: BTreeSet<String>,
     /// The last name of every speaker seen, for logs and notices.
     names: BTreeMap<String, String>,
-    /// The addresses that announced more receivers than
-    /// [`MAX_LISTED_PER_ADDRESS`], each logged once.
-    crowded: BTreeSet<IpAddr>,
     /// The credentials of the paired Apple TVs.
     store: PairingStore,
     /// The key of every speaker the sender paired on AirPlay 2, by speaker
@@ -1294,7 +1277,6 @@ impl AirPlaySpeakers {
             target_missing: BTreeMap::new(),
             gone_targets: BTreeSet::new(),
             names: BTreeMap::new(),
-            crowded: BTreeSet::new(),
             store,
             homekit_keys: BTreeMap::new(),
             pairings: BTreeMap::new(),
@@ -2730,7 +2712,8 @@ impl AirPlaySpeakers {
             .get(id)
             .and_then(|ask| ask.target.clone())
             .unwrap_or_else(|| id.to_owned());
-        if self.drop_password_ask(id, "cancelled by the user") && self.settings(&owner).enabled {
+        if self.drop_password_ask(&owner, "cancelled by the user") && self.settings(&owner).enabled
+        {
             self.password_attempts.remove(&owner);
             self.entry(&owner).enabled = false;
             self.reconcile();
@@ -3150,7 +3133,7 @@ impl AirPlaySpeakers {
             return own;
         };
         own.level = self.device_level_of(row);
-        own.dragging = added.read.held(now);
+        own.dragging = added.read.held();
         if let Command::DeviceVolume(db) = command {
             // The level the speaker has, the held one with k at 0 (S290).
             let has = match self.calibration_solo.as_deref() {
@@ -3239,7 +3222,7 @@ impl AirPlaySpeakers {
         let Some(added) = self.added.get_mut(&row) else {
             return false;
         };
-        if !added.read.reads.answered() || added.read.held(Instant::now()) {
+        if !added.read.reads.answered() || added.read.held() {
             return false;
         }
         if !added.read.echo.set_on_speaker(db, grid) {
@@ -4109,19 +4092,6 @@ impl AirPlaySpeakers {
         match event {
             ReceiverEvent::Appeared(info) | ReceiverEvent::Changed(info) => {
                 let id = speaker_id(&info.device.key);
-                if !self.listed.contains_key(&id)
-                    && let Some(address) = first_address(&info.device)
-                    && group_rules::address_full(group_rules::DESKTOP, self.listed_at(address))
-                {
-                    if self.crowded.insert(address) {
-                        self.log.log(|| {
-                            format!(
-                                "AirPlay receivers at {address} past the first {MAX_LISTED_PER_ADDRESS} not listed"
-                            )
-                        });
-                    }
-                    return;
-                }
                 let availability = self.availability_of(&id, &info);
                 let appeared = !self.listed.contains_key(&id);
                 let was = self.listed.get(&id).map(|listed| listed.device().product());
@@ -4235,14 +4205,6 @@ impl AirPlaySpeakers {
                 }
             }
         }
-    }
-
-    /// How many listed receivers announce `address` first.
-    fn listed_at(&self, address: IpAddr) -> usize {
-        self.listed
-            .values()
-            .filter(|listed| first_address(listed.device()) == Some(address))
-            .count()
     }
 
     /// Drops the name of a speaker or target that left discovery, unless
@@ -5653,40 +5615,22 @@ pub mod tests {
     }
 
     #[test]
-    fn one_address_lists_at_most_its_share_of_speakers() {
-        let path = crate::debug_log::test_dir("airplay-crowded-address").join("log.txt");
+    fn one_address_lists_every_receiver_it_announces() {
         let fake = FakeAirPlay::new();
         let mut airplay = speakers(&fake);
-        airplay.set_debug_log(DebugLog::new(Some(path.clone())));
-        let flood = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 66));
-        let announced: Vec<Device> = (1..=MAX_LISTED_PER_ADDRESS as u8 + 6)
-            .map(|n| device_at(n, &format!("Forged {n}"), OPEN_TXT, flood, 7000))
-            .collect();
-        for speaker in &announced {
-            fake.appear(speaker);
-        }
-        let kitchen = device(200, "Kitchen", OPEN_TXT);
-        fake.appear(&kitchen);
-        airplay.poll();
-        let listed = airplay.speakers();
-        assert_eq!(listed.len(), MAX_LISTED_PER_ADDRESS + 1);
-        assert!(listed.iter().any(|speaker| speaker.name == "Kitchen"));
-        // A listed one that changes keeps its row; the unlisted ones that
-        // announce again stay out and log nothing new.
-        fake.change(&device_at(1, "Renamed", OPEN_TXT, flood, 7000));
-        for speaker in &announced[MAX_LISTED_PER_ADDRESS..] {
-            fake.change(speaker);
+        // A bridge that fronts many speakers from one host.
+        let bridge = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 66));
+        for n in 1..=70 {
+            fake.appear(&device_at(
+                n,
+                &format!("Bridged {n}"),
+                OPEN_TXT,
+                bridge,
+                7000,
+            ));
         }
         airplay.poll();
-        let listed = airplay.speakers();
-        assert_eq!(listed.len(), MAX_LISTED_PER_ADDRESS + 1);
-        assert!(listed.iter().any(|speaker| speaker.name == "Renamed"));
-        assert!(airplay.log.flush(crate::debug_log::TEST_FLUSH));
-        let crowded = crate::debug_log::read_messages(&path)
-            .iter()
-            .filter(|message| message.contains("192.0.2.66 past the first"))
-            .count();
-        assert_eq!(crowded, 1);
+        assert_eq!(airplay.speakers().len(), 70);
     }
 
     /// A failed pairing, wrong PIN or not.
@@ -5741,6 +5685,9 @@ pub mod tests {
             AirPlayAvailability::NeedsPin
         );
         assert!(!airplay.submit_pin(&id, "12a4"), "digits only");
+        assert!(!airplay.submit_pin(&id, "48210"), "four digits only");
+        assert!(airplay.pin_prompt().unwrap().wrong_pin, "it asks again");
+        assert!(fake.take_calls().is_empty(), "nothing reaches the TV");
         assert!(airplay.submit_pin(&id, "4821"));
         assert_eq!(
             fake.take_calls(),
@@ -9887,19 +9834,19 @@ pub mod tests {
 
     // covers: S271, S291
     #[test]
-    fn a_slider_set_with_no_release_stops_holding_the_row_once_idle() {
+    fn a_held_slider_resting_past_the_idle_time_holds_the_row_until_released() {
         let fake = FakeAirPlay::new();
         let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
-        // A screen reader sets the value: the slider starts editing but
-        // never sees a release.
         airplay.set_volume_dragging(&id, true);
         airplay.move_row(&id, 30.0);
         fake.take_calls();
         settle(&mut airplay, &id);
+        // The television's remote moves it to −24 dB while the slider rests.
         read_now(&mut airplay);
-        report_volume(&fake, &kitchen, -21.0);
-        assert!(airplay.poll().is_empty(), "the echo of the level sent");
-        // The television's remote then moves it to −24 dB: level 20.
+        report_volume(&fake, &kitchen, -24.0);
+        assert!(airplay.poll().is_empty());
+        assert_eq!(airplay.speakers()[0].volume, 30.0);
+        airplay.set_volume_dragging(&id, false);
         read_now(&mut airplay);
         report_volume(&fake, &kitchen, -24.0);
         assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
@@ -11410,6 +11357,59 @@ pub mod tests {
             matches!(&fake.take_calls()[..], [Call::Latency(8_820), Call::AddTarget { id, .. }] if id == PAIR)
         );
         (airplay, left, right)
+    }
+
+    // covers: P176
+    #[test]
+    fn a_pair_asks_every_member_for_its_password_before_it_connects() {
+        let fake = FakeAirPlay::new();
+        let (mut pair, _, _) = stereo_pair();
+        let left = airplay2_flagged(21, "Left", 0x80);
+        let right = airplay2_flagged(22, "Right", 0x80);
+        pair.members = vec![member_of(&left), member_of(&right)];
+        pair.leader = Some(left.key.clone());
+        let mut airplay = with_target(&fake, &pair, &[&left, &right]);
+        airplay.set_streaming(true);
+        assert_eq!(
+            airplay.set_enabled(PAIR, true),
+            Err(AirPlayProblem::NeedsPassword)
+        );
+        airplay.ask_password(PAIR).expect("the prompts open");
+        assert_eq!(airplay.password_prompt().expect("a prompt").name, "Left");
+        assert!(airplay.submit_password(&id_of(&left), "hunter2"));
+        assert!(airplay.poll().iter().all(|event| !matches!(
+            event,
+            BackendEvent::AirPlayFailed { .. } | BackendEvent::AirPlayMemberNeedsPassword { .. }
+        )));
+        assert!(fake.take_calls().is_empty(), "no connect before Right's");
+        assert_eq!(airplay.password_prompt().expect("the next").name, "Right");
+        assert!(airplay.submit_password(&id_of(&right), "swordfish"));
+        assert!(matches!(&fake.take_calls()[..], [.., Call::AddTarget { id, .. }] if id == PAIR));
+        assert_eq!(airplay.enabled_ids(), [PAIR]);
+    }
+
+    // covers: P176
+    #[test]
+    fn cancelling_one_members_password_closes_every_prompt_of_its_pair() {
+        let fake = FakeAirPlay::new();
+        let (mut pair, _, _) = stereo_pair();
+        let left = airplay2_flagged(21, "Left", 0x80);
+        let right = airplay2_flagged(22, "Right", 0x80);
+        pair.members = vec![member_of(&left), member_of(&right)];
+        pair.leader = Some(left.key.clone());
+        let mut airplay = with_target(&fake, &pair, &[&left, &right]);
+        airplay.set_streaming(true);
+        assert_eq!(
+            airplay.set_enabled(PAIR, true),
+            Err(AirPlayProblem::NeedsPassword)
+        );
+        airplay.ask_password(PAIR).expect("the prompts open");
+        airplay.cancel_password(&id_of(&left));
+        assert_eq!(airplay.password_prompt(), None, "Right's goes too");
+        assert!(airplay.enabled_ids().is_empty());
+        assert!(!airplay.submit_password(&id_of(&right), "swordfish"));
+        assert!(airplay.enabled_ids().is_empty(), "the pair stays off");
+        assert!(fake.take_calls().is_empty());
     }
 
     // covers: P176

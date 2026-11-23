@@ -25,11 +25,6 @@ pub const VOLUME_READ_INTERVAL: Duration = Duration::from_secs(1);
 /// echo, not a person's change (S271, S276).
 pub const VOLUME_SETTLE: Duration = Duration::from_secs(3);
 
-/// How long a slider that started editing holds its row with no move under
-/// [`HeldSlider::UntilIdle`]: a screen reader's set never sends the release
-/// (S271). It mirrors [`VOLUME_SETTLE`], a design value, not a measurement.
-pub const DRAG_IDLE: Duration = Duration::from_secs(3);
-
 /// How long after a pause a reading may still predate the app's own pause;
 /// later readings that don't show the app paused resume. Longer than the
 /// receivers' buffer, so the flush it bought is never undone audibly (P213).
@@ -48,8 +43,6 @@ pub const SOUND_TO_RESUME: Duration = Duration::from_millis(200);
 pub enum HeldSlider {
     /// Until it is released.
     UntilRelease,
-    /// Until it is released or [`DRAG_IDLE`] passes with no move.
-    UntilIdle,
 }
 
 /// What one host does where the hosts still differ.
@@ -64,7 +57,7 @@ pub const MAC: HostRules = HostRules {
 
 /// The Windows and Linux app.
 pub const DESKTOP: HostRules = HostRules {
-    held_slider: HeldSlider::UntilIdle,
+    held_slider: HeldSlider::UntilRelease,
 };
 
 /// Whether a reading `since_set` after the host last set the volume may be
@@ -73,10 +66,12 @@ pub fn within_echo_window(since_set: Duration) -> bool {
     since_set < VOLUME_SETTLE
 }
 
-/// Whether a slider that is `dragging` and last moved `since_move` ago still
-/// holds its row against the speaker's readings (S271).
-pub fn slider_held(rule: HeldSlider, dragging: bool, since_move: Duration) -> bool {
-    dragging && (rule == HeldSlider::UntilRelease || since_move < DRAG_IDLE)
+/// Whether a slider that is `dragging` still holds its row against the
+/// speaker's readings (S271).
+pub fn slider_held(rule: HeldSlider, dragging: bool) -> bool {
+    match rule {
+        HeldSlider::UntilRelease => dragging,
+    }
 }
 
 /// Whether `warning` says the speaker won't answer volume reads this session
@@ -207,14 +202,9 @@ mod tests {
     fn a_held_slider_ignores_readings_by_each_hosts_rule() {
         // covers: S271
         assert_eq!(MAC.held_slider, HeldSlider::UntilRelease);
-        assert_eq!(DESKTOP.held_slider, HeldSlider::UntilIdle);
-        let still = Duration::from_secs(60);
-        assert!(slider_held(MAC.held_slider, true, still));
-        assert!(!slider_held(MAC.held_slider, false, Duration::ZERO));
-        let rule = DESKTOP.held_slider;
-        assert!(slider_held(rule, true, Duration::from_millis(2999)));
-        assert!(!slider_held(rule, true, DRAG_IDLE), "a screen reader's set");
-        assert!(!slider_held(rule, false, Duration::ZERO));
+        assert_eq!(DESKTOP.held_slider, HeldSlider::UntilRelease);
+        assert!(slider_held(MAC.held_slider, true));
+        assert!(!slider_held(MAC.held_slider, false));
     }
 
     #[test]

@@ -896,6 +896,8 @@ pub struct App {
     /// Rows that come into or leave the main window's lists ease in and out
     /// (`sync_rows`); the tests' lists change at once unless one turns it on.
     rows_ease: Cell<bool>,
+    /// The speakers whose volume slider is being moved.
+    volume_holds: RefCell<HashSet<String>>,
     /// The calibration ending Narrator was last told about.
     calibration_announced: RefCell<Option<(String, Phase)>>,
     /// The Calibrate All ending Narrator was last told about.
@@ -1411,6 +1413,7 @@ impl App {
             me: RefCell::default(),
             kept: RefCell::default(),
             rows_ease: Cell::new(!cfg!(test)),
+            volume_holds: RefCell::default(),
             calibration_announced: RefCell::default(),
             calibrate_all_announced: Cell::new(0),
             calibrate_all_measuring: RefCell::default(),
@@ -3350,6 +3353,15 @@ impl App {
             ROW_STAGGER,
         );
         let eased = self.rows_eased();
+        // A row built again mid-move never sends its release (S271).
+        if !eased
+            && (m.this_pc.row_count() != this_pc.len()
+                || m.connected.row_count() != connected.len()
+                || m.this_pc_zoned.row_count() != this_pc_zoned.len()
+                || m.connected_zoned.row_count() != connected_zoned.len())
+        {
+            self.end_volume_holds();
+        }
         sync_rows(&m.this_pc, this_pc, eased, Duration::ZERO);
         sync_rows(&m.connected, connected, eased, Duration::ZERO);
         sync_model(&m.this_pc_zoned, this_pc_zoned);
@@ -3596,6 +3608,15 @@ impl App {
             .collect()
     }
 
+    /// Ends every volume slider's move, for rows about to be built again.
+    fn end_volume_holds(&self) {
+        for id in self.volume_holds.take() {
+            self.backend
+                .borrow_mut()
+                .set_speaker_volume_editing(&id, false);
+        }
+    }
+
     /// Puts each zone's rows into its kept models, then the zones into theirs.
     fn sync_zones(&self, zones: Vec<ZoneRowsBuilt>) {
         let m = &self.models;
@@ -3607,6 +3628,9 @@ impl App {
                 .into_iter()
                 .map(|zone| {
                     let models = kept.entry(zone.item.id.to_string()).or_default();
+                    if models.members.row_count() != zone.members.len() {
+                        self.end_volume_holds();
+                    }
                     sync_model(&models.members, zone.members);
                     sync_model(&models.targets, zone.targets);
                     let item = ZoneItem {
@@ -3843,6 +3867,12 @@ impl App {
         main.on_speaker_volume_editing(move |id, on| {
             // Nothing shown changes, so no refresh.
             with_app(&w, |app| {
+                let mut holds = app.volume_holds.borrow_mut();
+                if on {
+                    holds.insert(id.to_string());
+                } else {
+                    holds.remove(id.as_str());
+                }
                 app.backend.borrow_mut().set_speaker_volume_editing(&id, on)
             })
         });
@@ -20348,6 +20378,92 @@ pub(crate) mod tests {
         app.main.set_focus_speaker_part(RowPart::Volume);
         app.main.set_focus_speaker_id(id.into());
         draw_frames();
+    }
+
+    // covers: S271
+    #[test]
+    fn a_volume_slider_that_loses_the_focus_mid_key_ends_its_move() {
+        let backend = MockBackend::new();
+        let editing = backend.volume_editing.clone();
+        let app = app_over(backend);
+        app.toggle_speaker("local:desk");
+        focus_speaker_volume(&app, "local:desk");
+        let window = app.main.window();
+        window.dispatch_event(WindowEvent::KeyPressed {
+            text: Key::RightArrow.into(),
+        });
+        assert_eq!(
+            editing.borrow().last(),
+            Some(&("local:desk".to_owned(), true))
+        );
+        // Its key's release then goes to whatever has the focus.
+        press(window, Key::Tab);
+        assert_eq!(
+            editing.borrow().last(),
+            Some(&("local:desk".to_owned(), false)),
+            "a hold that never sees its release ends with the focus"
+        );
+    }
+
+    // covers: S271
+    #[test]
+    fn a_volume_slider_whose_pointer_is_lost_mid_drag_ends_its_move() {
+        use i_slint_backend_testing::ElementHandle;
+        let backend = MockBackend::new();
+        let editing = backend.volume_editing.clone();
+        let app = app_over(backend);
+        app.toggle_speaker("local:desk");
+        app.main.show().unwrap();
+        draw_frames();
+        let window = app.main.window();
+        let slider = ElementHandle::find_by_accessible_label(&app.main, "Desk Speaker volume")
+            .next()
+            .expect("the desk's volume");
+        let (at, size) = (slider.absolute_position(), slider.size());
+        let y = at.y + size.height / 2.0;
+        let from = slint::LogicalPosition::new(at.x + size.width / 4.0, y);
+        let to = slint::LogicalPosition::new(at.x + size.width * 3.0 / 4.0, y);
+        window.dispatch_event(WindowEvent::PointerMoved { position: from });
+        window.dispatch_event(WindowEvent::PointerPressed {
+            position: from,
+            button: PointerEventButton::Left,
+        });
+        window.dispatch_event(WindowEvent::PointerMoved { position: to });
+        assert_eq!(
+            editing.borrow().last(),
+            Some(&("local:desk".to_owned(), true))
+        );
+        // The pointer leaves with the button still down: the slider gets a
+        // cancel, not a release.
+        window.dispatch_event(WindowEvent::PointerExited);
+        assert_eq!(
+            editing.borrow().last(),
+            Some(&("local:desk".to_owned(), false))
+        );
+    }
+
+    // covers: S271
+    #[test]
+    fn a_volume_slider_rebuilt_mid_move_ends_its_move() {
+        let backend = MockBackend::new();
+        let editing = backend.volume_editing.clone();
+        let app = app_over(backend);
+        app.toggle_speaker("local:desk");
+        focus_speaker_volume(&app, "local:desk");
+        app.main.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::RightArrow.into(),
+        });
+        assert_eq!(
+            editing.borrow().last(),
+            Some(&("local:desk".to_owned(), true))
+        );
+        // Another speaker leaves the list, which is built again.
+        app.update(|b| b.hide_speaker("local:bt", "Bluetooth"));
+        draw_frames();
+        assert_eq!(
+            editing.borrow().last(),
+            Some(&("local:desk".to_owned(), false))
+        );
     }
 
     #[test]

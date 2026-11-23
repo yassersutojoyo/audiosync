@@ -11,9 +11,6 @@
 /// What a PIN must look like before it goes to the Apple TV.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PinFormat {
-    /// One or more ASCII digits; anything else isn't sent and the prompt
-    /// stays as it was.
-    Digits,
     /// Exactly the four ASCII digits an Apple TV shows; anything else asks
     /// again, marked wrong.
     FourDigits,
@@ -28,8 +25,6 @@ pub enum PinCheck {
 pub fn check_pin(pin: &str, format: PinFormat) -> PinCheck {
     let digits = !pin.is_empty() && pin.bytes().all(|byte| byte.is_ascii_digit());
     match format {
-        PinFormat::Digits if digits => PinCheck::Send,
-        PinFormat::Digits => PinCheck::Refuse { wrong: false },
         PinFormat::FourDigits if digits && pin.len() == 4 => PinCheck::Send,
         PinFormat::FourDigits => PinCheck::Refuse { wrong: true },
     }
@@ -84,9 +79,6 @@ pub fn tell_unreadable_pairings(rule: UnreadablePairingsNotice, moment: Pairings
 pub enum PasswordMembers {
     /// Every member that needs one, the prompts queued at once.
     AllUpFront,
-    /// The first that needs one; the next once its session turns the
-    /// password down.
-    FirstThenNext,
 }
 
 /// What one host does where the hosts still differ.
@@ -109,10 +101,10 @@ pub const MAC: HostRules = HostRules {
 
 /// The Windows and Linux app.
 pub const DESKTOP: HostRules = HostRules {
-    pin_format: PinFormat::Digits,
+    pin_format: PinFormat::FourDigits,
     open_pairing_at_sender_stop: OpenPairingAtSenderStop::TurnOff,
     unreadable_pairings_notice: UnreadablePairingsNotice::OnceKeptAside,
-    password_members: PasswordMembers::FirstThenNext,
+    password_members: PasswordMembers::AllUpFront,
     refused_reappears: RefusedReappears::Quiet,
 };
 
@@ -300,7 +292,6 @@ pub fn members_to_ask(
         .filter_map(|(index, needs)| needs.then_some(index));
     match rule {
         PasswordMembers::AllUpFront => needing.collect(),
-        PasswordMembers::FirstThenNext => needing.take(1).collect(),
     }
 }
 
@@ -324,20 +315,6 @@ impl PairingsWrites {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_pin_of_digits_is_sent_and_anything_else_leaves_the_prompt_as_it_was() {
-        for pin in ["4821", "48210", "1"] {
-            assert_eq!(check_pin(pin, PinFormat::Digits), PinCheck::Send, "{pin}");
-        }
-        for pin in ["", "48a1", "４８２１", " 4821"] {
-            assert_eq!(
-                check_pin(pin, PinFormat::Digits),
-                PinCheck::Refuse { wrong: false },
-                "{pin}"
-            );
-        }
-    }
 
     #[test]
     fn a_pin_of_four_digits_is_sent_and_anything_else_asks_again_marked_wrong() {
@@ -373,7 +350,7 @@ mod tests {
 
     #[test]
     fn each_host_keeps_what_it_does_today() {
-        assert_eq!(DESKTOP.pin_format, PinFormat::Digits);
+        assert_eq!(DESKTOP.pin_format, PinFormat::FourDigits);
         assert_eq!(
             DESKTOP.open_pairing_at_sender_stop,
             OpenPairingAtSenderStop::TurnOff
@@ -391,7 +368,7 @@ mod tests {
             MAC.unreadable_pairings_notice,
             UnreadablePairingsNotice::AtLaunch
         );
-        assert_eq!(DESKTOP.password_members, PasswordMembers::FirstThenNext);
+        assert_eq!(DESKTOP.password_members, PasswordMembers::AllUpFront);
         assert_eq!(MAC.password_members, PasswordMembers::AllUpFront);
     }
 
@@ -586,14 +563,11 @@ mod tests {
     }
 
     #[test]
-    fn a_group_asks_its_first_member_needing_a_password_or_all_by_rule() {
+    fn a_group_asks_every_member_needing_a_password() {
         // covers: P176
-        use PasswordMembers::{AllUpFront, FirstThenNext};
-        assert_eq!(members_to_ask(FirstThenNext, [false, true, true]), [1]);
+        use PasswordMembers::AllUpFront;
         assert_eq!(members_to_ask(AllUpFront, [false, true, true]), [1, 2]);
-        for rule in [FirstThenNext, AllUpFront] {
-            assert!(members_to_ask(rule, [false, false]).is_empty());
-        }
+        assert!(members_to_ask(AllUpFront, [false, false]).is_empty());
     }
 
     #[test]

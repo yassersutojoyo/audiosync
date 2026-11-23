@@ -644,8 +644,7 @@ impl Added {
 
     /// The slider is held, so a reading must not move the row (S271).
     fn held(&self) -> bool {
-        // The Mac keeps no move time: its rule holds until the release.
-        slider_held(MAC.held_slider, self.dragging, Duration::ZERO)
+        slider_held(MAC.held_slider, self.dragging)
     }
 
     /// The host set the volume: an answer to a read asked before is old.
