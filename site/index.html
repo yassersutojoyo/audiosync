@@ -264,8 +264,9 @@
   @media (max-width: 640px) {
     .stage[data-os] { flex-direction: column; align-items: center; gap: 24px; }
     .stage[data-os] [data-slot] { flex: none; width: 100%; }
-    .stage [data-slot="panel"] { max-width: 348px; }
-    .stage[data-os="windows"] [data-slot="panel"], .stage[data-os="linux"] [data-slot="panel"] { max-width: 300px; }
+    /* Stacked, the panel keeps the main window's scale: its pixel width over the main shot's. */
+    .stage[data-os] [data-slot="panel"] { width: calc(100% * 696 / 1816); }
+    .stage[data-os="windows"] [data-slot="panel"], .stage[data-os="linux"] [data-slot="panel"] { width: calc(100% * 600 / 1392); }
   }
   .gallery-bar { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: center; }
   .gallery-bar[hidden] { display: none; }
