@@ -7,6 +7,7 @@
 //! ID (AirPlay) or device UID (local), never by display name (S147). None of
 //! this runs on an audio thread, so it may allocate.
 //!
+//! - [`airplay_pairing`]: the host's side of pairing AirPlay speakers, their PIN and password prompts and the pairings file's notices, with the switches where the hosts still differ (S222 to S224, S349).
 //! - [`airplay_reconnect`]: the host's side of AirPlay speakers the sender retries or makes wait, and of a sender that couldn't start (S101, S222, S285, S412).
 //! - [`delay`]: local output delays and the local delay model (S3, S79, S124, S172 to S179).
 //! - [`device_volume`]: an output device's own volume and mute, and the fix (S192 to S202).
@@ -24,6 +25,7 @@
 /// Seconds on a monotonic clock chosen by the host.
 pub type Seconds = f64;
 
+pub mod airplay_pairing;
 pub mod airplay_reconnect;
 pub mod capture;
 pub mod delay;

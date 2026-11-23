@@ -67,6 +67,9 @@ use audiosync_airplay::discovery::shown_text;
 use audiosync_core::channels::InputPair;
 use audiosync_core::clock;
 use audiosync_core::eq::{EqSettings, UserCurve, sanitized_curves};
+use audiosync_core::policy::airplay_pairing::{
+    self as pairing_rules, Appeared, EveryTimeAction, EveryTimeListed, OffReason,
+};
 use audiosync_core::policy::airplay_reconnect::{NoticeClear, NoticeEnd, notice_clear};
 use audiosync_core::policy::delay::{
     native_airplay_adjustment_ms, native_airplay_latency_ms, sanitize_offset_ms,
@@ -3485,8 +3488,15 @@ impl<A: AudioBackend> AudioAdapter<A> {
         for speaker in self.audio.airplay_speakers() {
             let new = !self.airplay_listed.contains(&speaker.id);
             if speaker.code_every_time {
-                if !speaker.playing && !self.airplay_on_by_hand.contains(&speaker.id) {
-                    asking.push((speaker.id.clone(), speaker.enabled, new));
+                let action = pairing_rules::every_time_listed(EveryTimeListed {
+                    on: speaker.enabled,
+                    playing: speaker.playing,
+                    on_by_hand: self.airplay_on_by_hand.contains(&speaker.id),
+                    new,
+                    auto_connect: self.auto_connect.contains(&airplay_key(&speaker.id)),
+                });
+                if action != EveryTimeAction::Untouched {
+                    asking.push((speaker.id.clone(), action));
                 }
             } else if new {
                 appeared.push(speaker.id.clone());
@@ -3529,17 +3539,14 @@ impl<A: AudioBackend> AudioAdapter<A> {
         });
         self.airplay_names = names;
         let mut switched_off = false;
-        for (id, enabled, new) in asking {
-            if !enabled && !(new && self.auto_connect.contains(&airplay_key(&id))) {
-                continue;
-            }
+        for (id, action) in asking {
             self.log.log(|| {
                 format!(
                     "auto-connect: {} stays off, it asks for a code every time",
                     self.airplay_name(&id)
                 )
             });
-            if enabled {
+            if action == EveryTimeAction::TurnOff {
                 let _ = self.audio.set_airplay_enabled(&id, false);
                 switched_off = true;
             }
@@ -3551,9 +3558,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .into_iter()
             .filter(|id| {
                 let key = airplay_key(id);
-                self.auto_connect.contains(&key)
-                    && !self.is_hidden(&key)
-                    && !self.airplay_refused.contains_key(id)
+                pairing_rules::auto_connects(Appeared {
+                    auto_connect: self.auto_connect.contains(&key),
+                    hidden: self.is_hidden(&key),
+                    refused: self.airplay_refused.contains_key(id),
+                    every_time: false,
+                })
             })
             .collect();
         if hits.is_empty() || self.auto_connect_skipped {
@@ -4623,13 +4633,14 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.reconnecting.remove(&id);
                 // It is off, so the click that turned it on is spent (S223).
                 let by_hand = self.airplay_on_by_hand.remove(&id);
-                if matches!(
-                    problem,
-                    AirPlayProblem::NotAccepted
-                        | AirPlayProblem::PairingNotYet
-                        | AirPlayProblem::StillNeedsCode
-                ) || (problem == AirPlayProblem::NeedsPin && !by_hand)
-                {
+                let reason = match problem {
+                    AirPlayProblem::NotAccepted => OffReason::NotAccepted,
+                    AirPlayProblem::PairingNotYet => OffReason::PairingNotYet,
+                    AirPlayProblem::StillNeedsCode => OffReason::StillNeedsCode,
+                    AirPlayProblem::NeedsPin => OffReason::NeedsPin,
+                    _ => OffReason::Other,
+                };
+                if pairing_rules::stays_refused(reason, by_hand) {
                     self.airplay_refused.insert(id.clone(), problem);
                 }
                 let timing = problem == AirPlayProblem::TimingUnavailable;
