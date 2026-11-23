@@ -2,6 +2,8 @@
 
 Notes for building AudioSync yourself and finding your way around the code. For how to send changes, see [`CONTRIBUTING.md`](../CONTRIBUTING.md); for cutting a release, [`RELEASE.md`](../RELEASE.md).
 
+What each system forces to work differently is listed in [`PLATFORM_DIFFERENCES.md`](PLATFORM_DIFFERENCES.md); any other difference between the apps is a bug.
+
 ## Building
 
 You need macOS 15 (Sequoia) or later, the Command Line Tools for Xcode 16 or later (`xcode-select --install`), which bring Swift 6 and the `python3` the build uses, and a Rust toolchain for the audio core in `core/`: install it with [rustup](https://rustup.rs).
