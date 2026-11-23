@@ -3564,15 +3564,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 pairing_rules::auto_connects(Appeared {
                     auto_connect: self.auto_connect.contains(&key),
                     hidden: self.is_hidden(&key),
-                    refused: self.airplay_refused.get(id).is_some_and(|&problem| {
-                        pairing_rules::refusal_holds(
-                            pairing_rules::DESKTOP.refused_reappears,
-                            matches!(
-                                problem,
-                                AirPlayProblem::NeedsPin | AirPlayProblem::NeedsPassword
-                            ),
-                        )
-                    }),
+                    refused: self.airplay_refused.contains_key(id),
                     every_time: false,
                 })
             })
