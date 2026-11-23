@@ -11771,7 +11771,7 @@ mod tests {
 
     // covers: S483
     #[test]
-    fn speakers_are_released_after_the_idle_time_and_a_switch_off_forgets_them() {
+    fn speakers_are_released_after_the_idle_time_and_a_stream_stop_keeps_them() {
         let id = "02005E005342";
         let mut handle = listing(vec![loopback_record(id, "Den", closed_port())]);
         let c_id = c_string(id);
@@ -11789,13 +11789,17 @@ mod tests {
         // SAFETY: as above.
         unsafe { asc_airplay_set_release_minutes(handle, 0) };
         assert_eq!(demand_events(handle), [(id.to_owned(), false)]);
-        // A removal the policy didn't ask for is the user's switch.
+        // A stream stop removes it, and the policy keeps it as the desktop
+        // does; the host passes over events for a speaker switched off.
         // SAFETY: as above.
         unsafe {
             assert!(asc_airplay_add_speaker(handle, c_id.as_ptr(), 40.0));
             assert!(asc_airplay_remove_speaker(handle, c_id.as_ptr()));
         }
-        assert_eq!(inside(handle).on_demand.status(&id.to_owned()), None);
+        assert_eq!(
+            inside(handle).on_demand.status(&id.to_owned()),
+            Some(on_demand::Status::Active)
+        );
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }
