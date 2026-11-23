@@ -74,6 +74,9 @@ pub enum ErrorKind {
     /// A pairing step was answered with 470 or another non-200 status, except
     /// a Busy answer (P58, P136).
     PairingFailed,
+    /// A 403 to `/pair-pin-start`: the receiver won't show a code to this
+    /// sender, so no PIN can follow (P58).
+    CodeRefused,
     /// The receiver closed the connection while the sender waited for the PIN
     /// (P51, P136).
     PairingCancelled,
@@ -105,6 +108,7 @@ impl ErrorKind {
                 | ErrorKind::WrongPassword
                 | ErrorKind::PairingRequired
                 | ErrorKind::PairingFailed
+                | ErrorKind::CodeRefused
                 | ErrorKind::ReceiverUnverified
                 | ErrorKind::Unsupported(_)
         )
@@ -121,6 +125,7 @@ impl ErrorKind {
             ErrorKind::PairingRequired | ErrorKind::PairingFailed | ErrorKind::PairingCancelled => {
                 UserReason::PairingRequired
             }
+            ErrorKind::CodeRefused => UserReason::CodeRefused,
             ErrorKind::ReceiverUnverified => UserReason::ReceiverUnverified,
             ErrorKind::Busy => UserReason::Busy,
             ErrorKind::Refused => UserReason::Refused,
@@ -145,6 +150,8 @@ pub enum UserReason {
     WrongPassword,
     /// The speaker needs pairing, or rejected or cancelled it.
     PairingRequired,
+    /// The speaker won't show a pairing code to this sender.
+    CodeRefused,
     /// The speaker didn't prove it is the one that was paired.
     ReceiverUnverified,
     /// Another sender seems to be playing to it.
@@ -182,6 +189,12 @@ pub struct SessionError {
 }
 
 impl SessionError {
+    /// The receiver closed or reset the session's connection, and neither
+    /// side sent a TEARDOWN (P249).
+    pub fn closed_by_receiver(&self) -> bool {
+        self.kind == ErrorKind::Lost && self.detail == Some("connection closed")
+    }
+
     pub fn new(kind: ErrorKind) -> SessionError {
         SessionError {
             kind,

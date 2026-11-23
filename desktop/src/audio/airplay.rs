@@ -86,6 +86,7 @@ use audiosync_airplay::sender::{
 use audiosync_airplay::stream::{
     DEFAULT_LATENCY_FRAMES, MAX_DELAY, SpeakerCounters, StreamCounters,
 };
+use audiosync_airplay::takeover::TakeoverReport;
 use audiosync_airplay::targets::{Target, TargetChange, TargetId, TargetKind};
 use audiosync_airplay::volume::{MUTED_DB, Volume};
 use audiosync_core::eq::{self, EqSettings};
@@ -794,6 +795,7 @@ pub fn problem(reason: UserReason) -> AirPlayProblem {
         // receiver that wants another kind of pairing.
         UserReason::PairingRequired => AirPlayProblem::PairingNotYet,
         UserReason::ReceiverUnverified => AirPlayProblem::ReceiverUnverified,
+        UserReason::CodeRefused => AirPlayProblem::CodeRefused,
         UserReason::Unsupported(UnsupportedReason::AirPlay2Only) => AirPlayProblem::AirPlay2NotYet,
         UserReason::Unsupported(UnsupportedReason::Timing) => AirPlayProblem::TimingUnavailable,
         UserReason::Unsupported(UnsupportedReason::TooManyAirPlay2Sessions) => {
@@ -1180,6 +1182,12 @@ pub struct AirPlaySpeakers {
     /// Speakers whose records changed while the PC slept, which retake
     /// them at the wake (P142, S412).
     changed_asleep: BTreeSet<String>,
+    /// Rows the host let go while they stay on: yielded to another sender
+    /// or released when nothing plays (S482, S483).
+    let_go: BTreeSet<String>,
+    /// What the sender reported about receivers closing our sessions, for
+    /// the host's yield rule (P249, S482).
+    takeovers: Vec<(String, TakeoverReport)>,
     /// How the last AirPlay 1 attempt of a speaker ended when that moved it
     /// to AirPlay 2, until the sender forgets it (P218).
     airplay1_outcome: BTreeMap<String, ErrorKind>,
@@ -1295,6 +1303,8 @@ impl AirPlaySpeakers {
             stream_ended: false,
             asleep: false,
             changed_asleep: BTreeSet::new(),
+            let_go: BTreeSet::new(),
+            takeovers: Vec::new(),
             airplay1_outcome: BTreeMap::new(),
             session_paths: BTreeMap::new(),
             streaming: false,
@@ -3348,6 +3358,27 @@ impl AirPlaySpeakers {
         self.reconcile();
     }
 
+    /// Lets row `id` go while it stays on, or takes it back (S482, S483).
+    pub fn set_let_go(&mut self, id: &str, let_go: bool) {
+        let changed = if let_go {
+            self.let_go.insert(id.to_owned())
+        } else {
+            self.let_go.remove(id)
+        };
+        if changed {
+            self.log.log(|| {
+                let what = if let_go { "let go" } else { "taken back" };
+                format!("AirPlay speaker {} {what}", self.label(id))
+            });
+            self.reconcile();
+        }
+    }
+
+    /// The sender's takeover reports since the last call, by row (P249).
+    pub fn take_takeovers(&mut self) -> Vec<(String, TakeoverReport)> {
+        std::mem::take(&mut self.takeovers)
+    }
+
     /// The PC is going to sleep, which ends the stream as stopping it does
     /// (S223).
     pub fn sleeping(&mut self) {
@@ -3418,7 +3449,9 @@ impl AirPlaySpeakers {
         let leaving: Vec<String> = self
             .added
             .iter()
-            .filter(|(id, _)| !self.streaming || !self.settings(id).enabled)
+            .filter(|(id, _)| {
+                !self.streaming || !self.settings(id).enabled || self.let_go.contains(*id)
+            })
             .map(|(id, _)| id.clone())
             .collect();
         let left = !leaving.is_empty();
@@ -3445,6 +3478,7 @@ impl AirPlaySpeakers {
                 // the TV would show a new code.
                 .filter(|(id, settings)| {
                     settings.enabled
+                        && !self.let_go.contains(*id)
                         && !self.added.contains_key(*id)
                         && !self.pairings.contains_key(*id)
                         && !self.targets.get(*id).is_some_and(|target| {
@@ -3913,6 +3947,7 @@ impl AirPlaySpeakers {
                     | UserReason::NotResponding
                     | UserReason::ConnectionLost) => problem(reason),
                     UserReason::Incompatible => AirPlayProblem::Unsupported,
+                    UserReason::CodeRefused => AirPlayProblem::CodeRefused,
                     _ => AirPlayProblem::PairingFailed,
                 };
                 events.push(BackendEvent::AirPlayFailed { id: owner, problem });
@@ -4716,6 +4751,13 @@ impl AirPlaySpeakers {
             SpeakerEvent::Trace(line) => {
                 self.log
                     .log(|| format!("AirPlay speaker {} trace: {line}", self.label(id)));
+                false
+            }
+            SpeakerEvent::Takeover(report) => {
+                self.log
+                    .log(|| format!("AirPlay speaker {}: {report:?}", self.label(id)));
+                let row = self.row_of(id).unwrap_or_else(|| id.to_owned());
+                self.takeovers.push((row, report));
                 false
             }
             SpeakerEvent::Methods(_) | SpeakerEvent::AudioJack(_) | SpeakerEvent::Path(_) => false,
@@ -6221,6 +6263,25 @@ pub mod tests {
             "{events:?}"
         );
         assert_eq!(airplay.pin_prompt(), None);
+        assert!(!airplay.speakers()[0].enabled);
+    }
+
+    // covers: S223
+    #[test]
+    fn a_pairing_whose_code_request_is_refused_stops_saying_so() {
+        let tv = airplay2_tv(9, "Loft");
+        let id = id_of(&tv);
+        let fake = FakeAirPlay::new();
+        let mut airplay = loft_turns_its_key_down_on_a_switch_on(&fake, &tv);
+        fake.pairing(&tv, pairing_failed(ErrorKind::CodeRefused, false));
+        let events = airplay.poll();
+        assert!(
+            events.contains(&BackendEvent::AirPlayFailed {
+                id: id.clone(),
+                problem: AirPlayProblem::CodeRefused,
+            }),
+            "{events:?}"
+        );
         assert!(!airplay.speakers()[0].enabled);
     }
 

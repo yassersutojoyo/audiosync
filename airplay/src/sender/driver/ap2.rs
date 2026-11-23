@@ -79,6 +79,8 @@ pub(super) struct Ap2Active {
     pub(super) events_io: Option<RtspIo>,
     /// The speaker in the stream once the stream is set up and flushed.
     pub(super) stream_id: Option<stream::SpeakerId>,
+    /// The session reached the stream; kept after its sockets close.
+    pub(super) played: bool,
     /// The session started with stored HomeKit credentials, so a
     /// PairingRequired from it means the receiver no longer takes them (P154).
     pub(super) verifying: bool,
@@ -279,6 +281,7 @@ impl Driver {
                 (session_key, session, 0, None, verifying)
             }
         };
+        let group = session.group_uuid().to_ascii_lowercase();
         let remote = session.ids().active_remote;
         speaker.phase = Phase::Ap2(Box::new(Ap2Active {
             key: session_key,
@@ -289,6 +292,7 @@ impl Driver {
             io,
             events_io: None,
             stream_id: None,
+            played: false,
             verifying,
             outranked_told: false,
             ptp_configured,
@@ -296,6 +300,7 @@ impl Driver {
             ntp_chosen: false,
             ptp_restart: restart,
         }));
+        self.own_groups.insert(group);
         self.sessions.insert(session_key, key.clone());
         self.sessions.insert(events_key, key.clone());
         self.remote_open(key, remote, now);
@@ -931,6 +936,7 @@ impl Driver {
             .stream
             .add_speaker_with_counters(config, speaker.counters.clone(), now);
         active.stream_id = Some(id);
+        active.played = true;
         self.stream_ids.insert(id, key.clone());
     }
 
@@ -1042,6 +1048,7 @@ impl Driver {
                 self.ap2_ready(key, now);
                 if let Some(speaker) = self.speakers.get_mut(key) {
                     speaker.backoff.on_playing();
+                    speaker.after_close = false;
                 }
                 self.emit_speaker(key, SpeakerEvent::State(SpeakerState::Playing));
                 // Ready follows the stream SETUP answer and FLUSH (P123).

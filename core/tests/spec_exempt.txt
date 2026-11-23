@@ -236,5 +236,6 @@ S476 Windows host only: the apps the source picker offers and their names; the d
 S477 Linux host only: AudioSync's own null sink as the default sink while the whole system streams; the desktop tests check the listing and the switch with fakes, the stranger run checks the PC speaker in step.
 S479 Linux host only: the whole-system capture route through the default output's monitor; the desktop graph tests check the route choice.
 S480 Windows host only: the whole system captured by endpoint loopback where it can be; the desktop tests check the endpoint choice and the lined-up switch between the two streams.
+S484 Windows host only: the sign-in entry that restores S469's and S471's outputs after a power cut; the desktop tests check it with fakes of the entry and the record store.
 S486 Windows host only: a call app pinned to the original output through the per-app interface; the desktop controller tests check the pin, the rejoin, the stop and the stayed case with fakes.
 S487 Linux host only: a call app's playback pointed at the original sink through PipeWire metadata; the desktop graph tests check the listening apps and their streams.

@@ -54,7 +54,12 @@ const RESEND_ATTEMPTS: usize = 5;
 const RESEND_WAIT: Duration = Duration::from_secs(3);
 
 fn start() -> (Sender, HostAudio) {
-    let (sender, writer) = Sender::start(SenderConfig::default()).expect("the sender starts");
+    let config = SenderConfig {
+        // A receiver's close stands for any loss (P142), not a takeover (P249).
+        evidence_window: None,
+        ..SenderConfig::default()
+    };
+    let (sender, writer) = Sender::start(config).expect("the sender starts");
     (sender, HostAudio::start(writer))
 }
 

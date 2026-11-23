@@ -373,7 +373,8 @@ fn options_goes_first_and_the_receivers_sealed_key_is_kept_when_it_opens() {
         link.connect();
         assert_eq!(link.events, [PairingEvent::PinRequested], "{status:?}");
     }
-    // A 403 that means access restricted: pin-start fails, PairingFailed.
+    // A 403 that means access restricted: pin-start is refused, so no code
+    // is shown (P58).
     let atv = FakeAppleTv::new(PIN);
     let mut receiver = apple_tv_receiver(&atv);
     receiver.status.insert("OPTIONS".to_owned(), 403);
@@ -383,7 +384,7 @@ fn options_goes_first_and_the_receivers_sealed_key_is_kept_when_it_opens() {
     let mut link = PairLink::new(receiver);
     link.connect();
     let (error, _) = link.failure().expect("failed");
-    assert_eq!(error.kind, ErrorKind::PairingFailed);
+    assert_eq!(error.kind, ErrorKind::CodeRefused);
     assert_eq!(error.status, Some(403));
 
     // The sealed answer: kept when it opens; one that is missing, doesn't
@@ -740,8 +741,8 @@ fn a_409_at_a_pairing_step_is_busy_and_other_failures_are_pairing_failed() {
         assert_eq!(error.status, Some(409));
         assert!(!wrong_pin);
     }
-    // Any other non-200 to a pairing request but a 401: PairingFailed
-    // (P58).
+    // Any other non-200 to a pairing request but a 401: PairingFailed,
+    // except a 403 to pin-start, a refused code request (P58).
     for status in [400, 403, 500, 503] {
         let atv = FakeAppleTv::new(PIN);
         let mut receiver = apple_tv_receiver(&atv);
@@ -751,7 +752,12 @@ fn a_409_at_a_pairing_step_is_busy_and_other_failures_are_pairing_failed() {
         let mut link = PairLink::new(receiver);
         link.connect();
         let (error, _) = link.failure().expect("failed");
-        assert_eq!(error.kind, ErrorKind::PairingFailed, "{status}");
+        let expected = if status == 403 {
+            ErrorKind::CodeRefused
+        } else {
+            ErrorKind::PairingFailed
+        };
+        assert_eq!(error.kind, expected, "{status}");
         let atv = FakeAppleTv::new(PIN);
         atv.queue_setup_status(Some(status));
         let mut link = PairLink::new(apple_tv_receiver(&atv));

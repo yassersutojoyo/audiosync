@@ -114,7 +114,12 @@ fn a_speaker_switched_off_and_on_fast_plays_again() {
 fn a_level_set_while_a_speaker_reconnects_is_the_level_it_plays_at() {
     let _serial = serial();
     let receiver = NetReceiver::start(Behavior::default());
-    let (sender, writer) = Sender::start(SenderConfig::default()).expect("the sender starts");
+    let (sender, writer) = Sender::start(SenderConfig {
+        // The receiver's close stands for any loss (P142), not a takeover (P249).
+        evidence_window: None,
+        ..SenderConfig::default()
+    })
+    .expect("the sender starts");
     let _host = HostAudio::start(writer);
     let mut events = Events::default();
     let device = receiver.device(1, PCM_TXT);
@@ -150,7 +155,12 @@ fn a_level_set_while_a_speaker_reconnects_is_the_level_it_plays_at() {
 fn a_track_changed_while_a_speaker_reconnects_reaches_it_once_it_plays() {
     let _serial = serial();
     let receiver = NetReceiver::start(Behavior::default());
-    let (sender, writer) = Sender::start(SenderConfig::default()).expect("the sender starts");
+    let (sender, writer) = Sender::start(SenderConfig {
+        // The receiver's close stands for any loss (P142), not a takeover (P249).
+        evidence_window: None,
+        ..SenderConfig::default()
+    })
+    .expect("the sender starts");
     let _host = HostAudio::start(writer);
     let mut events = Events::default();
     let device = receiver.device(1, PCM_TXT);

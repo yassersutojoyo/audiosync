@@ -2735,7 +2735,7 @@ struct AirPlayDelayRow: View {
                 DelayValueButton(model: model, id: Self.id, draft: model.draft(for: Self.id),
                                  label: t.airPlayDelay, focus: $delayFocused)
             }
-            SyncControls(model: model, id: Self.id, kind: .airPlay, ms: model.airPlayDelayMs,
+            SyncControls(model: model, id: Self.id, kind: .airPlay, ms: model.airPlayExtraMs,
                          label: t.airPlayDelay, text: t,
                          draft: model.draft(for: Self.id), escape: {
                 // Dropped first: the field losing the focus would apply it.
@@ -3455,7 +3455,7 @@ struct SyncControls: View {
     private func clamped(_ typed: Double) -> Double? {
         switch kind {
         case .offset: return LocalDelay.sanitizedOffset(typed)
-        case .airPlay: return LocalDelay.sanitizedAirPlayDelay(typed)
+        case .airPlay: return LocalDelay.sanitizedAdjustment(typed)
         case .cast: return CastModel.clampedOffset(typed)
         }
     }
