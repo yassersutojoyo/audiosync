@@ -273,6 +273,24 @@ function Check([string] $Row, [bool] $Ok, [string] $What) {
   if (-not $Ok) { $script:failed += $line }
 }
 
+# The waits that have no bound of their own; a timeout throws, and
+# with_deadline.ps1 prints the debug log tail and the process list.
+function Wait-Bounded($Process, [int] $Seconds, [string] $What) {
+  if (-not $Process.WaitForExit($Seconds * 1000)) {
+    Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+    throw "timeout: $What did not end within $Seconds s"
+  }
+}
+function Invoke-Bounded([int] $Seconds, [string] $What, [string] $File, [string[]] $Arguments) {
+  Step $What
+  $p = Start-Process -FilePath $File -ArgumentList $Arguments -NoNewWindow -PassThru `
+    -RedirectStandardOutput "$Work/native-out.txt" -RedirectStandardError "$Work/native-err.txt"
+  $null = $p.Handle
+  Wait-Bounded $p $Seconds $What
+  Get-Content "$Work/native-out.txt", "$Work/native-err.txt" | Tee-Object -FilePath "$Work/env.txt" -Append
+  $global:LASTEXITCODE = $p.ExitCode
+}
+
 function Not-Tried([string] $Why) {
   "NOT TRIED A1.2 A1.8 A1.11: $Why" | Tee-Object -FilePath "$Work/result.txt" -Append
   Get-PnpDevice -PresentOnly -Class MEDIA, AudioEndpoint -ErrorAction SilentlyContinue |
@@ -296,7 +314,8 @@ foreach ($name in 'AudioEndpointBuilder', 'Audiosrv') {
 # Scream 4.0 as released, outside the uploaded folder: the artifact carries no driver.
 $fixture = (New-Item -ItemType Directory -Force -Path (Join-Path ([IO.Path]::GetTempPath()) 'audiosync-ci-driver')).FullName
 $zip = Join-Path $fixture 'Scream4.0.zip'
-Invoke-WebRequest -Uri 'https://github.com/duncanthrax/scream/releases/download/4.0/Scream4.0.zip' -OutFile $zip
+Step 'driver download'
+Invoke-WebRequest -TimeoutSec 60 -Uri 'https://github.com/duncanthrax/scream/releases/download/4.0/Scream4.0.zip' -OutFile $zip
 $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash
 if ($hash -ne 'FA33E25F9A46C61E4E0CD83362C51C3D2A45C6FE4091AAD7507E240E40F1A520') { throw "Scream4.0.zip hash $hash" }
 Expand-Archive -Force $zip (Join-Path $fixture 'scream')
@@ -309,9 +328,10 @@ $cer = Join-Path $fixture 'ci-driver.cer'
 Export-Certificate -Cert $cert -FilePath $cer | Out-Null
 foreach ($store in 'Root', 'TrustedPublisher') { Import-Certificate -FilePath $cer -CertStoreLocation "Cert:\LocalMachine\$store" | Out-Null }
 $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName | Select-Object -Last 1
-& $signtool.FullName sign /fd SHA256 /sm /s My /sha1 $cert.Thumbprint (Join-Path $driver 'scream.cat')
+Invoke-Bounded 60 'catalog signing' $signtool.FullName @('sign', '/fd', 'SHA256', '/sm', '/s', 'My', '/sha1', $cert.Thumbprint, "`"$(Join-Path $driver 'scream.cat')`"")
 if ($LASTEXITCODE -ne 0) { Not-Tried "signtool could not sign the catalog (exit $LASTEXITCODE)" }
-pnputil /add-driver (Join-Path $driver 'Scream.inf') /install | Tee-Object -FilePath "$Work/env.txt" -Append
+Invoke-Bounded 120 'driver store add' 'pnputil.exe' @('/add-driver', "`"$(Join-Path $driver 'Scream.inf')`"", '/install')
+Step 'software device'
 $created = [SoftwareDevice]::Create('AudioSyncCI', '*Scream', 'Speakers')
 "software device: $created" | Tee-Object -FilePath "$Work/env.txt" -Append
 # Run 44292105824 (Server 2025) refused SWD with 0x8007007E: a ROOT device
@@ -319,10 +339,10 @@ $created = [SoftwareDevice]::Create('AudioSyncCI', '*Scream', 'Speakers')
 $script:builtIn = $created.StartsWith('0x00000000')
 $devcon = Join-Path $fixture 'scream/Install/helpers/devcon-x64.exe'
 if (-not $script:builtIn) {
-  & $devcon install (Join-Path $driver 'Scream.inf') '*Scream' |
-    Tee-Object -FilePath "$Work/env.txt" -Append
+  Invoke-Bounded 120 'ROOT device install' $devcon @('install', "`"$(Join-Path $driver 'Scream.inf')`"", '*Scream')
 }
 
+Step 'first endpoint'
 $count = 0
 for ($i = 0; $i -lt 60 -and $count -eq 0; $i++) { Start-Sleep -Seconds 1; $count = [Endpoints]::ActiveCount() }
 "active output endpoints with the driver: $count" | Tee-Object -FilePath "$Work/env.txt" -Append
@@ -335,8 +355,11 @@ if ($count -ne 1) { Not-Tried "$count active output endpoints after installing t
 [Endpoints]::SetMute($false)
 [Endpoints]::SetLevel(0.5)
 
-$install = Start-Process -FilePath $Setup -Wait -PassThru `
+Step 'silent install'
+$install = Start-Process -FilePath $Setup -PassThru `
   -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/ALLUSERS', "/LOG=`"$Work\install.log`""
+$null = $install.Handle
+Wait-Bounded $install 180 'the silent install'
 $dir = Join-Path $env:ProgramFiles 'AudioSync'
 $exe = Join-Path $dir 'audiosync.exe'
 if ($install.ExitCode -ne 0 -or -not (Test-Path $exe)) { throw "install failed (exit $($install.ExitCode))" }
@@ -376,6 +399,7 @@ $log = Join-Path $env:TEMP 'audiosync-debug.log'
 function Get-LogLines([string] $Pattern) { @(Select-String -Path $log -Pattern $Pattern -SimpleMatch -ErrorAction SilentlyContinue) }
 
 function Start-App {
+  Step 'app launch'
   $env:AUDIOSYNC_DEBUG = '1'
   $script:app = Start-Process -FilePath $exe -WorkingDirectory $dir -PassThru
   Remove-Item Env:AUDIOSYNC_DEBUG
@@ -556,6 +580,7 @@ Start-Sleep -Seconds 3
 Check 'A1.11' ((Get-Defaults) -eq $default) 'the default output is as found after streaming stops'
 
 if ($slider) {
+  Step 'Ctrl+Q'
   [System.Windows.Forms.SendKeys]::SendWait('^q')
   $quit = $script:app.WaitForExit(20000)
   Check 'A10.10' $quit 'Ctrl+Q quit the app within 20 s'
@@ -633,7 +658,8 @@ Start-Sleep -Seconds 2
 if (Test-Path $log) { Copy-Item $log (Join-Path $Work 'audiosync-debug-a1014.log') }
 '{"version":3,"show_virtual_devices":true}' | Set-Content -Encoding ascii (Join-Path $data 'settings.json')
 
-& $devcon install (Join-Path $driver 'Scream.inf') '*Scream' | Tee-Object -FilePath "$Work/env.txt" -Append
+Invoke-Bounded 120 'second ROOT device install' $devcon @('install', "`"$(Join-Path $driver 'Scream.inf')`"", '*Scream')
+Step 'second endpoint'
 $count = 0
 for ($i = 0; $i -lt 60 -and $count -ne 2; $i++) { Start-Sleep -Seconds 1; $count = [Endpoints]::ActiveCount() }
 if ($count -ne 2) {
@@ -655,7 +681,9 @@ if ($count -ne 2) {
       "NOT TRIED A1.2 mixer: no runner route" | Tee-Object -FilePath "$Work/result.txt" -Append
       Stop-Process -Id $script:app.Id -Force
     } else {
-      Start-Process -FilePath (Join-Path $dir 'unins000.exe') -Wait -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
+      Step 'uninstall'
+      $uninstall = Start-Process -FilePath (Join-Path $dir 'unins000.exe') -PassThru -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
+      Wait-Bounded $uninstall 120 'the uninstall'
       for ($i = 0; $i -lt 60 -and (Test-Path $exe); $i++) { Start-Sleep -Seconds 1 }
     }
     for ($i = 0; $i -lt 15 -and (Get-Found) -ne $found; $i++) { Start-Sleep -Seconds 1 }

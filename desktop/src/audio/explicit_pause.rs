@@ -6,20 +6,9 @@
 //! reading the speakers keep playing. Nothing here looks at the audio:
 //! silence never pauses.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-/// How long after a pause a reading may still predate the app's own pause;
-/// later readings that don't show the app paused resume. Longer than the
-/// receivers' buffer, so the flush it bought is never undone audibly.
-pub const STALE_READING: Duration = Duration::from_secs(3);
-
-/// A sample louder than this, -60 dBFS, is sound: digital silence and
-/// dither stay below it.
-pub const SOUND_LEVEL: f32 = 0.001;
-
-/// How much sound the capture carries, in total, before a paused stream
-/// resumes on its own.
-pub const SOUND_TO_RESUME: Duration = Duration::from_millis(200);
+pub use audiosync_core::policy::airplay_volume::{SOUND_LEVEL, SOUND_TO_RESUME, STALE_READING};
 
 /// The stereo frames of interleaved `block` with a sample louder than
 /// [`SOUND_LEVEL`]. Real-time safe.
@@ -170,6 +159,8 @@ impl ExplicitPause {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     const SPOTIFY: &str = "Spotify.exe";

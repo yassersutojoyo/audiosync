@@ -378,8 +378,10 @@ enum TrackSlide {
     /// What a change of the shown track does: another player ends the slide, the same song pausing or getting
     /// its cover changes nothing, and another song slides in, unless a slide runs: then that slide keeps its side
     /// and start, so the player's second reading of a song or a quick second skip doesn't slide in twice.
+    /// A later reading of the same player id (Spotify's can change the album after the slide ended) is no change.
     static func change(from old: NowPlayingMonitor.Track?, to new: NowPlayingMonitor.Track?, sliding: Bool) -> Change {
         guard let old, let new, isSkip(old, new) else { return old?.bundleID != new?.bundleID ? .stop : .none }
+        if !old.songID.isEmpty, old.songID == new.songID { return .none }
         return sliding ? .keep : .slide
     }
 

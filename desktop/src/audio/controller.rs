@@ -58,6 +58,7 @@ use audiosync_core::channels::InputPair;
 use audiosync_core::eq::{self, EqControl, EqProcessor, EqSettings};
 use audiosync_core::fade::FADE_MS;
 use audiosync_core::lead::HeldLead;
+use audiosync_core::policy::airplay_reconnect::{SENDER_RETRY_SECONDS, SenderRestart, SenderStart};
 use audiosync_core::policy::delay::{BRIEF_LOSS_HOLD, native_airplay_latency_ms};
 use audiosync_core::policy::source::AudioSource;
 use audiosync_core::policy::source_quit::{
@@ -240,7 +241,8 @@ const FRESH_REST_POLLS: u32 = 2;
 
 /// A sender that couldn't start is tried again this many polls later, 10 s
 /// (S101), until one runs.
-const AIRPLAY_RESTART_POLLS: u32 = 20;
+const AIRPLAY_RESTART_POLLS: u32 =
+    (SENDER_RETRY_SECONDS * 1000.0) as u32 / super::outputs::POLL_PERIOD.as_millis() as u32;
 
 /// How a running capture is doing.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -953,8 +955,7 @@ pub struct Controller<D: Driver> {
     /// Starts a new sender when the user retries after the sender stopped
     /// or couldn't start.
     starter: Option<SenderStarter>,
-    /// Polls left until a sender that couldn't start is tried again.
-    airplay_restart_in: Option<u32>,
+    sender_restart: SenderRestart,
     /// The paired Apple TVs' credentials while no sender ever started: the
     /// first one that does gets them.
     waiting_store: Option<PairingStore>,
@@ -1102,7 +1103,7 @@ impl<D: Driver> Controller<D> {
             feed: None,
             cast: None,
             starter: None,
-            airplay_restart_in: None,
+            sender_restart: SenderRestart::default(),
             waiting_store: None,
             retiring: Vec::new(),
             next_start: None,
@@ -1179,8 +1180,12 @@ impl<D: Driver> Controller<D> {
             None => {
                 self.log
                     .log(|| "AirPlay: no sender runs; it is tried again in 10 s".to_owned());
-                self.airplay_restart_in = Some(AIRPLAY_RESTART_POLLS);
-                self.pending.push(BackendEvent::AirPlayStopped);
+                if self
+                    .sender_restart
+                    .failed(SenderStart::First, AIRPLAY_RESTART_POLLS)
+                {
+                    self.pending.push(BackendEvent::AirPlayStopped);
+                }
             }
         }
     }
@@ -1209,7 +1214,9 @@ impl<D: Driver> Controller<D> {
             }
         }
         if !browsing {
-            self.airplay_restart_in = Some(AIRPLAY_RESTART_POLLS);
+            // Its notice is discovery's, below.
+            self.sender_restart
+                .failed(SenderStart::Due, AIRPLAY_RESTART_POLLS);
         }
         if !browsing && let Some(airplay) = self.airplay.as_mut() {
             airplay.discovery_unavailable(&mut self.pending);
@@ -1219,16 +1226,12 @@ impl<D: Driver> Controller<D> {
     /// A sender that couldn't start is tried again once its 10 s are up; a
     /// failure then isn't told again (S101).
     fn restart_airplay_when_due(&mut self) {
-        let Some(polls) = self.airplay_restart_in.as_mut() else {
-            return;
-        };
-        *polls = polls.saturating_sub(1);
-        if *polls > 0 {
+        if !self.sender_restart.poll() {
             return;
         }
         self.log
             .log(|| "AirPlay: starting a sender again, 10 s after one couldn't".to_owned());
-        if !self.restart_airplay() {
+        if !self.restart_airplay(SenderStart::Due) {
             self.log
                 .log(|| "AirPlay: no sender runs; it is tried again in 10 s".to_owned());
         }
@@ -1238,15 +1241,17 @@ impl<D: Driver> Controller<D> {
     /// can't start, or whose discovery can't, is dropped and tried again in
     /// 10 s, so a running capture restarts only for one that lists
     /// receivers. Returns whether one started.
-    fn restart_airplay(&mut self) -> bool {
-        self.airplay_restart_in = None;
+    fn restart_airplay(&mut self, start: SenderStart) -> bool {
+        self.sender_restart.cancel();
         let Some(started) = self
             .starter
             .as_mut()
             .and_then(|starter| starter())
             .filter(|started| started.browsing)
         else {
-            self.airplay_restart_in = Some(AIRPLAY_RESTART_POLLS);
+            if self.sender_restart.failed(start, AIRPLAY_RESTART_POLLS) {
+                self.pending.push(BackendEvent::AirPlayStopped);
+            }
             return false;
         };
         // A running capture feeds the old sender, or none: it starts again
@@ -2120,6 +2125,10 @@ impl<D: Driver> Controller<D> {
         if notified {
             self.log
                 .log(|| format!("{AUDIO_SYSTEM} reported a change of the outputs"));
+            // A new default takes the apps' streams along with no new session (S480).
+            if matches!(self.running_source(), Some(SourceId::WholeSystem)) {
+                self.check_routing_as(Instant::now(), false);
+            }
         }
         if force || notified || !self.listing_ok {
             let (changed, listed) = self.refresh_outputs();
@@ -4706,6 +4715,12 @@ impl<D: Driver> Controller<D> {
     /// queues [`BackendEvent::HeardTwice`] when the answer changed. A
     /// snapshot that fails keeps the last answer.
     fn check_routing(&mut self, now: Instant) {
+        self.check_routing_as(now, true);
+    }
+
+    /// [`Self::check_routing`], or with `report` false only the whole
+    /// system's route, leaving the heard-twice checks and their count alone.
+    fn check_routing_as(&mut self, now: Instant, report: bool) {
         let Some(session) = &self.session else {
             return;
         };
@@ -4715,7 +4730,9 @@ impl<D: Driver> Controller<D> {
             CaptureTarget::Mix(activations) => activations.clone(),
             CaptureTarget::Input { .. } => return,
         };
-        self.routing.last_check = Some(now);
+        if report {
+            self.routing.last_check = Some(now);
+        }
         let rendered: Vec<String> = session.outputs.keys().cloned().collect();
         let snapshot = self
             .driver
@@ -4783,7 +4800,14 @@ impl<D: Driver> Controller<D> {
                     .log(|| format!("whole system: apps play on {}", players.join("; ")));
                 self.routing.players = players;
             }
-            self.route_system(route);
+            // Off the regular check a stream may not have moved yet, and an
+            // app taken by process loopback could then reach the endpoint too.
+            if report || route.as_ref().is_some_and(|route| route.apps.is_empty()) {
+                self.route_system(route);
+            }
+        }
+        if !report {
+            return;
         }
         let answer = routing::check(&captured, &endpoints, &rendered, &self.routing.played_on);
         if answer.paths != self.routing.reported {
@@ -4927,7 +4951,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.stop_following_device_volumes();
         self.airplay = None;
         self.starter = None;
-        self.airplay_restart_in = None;
+        self.sender_restart.cancel();
         if let Some(cast) = cast {
             let clean = cast.join().unwrap_or(false);
             if !clean {
@@ -5725,9 +5749,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
         self.log
             .log(|| "AirPlay: Retry: starting a new sender".to_owned());
-        if !self.restart_airplay() {
-            self.pending.push(BackendEvent::AirPlayStopped);
-        }
+        self.restart_airplay(SenderStart::Retry);
     }
 
     fn follow_new_sessions(&mut self) {
@@ -13316,6 +13338,57 @@ mod tests {
         assert_eq!(backend.driver().capture_routes().last(), Some(&None));
     }
 
+    /// The default output changed mid-song moves the player's stream with no
+    /// new session: the capture follows at that poll, not up to 3 s later.
+    // covers: S480
+    #[cfg(windows)]
+    #[test]
+    fn a_default_output_changed_mid_song_moves_the_capture_at_once() {
+        let mut backend = routed_to_the_speakers();
+        backend.connect_output_as(TV, "TV", OutputKind::Hdmi);
+        backend.list_outputs().unwrap();
+        backend.poll();
+        for (from, to) in [(SPEAKERS, TV), (TV, SPEAKERS)] {
+            backend.set_default_output(to);
+            backend.move_session(PLAYER_PID, from, to);
+            backend.poll();
+            assert_eq!(
+                backend.driver().capture_routes().last(),
+                Some(&Some(to.to_owned())),
+                "{:?}",
+                backend.driver().capture_routes()
+            );
+        }
+    }
+
+    /// Windows' notice of a new default can come before the player's stream
+    /// moves: the capture keeps its route rather than take the player twice,
+    /// by the new endpoint and by process loopback.
+    // covers: S480
+    #[cfg(windows)]
+    #[test]
+    fn a_default_output_noticed_before_the_stream_moves_never_takes_the_player_twice() {
+        let mut backend = routed_to_the_speakers();
+        backend.connect_output_as(TV, "TV", OutputKind::Hdmi);
+        backend.list_outputs().unwrap();
+        backend.poll();
+        backend.set_default_output(TV);
+        backend.poll();
+        assert_eq!(
+            backend.driver().capture_routes().last(),
+            Some(&Some(SPEAKERS.to_owned())),
+            "{:?}",
+            backend.driver().capture_routes()
+        );
+        backend.move_session(PLAYER_PID, SPEAKERS, TV);
+        backend.check_routing_now();
+        backend.poll();
+        assert_eq!(
+            backend.driver().capture_routes().last(),
+            Some(&Some(TV.to_owned()))
+        );
+    }
+
     #[test]
     fn the_whole_system_is_heard_twice_from_the_default_output() {
         let mut backend = backend();
@@ -14918,6 +14991,30 @@ mod tests {
         assert_eq!(
             native_airplay_adjustment_ms(1970.0 + 30.0, sender_ms),
             Some(30.0)
+        );
+    }
+
+    /// A local output switched on at the captured endpoint and off again
+    /// hands the whole system back to that endpoint's loopback.
+    // covers: S480
+    #[cfg(windows)]
+    #[test]
+    fn a_local_output_switched_on_and_off_at_the_endpoint_gives_the_capture_back_to_it() {
+        let mut backend = routed_to_the_speakers();
+        backend.set_output_enabled(SPEAKERS, true).unwrap();
+        backend.poll();
+        backend.check_routing_now();
+        backend.poll();
+        assert_eq!(backend.driver().capture_routes().last(), Some(&None));
+        backend.set_output_enabled(SPEAKERS, false).unwrap();
+        backend.poll();
+        backend.check_routing_now();
+        backend.poll();
+        assert_eq!(
+            backend.driver().capture_routes().last(),
+            Some(&Some(SPEAKERS.to_owned())),
+            "{:?}",
+            backend.driver().capture_routes()
         );
     }
 }

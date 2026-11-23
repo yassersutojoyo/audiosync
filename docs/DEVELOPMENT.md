@@ -2,6 +2,8 @@
 
 Notes for building AudioSync yourself and finding your way around the code. For how to send changes, see [`CONTRIBUTING.md`](../CONTRIBUTING.md); for cutting a release, [`RELEASE.md`](../RELEASE.md).
 
+What each system forces to work differently is listed in [`PLATFORM_DIFFERENCES.md`](PLATFORM_DIFFERENCES.md); any other difference between the apps is a bug.
+
 ## Building
 
 You need macOS 15 (Sequoia) or later, the Command Line Tools for Xcode 16 or later (`xcode-select --install`), which bring Swift 6 and the `python3` the build uses, and a Rust toolchain for the audio core in `core/`: install it with [rustup](https://rustup.rs).
@@ -220,6 +222,8 @@ With AirPlay speakers and a Cast device on together, the side with the shorter l
 
 RustSec advisories are checked outside the per-push CI: `.github/workflows/advisories.yml` runs `cargo deny check advisories` in each of the five crates once a week, on every `v*` tag and by hand, against the `[advisories]` section of the crate's `deny.toml`, where every ignored advisory carries its reason.
 
+On `main`, each per-push workflow starts with a `proven` job that skips the heavy jobs when the same commit already passed that workflow on a push to an `integ/*` branch. That's safe because a push run reads the workflow file from the pushed commit, so the same commit means the same workflow file. Any error from the GitHub API leaves the skip off, and everything runs.
+
 Microphone calibration lives in the core, so both apps measure the same way. `core/src/calibrate.rs` makes the test sweep and finds where it arrives in a recording (`ENGINE_SPEC.md` S232 to S234); the apps play it and record the default input device, the Mac through `CalibrationMicrophone.swift`, Windows through `desktop/src/audio/wasapi/microphone.rs` (shared mode, float, mixed to mono, stamped with the core's clock). On Windows, 'Calibrate with Microphone' on a local speaker's row runs `desktop/src/audio/calibration.rs`: the music fades out, the sweep plays on the reference alone and then on the chosen output alone, and the estimate becomes that output's new offset. A cancel or any change during the runs leaves the offset as it was.
 
 Calibrate All Speakers (S235 to S240) measures the reference and then every speaker that is on, local, AirPlay and Cast alike, one at a time and twice each, while the others stay silent. `core/src/calibrate_all.rs` (`asc_calibration_run_*` in `core/src/ffi/calibrate_all.rs`) says what to play next and how long to record, and turns the recordings into a results sheet; it never changes a delay itself. A local row moves that output's offset, a Cast row the Cast speaker's offset (0 to 20 000 ms on the sheet), and the AirPlay rows share the one AirPlay delay, set to the median of the certain rows. A row more than 10 ms uncertain keeps its delay, and AirPlay rows more than 10 ms apart get a note, since one delay can't cover them. The user applies the sheet, undoes it in one step, or measures a row again. The Mac runs it from `AppDelegate+CalibrateAll.swift` with the sheet in `CalibrateAllViews.swift`; Windows from `desktop/src/audio/calibrate_all.rs`, shown in the main window's Calibrate All Speakers card. A change to what the run depends on stops it.
@@ -234,9 +238,23 @@ AudioSync's own AirPlay sender (`airplay/`, the one the Windows app uses) is the
 
 ### The Linux build and its AppImage
 
-`desktop/` also builds for Linux (x86_64 and aarch64). Its tray icon is a StatusNotifier item through tray-icon's ksni backend; at launch the app asks the session bus (for at most 1 s) whether `org.kde.StatusNotifierWatcher` runs with a host, and shows the icon only then (`desktop/src/os/status_notifier.rs`). Without one, there's no icon and closing the main window quits, as on Windows when the icon can't be made. A shown icon whose watcher stays gone for 10 s hands over to the main window. Without an icon the app asks the bus again every 2 s, also when the first answer took longer than 1 s, and adds the icon once a watcher with a host is there; from then on closing the main window keeps the app in the tray. Text uses the system's font through fontconfig. Slint's own `system-tray` feature is off, so the build has one tray stack.
+`desktop/` also builds for Linux (x86_64 and aarch64). Its tray icon is a StatusNotifier item through tray-icon's ksni backend; at launch the app asks the session bus (for at most 1 s) whether `org.kde.StatusNotifierWatcher` runs with a host, and shows the icon only then (`desktop/src/os/status_notifier.rs`). Without one, there's no icon and closing the main window quits, as on Windows when the icon can't be made. A shown icon whose watcher stays gone for 10 s hands over to the main window. Without an icon the app asks the bus again every 2 s, also when the first answer took longer than 1 s, and adds the icon once a watcher with a host is there; from then on closing the main window keeps the app in the tray. Text uses the bundled Inter (S450). Slint's own `system-tray` feature is off, so the build has one tray stack.
 
 The AppImage is built by `.github/workflows/linux.yml` on ubuntu-24.04, so glibc 2.39 is the oldest it runs on (the floor: this job and `stranger.yml` fail when `objdump -T` shows the program needs a newer glibc symbol, as one built on a newer image does); the same job builds the `.deb` with `scripts/build_deb.sh` and, on x86_64, the `.rpm` for Fedora 40 or newer with `scripts/build_rpm.sh`. `scripts/build_appimage.sh` lays out the AppDir from `desktop/linux/` (`AppRun`, the `.desktop` file and the AppStream metadata, all named `io.github.yassersutojoyo.audiosync`, the Wayland app id the app sets) and packs it with appimagetool 1.9.1 and type2-runtime 20251108, both pinned by SHA-256. Nothing is bundled: fontconfig, PipeWire, OpenSSL and the display libraries come from the system, and the job fails if the program links a library outside its list (`readelf -d`) or the AppDir gets a `usr/lib`. `AppRun` checks for `libpipewire-0.3.so.0` first and says so on stderr (and through `notify-send` where it exists) instead of letting the loader fail without a window. The job validates the `.desktop` and AppStream files, then runs `Tests/linux-tray-smoke.sh` on a mock-backend AppImage under Xvfb: once next to `desktop/examples/sni_watcher_stub.rs`, a stand-in watcher the icon must register with, once without one, where the app must run window-only, and once with the stand-in starting 3 s after the app, where the icon must still register. The license texts of the runtime and the libraries it links statically live in `desktop/linux/RUNTIME-NOTICES.txt`, which the AppImage carries in `usr/share/doc/audiosync/`; a new runtime release means checking that file against the runtime's LICENSE. Each release that ships the AppImage attaches the runtime's source and that of the libfuse it links statically, which the job uploads as the `appimage-runtime-sources` artifact (see `RELEASE.md`).
+
+#### Building on Linux
+
+This is what `.github/workflows/linux.yml` does, on Ubuntu 24.04 with Rust 1.99.1 (`desktop/` needs 1.99 or newer). First the libraries for Slint, the Cast sender's OpenSSL and the PipeWire client, whose bindings need libclang:
+
+```bash
+sudo apt-get install libfontconfig1-dev libxkbcommon-dev libwayland-dev libx11-dev \
+  libssl-dev pkg-config libpipewire-0.3-dev clang libclang-dev
+cd desktop
+cargo build --locked --release
+./target/release/audiosync
+```
+
+The app needs PipeWire running. To package it, the workflow writes the notices with `python3 -I ../scripts/windows_notices.py x86_64-unknown-linux-gnu --output target/release/THIRD-PARTY-NOTICES.txt` (or `aarch64-unknown-linux-gnu`), then calls `scripts/build_appimage.sh`, `scripts/build_deb.sh` and `scripts/build_rpm.sh`; its "AppImage and .deb" step shows the arguments, and the AppImage also needs the pinned appimagetool and runtime it downloads.
 
 ## Logo, icons and screenshots
 

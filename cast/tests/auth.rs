@@ -13,8 +13,9 @@ use audiosync_cast::auth::{
     Failure, HASH_SHA1, HASH_SHA256, KeyPin, Outcome, SIGNATURE_RSASSA_PKCS1V15,
     SIGNATURE_RSASSA_PSS, SIGNATURE_UNSPECIFIED, Verified,
 };
-use audiosync_cast::client::{CastClient, DeviceAuth};
-use audiosync_cast::device_keys::{DeviceKeyBook, Entry};
+use audiosync_cast::client::{CastClient, DeviceAuth, FingerprintBook, FingerprintChange};
+use audiosync_cast::device_keys::{DeviceKeyBook, Entry, Verdict, decide};
+use audiosync_cast::discovery::DeviceId;
 use audiosync_cast::ids::RequestIds;
 use audiosync_cast::message::{
     CastMessage, NS_DEVICE_AUTH, PLATFORM, PayloadType, ProtocolVersion, SENDER,
@@ -586,10 +587,10 @@ fn the_device_and_intermediates_must_be_valid_now_but_the_root_need_not() {
     let mut expired = ca("Test Intermediate", None);
     expired.not_after = rcgen::date_time_ymd(2029, 1, 1);
     let chain = chain_with(ca("Test Root", None), expired, device_params());
-    assert_eq!(
+    assert!(matches!(
         judge(&chain, response(&chain)),
-        Outcome::Failed(Failure::Chain)
-    );
+        Outcome::IntermediateExpired(_)
+    ));
 
     let mut early = device_params();
     early.not_before = rcgen::date_time_ymd(2031, 1, 1);
@@ -760,4 +761,224 @@ fn a_genuine_device_is_verified_and_pinned_over_the_wire() {
     );
     let _ = client.stop(Duration::from_secs(1));
     device.join();
+}
+
+/// A chain whose one intermediate passed its not-after a day before [`NOW`],
+/// everything else valid.
+fn lapsed_chain() -> Chain {
+    let mut lapsed = ca("Test Intermediate", None);
+    lapsed.not_after = rcgen::date_time_ymd(2030, 1, 1);
+    chain_with(ca("Test Root", None), lapsed, device_params())
+}
+
+// covers: C125, C129
+#[test]
+fn a_lapsed_intermediate_proceeds_when_the_pin_matches() {
+    let chain = lapsed_chain();
+    let pin = device_pin(&chain);
+    let outcome = judge(&chain, response(&chain));
+    let (decision, after) = decide("dev", Some(Entry::Pin(pin)), &outcome, false);
+    assert_eq!(decision.verdict, Verdict::Proceed);
+    assert!(!decision.warn);
+    assert!(
+        decision.line.ends_with("intermediate expired, pin matched"),
+        "{}",
+        decision.line
+    );
+    assert_eq!(after, None);
+}
+
+// covers: C125, C129, C131
+#[test]
+fn a_new_device_with_a_lapsed_intermediate_is_pinned_and_warned_once() {
+    let chain = lapsed_chain();
+    let pin = device_pin(&chain);
+    let outcome = judge(&chain, response(&chain));
+    let mut book = DeviceKeyBook::new();
+    let first = book.judge("dev", &outcome, false);
+    assert_eq!(first.verdict, Verdict::Proceed);
+    assert!(first.warn);
+    assert_eq!(book.entry("dev"), Some(Entry::Pin(pin)));
+    let again = book.judge("dev", &outcome, false);
+    assert_eq!(again.verdict, Verdict::Proceed);
+    assert!(!again.warn);
+    assert_eq!(book.entry("dev"), Some(Entry::Pin(pin)));
+}
+
+// covers: C125, C129, C130
+#[test]
+fn another_key_with_a_lapsed_intermediate_is_refused_and_keeps_the_pin() {
+    let other = KeyPin([0x33; 32]);
+    let mut book = DeviceKeyBook::new();
+    let verified = Outcome::Verified(Verified {
+        key: other,
+        sha1: false,
+        nonce_echoed: true,
+        audio_only: false,
+        crl: None,
+    });
+    assert_eq!(
+        book.judge("dev", &verified, false).verdict,
+        Verdict::Proceed
+    );
+    let chain = lapsed_chain();
+    let decision = book.judge("dev", &judge(&chain, response(&chain)), false);
+    assert_eq!(decision.verdict, Verdict::Refused);
+    assert!(!decision.warn);
+    assert!(
+        decision.line.contains("intermediate expired") && decision.line.contains("key mismatch"),
+        "{}",
+        decision.line
+    );
+    assert_eq!(book.entry("dev"), Some(Entry::Pin(other)));
+}
+
+// covers: C125, C130
+#[test]
+fn a_lapsed_intermediate_with_any_other_fault_is_refused() {
+    let mut lapsed_device = device_params();
+    lapsed_device.not_after = rcgen::date_time_ymd(2030, 1, 1);
+    let chain = chain_with(
+        ca("Test Root", None),
+        ca("Test Intermediate", None),
+        lapsed_device,
+    );
+    let pin = device_pin(&chain);
+    let outcome = judge(&chain, response(&chain));
+    assert_eq!(outcome, Outcome::Failed(Failure::Chain));
+    let (decision, _) = decide("dev", Some(Entry::Pin(pin)), &outcome, false);
+    assert_eq!(decision.verdict, Verdict::Refused);
+
+    let chain = lapsed_chain();
+    let pin = device_pin(&chain);
+    let mut other_tls = response(&chain);
+    other_tls.signature = Some(sign(&key().0, false, b"another TLS certificate"));
+    let outcome = judge(&chain, other_tls);
+    assert_eq!(outcome, Outcome::Failed(Failure::Signature));
+    for entry in [None, Some(Entry::Pin(pin))] {
+        let (decision, after) = decide("dev", entry, &outcome, false);
+        assert_eq!(decision.verdict, Verdict::Refused);
+        assert_eq!(after, None);
+    }
+}
+
+// covers: C125, C129, C131
+#[test]
+fn a_group_with_a_lapsed_intermediate_plays_with_one_notice_and_no_pin() {
+    let chain = lapsed_chain();
+    let outcome = judge(&chain, response(&chain));
+    let mut book = DeviceKeyBook::new();
+    let first = book.judge("group", &outcome, true);
+    assert_eq!(first.verdict, Verdict::Proceed);
+    assert!(first.warn);
+    assert_eq!(book.entry("group"), Some(Entry::Unauthenticated));
+    let again = book.judge("group", &outcome, true);
+    assert_eq!(again.verdict, Verdict::Proceed);
+    assert!(!again.warn);
+    assert_eq!(book.entry("group"), Some(Entry::Unauthenticated));
+}
+
+// covers: C125, C130
+#[test]
+fn a_group_whose_device_certificate_lapsed_is_refused() {
+    let mut lapsed_device = device_params();
+    lapsed_device.not_after = rcgen::date_time_ymd(2030, 1, 1);
+    let chain = chain_with(
+        ca("Test Root", None),
+        ca("Test Intermediate", None),
+        lapsed_device,
+    );
+    let outcome = judge(&chain, response(&chain));
+    assert_eq!(outcome, Outcome::Failed(Failure::Chain));
+    for entry in [None, Some(Entry::Unauthenticated)] {
+        let (decision, after) = decide("group", entry, &outcome, true);
+        assert_eq!(decision.verdict, Verdict::Refused);
+        assert!(!decision.warn);
+        assert_eq!(after, None);
+    }
+}
+
+// covers: C124, C129
+#[test]
+fn a_host_clock_before_the_tls_certificate_fails_the_connect_and_keeps_the_pin() {
+    let chain = chain();
+    let pin = device_pin(&chain);
+    let outcome = judge_at(&chain, response(&chain), NOW - 3 * 86_400);
+    assert_eq!(outcome, Outcome::Failed(Failure::TlsCertificateWindow));
+    for entry in [None, Some(Entry::Unauthenticated), Some(Entry::Pin(pin))] {
+        let (decision, after) = decide("dev", entry, &outcome, false);
+        assert_eq!(decision.verdict, Verdict::ConnectFailed);
+        assert!(!decision.warn);
+        assert_eq!(after, None);
+    }
+}
+
+// covers: C21, C117, C129
+#[test]
+fn a_new_tls_certificate_under_the_same_device_key_goes_ahead_quietly() {
+    let book = Arc::new(Mutex::new(DeviceKeyBook::new()));
+    let mut fingerprints = FingerprintBook::new();
+    let id = DeviceId([0xA1; 16]);
+    let pin = device_pin(wire_chain());
+    let mut changes = Vec::new();
+    for _ in 0..2 {
+        let device = FakeDevice::start(Behavior {
+            on_auth: OnAuth::Answer(genuine_answer),
+            ..Behavior::default()
+        });
+        let auth = DeviceAuth::new("dev".to_owned(), false, Arc::clone(&book))
+            .with_roots(vec![wire_chain().root.clone()]);
+        let mut client = CastClient::connect_authed(
+            &[device.address],
+            RequestIds::starting_at(10),
+            &AtomicBool::new(true),
+            None,
+            Some(&auth),
+        )
+        .expect("goes ahead");
+        assert!(!client.take_auth().expect("judged").warn);
+        changes.push(fingerprints.record(id, client.fingerprint().expect("fingerprint")));
+        let _ = client.stop(Duration::from_secs(1));
+        device.join();
+    }
+    assert_eq!(changes[0], FingerprintChange::First);
+    assert!(matches!(changes[1], FingerprintChange::Changed { .. }));
+    assert_eq!(
+        book.lock().expect("book").entry("dev"),
+        Some(Entry::Pin(pin))
+    );
+}
+
+// covers: C124, C130
+#[test]
+fn a_tls_certificate_outside_the_clock_is_judged_only_after_the_signature_and_chain() {
+    let mut chain = chain();
+    chain.tls = tls_certificate((2030, 1, 4), (2030, 1, 5));
+    let mut forged = response(&chain);
+    forged.signature = Some(sign(&key().0, false, b"another TLS certificate"));
+    assert_eq!(judge(&chain, forged), Outcome::Failed(Failure::Signature));
+    let mut lapsed_device = device_params();
+    lapsed_device.not_after = rcgen::date_time_ymd(2030, 1, 1);
+    let mut broken = chain_with(
+        ca("Test Root", None),
+        ca("Test Intermediate", None),
+        lapsed_device,
+    );
+    broken.tls = chain.tls.clone();
+    assert_eq!(
+        judge(&broken, response(&broken)),
+        Outcome::Failed(Failure::Chain)
+    );
+}
+
+// covers: C129, C131
+#[test]
+fn a_marked_device_with_a_lapsed_intermediate_is_pinned_without_a_second_notice() {
+    let chain = lapsed_chain();
+    let pin = device_pin(&chain);
+    let outcome = judge(&chain, response(&chain));
+    let (decision, after) = decide("dev", Some(Entry::Unauthenticated), &outcome, false);
+    assert_eq!(decision.verdict, Verdict::Proceed);
+    assert!(!decision.warn);
+    assert_eq!(after, Some(Entry::Pin(pin)));
 }

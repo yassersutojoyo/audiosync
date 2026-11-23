@@ -67,6 +67,13 @@ use audiosync_airplay::discovery::shown_text;
 use audiosync_core::channels::InputPair;
 use audiosync_core::clock;
 use audiosync_core::eq::{EqSettings, UserCurve, sanitized_curves};
+use audiosync_core::policy::airplay_groups::has_row;
+use audiosync_core::policy::airplay_pairing::{
+    self as pairing_rules, Appeared, EveryTimeAction, EveryTimeListed, OffReason,
+};
+use audiosync_core::policy::airplay_reconnect::{
+    NoticeClear, NoticeEnd, notice_clear, ptp_notice_clears, ptp_notice_raised,
+};
 use audiosync_core::policy::delay::{
     native_airplay_adjustment_ms, native_airplay_latency_ms, sanitize_offset_ms,
 };
@@ -2197,6 +2204,19 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
     }
 
+    /// Clears what a speaker's reconnecting or waiting showed once it ends
+    /// (S222).
+    fn end_reconnect_notice(&mut self, id: &str, end: NoticeEnd) {
+        match notice_clear(end) {
+            NoticeClear::All => {
+                self.notices.clear(&[airplay_subject(id)]);
+            }
+            NoticeClear::Reconnecting => self.clear_if(airplay_subject(id), |message| {
+                matches!(message, NoticeMessage::AirPlayRetrying { .. })
+            }),
+        }
+    }
+
     fn start_airplay_again(&mut self) {
         // A new sender binds the PTP ports anew and reports a clash itself.
         self.ptp_taken = None;
@@ -3471,8 +3491,15 @@ impl<A: AudioBackend> AudioAdapter<A> {
         for speaker in self.audio.airplay_speakers() {
             let new = !self.airplay_listed.contains(&speaker.id);
             if speaker.code_every_time {
-                if !speaker.playing && !self.airplay_on_by_hand.contains(&speaker.id) {
-                    asking.push((speaker.id.clone(), speaker.enabled, new));
+                let action = pairing_rules::every_time_listed(EveryTimeListed {
+                    on: speaker.enabled,
+                    playing: speaker.playing,
+                    on_by_hand: self.airplay_on_by_hand.contains(&speaker.id),
+                    new,
+                    auto_connect: self.auto_connect.contains(&airplay_key(&speaker.id)),
+                });
+                if action != EveryTimeAction::Untouched {
+                    asking.push((speaker.id.clone(), action));
                 }
             } else if new {
                 appeared.push(speaker.id.clone());
@@ -3496,9 +3523,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .collect();
         for id in gone {
             self.reconnecting.remove(&id);
-            self.clear_if(airplay_subject(&id), |message| {
-                matches!(message, NoticeMessage::AirPlayRetrying { .. })
-            });
+            self.end_reconnect_notice(&id, NoticeEnd::LeftSender);
         }
         let mut names = std::mem::take(&mut self.airplay_names);
         let enabled = self.audio.enabled_airplay();
@@ -3517,17 +3542,14 @@ impl<A: AudioBackend> AudioAdapter<A> {
         });
         self.airplay_names = names;
         let mut switched_off = false;
-        for (id, enabled, new) in asking {
-            if !enabled && !(new && self.auto_connect.contains(&airplay_key(&id))) {
-                continue;
-            }
+        for (id, action) in asking {
             self.log.log(|| {
                 format!(
                     "auto-connect: {} stays off, it asks for a code every time",
                     self.airplay_name(&id)
                 )
             });
-            if enabled {
+            if action == EveryTimeAction::TurnOff {
                 let _ = self.audio.set_airplay_enabled(&id, false);
                 switched_off = true;
             }
@@ -3539,9 +3561,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .into_iter()
             .filter(|id| {
                 let key = airplay_key(id);
-                self.auto_connect.contains(&key)
-                    && !self.is_hidden(&key)
-                    && !self.airplay_refused.contains_key(id)
+                pairing_rules::auto_connects(Appeared {
+                    auto_connect: self.auto_connect.contains(&key),
+                    hidden: self.is_hidden(&key),
+                    refused: self.airplay_refused.contains_key(id),
+                    every_time: false,
+                })
             })
             .collect();
         if hits.is_empty() || self.auto_connect_skipped {
@@ -4014,7 +4039,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// Once a speaker played since the clash report, the port notice goes
     /// with the last row off for PTP timing (S358).
     fn ptp_rows_changed(&mut self) {
-        if self.ptp_played && self.ptp_off.is_empty() {
+        if ptp_notice_clears(self.ptp_played, self.ptp_off.len()) {
             self.notices.clear(&[NoticeSubject::AirPlayPtp]);
         }
     }
@@ -4312,9 +4337,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .collect();
         for id in stale {
             self.reconnecting.remove(&id);
-            self.clear_if(airplay_subject(&id), |message| {
-                matches!(message, NoticeMessage::AirPlayRetrying { .. })
-            });
+            self.end_reconnect_notice(&id, NoticeEnd::LeftSender);
         }
     }
 
@@ -4574,9 +4597,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             }
             BackendEvent::AirPlayWaitOver { id } => {
                 self.reconnecting.remove(&id);
-                self.clear_if(airplay_subject(&id), |message| {
-                    matches!(message, NoticeMessage::AirPlayRetrying { .. })
-                });
+                self.end_reconnect_notice(&id, NoticeEnd::WaitOver);
             }
             BackendEvent::AirPlayPlaying { id } => {
                 self.note_speakers();
@@ -4584,15 +4605,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.ptp_off.remove(&id);
                 self.ptp_played = true;
                 self.ptp_rows_changed();
-                self.notices.clear(&[airplay_subject(&id)]);
+                self.end_reconnect_notice(&id, NoticeEnd::Plays);
             }
             BackendEvent::AirPlayUnannounced { id, unannounced } => {
                 if unannounced {
                     // Not a failure: the user has nothing to do (P215).
                     self.reconnecting.insert(id.clone(), Waiting::NotOnNetwork);
-                    self.clear_if(airplay_subject(&id), |message| {
-                        matches!(message, NoticeMessage::AirPlayRetrying { .. })
-                    });
+                    self.end_reconnect_notice(&id, NoticeEnd::LeftNetwork);
                 } else if self.reconnecting.get(&id) == Some(&Waiting::NotOnNetwork) {
                     self.reconnecting.remove(&id);
                 }
@@ -4617,13 +4636,14 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.reconnecting.remove(&id);
                 // It is off, so the click that turned it on is spent (S223).
                 let by_hand = self.airplay_on_by_hand.remove(&id);
-                if matches!(
-                    problem,
-                    AirPlayProblem::NotAccepted
-                        | AirPlayProblem::PairingNotYet
-                        | AirPlayProblem::StillNeedsCode
-                ) || (problem == AirPlayProblem::NeedsPin && !by_hand)
-                {
+                let reason = match problem {
+                    AirPlayProblem::NotAccepted => OffReason::NotAccepted,
+                    AirPlayProblem::PairingNotYet => OffReason::PairingNotYet,
+                    AirPlayProblem::StillNeedsCode => OffReason::StillNeedsCode,
+                    AirPlayProblem::NeedsPin => OffReason::NeedsPin,
+                    _ => OffReason::Other,
+                };
+                if pairing_rules::stays_refused(reason, by_hand) {
                     self.airplay_refused.insert(id.clone(), problem);
                 }
                 let timing = problem == AirPlayProblem::TimingUnavailable;
@@ -4634,10 +4654,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     self.ptp_rows_changed();
                 }
                 let raises = timing
-                    && self
-                        .ptp_taken
-                        .as_mut()
-                        .is_some_and(|raised| raised.insert(id.clone()));
+                    && ptp_notice_raised(
+                        self.ptp_taken.is_some(),
+                        self.ptp_taken
+                            .as_mut()
+                            .is_some_and(|raised| raised.insert(id.clone())),
+                    );
                 self.airplay_cant_play(&id, problem);
                 if raises {
                     self.post(
@@ -5127,13 +5149,15 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                         .into_iter()
                         // A single receiver that can't play isn't listed, as on the Mac (S222).
                         .filter(|speaker| {
-                            speaker.group.is_some()
-                                || !matches!(
+                            has_row(
+                                speaker.group.is_some(),
+                                matches!(
                                     speaker.availability,
                                     AirPlayAvailability::PairingNotYet
                                         | AirPlayAvailability::AirPlay2NotYet
                                         | AirPlayAvailability::Unsupported
-                                )
+                                ),
+                            )
                         })
                         .map(|speaker| self.airplay_speaker(speaker, prompted)),
                 )

@@ -31,7 +31,7 @@ final class NowPlayingMonitor {
         /// Nil where the player doesn't take the command, which hides its button.
         var shuffle: Bool? = nil
         var repeatMode: RepeatMode? = nil
-        /// The player's own id of the song, for the debug log only.
+        /// The player's own id of the song, for the debug log and `TrackSlide.change`.
         var songID = ""
 
         /// Leaves `position` out: it moves on all the time, and only a jump

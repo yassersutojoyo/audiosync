@@ -3865,6 +3865,14 @@ do {
     check(returned.joinable(returned.rows(enabled: []), after: ["native:A1"], stopped: false) == ["native:C3"],
           "native airplay: a new auto-connect row asking for a password given this run is joinable",
           "\(returned.joinable(returned.rows(enabled: []), after: ["native:A1"], stopped: false))")
+    var pinRefusedBack = model
+    pinRefusedBack.turnedOffAsking("B2")
+    pinRefusedBack.apply(.gone(id: "B2", name: nil))
+    pinRefusedBack.apply(.appeared(receiver("B2", "Den TV", .needsPin)))
+    // covers: S349
+    check(appearedAsking(pinRefusedBack) == ["C3"] && pinRefusedBack.refusedOff == ["B2"],
+          "native airplay: an auto-connect Apple TV turned off for its PIN stays off with no new notice when it appears again this run, as on Windows",
+          "\(appearedAsking(pinRefusedBack)) \(pinRefusedBack.refusedOff)")
     var cantPlayModel = NativeAirPlayModel()
     for r in [receiver("A1", "kitchen", .available), receiver("D4", "HomePod", .airPlay2Only),
               receiver("E5", "Old", .unsupported), receiver("F6", "Attic", .needsPairing)] {
@@ -5527,6 +5535,32 @@ do {
             && sfReopened == .prompt && sfNew.nextPrompt() == NativePrompt(id: "P1", password: true, wrong: false),
           "sender failure: the speaker whose password prompt was open goes off with the needs-a-password notice, the others rejoin, and Retry asks again",
           "off \(sfOff), idle \(sfIdleOff), rejoin \(sfRejoin), relisted \(sfRelisted), reopened \(String(describing: sfReopened))")
+}
+
+// MARK: A sender that fails while an Apple TV's PIN pairing runs turns it off with the needs-a-PIN notice, as on Windows
+do {
+    var psoModel = NativeAirPlayModel()
+    for id in ["T1", "T2"] {
+        psoModel.apply(.appeared(NativeReceiver(id: id, name: id, model: "", availability: .needsPin, reason: nil, hints: [])))
+    }
+    psoModel.apply(.appeared(NativeReceiver(id: "O2", name: "O2", model: "", availability: .available, reason: nil, hints: [])))
+    psoModel.added("O2")
+    _ = psoModel.apply(.state(id: "O2", .playing, retryMs: nil))
+    let psoPairing = psoModel.turnedOnByUser("T1")
+    _ = psoModel.turnedOnByUser("T2")
+    _ = psoModel.apply(.pinNeeded(id: "T2"))
+    let psoOn: Set<String> = ["native:T1", "native:T2", "native:O2"]
+    var psoHand = EveryTimeGuard()
+    psoHand.turnedOnByHand(["native:T1", "native:T2"])
+    let psoOff = psoHand.streamEnded(.senderFailed, streaming: true, model: psoModel, enabled: psoOn)
+    var psoIdleHand = EveryTimeGuard()
+    let psoIdleOff = psoIdleHand.streamEnded(.senderFailed, streaming: false, model: psoModel, enabled: psoOn)
+    // covers: S223
+    check(psoPairing == .startPairing("T1")
+            && psoOff == [.init(id: "native:T1", reason: .needsCode), .init(id: "native:T2", reason: .needsCode)]
+            && psoIdleOff == psoOff,
+          "sender failure: an Apple TV whose PIN pairing runs or whose PIN prompt is open goes off with the needs-a-PIN notice, the others rejoin",
+          "off \(psoOff), idle \(psoIdleOff)")
 }
 
 // MARK: A sender Retry keeps what the run learned: passwords typed, refused speakers, turned-down credentials
@@ -14418,6 +14452,10 @@ do {
     // covers: C130
     check(CastEnd.failed(CastError(ASC_CAST_ERROR_REFUSED)).problem == .notGenuine,
           "cast: a device that fails authentication reads as not genuine, as on Windows (C130)")
+    // covers: C124
+    check(CastEnd.failed(CastError(ASC_CAST_ERROR_CLOCK)) == .failed(.clock)
+            && CastEnd.failed(CastError(ASC_CAST_ERROR_CLOCK)).problem == .notResponding,
+          "cast: a TLS certificate outside this Mac's clock has its own error and is not read as not genuine (C124)")
 
     // covers: C112
     final class SavedCast { var values: [String: Any] = [:] }
@@ -19214,9 +19252,14 @@ do {
     check(auditSwitch.contains(".overlay(alignment: on ? .trailing : .leading) {") && auditSwitch.contains(".drawingGroup()")
             && !auditSwitch.contains("ZStack(alignment: on ? .trailing : .leading)"),
           "streaming switch source: the knob sits on the track and both draw in one pass, so the off knob is not a pixel low")
-    let auditTitle = auditPart("MainWindow.swift", "struct ScrollingTitle: View")
-    check(auditTitle.contains(".mask(MarqueeEdges(") && auditTitle.contains("Marquee.edges(offset:"),
-          "scrolling title source: a running name fades out at the edge it is cut on, so no cut letter meets the dot beside it")
+    func auditMask(_ offset: CGFloat) -> [CGFloat] {
+        Marquee.maskStops(fades: Marquee.edges(offset: offset, overflow: 60), width: 256).map { $0.location }
+    }
+    let auditCutMask = auditMask(30), auditStartMask = auditMask(0), auditEndMask = auditMask(60)
+    check(auditCutMask[2] == 8.0 / 256 && auditCutMask[3] == 1 - 4.0 / 256
+            && auditStartMask[2] == 0 && auditStartMask[3] < 1 && auditEndMask[2] > 0 && auditEndMask[3] == 1,
+          "scrolling title: a running name fades out at the edge it is cut on, so no cut letter meets the dot beside it",
+          "\(auditCutMask) \(auditStartMask) \(auditEndMask)")
     let auditEdges = ([0, 3, 30, 57, 60] as [CGFloat]).map { Marquee.edges(offset: $0, overflow: 60) }
     check(auditEdges.map(\.leading) == [0, 3, 8, 8, 8] && auditEdges.map(\.trailing) == [4, 4, 4, 3, 0]
             && Marquee.edges(offset: 0, overflow: 0) == (0, 0),
@@ -19606,6 +19649,14 @@ do {
             && TrackSlide.change(from: one, to: spotifyOne, sliding: true) == .stop
             && TrackSlide.change(from: nil, to: one, sliding: false) == .stop,
           "track slide: a second reading or a quick second skip while a slide runs keeps that slide, its side and start")
+    // Mac debug log 2026-11-20 08:04: Spotify read the new song twice, the second time with another album.
+    let songRead = NowPlayingMonitor.Track(bundleID: "com.spotify.client", appName: "Spotify", title: "Two",
+                                           artist: "A", album: "B", isPlaying: true, artwork: nil, songID: "t2")
+    let songReread = NowPlayingMonitor.Track(bundleID: "com.spotify.client", appName: "Spotify", title: "Two",
+                                             artist: "A", album: "C", isPlaying: true, artwork: nil, songID: "t2")
+    check(TrackSlide.change(from: songRead, to: songReread, sliding: false) == .none
+            && TrackSlide.change(from: songRead, to: songReread, sliding: true) == .none,
+          "track slide: the player's later reading of the song that slid in, with another album, slides nothing")
     let cover = NSImage(size: NSSize(width: 1, height: 1))
     var shown = two
     shown.artwork = cover

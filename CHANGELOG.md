@@ -6,7 +6,9 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
-- AirPlay 2 speakers that support PTP timing now get it first, as Apple's own sender gives it to them. A WiiM Amp that took the older NTP timing stopped playing after a few minutes, while AudioSync still showed it playing, until its volume changed.
+- On the Mac, Windows and Linux, AirPlay 2 speakers that support PTP timing now get it first, as Apple's own sender gives it to them. A WiiM Amp that took the older NTP timing stopped playing after a few minutes, while AudioSync still showed it playing, until its volume changed.
+- On Linux, each preset's … button stays visible while Orca runs, as on the Mac with VoiceOver and on Windows with Narrator.
+- On Windows and Linux, a notice that is closing no longer takes clicks, as on the Mac.
 
 ## [0.9.3] - 2026-11-20
 

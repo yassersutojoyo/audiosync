@@ -100,6 +100,7 @@ jobs:
             packages="$packages pipewire pipewire-bin wireplumber pipewire-pulse pulseaudio-utils
               dbus dbus-user-session xvfb libx11-xcb1 libxcursor1 libxkbcommon-x11-0 libxi6 libxrandr2"
           fi
+          echo 'Acquire::http::Timeout "30"; Acquire::https::Timeout "30"; Acquire::Retries "3";' | sudo tee /etc/apt/apt.conf.d/99stranger-timeouts
           sudo apt-get update -q
           # shellcheck disable=SC2086
           sudo apt-get install -y --no-install-recommends $packages
@@ -329,8 +330,11 @@ jobs:
 
       # As the stranger session, plus the accessibility bus, the AT-SPI
       # bindings, ImageMagick's import, xdotool and a tray host.
+      # A stalled mirror connection held apt-get update until the job limit
+      # (23 Nov 2026), so every apt call here gives up and retries instead.
       - name: System packages and the installed package
         run: |
+          echo 'Acquire::http::Timeout "30"; Acquire::https::Timeout "30"; Acquire::Retries "3";' | sudo tee /etc/apt/apt.conf.d/99stranger-timeouts
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends pipewire pipewire-bin wireplumber pipewire-pulse             pulseaudio-utils dbus dbus-user-session xvfb libx11-xcb1 libxcursor1 libxkbcommon-x11-0 libxi6 libxrandr2             at-spi2-core python3-gi gir1.2-atspi-2.0 imagemagick xdotool stalonetray
           sudo apt-get install -y --no-install-recommends snixembed || echo "snixembed: not in the archive, the stand-in watcher hosts the tray"
@@ -398,7 +402,12 @@ jobs:
     needs: [proven, windows]
     if: ${{ !cancelled() && needs.proven.outputs.skip != 'true' }}
     runs-on: windows-latest
-    timeout-minutes: 30
+    # A pass takes about 3 min. A lost runner ends only at this limit plus
+    # GitHub's 5 min grace, so the limit stays close to a pass.
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      checks: write
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -409,11 +418,17 @@ jobs:
           name: stranger-windows-setup
           path: pkg
 
-      # Shorter than the job, so a hang still leaves time for the upload.
+      # The harness deadline ends a hang with its log and the process list;
+      # the step timeout is the net behind it. The heartbeat check run keeps
+      # the progress when the whole runner is lost and neither fires.
       - name: Install, stream to the default output, change its volume and mute
+        id: device
         shell: pwsh
-        timeout-minutes: 25
-        run: ./scripts/stranger/windows_default_device.ps1 -Setup pkg/AudioSync-Setup.exe -Work default-device
+        timeout-minutes: 10
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEARTBEAT_NAME: Stranger default output heartbeat (run ${{ github.run_id }}.${{ github.run_attempt }})
+        run: ./scripts/stranger/with_deadline.ps1 -Minutes 7 -Work default-device -Script scripts/stranger/windows_default_device.ps1 -Setup pkg/AudioSync-Setup.exe
 
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         if: ${{ !cancelled() }}
@@ -422,8 +437,10 @@ jobs:
           path: harness
 
       # A1.8: the System slider's backend call on the virtual card, muted first.
+      # Skipped after a hang: a second call into a stuck audio stack would hang
+      # past the job limit too, and the upload below would never run.
       - name: System slider harness (mute, set_device_volume, read back)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.device.outputs.hung != 'true' }}
         shell: pwsh
         timeout-minutes: 3
         env:
@@ -442,6 +459,34 @@ jobs:
           path: default-device
           if-no-files-found: warn
           retention-days: 7
+
+  default-device-heartbeat:
+    # Prints the default output job's last heartbeat, which outlives a lost
+    # runner, and closes its check run.
+    name: Windows default output, last heartbeat
+    needs: [default-device-windows]
+    if: ${{ always() && needs.default-device-windows.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      checks: write
+    steps:
+      - name: Print and close the heartbeat check run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          NAME: Stranger default output heartbeat (run ${{ github.run_id }}.${{ github.run_attempt }})
+          RESULT: ${{ needs.default-device-windows.result }}
+        run: |
+          echo "default output job: $RESULT"
+          id=$(gh api "repos/$REPO/commits/$SHA/check-runs" -X GET -f check_name="$NAME" --jq '.check_runs[0].id // empty') || true
+          if [ -z "$id" ]; then echo "no heartbeat was posted"; exit 0; fi
+          gh api "repos/$REPO/check-runs/$id" \
+            --jq '"check run: \(.status) \(.conclusion // "")\n\(.output.title)\n\(.output.summary)\n\(.output.text // "")"' || true
+          if [ "$(gh api "repos/$REPO/check-runs/$id" --jq .status)" != completed ]; then
+            gh api -X PATCH "repos/$REPO/check-runs/$id" -f status=completed -f conclusion="$([ "$RESULT" = success ] && echo success || echo failure)" --silent || true
+          fi
 
   keys-windows:
     # Every Ctrl shortcut from each window, and Escape in the zone dialog, the

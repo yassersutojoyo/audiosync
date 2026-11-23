@@ -1100,6 +1100,18 @@ mod tests {
         assert_eq!(linear_volume(2.0), 1.0);
     }
 
+    // covers: S472
+    #[test]
+    fn a_level_written_reads_back_as_the_same_remembered_level() {
+        // A drift of 0.001 would read as a level changed in the system, and
+        // the remembered level would never go back on.
+        for percent in 0..=100_u8 {
+            let level = f32::from(percent) / 100.0;
+            let read = endpoint_volume(false, &[linear_volume(level); 2]).level;
+            assert!((read - level).abs() < 1e-4, "{level} reads {read}");
+        }
+    }
+
     // covers: S381
     #[test]
     fn removing_a_sink_says_the_listing_changed() {

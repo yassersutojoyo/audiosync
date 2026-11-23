@@ -131,6 +131,8 @@ enum CastProblem: Equatable {
 enum CastError: Equatable {
     case connect, launch, media, noFetch, stream, noSession, volumeFixed, volume, artwork, `internal`, noAddress
     case notGenuine
+    /// The device's TLS certificate is outside its dates by this Mac's clock (C124).
+    case clock
     case other(Int32)
 
     init?(_ code: Int32) {
@@ -148,6 +150,7 @@ enum CastError: Equatable {
         case ASC_CAST_ERROR_INTERNAL: self = .internal
         case ASC_CAST_ERROR_NO_ADDRESS: self = .noAddress
         case ASC_CAST_ERROR_REFUSED: self = .notGenuine
+        case ASC_CAST_ERROR_CLOCK: self = .clock
         default: self = .other(code)
         }
     }

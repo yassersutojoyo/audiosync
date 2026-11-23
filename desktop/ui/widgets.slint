@@ -2007,6 +2007,11 @@ export component LevelSlider inherits Rectangle {
     touch := TouchArea {
         enabled: root.enabled;
         pointer-event(event) => {
+            // A cancel comes with no button.
+            if event.kind == PointerEventKind.cancel {
+                root.released(root.value);
+                return;
+            }
             if event.button != PointerEventButton.left {
                 return;
             }
@@ -2203,6 +2208,13 @@ export component VolumeSlider inherits HorizontalLayout {
     // A slider disabled mid-drag never sees its release.
     changed enabled => {
         if !root.enabled && root.is-editing {
+            root.is-editing = false;
+            root.editing(false);
+        }
+    }
+    // Nor does one that loses the focus before its key is let go.
+    changed slider-focused => {
+        if !root.slider-focused && root.is-editing {
             root.is-editing = false;
             root.editing(false);
         }
@@ -6154,6 +6166,9 @@ export component NoticeStack inherits VerticalLayout {
                 }
             }
         }
+
+        // A closing slot takes no clicks, as the Mac's (NoticeMotion.swift:51).
+        if slot.closing: TouchArea { }
     }
 
     if root.notices.length > 1: all-slot := Rectangle {
@@ -6202,5 +6217,7 @@ export component NoticeStack inherits VerticalLayout {
                 }
             }
         }
+
+        if all-slot.closing: TouchArea { }
     }
 }

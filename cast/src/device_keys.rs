@@ -7,7 +7,7 @@ use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::auth::{AUTH_WAIT, KeyPin, MARKED_AUTH_WAIT, Outcome};
+use crate::auth::{AUTH_WAIT, Failure, KeyPin, MARKED_AUTH_WAIT, Outcome};
 
 /// What the host keeps for one device (C129).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,6 +87,63 @@ pub fn decide(
                 ),
             }
         }
+        Outcome::IntermediateExpired(verified) => match entry {
+            Some(Entry::Pin(pin)) if !group && pin == verified.key => (
+                decision(Verdict::Proceed, false, format!("{outcome}, pin matched")),
+                None,
+            ),
+            Some(Entry::Pin(pin)) if !group => (
+                decision(
+                    Verdict::Refused,
+                    false,
+                    format!("{outcome}, key mismatch with pin {}, refused", pin.short()),
+                ),
+                None,
+            ),
+            None if !group => (
+                decision(
+                    Verdict::Proceed,
+                    true,
+                    format!("{outcome}, pinned {}, warned", verified.key.short()),
+                ),
+                Some(Entry::Pin(verified.key)),
+            ),
+            Some(Entry::Unauthenticated) if !group => (
+                decision(
+                    Verdict::Proceed,
+                    false,
+                    format!("{outcome}, pinned {}", verified.key.short()),
+                ),
+                Some(Entry::Pin(verified.key)),
+            ),
+            // A group has no pin to match, and refusing it would protect no
+            // one: a group that declines already plays with one notice.
+            None => (
+                decision(
+                    Verdict::Proceed,
+                    true,
+                    format!("{outcome}, unauthenticated, warned"),
+                ),
+                Some(Entry::Unauthenticated),
+            ),
+            Some(_) => (
+                decision(
+                    Verdict::Proceed,
+                    false,
+                    format!("{outcome}, unauthenticated"),
+                ),
+                None,
+            ),
+        },
+        // A host clock days off fails every device alike (C124).
+        Outcome::Failed(Failure::TlsCertificateWindow) => (
+            decision(
+                Verdict::ConnectFailed,
+                false,
+                format!("{outcome}, connect failed"),
+            ),
+            None,
+        ),
         Outcome::Failed(_) => (
             decision(Verdict::Refused, false, format!("{outcome}, refused")),
             None,
