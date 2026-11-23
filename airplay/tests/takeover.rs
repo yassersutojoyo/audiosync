@@ -256,6 +256,62 @@ fn a_close_with_no_evidence_waits_for_the_host_and_a_busy_retry_is_taken() {
     sender.shutdown();
 }
 
+// The host restarts a speaker by removing and adding it: a Busy answer
+// after that still follows the receiver's close, so it is Taken (P249).
+// covers: P249
+#[test]
+fn a_busy_answer_after_a_remove_and_add_is_still_taken() {
+    let _serial = serial();
+    let window = Duration::from_millis(1500);
+    let Rig {
+        receiver: a,
+        sender,
+        _host,
+        mut events,
+        key,
+        device,
+        ..
+    } = playing(window);
+    a.kill();
+    let closed = Instant::now();
+    watch(
+        &mut events,
+        &sender,
+        closed + window + Duration::from_secs(1),
+    );
+    assert_eq!(
+        takeovers(&events, &key),
+        [TakeoverReport::ClosedByReceiver, TakeoverReport::NoEvidence]
+    );
+
+    sender.remove_speaker(&key);
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Stopped)
+            .is_some()
+    );
+    let seen = events.of(&key).len();
+    a.behavior().status.insert("ANNOUNCE".to_owned(), 453);
+    sender.add_speaker(device, SpeakerOptions::new(Volume::Db(-20.0)));
+    watch(
+        &mut events,
+        &sender,
+        Instant::now() + Duration::from_secs(4),
+    );
+    assert_eq!(
+        takeovers(&events, &key).last(),
+        Some(&TakeoverReport::Taken { group: None }),
+        "{:?}",
+        &events.of(&key)[seen..]
+    );
+    let retries = events.of(&key)[seen..]
+        .iter()
+        .filter(|event| matches!(event, SpeakerEvent::State(SpeakerState::Retrying { .. })))
+        .count();
+    assert_eq!(retries, 0);
+    sender.shutdown();
+}
+
 // A release ends the session as a deselect does: TEARDOWN, then Stopped,
 // with no error and no retry (P250).
 // covers: P250
