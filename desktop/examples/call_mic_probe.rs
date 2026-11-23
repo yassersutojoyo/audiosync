@@ -34,22 +34,23 @@ mod probe {
     use std::ffi::c_void;
     use std::io::{BufRead, BufReader, Write};
     use std::process::{Child, ChildStdin, Command, ExitCode, Stdio};
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::{self, Receiver};
+    use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::{Duration, Instant};
 
     use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
+    use windows::Win32::Foundation::PROPERTYKEY;
     use windows::Win32::Foundation::{CloseHandle, ERROR_SUCCESS, HANDLE};
     use windows::Win32::Media::Audio::{
         AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, ActivateAudioInterfaceAsync,
-        AudioSessionStateActive, DEVICE_STATE_ACTIVE, EDataFlow, ERole,
+        AudioSessionStateActive, DEVICE_STATE, DEVICE_STATE_ACTIVE, EDataFlow, ERole,
         IActivateAudioInterfaceAsyncOperation, IActivateAudioInterfaceCompletionHandler,
         IActivateAudioInterfaceCompletionHandler_Impl, IAudioCaptureClient, IAudioClient,
         IAudioRenderClient, IAudioSessionControl2, IAudioSessionManager2, IMMDevice,
-        IMMDeviceEnumerator, MMDeviceEnumerator, eCapture, eCommunications, eConsole, eMultimedia,
-        eRender,
+        IMMDeviceEnumerator, IMMNotificationClient, IMMNotificationClient_Impl, MMDeviceEnumerator,
+        eCapture, eCommunications, eConsole, eMultimedia, eRender,
     };
     use windows::Win32::Security::{
         GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
@@ -62,7 +63,7 @@ mod probe {
     use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
     use windows::Win32::System::Variant::VT_LPWSTR;
     use windows::Win32::System::WinRT::RoGetActivationFactory;
-    use windows::core::{GUID, HRESULT, HSTRING, IInspectable, IUnknown, Interface, Ref};
+    use windows::core::{GUID, HRESULT, HSTRING, IInspectable, IUnknown, Interface, PCWSTR, Ref};
     use windows_core::implement;
 
     type Fallible<T> = Result<T, String>;
@@ -75,6 +76,10 @@ mod probe {
     const WAIT: Duration = Duration::from_secs(5);
     const MIC_CYCLES: usize = 5;
     const Q1_ROUNDS: usize = 50;
+    /// The rule's read-back delay after a move (S485).
+    const STAYED: Duration = Duration::from_millis(250);
+    /// The rule's hold before an app that stopped listening rejoins (S485).
+    const HOLD: Duration = Duration::from_secs(3);
 
     const POLICY_CLASS: &str = "Windows.Media.Internal.AudioPolicyConfig";
     const POLICY_IIDS: [GUID; 2] = [
@@ -97,7 +102,14 @@ mod probe {
         let result = init_com().and_then(|()| match args.first().map(String::as_str) {
             None => control(true),
             Some("--no-mic") => control(false),
-            Some("tone") => tone(args.get(1).map(String::as_str) == Some("default")),
+            Some("tone") => match args.get(1).map(String::as_str) {
+                Some("reopen") => tone_reopen(),
+                mode => tone(mode == Some("default")),
+            },
+            Some("chrome") => match args.get(1) {
+                Some(path) => chrome(path),
+                None => Err("`chrome` needs the browser's path".into()),
+            },
             Some("mic") => match args.get(1) {
                 Some(id) => mic(id),
                 None => Err("`mic` needs an endpoint ID".into()),
@@ -134,8 +146,9 @@ mod probe {
             println!("Q3: skipped (--no-mic)");
             None
         };
-        let q2_default = q2_move(&enumerator, true)?;
-        let q2_device = q2_move(&enumerator, false)?;
+        let q2_default = q2_move(&enumerator, "default")?;
+        let q2_device = q2_move(&enumerator, "device")?;
+        let q2_reopen = q2_move(&enumerator, "reopen")?;
 
         let after = Snapshot::take(&enumerator)?;
         after.print("after");
@@ -151,6 +164,9 @@ mod probe {
         println!("RESULT Q1 {q1}");
         println!("RESULT Q2 default-path stream: {q2_default}");
         println!("RESULT Q2 endpoint-bound stream: {q2_device}");
+        println!(
+            "RESULT Q4 endpoint-bound stream reopening on a default-change notice: {q2_reopen}"
+        );
         match q3 {
             Some(q3) => println!("RESULT Q3 {q3}"),
             None => println!("RESULT Q3 not run"),
@@ -253,8 +269,7 @@ mod probe {
     /// Q2: a helper renders silence on the console default; the probe moves
     /// the helper's console and multimedia output to another endpoint and
     /// times when its session plays there, then clears the move.
-    fn q2_move(enumerator: &IMMDeviceEnumerator, default_path: bool) -> Fallible<String> {
-        let mode = if default_path { "default" } else { "device" };
+    fn q2_move(enumerator: &IMMDeviceEnumerator, mode: &str) -> Fallible<String> {
         // SAFETY: reads the console default render endpoint.
         let console = unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eConsole) }
             .map_err(|e| failed("GetDefaultAudioEndpoint", &e))?;
@@ -294,6 +309,21 @@ mod probe {
         let left = !sessions_on(enumerator, &from)?
             .iter()
             .any(|session| session.pid == pid && session.active);
+        // The rule's read-back: still active on the old endpoint 250 ms
+        // after the move marks the app as stayed.
+        let stayed = !left && arrived.is_none_or(|at| at.duration_since(set_at) > STAYED);
+        let told: Vec<String> = helper.lines.try_iter().map(|(line, _)| line).collect();
+        let notices = told
+            .iter()
+            .filter(|line| line.starts_with("notice"))
+            .count();
+        let reopened = told
+            .iter()
+            .filter(|line| line.starts_with("reopened"))
+            .count();
+        for line in &told {
+            println!("helper: {line}");
+        }
         for role in [eConsole, eMultimedia] {
             policy.set(pid, role, "")?;
         }
@@ -310,11 +340,12 @@ mod probe {
             yes_no(cleared)
         );
         Ok(format!(
-            "{}: N = {} ms, left the old endpoint {}, per-app cleared {}",
+            "{}: N = {} ms, left the old endpoint {}, per-app cleared {}, default-change              notices to the app {notices}, reopened {reopened}, stayed at 250 ms {}",
             yes_no(ms.is_some()),
             ms.map_or("none within 5000".into(), |ms| ms.to_string()),
             yes_no(left),
-            yes_no(cleared)
+            yes_no(cleared),
+            yes_no(stayed)
         ))
     }
 
@@ -839,6 +870,307 @@ mod probe {
             self.0.0.store(true, Ordering::Release);
             Ok(())
         }
+    }
+
+    // MARK: Rule proof: an app bound by ID that follows default changes
+
+    /// Render default-change notices, as Windows delivered them.
+    #[implement(IMMNotificationClient)]
+    struct Notices(Arc<Mutex<Vec<String>>>);
+
+    impl IMMNotificationClient_Impl for Notices_Impl {
+        fn OnDeviceStateChanged(
+            &self,
+            _id: &PCWSTR,
+            _state: DEVICE_STATE,
+        ) -> windows_core::Result<()> {
+            Ok(())
+        }
+
+        fn OnDeviceAdded(&self, _id: &PCWSTR) -> windows_core::Result<()> {
+            Ok(())
+        }
+
+        fn OnDeviceRemoved(&self, _id: &PCWSTR) -> windows_core::Result<()> {
+            Ok(())
+        }
+
+        fn OnDefaultDeviceChanged(
+            &self,
+            flow: EDataFlow,
+            role: ERole,
+            id: &PCWSTR,
+        ) -> windows_core::Result<()> {
+            if flow == eRender {
+                // SAFETY: Windows passes a NUL-terminated ID, or null, that
+                // lives through the call.
+                let id = if id.is_null() {
+                    String::new()
+                } else {
+                    unsafe { id.to_string() }.unwrap_or_default()
+                };
+                if let Ok(mut told) = self.0.lock() {
+                    told.push(format!("notice role {} {id}", role.0));
+                }
+            }
+            Ok(())
+        }
+
+        fn OnPropertyValueChanged(
+            &self,
+            _id: &PCWSTR,
+            _key: &PROPERTYKEY,
+        ) -> windows_core::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A silent stream on the endpoint `GetDefaultAudioEndpoint` names now.
+    fn open_bound(
+        enumerator: &IMMDeviceEnumerator,
+    ) -> Fallible<(IAudioClient, IAudioRenderClient, u32, String)> {
+        // SAFETY: opens the console default render endpoint and a stream on
+        // it; the mix format is freed after Initialize copied it.
+        unsafe {
+            let device = enumerator
+                .GetDefaultAudioEndpoint(eRender, eConsole)
+                .map_err(|e| failed("GetDefaultAudioEndpoint", &e))?;
+            let id = device_id(&device);
+            let client = device
+                .Activate::<IAudioClient>(CLSCTX_ALL, None)
+                .map_err(|e| failed("Activate(IAudioClient)", &e))?;
+            let format = client
+                .GetMixFormat()
+                .map_err(|e| failed("GetMixFormat", &e))?;
+            let init = client.Initialize(AUDCLNT_SHAREMODE_SHARED, 0, BUFFER_HNS, 0, format, None);
+            CoTaskMemFree(Some(format.cast_const().cast()));
+            init.map_err(|e| failed("Initialize", &e))?;
+            let render = client
+                .GetService::<IAudioRenderClient>()
+                .map_err(|e| failed("GetService(IAudioRenderClient)", &e))?;
+            let size = client
+                .GetBufferSize()
+                .map_err(|e| failed("GetBufferSize", &e))?;
+            client.Start().map_err(|e| failed("Start", &e))?;
+            Ok((client, render, size, id))
+        }
+    }
+
+    /// Renders silence on a stream bound to the console default endpoint and,
+    /// at each render default-change notice, closes it and opens one on the
+    /// endpoint `GetDefaultAudioEndpoint` then names, until standard input
+    /// closes.
+    fn tone_reopen() -> Fallible<()> {
+        let closed = input_closed();
+        let enumerator = enumerator()?;
+        let told = Arc::new(Mutex::new(Vec::new()));
+        let listener: IMMNotificationClient = Notices(Arc::clone(&told)).into();
+        // SAFETY: registers a live, agile listener, removed below.
+        unsafe { enumerator.RegisterEndpointNotificationCallback(&listener) }
+            .map_err(|e| failed("RegisterEndpointNotificationCallback", &e))?;
+        let (mut client, mut render, mut size, mut id) = open_bound(&enumerator)?;
+        say(&format!("opened {id}"));
+        say("started");
+        while !closed.load(Ordering::Relaxed) {
+            let notices: Vec<String> = told
+                .lock()
+                .map(|mut told| told.drain(..).collect())
+                .unwrap_or_default();
+            if !notices.is_empty() {
+                for notice in &notices {
+                    say(notice);
+                }
+                // SAFETY: stops the stream this function owns.
+                let _ = unsafe { client.Stop() };
+                (client, render, size, id) = open_bound(&enumerator)?;
+                say(&format!("reopened {id}"));
+            }
+            // SAFETY: calls on the stream this function owns; every buffer
+            // is released silent.
+            unsafe {
+                let padding = client.GetCurrentPadding().unwrap_or(size);
+                let frames = size.saturating_sub(padding);
+                if frames > 0 && render.GetBuffer(frames).is_ok() {
+                    let _ = render.ReleaseBuffer(frames, AUDCLNT_BUFFERFLAGS_SILENT.0 as u32);
+                }
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        // SAFETY: stops the stream and removes the listener registered above.
+        unsafe {
+            let _ = client.Stop();
+            let _ = enumerator.UnregisterEndpointNotificationCallback(&listener);
+        }
+        say("stopped");
+        Ok(())
+    }
+
+    // MARK: Rule proof: a real browser with a tone and a microphone
+
+    /// A page that plays a quiet tone at once and listens to the default
+    /// microphone for 6 s, then lets the microphone go and keeps the tone.
+    const PAGE: &str = r#"<!doctype html><title>call</title><script>
+const context = new AudioContext();
+const tone = context.createOscillator();
+const level = context.createGain();
+level.gain.value = 0.05;
+tone.connect(level).connect(context.destination);
+tone.start();
+navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+  const source = context.createMediaStreamSource(stream);
+  source.connect(context.createAnalyser());
+  setTimeout(() => stream.getTracks().forEach((track) => track.stop()), 6000);
+});
+</script>"#;
+
+    /// Runs Chrome at `path` on [`PAGE`], with the flag that answers the
+    /// permission prompt itself: when its listening shows, its audio is
+    /// moved to another endpoint, as the rule pins a call app; once it has
+    /// stopped listening for [`HOLD`] the move is cleared. Prints when each
+    /// happened and where its session plays at the end.
+    fn chrome(path: &str) -> Fallible<()> {
+        let enumerator = enumerator()?;
+        let own = std::process::id();
+        let before: Vec<u32> = sessions_of(&enumerator, eRender)?
+            .iter()
+            .chain(sessions_of(&enumerator, eCapture)?.iter())
+            .map(|session| session.pid)
+            .collect();
+        let dir = std::env::temp_dir().join("call-mic-chrome");
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let page = dir.join("call.html");
+        std::fs::write(&page, PAGE).map_err(|e| format!("{}: {e}", page.display()))?;
+        let started = Instant::now();
+        let mut browser = Command::new(path)
+            .arg(format!("--user-data-dir={}", dir.join("profile").display()))
+            .args([
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--use-fake-ui-for-media-stream",
+                "--autoplay-policy=no-user-gesture-required",
+                "--allow-file-access-from-files",
+            ])
+            .arg(format!(
+                "file:///{}",
+                page.display().to_string().replace('\\', "/")
+            ))
+            .spawn()
+            .map_err(|e| format!("starting Chrome failed: {e}"))?;
+        let ms = |at: Instant| at.duration_since(started).as_millis();
+        let fresh = |session: &Session| {
+            session.active && session.pid != own && !before.contains(&session.pid)
+        };
+        let mut wait =
+            |what: &str, check: &mut dyn FnMut() -> Fallible<bool>| -> Fallible<Option<Instant>> {
+                let deadline = Instant::now() + Duration::from_secs(30);
+                while Instant::now() < deadline {
+                    if check()? {
+                        let at = Instant::now();
+                        println!("Q5: {what} at {} ms", ms(at));
+                        return Ok(Some(at));
+                    }
+                    thread::sleep(POLL);
+                }
+                println!("Q5: {what}: not within 30 s");
+                Ok(None)
+            };
+        let mut player = None;
+        wait("Chrome's tone plays", &mut || {
+            player = sessions_of(&enumerator, eRender)?
+                .into_iter()
+                .find(|s| fresh(s))
+                .map(|s| s.pid);
+            Ok(player.is_some())
+        })?;
+        let mut listener = None;
+        let heard = wait("Chrome listens (capture session active)", &mut || {
+            listener = sessions_of(&enumerator, eCapture)?
+                .into_iter()
+                .find(|s| fresh(s))
+                .map(|s| s.pid);
+            Ok(listener.is_some())
+        })?;
+        let result = match (player, listener, heard) {
+            (Some(pid), Some(listening), Some(_)) => {
+                println!("Q5: render pid {pid}, capture pid {listening}");
+                chrome_move(&enumerator, pid, listening, &mut wait)
+            }
+            _ => Ok("untested: Chrome's tone or listening never showed".to_owned()),
+        };
+        // Chrome's children end with its browser process.
+        let _ = Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &browser.id().to_string()])
+            .output();
+        let _ = browser.wait();
+        println!(
+            "RESULT Q5 Chrome (same engine as Electron and WebView apps): {}",
+            result?
+        );
+        Ok(())
+    }
+
+    type Wait<'a> =
+        dyn FnMut(&str, &mut dyn FnMut() -> Fallible<bool>) -> Fallible<Option<Instant>> + 'a;
+
+    fn chrome_move(
+        enumerator: &IMMDeviceEnumerator,
+        pid: u32,
+        listening: u32,
+        wait: &mut Wait<'_>,
+    ) -> Fallible<String> {
+        let Some(from) = playing_endpoint(enumerator, pid)? else {
+            return Ok("untested: its session left before the move".into());
+        };
+        let Some((to, name)) = pick_render(enumerator, &from)? else {
+            return Ok("untested: no second render endpoint".into());
+        };
+        println!("Q5: moving Chrome's audio to {name:?}");
+        let policy = Policy::new()?;
+        let target = render_interface(&to);
+        let set_at = Instant::now();
+        for role in [eConsole, eMultimedia] {
+            policy.set(pid, role, &target)?;
+        }
+        let on = |id: &str| -> Fallible<bool> {
+            Ok(sessions_on(enumerator, id)?
+                .iter()
+                .any(|s| s.pid == pid && s.active))
+        };
+        let arrived = wait("Chrome's tone on the pinned endpoint", &mut || on(&to))?;
+        thread::sleep(STAYED.saturating_sub(set_at.elapsed()));
+        let stayed = on(&from)?;
+        let quiet = wait("Chrome stopped listening", &mut || {
+            Ok(!sessions_of(enumerator, eCapture)?
+                .iter()
+                .any(|s| s.pid == listening && s.active))
+        })?;
+        if let Some(quiet) = quiet {
+            thread::sleep(HOLD.saturating_sub(quiet.elapsed()));
+        }
+        let cleared_at = Instant::now();
+        for role in [eConsole, eMultimedia] {
+            policy.set(pid, role, "")?;
+        }
+        let back = wait("Chrome's tone back on the default", &mut || on(&from))?;
+        let ends_on = playing_endpoint(enumerator, pid)?;
+        let ms = |at: Option<Instant>, since: Instant| {
+            at.map_or("never".to_owned(), |at| {
+                format!("{} ms", at.duration_since(since).as_millis())
+            })
+        };
+        Ok(format!(
+            "moved after {}, still on the old endpoint at 250 ms {}, back after the hold {}, \\
+             session ends on {}",
+            ms(arrived, set_at),
+            yes_no(stayed),
+            ms(back, cleared_at),
+            match ends_on {
+                Some(id) if id == from => "the default".to_owned(),
+                Some(id) if id == to => "the pinned endpoint".to_owned(),
+                Some(id) => id,
+                None => "no endpoint".to_owned(),
+            }
+        ))
     }
 
     // MARK: Small readers

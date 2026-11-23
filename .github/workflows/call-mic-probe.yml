@@ -6,6 +6,12 @@ name: Call microphone probe (Windows)
 # playing stream. The runner has no sound card, so two VB-CABLE instances
 # give it two render endpoints and a capture endpoint.
 #
+# The call rule's proof (S485, S486) runs here too: a stream bound to an
+# endpoint that reopens on a default-change notice, the read-back at 250 ms,
+# and the runner's own Chrome on a page with a tone and a microphone, its
+# permission prompt answered by Chrome's own flag. Chrome stands for the
+# engine Electron and WebView apps share, not for those apps.
+#
 # VB-CABLE is donationware (https://vb-audio.com/Services/licensing.htm) and
 # Scream (MS-PL) only supplies devcon here: the job downloads both, checked by
 # hash, and installs them on the runner only. Neither is bundled, vendored or
@@ -14,6 +20,7 @@ on:
   push:
     branches:
       - '*/call-mic-probe-1124'
+      - '*/call-mic-rule-1124'
   workflow_dispatch:
 
 concurrency:
@@ -131,6 +138,13 @@ jobs:
           & bin/call_mic_probe.exe list 2>&1 | Tee-Object -FilePath $log -Append
           & bin/call_mic_probe.exe 2>&1 | Tee-Object -FilePath $log -Append
           $code = $LASTEXITCODE
+          $chrome = 'C:\Program Files\Google\Chrome\Application\chrome.exe'
+          if (Test-Path $chrome) {
+            & bin/call_mic_probe.exe chrome $chrome 2>&1 | Tee-Object -FilePath $log -Append
+            if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+          } else {
+            'RESULT Q5 untested: no Chrome on the runner' | Tee-Object -FilePath $log -Append
+          }
           Select-String -Path $log -Pattern '^(RESULT|READBACK)' | ForEach-Object { "- $($_.Line)" } |
             Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
           exit $code
