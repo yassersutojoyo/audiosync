@@ -13,7 +13,7 @@ name: Call microphone probe (Windows)
 on:
   push:
     branches:
-      - 'fadhil/call-mic-probe-1124'
+      - '*/call-mic-probe-1124'
   workflow_dispatch:
 
 concurrency:
