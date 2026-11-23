@@ -11528,4 +11528,15 @@ mod tests {
             "Kitchen withdrawn: 1 GONE (Kitchen), 0 events for Den in 500 ms, Den still listed; Kitchen announced again: listed and playing",
         );
     }
+
+    // The Mac holds a receiver's close for evidence, as Windows and Linux
+    // do, so a speaker another sender took is yielded, not retried.
+    // covers: P249
+    #[test]
+    fn the_mac_sender_holds_a_close_for_evidence() {
+        assert_eq!(
+            sender_config(None, None).evidence_window,
+            Some(audiosync_airplay::takeover::EVIDENCE_WINDOW)
+        );
+    }
 }
