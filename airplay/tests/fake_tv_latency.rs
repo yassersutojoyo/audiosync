@@ -24,7 +24,7 @@ use audiosync_airplay::sender::{
 use audiosync_airplay::volume::Volume;
 
 use common::ap2::{Ap2Server, open_packet, read_dict, request_key, stream_key};
-use common::net::{Events, HostAudio, host_frame_of, serial};
+use common::net::{Events, HostAudio, host_frame_of, scheduling_probe, serial, unscheduled};
 use common::rig::decode;
 use television::{LATENCY_VAR, Pin, latency_from, report_latency, television};
 
@@ -275,6 +275,9 @@ fn fake_tv_a_burst_of_resend_requests_leaves_lf_at_a_tenth_of_a_second() {
 /// above it.
 const UNREPORTED_LF: u32 = 8_820;
 const STEPPED_LF: u32 = 13_230;
+/// The time before a break's arrival that a runner stall past M (about
+/// 100 ms) falls in.
+const BREAK_WINDOW: Duration = Duration::from_millis(200);
 
 type Logged = Arc<Mutex<Vec<(Instant, Vec<u8>)>>>;
 
@@ -374,31 +377,32 @@ fn stated(control: &[(Instant, Vec<u8>)]) -> Vec<u32> {
 
 /// What breaks one session's audio from a first-flagged packet on: a packet
 /// whose number or RTP time does not follow the one before, a silent frame,
-/// or a frame that is not the host frame after the one before.
-fn breaks(audio: &[(Instant, Vec<u8>)], shk: &[u8; 32]) -> Vec<String> {
+/// or a frame that is not the host frame after the one before; each with
+/// its packet's arrival.
+fn breaks(audio: &[(Instant, Vec<u8>)], shk: &[u8; 32]) -> Vec<(Instant, String)> {
     let mut found = Vec::new();
     let mut last: Option<RtpHeader> = None;
     let mut frame: Option<u64> = None;
-    for (_, bytes) in audio {
+    for (at, bytes) in audio {
         let header = RtpHeader::parse(bytes).expect("RTP");
         if let Some(before) = last
             && (header.seq != before.seq.wrapping_add(1)
                 || header.timestamp != before.timestamp.wrapping_add(352))
         {
-            found.push(format!("packet {} after {}", header.seq, before.seq));
+            found.push((*at, format!("packet {} after {}", header.seq, before.seq)));
         }
         let opened = open_packet(shk, bytes).expect("the packet opens with shk");
         for (index, pair) in decode(Codec::Alac, &opened.payload).into_iter().enumerate() {
             match host_frame_of(pair) {
                 Some(n) if frame.is_none_or(|f| n == f + 1) => frame = Some(n),
                 Some(n) => {
-                    found.push(format!(
-                        "packet {} [{index}]: {n} after {frame:?}",
-                        header.seq
+                    found.push((
+                        *at,
+                        format!("packet {} [{index}]: {n} after {frame:?}", header.seq),
                     ));
                     frame = Some(n);
                 }
-                None => found.push(format!("packet {} [{index}]: silent", header.seq)),
+                None => found.push((*at, format!("packet {} [{index}]: silent", header.seq))),
             }
         }
         last = Some(header);
@@ -436,6 +440,8 @@ fn fake_tv_a_rate_step_holds_and_the_audio_runs_whole_across_a_pause_and_off_and
     let stop = Arc::new(AtomicBool::new(false));
     let (audio, audio_reader) = log_until(&data, &stop);
     let (controls, control_reader) = log_until(&control, &stop);
+    let stop_probe = Arc::new(AtomicBool::new(false));
+    let probe = scheduling_probe(Arc::clone(&stop_probe));
     let (sender, writer) = Sender::start(SenderConfig {
         airplay2: true,
         airplay2_device_id: Some([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]),
@@ -488,7 +494,7 @@ fn fake_tv_a_rate_step_holds_and_the_audio_runs_whole_across_a_pause_and_off_and
     host.run(Duration::from_secs(1));
 
     host.sender.pause();
-    host.run(Duration::from_secs(10));
+    host.run(Duration::from_secs(3));
     let resumed = Instant::now();
     host.sender.resume();
     host.run(Duration::from_secs(4));
@@ -531,14 +537,31 @@ fn fake_tv_a_rate_step_holds_and_the_audio_runs_whole_across_a_pause_and_off_and
     assert_eq!(first.seq, held.seq.wrapping_add(1), "the resume goes on");
     let again = between(&audio, added, end);
     assert!(RtpHeader::parse(&again[0].1).expect("RTP").marker);
+    let mut found = Vec::new();
     for (what, run, key) in [("resumed", &after, &shk), ("on again", &again, &shk_again)] {
-        let found = breaks(run, key);
-        assert!(
-            found.is_empty(),
-            "{what}: {} breaks in {} packets: {:?}",
-            found.len(),
-            run.len(),
-            &found[..found.len().min(10)]
-        );
+        for (at, what_broke) in breaks(run, key) {
+            found.push((at, format!("{what}: {what_broke}")));
+        }
     }
+    stop_probe.store(true, Ordering::SeqCst);
+    let wakes = probe.join().expect("the probe");
+    // A runner that held the process past the margin M fills silence
+    // (P112): such a break is inconclusive, not the sender's.
+    let real: Vec<&String> = found
+        .iter()
+        .filter(|(at, _)| unscheduled(&wakes, *at - BREAK_WINDOW, *at) * 2 <= BREAK_WINDOW)
+        .map(|(_, what_broke)| what_broke)
+        .collect();
+    assert!(
+        real.is_empty(),
+        "{} of {} breaks: {:?}",
+        real.len(),
+        found.len(),
+        &real[..real.len().min(10)]
+    );
+    assert!(
+        found.is_empty(),
+        "inconclusive: each of {} breaks came with the process unscheduled for half of the {BREAK_WINDOW:?} before",
+        found.len()
+    );
 }
