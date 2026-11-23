@@ -1730,7 +1730,6 @@ fn b11() -> Vec<Row> {
             main.set_check_updates_automatically(false);
             main.set_launch_at_login(false);
             main.set_resume_after_sleep(false);
-            main.set_switch_source_on_quit(false);
             main.set_volume_keys_available(true);
             main.set_volume_keys(false);
             let win = s.settings()?;

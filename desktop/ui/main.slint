@@ -3130,8 +3130,6 @@ export component MainWindow inherits Window {
     // Settings > Show Virtual Devices: virtual outputs are listed even while off.
     in property <bool> show-virtual-devices;
     in property <Appearance> appearance;
-    in property <bool> switch-source-on-quit;
-    in property <bool> switch-source-on-quit-available;
     in property <bool> resume-after-sleep;
     // Settings > Launch at Sign-In: what the Run key says, read again by Rust.
     in property <bool> launch-at-login;
@@ -3341,7 +3339,6 @@ export component MainWindow inherits Window {
     callback refresh-devices();
     callback show-virtual-devices-toggled(bool);
     callback appearance-chosen(Appearance);
-    callback switch-source-on-quit-toggled(bool);
     callback resume-after-sleep-toggled(bool);
     callback launch-at-login-toggled(bool);
     callback check-updates-automatically-toggled(bool);

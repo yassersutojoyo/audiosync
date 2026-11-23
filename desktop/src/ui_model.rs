@@ -1805,6 +1805,7 @@ pub trait Backend {
     #[cfg(test)]
     fn dismiss_all_notices(&mut self);
     fn refresh_devices(&mut self);
+    #[cfg(test)]
     fn set_when_source_quits(&mut self, setting: WhenSourceQuits);
     fn set_resume_after_sleep(&mut self, on: bool);
 
@@ -2808,6 +2809,7 @@ impl Backend for MockBackend {
         self.state.mix_all_except = on;
     }
 
+    #[cfg(test)]
     fn set_when_source_quits(&mut self, setting: WhenSourceQuits) {
         self.state.when_source_quits = setting;
     }

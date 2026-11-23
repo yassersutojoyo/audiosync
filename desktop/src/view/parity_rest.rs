@@ -322,3 +322,19 @@ fn the_equalizer_band_text_is_semibold_and_its_divider_170_tall() {
     assert!(divider.contains("height: 170px;"), "{divider}");
     assert!(!divider.contains("padding-top: 8px;"), "{divider}");
 }
+
+/// The Mac (8 Nov) and Windows (17 Nov) always switch to All System Audio
+/// when the source app quits; Linux does too, so no Settings shows a switch.
+#[test]
+fn settings_has_no_switch_for_a_quitting_source_app() {
+    use i_slint_backend_testing::ElementHandle;
+
+    let app = super::tests::app_over(crate::ui_model::MockBackend::new());
+    app.show_settings();
+    let settings = app.settings();
+    let label = "Switch to All System Audio When the Source App Quits";
+    assert_eq!(
+        ElementHandle::find_by_accessible_label(&settings, label).count(),
+        0
+    );
+}

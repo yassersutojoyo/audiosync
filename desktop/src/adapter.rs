@@ -860,7 +860,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             airplay2_auto: crate::audio::airplay::airplay2_auto_on(),
             airplay2_at_launch: false,
             airplay2_switch_env: crate::audio::airplay::airplay2_switch_env(),
-            when_source_quits: WhenSourceQuits::Stop,
+            when_source_quits: WhenSourceQuits::SwitchToSystem,
             resume_after_sleep: false,
             release_when_quiet: false,
             release_minutes: audiosync_core::policy::on_demand::DEFAULT_RELEASE_MINUTES,
@@ -921,12 +921,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
         // A pair chosen while the file was held (S212) stays unless the file names that input.
         self.input_pairs.extend(saved.input_pairs.clone());
-        // Windows switches as the Mac does and ignores a stored `stop` (S227).
-        self.when_source_quits = if cfg!(windows) {
-            WhenSourceQuits::SwitchToSystem
-        } else {
-            WhenSourceQuits::from_stored(Some(&saved.when_source_quits))
-        };
+        // Every system switches as the Mac does and ignores a stored `stop` (S227).
+        self.when_source_quits = WhenSourceQuits::SwitchToSystem;
         self.audio.set_when_source_quits(self.when_source_quits);
         self.resume_after_sleep = saved.resume_after_sleep;
         self.audio.set_resume_after_sleep(self.resume_after_sleep);
@@ -1067,10 +1063,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.airplay2_at_launch =
             crate::audio::airplay::airplay2_on(self.airplay2_switch_env.as_deref());
         self.saved = saved;
-        // Windows ignores the stored value, which alone is no change to write (S227).
-        if cfg!(windows) {
-            self.saved.when_source_quits = self.when_source_quits.stored().to_owned();
-        }
+        // The stored value is ignored, which alone is no change to write (S227).
+        self.saved.when_source_quits = self.when_source_quits.stored().to_owned();
     }
 
     /// The speakers' settings to save: the saved ones, updated with what the
@@ -6406,6 +6400,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.audio.restore_default_output();
     }
 
+    #[cfg(test)]
     fn set_when_source_quits(&mut self, setting: WhenSourceQuits) {
         self.log.log(|| {
             format!(
@@ -8192,12 +8187,10 @@ mod tests {
     #[test]
     fn the_setting_for_a_quitting_app_is_saved_and_restored() {
         let mut adapter = adapter();
-        let default = if cfg!(windows) {
+        assert_eq!(
+            adapter.snapshot().when_source_quits,
             WhenSourceQuits::SwitchToSystem
-        } else {
-            WhenSourceQuits::Stop
-        };
-        assert_eq!(adapter.snapshot().when_source_quits, default);
+        );
         adapter.set_when_source_quits(WhenSourceQuits::SwitchToSystem);
         let saved = adapter.current_settings();
         let mut restored = AudioAdapter::new(
@@ -8214,7 +8207,7 @@ mod tests {
 
     // covers: S142, S227
     #[test]
-    fn a_quit_on_windows_always_switches_and_a_stored_stop_is_ignored() {
+    fn a_quit_always_switches_and_a_stored_stop_is_ignored() {
         let mut adapter = adapter();
         let mut saved = adapter.current_settings();
         saved.when_source_quits = WhenSourceQuits::Stop.stored().to_owned();
@@ -8226,9 +8219,8 @@ mod tests {
         adapter.poll();
         adapter.poll();
         let state = adapter.snapshot();
-        // Linux keeps Stop until its own captures leave no copy.
-        assert_eq!(state.running, cfg!(windows), "{:?}", messages(&adapter));
-        assert_eq!(state.source_id == "system", cfg!(windows));
+        assert!(state.running, "{:?}", messages(&adapter));
+        assert_eq!(state.source_id, "system");
     }
 
     // covers: S465

@@ -28,6 +28,10 @@ An app that's using a microphone, like a call, is left out of a whole-system str
 - **Linux:** the tray icon needs a desktop that shows StatusNotifier icons. Without one, AudioSync runs as a window only: closing the window quits, and a launch at sign-in opens the window. Clicking the icon opens the tray panel by the pointer, since the desktop doesn't say where the icon is, and on Wayland the desktop places the panel itself. A desktop that only shows the icon's menu keeps Open AudioSync in it.
 - **Linux on Wayland:** opening AudioSync while it already runs brings its window up, but maybe without the focus. Wayland only hands the focus over with a token the toolkit can't pass on yet.
 
+## Volume keys
+
+Volume Keys Control AudioSync: Mac and Windows only. On Linux the desktop keeps the volume keys (Wayland lets no app grab keys for the whole desktop), so they change the desktop's volume and AudioSync's master stays where you set it.
+
 ## Permissions and the network
 
 - **Mac:** macOS asks once for Local Network access (to find speakers) and for permission to record system audio, and for the microphone when you pick an input device or calibrate.

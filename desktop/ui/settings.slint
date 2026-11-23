@@ -177,9 +177,6 @@ export component SettingsWindow inherits Window {
     in property <Appearance> appearance;
     in property <bool> launch-at-login;
     in property <bool> resume-after-sleep;
-    in property <bool> switch-source-on-quit;
-    // Linux only: Windows switches as the Mac does.
-    in property <bool> switch-source-on-quit-available;
     in property <bool> volume-keys-available;
     in property <bool> volume-keys;
     in property <bool> show-virtual-devices;
@@ -193,7 +190,6 @@ export component SettingsWindow inherits Window {
     callback appearance-chosen(Appearance);
     callback launch-at-login-toggled(bool);
     callback resume-after-sleep-toggled(bool);
-    callback switch-source-on-quit-toggled(bool);
     callback volume-keys-toggled(bool);
     callback show-virtual-devices-toggled(bool);
     callback speaker-unhide-requested(string);
@@ -384,16 +380,6 @@ export component SettingsWindow inherits Window {
                             checked: root.resume-after-sleep;
                             toggled(on) => {
                                 root.resume-after-sleep-toggled(on);
-                            }
-                        }
-
-                        if root.switch-source-on-quit-available: Divider { }
-
-                        if root.switch-source-on-quit-available: SwitchRow {
-                            text: Strings.switch-source-on-quit;
-                            checked: root.switch-source-on-quit;
-                            toggled(on) => {
-                                root.switch-source-on-quit-toggled(on);
                             }
                         }
                     }
