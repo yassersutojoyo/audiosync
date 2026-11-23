@@ -137,6 +137,10 @@ enum Command {
         sink: String,
         reply: mpsc::Sender<Result<(), BackendError>>,
     },
+    Target {
+        node: u32,
+        sink: Option<String>,
+    },
     Stop,
 }
 
@@ -193,6 +197,15 @@ impl Registry {
     /// once the daemon went away.
     pub fn graph(&self) -> Result<Graph, BackendError> {
         copy(&self.shared)
+    }
+
+    /// Points stream `node` at `sink`, or with `None` lets it follow the
+    /// default sink again (S487).
+    pub fn target(&self, node: u32, sink: Option<&str>) {
+        let _ = self.commands.send(Command::Target {
+            node,
+            sink: sink.map(str::to_owned),
+        });
     }
 
     /// The default sink's seam for S469's switch, as S477 moves it.
@@ -360,6 +373,7 @@ impl DefaultEndpoints for SinkDefaults {
             .into_iter()
             .map(|endpoint| Candidate {
                 listened: endpoint.kind == OutputKind::Virtual,
+                communications: false,
                 kind: endpoint.kind,
                 id: endpoint.id,
             })
@@ -369,6 +383,7 @@ impl DefaultEndpoints for SinkDefaults {
                 id: OWN_SINK.to_owned(),
                 kind: OutputKind::Virtual,
                 listened: false,
+                communications: false,
             });
         }
         Ok(candidates)
@@ -478,6 +493,13 @@ fn serve(
                     _ => Err(BackendError::ServiceNotRunning),
                 };
                 let _ = reply.send(written);
+            }
+            Command::Target { node, sink } => {
+                if let Ok(Some(held)) = session.try_borrow().as_deref()
+                    && !held.lost.get()
+                {
+                    set_target(&held.defaults.borrow(), node, sink.as_deref());
+                }
             }
             Command::SetDefault { sink, reply } => {
                 let written = match session.try_borrow().as_deref() {
@@ -905,6 +927,14 @@ fn set_default(
         Some(&value),
     );
     Ok(())
+}
+
+/// Points stream `node` at `sink` through the bound `default` metadata, or
+/// with `None` lets it follow the default sink again (S487).
+fn set_target(defaults: &Slot<(Metadata, MetadataListener)>, node: u32, sink: Option<&str>) {
+    if let Some((_, (metadata, _))) = &defaults.held {
+        metadata.set_property(node, "target.object", None, sink);
+    }
 }
 
 /// Binds the `default` metadata and keeps the default output and input in

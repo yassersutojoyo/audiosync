@@ -9,7 +9,7 @@ use windows::Win32::Foundation::S_OK;
 use windows::Win32::Media::Audio::Endpoints::{IAudioEndpointVolume, IAudioMeterInformation};
 use windows::Win32::Media::Audio::{
     AudioSessionStateActive, DEVICE_STATE_ACTIVE, IAudioSessionControl2, IAudioSessionManager2,
-    IMMDevice, eConsole, eRender,
+    IMMDevice, eCapture, eConsole, eRender,
 };
 use windows::Win32::System::Com::CLSCTX_ALL;
 use windows::core::Interface;
@@ -173,6 +173,31 @@ fn session_pids(device: &IMMDevice) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
         .filter(|pid| sounding.contains(pid) && !off_mix.contains(pid))
         .collect();
     (pids, silent, mix)
+}
+
+/// The IDs of the processes with an active audio session on any active
+/// capture endpoint: the apps listening to a microphone (S486). It reads the
+/// session list only, which opens no microphone.
+pub(super) fn listening_pids() -> Result<Vec<u32>, BackendError> {
+    let _apartment = Apartment::enter()?;
+    let enumerator = enumerator()?;
+    // SAFETY: calls on a live enumerator and its collection, indices below
+    // the count; a device that fails is skipped.
+    unsafe {
+        let devices = enumerator
+            .EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)
+            .map_err(|error| system_error("IMMDeviceEnumerator::EnumAudioEndpoints", &error))?;
+        let count = devices
+            .GetCount()
+            .map_err(|error| system_error("IMMDeviceCollection::GetCount", &error))?;
+        let mut pids: Vec<u32> = (0..count)
+            .filter_map(|index| devices.Item(index).ok())
+            .flat_map(|device| session_pids(&device).0)
+            .collect();
+        pids.sort_unstable();
+        pids.dedup();
+        Ok(pids)
+    }
 }
 
 #[cfg(test)]

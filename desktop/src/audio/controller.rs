@@ -61,6 +61,7 @@ use audiosync_core::fade::FADE_MS;
 use audiosync_core::lead::HeldLead;
 use audiosync_core::policy::Seconds;
 use audiosync_core::policy::airplay_reconnect::{SENDER_RETRY_SECONDS, SenderRestart, SenderStart};
+use audiosync_core::policy::call_listeners::{CallListeners, Facts, ListenerAction};
 use audiosync_core::policy::delay::{BRIEF_LOSS_HOLD, native_airplay_latency_ms};
 use audiosync_core::policy::on_demand::{self, Action, OnDemand};
 use audiosync_core::policy::source::AudioSource;
@@ -441,6 +442,21 @@ pub trait Driver: Send {
     /// active audio session on it. It only reads: no mute, volume or default
     /// output changes.
     fn endpoint_audio(&mut self) -> Result<Vec<EndpointAudio>, BackendError>;
+
+    /// The IDs of the processes with an active stream from a microphone or
+    /// another input, read without opening one (S485).
+    fn listening_pids(&mut self) -> Result<Vec<u32>, BackendError> {
+        Ok(Vec::new())
+    }
+
+    /// Whether [`Driver::target_streams`] moves anything (S487).
+    fn targets_streams(&self) -> bool {
+        false
+    }
+
+    /// Plays every output stream of `pids` on `sink`, or with `None` lets
+    /// them follow the default again (S487).
+    fn target_streams(&mut self, _pids: &[u32], _sink: Option<&str>) {}
 
     /// Whether an audio session was created or changed state on a render
     /// endpoint since the last call (S470). The notification runs on a system thread and only
@@ -1035,6 +1051,12 @@ pub struct Controller<D: Driver> {
     /// and where its restore record is kept (S471); `None` where it isn't.
     app_output: Option<(Box<dyn AppEndpoints>, Box<dyn AppRecordStore>)>,
     app_redirect: AppRedirect,
+    /// The apps listening to a microphone left out of a whole-system stream
+    /// (S485), on the clock `calls_clock` starts, and those that stayed on
+    /// the silent endpoint.
+    call_listeners: CallListeners,
+    calls_clock: Instant,
+    calls_stayed: Vec<String>,
     /// When the redirect last ran, and what it said once this stream.
     app_checked: Option<Instant>,
     app_said: Vec<&'static str>,
@@ -1247,6 +1269,9 @@ impl<D: Driver> Controller<D> {
             system_endpoint: None,
             app_output: None,
             app_redirect: AppRedirect::default(),
+            call_listeners: CallListeners::default(),
+            calls_clock: Instant::now(),
+            calls_stayed: Vec::new(),
             app_checked: None,
             app_said: Vec::new(),
             restore_guard: None,
@@ -1498,6 +1523,12 @@ impl<D: Driver> Controller<D> {
         let mut running: Vec<Process> = record
             .apps
             .iter()
+            .chain(
+                record
+                    .calls
+                    .iter()
+                    .filter(|app| !self.call_listeners.left_out().any(|out| *out == app.exe)),
+            )
             .flat_map(|app| {
                 table.running(&app.exe).map(|pid| Process {
                     pid,
@@ -1552,7 +1583,12 @@ impl<D: Driver> Controller<D> {
                 return;
             }
         }
-        if !due || (root.is_none() && self.app_redirect.record().is_none()) {
+        // Apps pinned for a call are put back when they rejoin (S486).
+        let moved = self
+            .app_redirect
+            .record()
+            .is_some_and(|record| !record.apps.is_empty());
+        if !due || (root.is_none() && !moved) {
             return;
         }
         self.app_checked = Some(Instant::now());
@@ -1725,6 +1761,180 @@ impl<D: Driver> Controller<D> {
                     self.say_once("idle", || line);
                 }
             }
+        }
+    }
+
+    /// Leaves an app listening to a microphone out of a whole-system stream
+    /// while S469's switch holds, by pinning its output to the default the
+    /// switch recorded, and puts it back when the core says it rejoins
+    /// (S485, S486).
+    fn sync_call_listeners(&mut self) {
+        let whole_system = self.default_switch.switched()
+            && (self.app_output.is_some() || self.driver.targets_streams());
+        let pinned = self
+            .app_redirect
+            .record()
+            .is_some_and(|record| !record.calls.is_empty());
+        if !whole_system && self.call_listeners.left_out().next().is_none() && !pinned {
+            return;
+        }
+        let Ok(table) = self.driver.processes() else {
+            return;
+        };
+        let own = table.tree(self.driver.own_pid());
+        let exe = |pid: &u32| {
+            (!own.contains(pid))
+                .then(|| table.get(*pid).map(|entry| entry.executable.clone()))
+                .flatten()
+        };
+        let mut listening: Vec<String> = if whole_system {
+            self.driver
+                .listening_pids()
+                .unwrap_or_default()
+                .iter()
+                .filter_map(exe)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        listening.sort();
+        listening.dedup();
+        let audio = self.driver.endpoint_audio().unwrap_or_default();
+        let silent = self
+            .default_switch
+            .record()
+            .map(|record| record.silent.clone());
+        let on_silent: Vec<String> = audio
+            .iter()
+            .filter(|endpoint| Some(&endpoint.id) == silent.as_ref())
+            .flat_map(|endpoint| endpoint.active_pids.iter().filter_map(exe))
+            .collect();
+        let now = self.calls_clock.elapsed().as_secs_f64();
+        let actions = self.call_listeners.update(
+            Facts {
+                whole_system,
+                listening: &listening,
+                on_silent: &on_silent,
+            },
+            now,
+        );
+        // A pin the rule no longer holds (an earlier run's, or one whose app
+        // quit before it rejoined) is put back once the app runs.
+        let leftover: Vec<String> = self
+            .app_redirect
+            .record()
+            .map(|record| {
+                record
+                    .calls
+                    .iter()
+                    .map(|app| app.exe.clone())
+                    .filter(|exe| !self.call_listeners.left_out().any(|out| out == exe))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let sessions: Vec<u32> = audio
+            .iter()
+            .flat_map(|endpoint| endpoint.active_pids.iter().copied())
+            .collect();
+        let running = |exe: &str| -> Vec<Process> {
+            let mut running: Vec<Process> = table
+                .running(exe)
+                .map(|pid| Process {
+                    pid,
+                    exe: exe.to_owned(),
+                })
+                .collect();
+            running.sort_by_key(|process| !sessions.contains(&process.pid));
+            running
+        };
+        let pids = |exe: &str| -> Vec<u32> { table.running(exe).collect() };
+        let original = self
+            .default_switch
+            .record()
+            .map(|record| record.console.clone());
+        let mut lines = Vec::new();
+        for action in actions {
+            match action {
+                ListenerAction::LeaveOut(exe) => {
+                    lines.push(format!("call: {exe} listens to a microphone, left out"));
+                }
+                ListenerAction::Stayed(exe) => {
+                    lines.push(format!(
+                        "call: {exe} still plays on the silent endpoint after its move, so it \
+                         stays in the stream"
+                    ));
+                    self.calls_stayed.push(exe);
+                }
+                ListenerAction::Rejoin(exe) => {
+                    self.calls_stayed.retain(|stayed| *stayed != exe);
+                    lines.push(format!("call: {exe} rejoins the stream"));
+                    match self.app_output.as_mut() {
+                        Some((endpoints, store)) => lines.extend(self.app_redirect.unpin(
+                            endpoints.as_mut(),
+                            store.as_mut(),
+                            &exe,
+                            &running(&exe),
+                        )),
+                        None => self.driver.target_streams(&pids(&exe), None),
+                    }
+                }
+            }
+        }
+        if let Some((endpoints, store)) = self.app_output.as_mut() {
+            for exe in leftover {
+                let mut running = running(&exe);
+                running.retain(|process| sessions.contains(&process.pid));
+                if !running.is_empty() {
+                    lines.extend(self.app_redirect.unpin(
+                        endpoints.as_mut(),
+                        store.as_mut(),
+                        &exe,
+                        &running,
+                    ));
+                }
+            }
+        }
+        let Some(original) = original else {
+            for line in lines {
+                self.log.log(|| line);
+            }
+            return;
+        };
+        let mut acted = Vec::new();
+        for exe in self.call_listeners.left_out() {
+            if self.calls_stayed.iter().any(|stayed| stayed == exe) {
+                continue;
+            }
+            let Some((endpoints, store)) = self.app_output.as_mut() else {
+                // The driver skips the streams it already moved.
+                self.driver
+                    .target_streams(&pids(exe), Some(original.as_str()));
+                continue;
+            };
+            // Windows refuses an app with no audio session, so the pin
+            // waits until the app plays.
+            let process = running(exe)
+                .into_iter()
+                .find(|process| sessions.contains(&process.pid));
+            if let Some(process) = process
+                && !self.app_redirect.pinned(exe)
+            {
+                lines.extend(self.app_redirect.pin(
+                    endpoints.as_mut(),
+                    store.as_mut(),
+                    &original,
+                    std::slice::from_ref(&process),
+                ));
+                if self.app_redirect.pinned(exe) {
+                    acted.push(exe.to_owned());
+                }
+            }
+        }
+        for exe in acted {
+            self.call_listeners.acted(&exe, now);
+        }
+        for line in lines {
+            self.log.log(|| line);
         }
     }
 
@@ -5066,6 +5276,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.reap(true);
         self.sync_app_output(true);
         self.sync_default_output(false);
+        self.sync_call_listeners();
         self.put_back_local_volumes();
         self.stop_following_device_volumes();
         self.airplay = None;
@@ -5212,6 +5423,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.end_session();
         self.sync_app_output(true);
         self.sync_default_output(false);
+        self.sync_call_listeners();
         self.airplay_streaming(false);
         self.release_busy();
         self.put_back_local_volumes();
@@ -6096,6 +6308,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
             self.check_routing_if_due(now);
             self.sync_app_output(false);
         }
+        self.sync_call_listeners();
         let recorded =
             self.default_switch.record().is_some() || self.app_redirect.record().is_some();
         if recorded && let Some(keep) = self.restore_guard.as_mut() {
@@ -6893,6 +7106,7 @@ mod tests {
     use crate::audio::routing::{DirectPath, DirectReason, HOLD_CHECKS};
     use crate::audio::test_cells::{SyncCell, SyncRefCell};
     use crate::debug_log::{FILE_NAME, TEST_FLUSH, assert_in_order, read_messages, test_dir};
+    use audiosync_core::policy::call_listeners::{HOLD, STAYED_AFTER};
 
     const SPEAKERS: &str = "speakers";
     const HEADPHONES: &str = "headphones";
@@ -7433,6 +7647,169 @@ mod tests {
         fake.0.borrow().output("player.exe", Role::Console)
     }
 
+    const CALL_PID: u32 = 2100;
+
+    /// A whole-system stream with the default switched to the listed cable
+    /// and the per-app seam set, knowing the player and a call app.
+    fn with_a_call_app(backend: &mut MockBackend) -> AppFakes {
+        backend.connect_output(switch_fakes::CABLE, "Cable");
+        backend.add_app(CALL_PID, "call.exe");
+        with_switch(backend);
+        let calls = app_fakes::Calls::default();
+        let known = [
+            app_fakes::process(PLAYER_PID, "player.exe"),
+            app_fakes::process(CALL_PID, "call.exe"),
+        ];
+        let fake = app_fakes::Shared(Arc::new(SyncRefCell::new(app_fakes::Fake::new(
+            &calls, &known,
+        ))));
+        let store = app_fakes::Shared(Arc::new(SyncRefCell::new(app_fakes::Store {
+            calls,
+            record: None,
+            failing: false,
+        })));
+        backend.set_app_output(Box::new(fake.clone()), Box::new(store.clone()));
+        backend.start(&SourceId::WholeSystem).unwrap();
+        (fake, store)
+    }
+
+    fn call_output(fake: &app_fakes::Shared<app_fakes::Fake>) -> String {
+        fake.0.borrow().output("call.exe", Role::Console)
+    }
+
+    // covers: S486
+    #[test]
+    fn a_call_app_plays_on_the_original_default_and_rejoins_after_the_hold() {
+        let mut backend = backend();
+        let (apps, store) = with_a_call_app(&mut backend);
+        backend.play_on(CALL_PID, switch_fakes::CABLE);
+        backend.listen(CALL_PID, true);
+        backend.poll();
+        let original = render_interface(switch_fakes::SPEAKERS);
+        assert_eq!(call_output(&apps), original);
+        assert_eq!(player_output(&apps), "");
+        assert!(store.0.borrow().record.is_some());
+        backend.listen(CALL_PID, false);
+        backend.poll();
+        assert_eq!(call_output(&apps), original);
+        backend.calls_clock -= Duration::from_secs_f64(HOLD);
+        backend.poll();
+        assert_eq!(call_output(&apps), "");
+        assert_eq!(store.0.borrow().record, None);
+        backend.stop();
+    }
+
+    // covers: S486
+    #[test]
+    fn a_call_app_is_put_back_when_streaming_stops() {
+        let mut backend = backend();
+        let (apps, store) = with_a_call_app(&mut backend);
+        backend.play_on(CALL_PID, switch_fakes::CABLE);
+        backend.listen(CALL_PID, true);
+        backend.poll();
+        assert_ne!(call_output(&apps), "");
+        backend.stop();
+        assert_eq!(call_output(&apps), "");
+        assert_eq!(store.0.borrow().record, None);
+    }
+
+    // covers: S486
+    #[test]
+    fn a_call_pin_left_by_an_earlier_run_is_put_back_at_launch() {
+        let mut backend = backend();
+        backend.add_app(CALL_PID, "call.exe");
+        let calls = app_fakes::Calls::default();
+        let fake = app_fakes::Shared(Arc::new(SyncRefCell::new(app_fakes::Fake::new(
+            &calls,
+            &[app_fakes::process(CALL_PID, "call.exe")],
+        ))));
+        let original = render_interface(switch_fakes::SPEAKERS);
+        for role in [Role::Console, Role::Multimedia] {
+            fake.0.borrow_mut().put("call.exe", role, &original);
+        }
+        let record = AppRecord {
+            original,
+            calls: vec![Previous {
+                exe: "call.exe".into(),
+                console: String::new(),
+                multimedia: String::new(),
+            }],
+            ..AppRecord::default()
+        };
+        let store = app_fakes::Shared(Arc::new(SyncRefCell::new(app_fakes::Store {
+            calls,
+            record: Some(record),
+            failing: false,
+        })));
+        backend.set_app_output(Box::new(fake.clone()), Box::new(store.clone()));
+        assert_eq!(call_output(&fake), "");
+        assert_eq!(store.0.borrow().record, None);
+    }
+
+    // covers: S486
+    #[test]
+    fn a_call_app_that_quit_before_it_rejoined_is_put_back_when_it_runs_again() {
+        let mut backend = backend();
+        let (apps, store) = with_a_call_app(&mut backend);
+        backend.play_on(CALL_PID, switch_fakes::CABLE);
+        backend.listen(CALL_PID, true);
+        backend.poll();
+        assert_ne!(call_output(&apps), "");
+        backend.listen(CALL_PID, false);
+        backend.pause_on(CALL_PID, switch_fakes::CABLE);
+        backend.quit_app(CALL_PID);
+        backend.calls_clock -= Duration::from_secs_f64(HOLD);
+        backend.poll();
+        assert_ne!(call_output(&apps), "");
+        backend.add_app(CALL_PID, "call.exe");
+        backend.play_on(CALL_PID, SPEAKERS);
+        backend.poll();
+        assert_eq!(call_output(&apps), "");
+        assert_eq!(store.0.borrow().record, None);
+        backend.stop();
+    }
+
+    // covers: S486
+    #[test]
+    fn a_leftover_call_pin_waits_for_a_sound_session_without_rewriting_the_record() {
+        let mut backend = backend();
+        let (apps, store) = with_a_call_app(&mut backend);
+        backend.play_on(CALL_PID, switch_fakes::CABLE);
+        backend.listen(CALL_PID, true);
+        backend.poll();
+        backend.listen(CALL_PID, false);
+        backend.pause_on(CALL_PID, switch_fakes::CABLE);
+        backend.quit_app(CALL_PID);
+        backend.calls_clock -= Duration::from_secs_f64(HOLD);
+        backend.poll();
+        backend.add_app(CALL_PID, "call.exe");
+        apps.0.borrow_mut().sessionless.push(CALL_PID);
+        store.0.borrow().calls.borrow_mut().clear();
+        for _ in 0..5 {
+            backend.poll();
+        }
+        assert_eq!(*store.0.borrow().calls.borrow(), Vec::<String>::new());
+        assert_ne!(store.0.borrow().record, None);
+        backend.stop();
+    }
+
+    // covers: S486
+    #[test]
+    fn a_call_app_still_on_the_silent_endpoint_stays_in_the_stream() {
+        let mut backend = backend();
+        let (apps, _) = with_a_call_app(&mut backend);
+        backend.play_on(CALL_PID, switch_fakes::CABLE);
+        backend.listen(CALL_PID, true);
+        backend.poll();
+        assert!(backend.calls_stayed.is_empty());
+        backend.calls_clock -= Duration::from_secs_f64(STAYED_AFTER);
+        backend.poll();
+        assert_eq!(backend.calls_stayed, vec!["call.exe".to_owned()]);
+        assert_ne!(call_output(&apps), "");
+        backend.stop();
+        assert_eq!(call_output(&apps), "");
+    }
+
     // covers: S475
     #[test]
     fn a_test_copy_moves_neither_the_default_nor_an_app() {
@@ -7728,6 +8105,7 @@ mod tests {
                 console: String::new(),
                 multimedia: String::new(),
             }],
+            ..AppRecord::default()
         };
         let calls = app_fakes::Calls::default();
         let player = [app_fakes::process(PLAYER_PID, "player.exe")];

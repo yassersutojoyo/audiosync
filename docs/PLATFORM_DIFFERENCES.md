@@ -8,6 +8,14 @@ AudioSync is meant to behave the same on macOS, Windows and Linux. This page lis
 - **Windows:** Windows can't mute an app without also silencing the capture. So while AudioSync streams the whole system, it makes a virtual output (a virtual cable, for example) Windows' default and puts your default back when it stops. With one app as the source, it moves only that app. With no virtual output on the PC, your default output simply gets no copy from AudioSync, since it already plays the original. Windows has no way for an app to create an output without installing a driver. If the PC loses power mid-stream, Windows keeps the virtual output as the default, so while AudioSync has moved something it also adds a startup entry that puts your output back at your next sign-in and then removes itself.
 - **Linux:** AudioSync adds its own silent output to PipeWire while it runs and makes it the default while the whole system streams, so no virtual output is needed. That output goes away with AudioSync, so after a power cut PipeWire plays on a real output again without any startup entry.
 
+## Calls while the whole system streams
+
+An app that's using a microphone, like a call, is left out of a whole-system stream, so you hear the call right away on your own output instead of late on the network speakers. It joins the stream again a few seconds after it stops using the microphone.
+
+- **Mac:** not yet. A call is still streamed with everything else.
+- **Windows:** the app's own output is set to the output that was your default before AudioSync switched it. An app that holds on to one output instead of following the default can't be moved this way; it stays in the stream. Chrome and Edge do this, so a call in a browser tab (Meet, Discord on the web) stays in the stream and you hear it late. Windows' communications output is never the one AudioSync switches to. Zoom and Teams haven't been tested, so how they behave here is unknown.
+- **Linux:** the app's playback is pointed at the output that was your default before AudioSync's own output took over. PipeWire has no way for an app to hold on to AudioSync's output against that, so there's nothing like the Windows case above.
+
 ## Now Playing
 
 - **Mac:** the Now Playing card shows Spotify and Music only, and macOS asks once whether AudioSync may control each of them. macOS doesn't let other apps read its system-wide Now Playing info, so AudioSync talks to those two players directly.

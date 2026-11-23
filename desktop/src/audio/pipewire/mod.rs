@@ -94,6 +94,8 @@ mod driver {
     pub struct PipeWireDriver {
         own_pid: u32,
         registry: Registry,
+        /// The streams pointed at the recorded sink for a call (S487).
+        targeted: std::collections::BTreeSet<String>,
     }
 
     impl PipeWireDriver {
@@ -133,6 +135,24 @@ mod driver {
         fn endpoint_audio(&mut self) -> Result<Vec<EndpointAudio>, BackendError> {
             let graph = self.registry.graph()?;
             Ok(graph.endpoint_audio(&self.snapshot()?))
+        }
+
+        fn listening_pids(&mut self) -> Result<Vec<u32>, BackendError> {
+            let graph = self.registry.graph()?;
+            Ok(graph.listening_pids(&self.snapshot()?))
+        }
+
+        fn targets_streams(&self) -> bool {
+            true
+        }
+
+        fn target_streams(&mut self, pids: &[u32], sink: Option<&str>) {
+            let (Ok(graph), Ok(processes)) = (self.registry.graph(), self.snapshot()) else {
+                return;
+            };
+            for node in graph.to_target(&mut self.targeted, pids, &processes, sink.is_some()) {
+                self.registry.target(node, sink);
+            }
         }
 
         fn watch_endpoint_volume(&mut self, id: &str) -> Result<(), BackendError> {
@@ -243,6 +263,7 @@ mod driver {
         Ok(Controller::with_driver(PipeWireDriver {
             own_pid: std::process::id(),
             registry: Registry::start()?,
+            targeted: std::collections::BTreeSet::new(),
         }))
     }
 }

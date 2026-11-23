@@ -9,7 +9,7 @@ use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_ContainerId;
 use windows::Win32::Foundation::ERROR_NOT_FOUND;
 use windows::Win32::Media::Audio::{
     AudioSessionStateActive, DEVICE_STATE_ACTIVE, EDataFlow, ERole, IAudioSessionManager2,
-    IMMDevice, IMMDeviceEnumerator, eCapture, eConsole, eMultimedia, eRender,
+    IMMDevice, IMMDeviceEnumerator, eCapture, eCommunications, eConsole, eMultimedia, eRender,
 };
 use windows::Win32::System::Com::StructuredStorage::PropVariantClear;
 use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance, STGM_READ};
@@ -95,6 +95,12 @@ impl DefaultEndpoints for WasapiDefaults {
             .filter(|device| records(device))
             .filter_map(container)
             .collect();
+        // SAFETY: a call on the live enumerator; no endpoint with the role is
+        // an error, which leaves it empty.
+        let communications =
+            unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eCommunications) }
+                .ok()
+                .and_then(|device| device_id(&device).ok());
         Ok(active_devices(&enumerator, eRender)?
             .iter()
             .filter_map(|device| {
@@ -106,7 +112,12 @@ impl DefaultEndpoints for WasapiDefaults {
                     properties.display_port,
                 );
                 let listened = container(device).is_some_and(|guid| recorded.contains(&guid));
-                Some(Candidate { id, kind, listened })
+                Some(Candidate {
+                    communications: communications.as_deref() == Some(id.as_str()),
+                    id,
+                    kind,
+                    listened,
+                })
             })
             .collect())
     }
