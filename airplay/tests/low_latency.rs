@@ -765,10 +765,14 @@ fn dropped_late(rig: &Rig, id: SpeakerId, jitter: f64, rng: &mut Rng) -> usize {
         .iter()
         .filter(|packet| {
             let arrival = packet.at + rng.uniform(0.0, jitter);
+            // Syncs carry NTP-era seconds; the packets, seconds on the clock.
             syncs
                 .iter()
                 .rfind(|(at, _)| *at <= packet.at)
-                .is_some_and(|(_, sync)| arrival > heard_by(sync, packet.header.timestamp))
+                .is_some_and(|(_, sync)| {
+                    let skew = rig.clock.seconds_of(sync.time) - sync_seconds(sync);
+                    arrival > heard_by(sync, packet.header.timestamp) + skew
+                })
         })
         .count()
 }
