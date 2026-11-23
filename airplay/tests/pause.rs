@@ -285,7 +285,12 @@ fn a_host_pause_flushes_the_receiver_over_loopback() {
 
 /// A sender playing to `receiver`, once audio flows.
 fn play(receiver: &NetReceiver, id: u8) -> (Sender, HostAudio, Events, DeviceKey) {
-    let (sender, writer) = Sender::start(SenderConfig::default()).expect("the sender starts");
+    let (sender, writer) = Sender::start(SenderConfig {
+        // The receiver's close stands for any loss (P142), not a takeover (P249).
+        evidence_window: None,
+        ..SenderConfig::default()
+    })
+    .expect("the sender starts");
     let host = HostAudio::start(writer);
     let mut events = Events::default();
     let device = receiver.device(id, PCM_TXT);

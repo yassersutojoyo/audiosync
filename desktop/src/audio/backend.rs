@@ -1285,6 +1285,10 @@ pub trait AudioBackend {
     /// play once the outputs are back.
     fn set_resume_after_sleep(&mut self, _on: bool) {}
 
+    /// Release speakers when nothing plays after this many minutes, or
+    /// never with `None` (S483).
+    fn set_release_when_quiet(&mut self, _minutes: Option<u32>) {}
+
     /// The channel pair input device `endpoint_id` plays from its next
     /// start (`InputPair::index`, 0 for channels 1-2). A running capture
     /// keeps its pair until started again.

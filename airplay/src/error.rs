@@ -189,6 +189,12 @@ pub struct SessionError {
 }
 
 impl SessionError {
+    /// The receiver closed or reset the session's connection, and neither
+    /// side sent a TEARDOWN (P249).
+    pub fn closed_by_receiver(&self) -> bool {
+        self.kind == ErrorKind::Lost && self.detail == Some("connection closed")
+    }
+
     pub fn new(kind: ErrorKind) -> SessionError {
         SessionError {
             kind,

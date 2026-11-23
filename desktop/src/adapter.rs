@@ -700,6 +700,10 @@ pub struct AudioAdapter<A: AudioBackend> {
     when_source_quits: WhenSourceQuits,
     /// Settings > Resume Playback After Sleep (spec S465).
     resume_after_sleep: bool,
+    /// Release speakers when nothing plays, and after how many minutes
+    /// (S483); stored, with no control yet.
+    release_when_quiet: bool,
+    release_minutes: u32,
     /// The microphone calibration running, or letting its cut-off sweep
     /// play out.
     calibration_run: Option<CalibrationRun>,
@@ -857,6 +861,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             airplay2_switch_env: crate::audio::airplay::airplay2_switch_env(),
             when_source_quits: WhenSourceQuits::Stop,
             resume_after_sleep: false,
+            release_when_quiet: false,
+            release_minutes: audiosync_core::policy::on_demand::DEFAULT_RELEASE_MINUTES,
             calibration_run: None,
             calibration: calibration::Status::default(),
             calibrate_all: CalibrateAll::default(),
@@ -923,6 +929,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.audio.set_when_source_quits(self.when_source_quits);
         self.resume_after_sleep = saved.resume_after_sleep;
         self.audio.set_resume_after_sleep(self.resume_after_sleep);
+        self.release_when_quiet = saved.release_when_quiet;
+        self.release_minutes = saved.release_minutes;
+        self.audio
+            .set_release_when_quiet(saved.release_when_quiet.then_some(saved.release_minutes));
         if !self.delays_to_migrate {
             self.audio
                 .set_airplay_adjustment(saved.airplay_adjustment_ms);
@@ -1196,6 +1206,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             equalizer_curves: self.equalizer_curves.iter().map(SavedCurve::from).collect(),
             show_virtual_devices: self.view.show_virtual_devices,
             presets_list_open: self.view.presets_list_open,
+            release_when_quiet: self.release_when_quiet,
+            release_minutes: self.release_minutes,
             appearance: self.view.appearance,
             window: self.view.window,
             guide_window: self.view.guide,

@@ -132,6 +132,9 @@ pub struct Ring {
     /// ran, as float bits: for non-negative floats the bit order is the
     /// numeric order, so the writer raises it with one `fetch_max`.
     peak: AtomicU32,
+    /// The same since [`Ring::take_demand_peak`] last ran, for the
+    /// lasting-sound policy, which polls at its own pace (S481).
+    demand_peak: AtomicU32,
     /// The peak of each band (bass, mid, treble) since
     /// [`Ring::take_band_peaks`] last ran, as float bits like `peak`.
     band_peaks: [AtomicU32; 3],
@@ -189,6 +192,7 @@ impl Ring {
             stamp_written: AtomicU64::new(0),
             stamp_time: AtomicU64::new(NO_STAMP),
             peak: AtomicU32::new(0),
+            demand_peak: AtomicU32::new(0),
             band_peaks: [const { AtomicU32::new(0) }; 3],
             band_rate: AtomicU32::new(0),
             band_taken_at: AtomicU64::new(0),
@@ -255,6 +259,12 @@ impl Ring {
     /// samples don't count. A relaxed swap, safe on any thread.
     pub fn take_peak(&self) -> f32 {
         f32::from_bits(self.peak.swap(0, Ordering::Relaxed))
+    }
+
+    /// As [`Ring::take_peak`], for the lasting-sound policy (S481): the
+    /// meter taking its own peak never hides sound from it.
+    pub fn take_demand_peak(&self) -> f32 {
+        f32::from_bits(self.demand_peak.swap(0, Ordering::Relaxed))
     }
 
     /// The peak of each band of the signal written since the last call, as
@@ -433,6 +443,9 @@ impl RingWriter {
             .fold(0.0_f32, f32::max);
         if peak > 0.0 {
             self.ring.peak.fetch_max(peak.to_bits(), Ordering::Relaxed);
+            self.ring
+                .demand_peak
+                .fetch_max(peak.to_bits(), Ordering::Relaxed);
             self.ring.heard.store(true, Ordering::Relaxed);
         }
         self.split_bands(samples);
@@ -662,6 +675,12 @@ mod tests {
             "the larger block wins, its sign aside"
         );
         assert_eq!(ring.take_peak(), 0.0, "taking it starts a new span");
+        assert_eq!(
+            ring.take_demand_peak(),
+            0.5,
+            "the meter's take hides nothing"
+        );
+        assert_eq!(ring.take_demand_peak(), 0.0);
         // A frame count below the slice's length counts only those frames.
         writer.write(&[f32::NAN, f32::INFINITY, -0.75, 0.0, 0.9, 0.9], 2);
         assert_eq!(ring.take_peak(), 0.75, "non-finite samples don't count");

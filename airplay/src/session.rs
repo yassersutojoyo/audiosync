@@ -761,6 +761,12 @@ impl Session {
                         return;
                     }
                 }
+                Ok(Some(Message::Request(_))) if self.state == State::Playing => {
+                    // A receiver's TEARDOWN or other request while it plays
+                    // counts as its close (P249).
+                    self.fail(ErrorKind::Lost, None, None, Some("connection closed"));
+                    return;
+                }
                 Ok(Some(Message::Request(_))) | Err(ParseError::UnknownMethod) => {
                     // The receiver sends no requests in AirPlay 1 (P40).
                     self.fail(

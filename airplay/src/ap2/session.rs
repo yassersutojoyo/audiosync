@@ -605,6 +605,11 @@ impl Ap2Session {
         &self.ids
     }
 
+    /// The `groupUUID` its session SETUP sends.
+    pub fn group_uuid(&self) -> &str {
+        &self.group_uuid
+    }
+
     /// Volume reads and artwork requests given up on whose answers may
     /// still come.
     #[doc(hidden)]
@@ -1219,6 +1224,11 @@ impl Ap2Session {
                     if matches!(self.state, Ap2State::Closed | Ap2State::Connecting) {
                         return;
                     }
+                }
+                // A receiver's TEARDOWN or other request after RECORD counts
+                // as its close (P249).
+                Ok(Some(Message::Request(_))) if self.recorded => {
+                    return self.fail(ErrorKind::Lost, None, None, Some("connection closed"));
                 }
                 Ok(Some(Message::Request(_))) | Err(crate::rtsp::ParseError::UnknownMethod) => {
                     return self.fail(
