@@ -212,6 +212,9 @@ fn a_speaker_switched_off_and_on_while_paused_plays_on_resume() {
     let _serial = serial();
     let receiver = NetReceiver::start(Behavior::default());
     let (sender, writer) = Sender::start(SenderConfig::default()).expect("the sender starts");
+    // At an Lf of 100 ms a loaded runner's stall restarts the timeline (P143),
+    // and that FLUSH would pass for the pause's; 2 s rules it out.
+    sender.set_latency(88_200);
     let _host = HostAudio::start(writer);
     let mut events = Events::default();
     let device = receiver.device(1, PCM_TXT);
@@ -222,6 +225,9 @@ fn a_speaker_switched_off_and_on_while_paused_plays_on_resume() {
             .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Playing)
             .is_some()
     );
+    // Playing comes with RECORD's answer; a pause before the first packet has
+    // nothing to flush (P213), so the pause waits for audio.
+    assert!(wait_until(LONG, || receiver.log().audio.len() >= 50));
     sender.pause();
     assert!(wait_until(LONG, || receiver.log().count("FLUSH") >= 1));
     sender.remove_speaker(&key);
