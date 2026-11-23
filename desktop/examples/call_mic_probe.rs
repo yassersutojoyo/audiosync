@@ -80,6 +80,10 @@ mod probe {
     const STAYED: Duration = Duration::from_millis(250);
     /// The rule's hold before an app that stopped listening rejoins (S485).
     const HOLD: Duration = Duration::from_secs(3);
+    /// A reopen refused while the endpoint switches is tried again this
+    /// many times, this far apart.
+    const REOPEN_TRIES: u32 = 10;
+    const REOPEN_GAP: Duration = Duration::from_millis(50);
 
     const POLICY_CLASS: &str = "Windows.Media.Internal.AudioPolicyConfig";
     const POLICY_IIDS: [GUID; 2] = [
@@ -321,14 +325,17 @@ mod probe {
             .iter()
             .filter(|line| line.starts_with("reopened"))
             .count();
+        let refused = told
+            .iter()
+            .filter(|line| line.starts_with("reopen refused"))
+            .count();
         for line in &told {
             println!("helper: {line}");
         }
-        for role in [eConsole, eMultimedia] {
-            policy.set(pid, role, "")?;
-        }
-        let cleared =
-            policy.get(pid, eConsole)?.is_empty() && policy.get(pid, eMultimedia)?.is_empty();
+        let cleared = [eConsole, eMultimedia].into_iter().all(|role| {
+            policy.set(pid, role, "").is_ok()
+                && policy.get(pid, role).is_ok_and(|now| now.is_empty())
+        });
         helper.finish();
         let ms = arrived.map(|at| at.duration_since(set_at).as_millis());
         println!(
@@ -340,7 +347,7 @@ mod probe {
             yes_no(cleared)
         );
         Ok(format!(
-            "{}: N = {} ms, left the old endpoint {}, per-app cleared {}, default-change              notices to the app {notices}, reopened {reopened}, stayed at 250 ms {}",
+            "{}: N = {} ms, left the old endpoint {}, per-app cleared {}, default-change              notices to the app {notices}, reopened {reopened}, reopen refused {refused}, stayed at 250 ms {}",
             yes_no(ms.is_some()),
             ms.map_or("none within 5000".into(), |ms| ms.to_string()),
             yes_no(left),
@@ -926,15 +933,27 @@ mod probe {
     }
 
     /// A silent stream on the endpoint `GetDefaultAudioEndpoint` names now.
-    fn open_bound(
-        enumerator: &IMMDeviceEnumerator,
-    ) -> Fallible<(IAudioClient, IAudioRenderClient, u32, String)> {
-        // SAFETY: opens the console default render endpoint and a stream on
-        // it; the mix format is freed after Initialize copied it.
+    fn open_bound(enumerator: &IMMDeviceEnumerator) -> Fallible<Stream> {
+        // SAFETY: reads the console default render endpoint.
+        let device = unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eConsole) }
+            .map_err(|e| failed("GetDefaultAudioEndpoint", &e))?;
+        open_on(device)
+    }
+
+    /// A silent stream on endpoint `id`.
+    fn open_bound_to(id: &str) -> Fallible<Stream> {
+        // SAFETY: looks up a render endpoint by the ID it reported.
+        let device = unsafe { enumerator()?.GetDevice(&HSTRING::from(id)) }
+            .map_err(|e| failed("GetDevice", &e))?;
+        open_on(device)
+    }
+
+    type Stream = (IAudioClient, IAudioRenderClient, u32, String);
+
+    fn open_on(device: IMMDevice) -> Fallible<Stream> {
+        // SAFETY: opens a stream on `device`; the mix format is freed after
+        // Initialize copied it.
         unsafe {
-            let device = enumerator
-                .GetDefaultAudioEndpoint(eRender, eConsole)
-                .map_err(|e| failed("GetDefaultAudioEndpoint", &e))?;
             let id = device_id(&device);
             let client = device
                 .Activate::<IAudioClient>(CLSCTX_ALL, None)
@@ -982,8 +1001,26 @@ mod probe {
                 }
                 // SAFETY: stops the stream this function owns.
                 let _ = unsafe { client.Stop() };
-                (client, render, size, id) = open_bound(&enumerator)?;
-                say(&format!("reopened {id}"));
+                drop((client, render));
+                let mut opened = open_bound(&enumerator);
+                for _ in 0..REOPEN_TRIES {
+                    if opened.is_ok() {
+                        break;
+                    }
+                    thread::sleep(REOPEN_GAP);
+                    opened = open_bound(&enumerator);
+                }
+                match opened {
+                    Ok(stream) => {
+                        (client, render, size, id) = stream;
+                        say(&format!("reopened {id}"));
+                    }
+                    Err(error) => {
+                        say(&format!("reopen refused: {error}"));
+                        // Back on the endpoint it held, so the session stays.
+                        (client, render, size, id) = open_bound_to(&id)?;
+                    }
+                }
             }
             // SAFETY: calls on the stream this function owns; every buffer
             // is released silent.
@@ -1158,9 +1195,16 @@ navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
                 format!("{} ms", at.duration_since(since).as_millis())
             })
         };
+        // A stream that never left the old endpoint is the stayed case: the
+        // rule logs it once and keeps it in the stream.
+        let outcome = match (arrived, stayed) {
+            (_, true) => "stayed, kept in the stream",
+            (Some(_), false) => "left out, then rejoined",
+            (None, false) => "neither: its session ended",
+        };
         Ok(format!(
-            "moved after {}, still on the old endpoint at 250 ms {}, back after the hold {}, \\
-             session ends on {}",
+            "rule outcome {outcome}; moved after {}, still on the old endpoint at 250 ms {}, \
+             back after the hold {}, session ends on {}",
             ms(arrived, set_at),
             yes_no(stayed),
             ms(back, cleared_at),
