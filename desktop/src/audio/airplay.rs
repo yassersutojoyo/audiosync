@@ -93,6 +93,9 @@ use audiosync_airplay::volume::{MUTED_DB, Volume};
 use audiosync_core::eq::{self, EqSettings};
 use audiosync_core::fade::InputFade;
 use audiosync_core::ffi::airplay::{latest_panic_since, panic_mark};
+use audiosync_core::policy::airplay_reconnect::{
+    self as reconnect, ErrorReaction, Retries, SessionState,
+};
 use audiosync_core::policy::remote::{
     Action, App, Command, Control, Event as RemoteEvent, OwnVolume, Playback, Remote,
 };
@@ -1046,8 +1049,7 @@ struct Added {
     /// A target's members by speaker ID, with the last state each reported.
     members: BTreeMap<String, Option<SpeakerState>>,
     read: VolumeRead,
-    /// Retried errors since it last played or went unannounced.
-    retried: u8,
+    retries: Retries,
     /// It waits for an AirPlay 2 place or for PTP (S285).
     waiting: bool,
 }
@@ -1064,17 +1066,9 @@ impl Added {
                 .collect(),
             members: BTreeMap::new(),
             read: VolumeRead::new(Instant::now()),
-            retried: 0,
+            retries: Retries::default(),
             waiting: false,
         }
-    }
-
-    /// Counts a retried error; true at the second failed retry, about 3 s
-    /// in, so a blip its first retry heals never shows, and a dismissed
-    /// notice stays dismissed until it plays again (S222).
-    fn reconnecting(&mut self) -> bool {
-        self.retried = self.retried.saturating_add(1);
-        self.retried == 3
     }
 
     fn key(&self) -> Option<&DeviceKey> {
@@ -3573,7 +3567,7 @@ impl AirPlaySpeakers {
                 .map(|(key, counters)| (speaker_id(&key), counters))
                 .collect(),
             read: VolumeRead::new(Instant::now()),
-            retried: 0,
+            retries: Retries::default(),
             waiting: false,
         }
     }
@@ -4331,9 +4325,11 @@ impl AirPlaySpeakers {
         if state != SpeakerState::Failed && std::mem::take(&mut added.waiting) {
             events.push(BackendEvent::AirPlayWaitOver { id: id.to_owned() });
         }
-        if matches!(state, SpeakerState::Playing | SpeakerState::Unannounced) {
-            added.retried = 0;
-        }
+        added.retries.on_state(match state {
+            SpeakerState::Playing => SessionState::Playing,
+            SpeakerState::Unannounced => SessionState::Unannounced,
+            _ => SessionState::Other,
+        });
         let mut relisted = false;
         if state == SpeakerState::Playing {
             // Its password worked: one turned down later turns it off.
@@ -4407,23 +4403,28 @@ impl AirPlaySpeakers {
                     return Some(self.target_state(target, events));
                 }
                 added.waiting = problem.waits();
-                if let Some(at) = retry_at
-                    && problem.retried()
-                {
-                    added.state = SpeakerState::Retrying { at: *at };
-                    if !self.asleep && added.reconnecting() {
-                        events.push(BackendEvent::AirPlayTrouble {
-                            id: target.to_owned(),
-                            problem,
-                        });
+                let retry_at = retry_at.filter(|_| problem.retried());
+                let error = reconnect::SpeakerError {
+                    retried: retry_at.is_some(),
+                    waits: problem.waits(),
+                };
+                match added.retries.on_error(error, self.asleep) {
+                    ErrorReaction::Retry { notice } => {
+                        if let Some(at) = retry_at {
+                            added.state = SpeakerState::Retrying { at };
+                        }
+                        if notice {
+                            events.push(BackendEvent::AirPlayTrouble {
+                                id: target.to_owned(),
+                                problem,
+                            });
+                        }
                     }
-                } else if problem.waits() {
-                    events.push(BackendEvent::AirPlayTrouble {
+                    ErrorReaction::Wait => events.push(BackendEvent::AirPlayTrouble {
                         id: target.to_owned(),
                         problem,
-                    });
-                } else {
-                    self.turn_off(target, problem, events);
+                    }),
+                    ErrorReaction::TurnOff => self.turn_off(target, problem, events),
                 }
                 Some(true)
             }
@@ -4643,26 +4644,32 @@ impl AirPlaySpeakers {
                     return false;
                 };
                 added.waiting = problem.waits();
-                if let Some(at) = retry_at
-                    && problem.retried()
-                {
-                    added.state = SpeakerState::Retrying { at };
-                    if !self.asleep && added.reconnecting() {
-                        events.push(BackendEvent::AirPlayTrouble {
-                            id: id.to_owned(),
-                            problem,
-                        });
+                let retry_at = retry_at.filter(|_| problem.retried());
+                let error = reconnect::SpeakerError {
+                    retried: retry_at.is_some(),
+                    waits: problem.waits(),
+                };
+                match added.retries.on_error(error, self.asleep) {
+                    ErrorReaction::Retry { notice } => {
+                        if let Some(at) = retry_at {
+                            added.state = SpeakerState::Retrying { at };
+                        }
+                        if notice {
+                            events.push(BackendEvent::AirPlayTrouble {
+                                id: id.to_owned(),
+                                problem,
+                            });
+                        }
                     }
-                } else if problem.waits() {
                     // The sender starts it once it has a place or PTP is free.
-                    events.push(BackendEvent::AirPlayTrouble {
+                    ErrorReaction::Wait => events.push(BackendEvent::AirPlayTrouble {
                         id: id.to_owned(),
                         problem,
-                    });
-                } else if unasked {
-                    self.turn_off(id, AirPlayProblem::NotAccepted, events);
-                } else {
-                    self.turn_off(id, problem, events);
+                    }),
+                    ErrorReaction::TurnOff if unasked => {
+                        self.turn_off(id, AirPlayProblem::NotAccepted, events)
+                    }
+                    ErrorReaction::TurnOff => self.turn_off(id, problem, events),
                 }
                 true
             }

@@ -67,6 +67,7 @@ use audiosync_airplay::discovery::shown_text;
 use audiosync_core::channels::InputPair;
 use audiosync_core::clock;
 use audiosync_core::eq::{EqSettings, UserCurve, sanitized_curves};
+use audiosync_core::policy::airplay_reconnect::{NoticeClear, NoticeEnd, notice_clear};
 use audiosync_core::policy::delay::{
     native_airplay_adjustment_ms, native_airplay_latency_ms, sanitize_offset_ms,
 };
@@ -2197,6 +2198,19 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
     }
 
+    /// Clears what a speaker's reconnecting or waiting showed once it ends
+    /// (S222).
+    fn end_reconnect_notice(&mut self, id: &str, end: NoticeEnd) {
+        match notice_clear(end) {
+            NoticeClear::All => {
+                self.notices.clear(&[airplay_subject(id)]);
+            }
+            NoticeClear::Reconnecting => self.clear_if(airplay_subject(id), |message| {
+                matches!(message, NoticeMessage::AirPlayRetrying { .. })
+            }),
+        }
+    }
+
     fn start_airplay_again(&mut self) {
         // A new sender binds the PTP ports anew and reports a clash itself.
         self.ptp_taken = None;
@@ -3496,9 +3510,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .collect();
         for id in gone {
             self.reconnecting.remove(&id);
-            self.clear_if(airplay_subject(&id), |message| {
-                matches!(message, NoticeMessage::AirPlayRetrying { .. })
-            });
+            self.end_reconnect_notice(&id, NoticeEnd::LeftSender);
         }
         let mut names = std::mem::take(&mut self.airplay_names);
         let enabled = self.audio.enabled_airplay();
@@ -4312,9 +4324,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .collect();
         for id in stale {
             self.reconnecting.remove(&id);
-            self.clear_if(airplay_subject(&id), |message| {
-                matches!(message, NoticeMessage::AirPlayRetrying { .. })
-            });
+            self.end_reconnect_notice(&id, NoticeEnd::LeftSender);
         }
     }
 
@@ -4574,9 +4584,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             }
             BackendEvent::AirPlayWaitOver { id } => {
                 self.reconnecting.remove(&id);
-                self.clear_if(airplay_subject(&id), |message| {
-                    matches!(message, NoticeMessage::AirPlayRetrying { .. })
-                });
+                self.end_reconnect_notice(&id, NoticeEnd::WaitOver);
             }
             BackendEvent::AirPlayPlaying { id } => {
                 self.note_speakers();
@@ -4584,15 +4592,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.ptp_off.remove(&id);
                 self.ptp_played = true;
                 self.ptp_rows_changed();
-                self.notices.clear(&[airplay_subject(&id)]);
+                self.end_reconnect_notice(&id, NoticeEnd::Plays);
             }
             BackendEvent::AirPlayUnannounced { id, unannounced } => {
                 if unannounced {
                     // Not a failure: the user has nothing to do (P215).
                     self.reconnecting.insert(id.clone(), Waiting::NotOnNetwork);
-                    self.clear_if(airplay_subject(&id), |message| {
-                        matches!(message, NoticeMessage::AirPlayRetrying { .. })
-                    });
+                    self.end_reconnect_notice(&id, NoticeEnd::LeftNetwork);
                 } else if self.reconnecting.get(&id) == Some(&Waiting::NotOnNetwork) {
                     self.reconnecting.remove(&id);
                 }

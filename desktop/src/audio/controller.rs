@@ -58,6 +58,7 @@ use audiosync_core::channels::InputPair;
 use audiosync_core::eq::{self, EqControl, EqProcessor, EqSettings};
 use audiosync_core::fade::FADE_MS;
 use audiosync_core::lead::HeldLead;
+use audiosync_core::policy::airplay_reconnect::{SENDER_RETRY_SECONDS, SenderRestart, SenderStart};
 use audiosync_core::policy::delay::{BRIEF_LOSS_HOLD, native_airplay_latency_ms};
 use audiosync_core::policy::source::AudioSource;
 use audiosync_core::policy::source_quit::{
@@ -240,7 +241,8 @@ const FRESH_REST_POLLS: u32 = 2;
 
 /// A sender that couldn't start is tried again this many polls later, 10 s
 /// (S101), until one runs.
-const AIRPLAY_RESTART_POLLS: u32 = 20;
+const AIRPLAY_RESTART_POLLS: u32 =
+    (SENDER_RETRY_SECONDS * 1000.0) as u32 / super::outputs::POLL_PERIOD.as_millis() as u32;
 
 /// How a running capture is doing.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -953,8 +955,7 @@ pub struct Controller<D: Driver> {
     /// Starts a new sender when the user retries after the sender stopped
     /// or couldn't start.
     starter: Option<SenderStarter>,
-    /// Polls left until a sender that couldn't start is tried again.
-    airplay_restart_in: Option<u32>,
+    sender_restart: SenderRestart,
     /// The paired Apple TVs' credentials while no sender ever started: the
     /// first one that does gets them.
     waiting_store: Option<PairingStore>,
@@ -1102,7 +1103,7 @@ impl<D: Driver> Controller<D> {
             feed: None,
             cast: None,
             starter: None,
-            airplay_restart_in: None,
+            sender_restart: SenderRestart::default(),
             waiting_store: None,
             retiring: Vec::new(),
             next_start: None,
@@ -1179,8 +1180,12 @@ impl<D: Driver> Controller<D> {
             None => {
                 self.log
                     .log(|| "AirPlay: no sender runs; it is tried again in 10 s".to_owned());
-                self.airplay_restart_in = Some(AIRPLAY_RESTART_POLLS);
-                self.pending.push(BackendEvent::AirPlayStopped);
+                if self
+                    .sender_restart
+                    .failed(SenderStart::First, AIRPLAY_RESTART_POLLS)
+                {
+                    self.pending.push(BackendEvent::AirPlayStopped);
+                }
             }
         }
     }
@@ -1209,7 +1214,9 @@ impl<D: Driver> Controller<D> {
             }
         }
         if !browsing {
-            self.airplay_restart_in = Some(AIRPLAY_RESTART_POLLS);
+            // Its notice is discovery's, below.
+            self.sender_restart
+                .failed(SenderStart::Due, AIRPLAY_RESTART_POLLS);
         }
         if !browsing && let Some(airplay) = self.airplay.as_mut() {
             airplay.discovery_unavailable(&mut self.pending);
@@ -1219,16 +1226,12 @@ impl<D: Driver> Controller<D> {
     /// A sender that couldn't start is tried again once its 10 s are up; a
     /// failure then isn't told again (S101).
     fn restart_airplay_when_due(&mut self) {
-        let Some(polls) = self.airplay_restart_in.as_mut() else {
-            return;
-        };
-        *polls = polls.saturating_sub(1);
-        if *polls > 0 {
+        if !self.sender_restart.poll() {
             return;
         }
         self.log
             .log(|| "AirPlay: starting a sender again, 10 s after one couldn't".to_owned());
-        if !self.restart_airplay() {
+        if !self.restart_airplay(SenderStart::Due) {
             self.log
                 .log(|| "AirPlay: no sender runs; it is tried again in 10 s".to_owned());
         }
@@ -1238,15 +1241,17 @@ impl<D: Driver> Controller<D> {
     /// can't start, or whose discovery can't, is dropped and tried again in
     /// 10 s, so a running capture restarts only for one that lists
     /// receivers. Returns whether one started.
-    fn restart_airplay(&mut self) -> bool {
-        self.airplay_restart_in = None;
+    fn restart_airplay(&mut self, start: SenderStart) -> bool {
+        self.sender_restart.cancel();
         let Some(started) = self
             .starter
             .as_mut()
             .and_then(|starter| starter())
             .filter(|started| started.browsing)
         else {
-            self.airplay_restart_in = Some(AIRPLAY_RESTART_POLLS);
+            if self.sender_restart.failed(start, AIRPLAY_RESTART_POLLS) {
+                self.pending.push(BackendEvent::AirPlayStopped);
+            }
             return false;
         };
         // A running capture feeds the old sender, or none: it starts again
@@ -4946,7 +4951,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.stop_following_device_volumes();
         self.airplay = None;
         self.starter = None;
-        self.airplay_restart_in = None;
+        self.sender_restart.cancel();
         if let Some(cast) = cast {
             let clean = cast.join().unwrap_or(false);
             if !clean {
@@ -5744,9 +5749,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
         self.log
             .log(|| "AirPlay: Retry: starting a new sender".to_owned());
-        if !self.restart_airplay() {
-            self.pending.push(BackendEvent::AirPlayStopped);
-        }
+        self.restart_airplay(SenderStart::Retry);
     }
 
     fn follow_new_sessions(&mut self) {
