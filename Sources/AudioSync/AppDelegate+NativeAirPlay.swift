@@ -716,6 +716,7 @@ extension AppDelegate {
             return text.nativeAirPlayMemberNeedsPassword(member: memberName, target: name)
         case .cancelled: return nil
         case .pairingFailed: return text.nativeAirPlayPairingFailed(name: name)
+        case .codeRefused: return text.nativeAirPlayCodeRefused(name: name)
         case .stillNeedsCode: return text.airPlayTurnedOff(name: name, reason: .stillNeedsCode)
         }
     }

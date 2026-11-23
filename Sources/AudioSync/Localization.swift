@@ -832,7 +832,7 @@ struct UIStrings {
         case .needsCode: return airPlayTurnedOff(name: name, reason: .needsPin, onThisMac: onThisMac)
         case .needsPassword: return airPlayTurnedOff(name: name, reason: .needsPassword, onThisMac: onThisMac)
         case .unreachable, .busy, .refused, .cantPlay, .needsAirPlay2, .timingUnavailable, .playsThroughSpeakers,
-             .receiverUnverified, .memberNeedsPassword, .cancelled, .pairingFailed, .stillNeedsCode:
+             .receiverUnverified, .memberNeedsPassword, .cancelled, .pairingFailed, .codeRefused, .stillNeedsCode:
             return nil
         }
     }
@@ -842,6 +842,13 @@ struct UIStrings {
     func nativeAirPlayPairingFailed(name: String) -> String {
         "Pairing with \(name) didn't finish, so it's off. "
             + "To try again, turn it on and enter the code it shows."
+    }
+
+    /// A pairing's receiver refused to show a code (403 to the code request).
+    /// A Mac's Allow AirPlay for setting is one known cause, not the only one.
+    func nativeAirPlayCodeRefused(name: String) -> String {
+        "\(name) won't show a pairing code, so it's off. "
+            + "On a Mac, set Allow AirPlay for to Anyone on the Same Network in AirPlay Receiver settings, then turn it on again."
     }
 
     /// AudioSync's own AirPlay sender couldn't start (or browse the network

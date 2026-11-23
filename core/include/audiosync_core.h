@@ -202,6 +202,7 @@ extern "C" {
 #define ASC_AIRPLAY_ERROR_UNSUPPORTED 9       /* the sender can't drive it; .unsupported says why */
 #define ASC_AIRPLAY_ERROR_WRONG_PIN 10        /* a pairing's Apple TV turned the PIN down; a new pairing shows a PIN again */
 #define ASC_AIRPLAY_ERROR_RECEIVER_UNVERIFIED 11 /* a paired speaker didn't prove it is the one paired; not connected, its credentials stay */
+#define ASC_AIRPLAY_ERROR_CODE_REFUSED 12     /* a pairing's speaker won't show a code to this sender (403 to the code request) */
 
 /* What asc_airplay_open_pairings returns when the store holds nothing it found. */
 #define ASC_AIRPLAY_PAIRINGS_FAILED -1  /* NULL or dead handle, or NULL, empty or non-UTF-8 path */

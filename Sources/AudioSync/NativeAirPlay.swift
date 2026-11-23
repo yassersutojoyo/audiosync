@@ -897,6 +897,7 @@ final class NativeAirPlay {
         case ASC_AIRPLAY_ERROR_WRONG_PASSWORD: return .wrongPassword
         case ASC_AIRPLAY_ERROR_PAIRING_REQUIRED: return .pairingRequired
         case ASC_AIRPLAY_ERROR_RECEIVER_UNVERIFIED: return .receiverUnverified
+        case ASC_AIRPLAY_ERROR_CODE_REFUSED: return .codeRefused
         case ASC_AIRPLAY_ERROR_UNSUPPORTED: return .unsupported
         default: return .incompatible
         }

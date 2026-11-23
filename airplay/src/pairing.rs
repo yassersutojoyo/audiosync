@@ -895,17 +895,17 @@ impl Pairing {
         }
         if response.code != 200 {
             // A 470, or any other non-200 answer to a pairing request but
-            // the 409 and 401 above, ends the pairing (P58). A 470 to the
+            // the 409 and 401 above, ends the pairing (P58); a 403 to
+            // pin-start means no code will be shown. A 470 to the
             // proof is the Apple TV turning the PIN down (P52); the proof is
             // never sent again.
             let wrong_pin = in_flight.step == Step::Prove && response.code == STATUS_PAIRING_FAILED;
-            self.fail_status(
-                ErrorKind::PairingFailed,
-                method,
-                response.code,
-                None,
-                wrong_pin,
-            );
+            let kind = if in_flight.step == Step::PinStart && response.code == 403 {
+                ErrorKind::CodeRefused
+            } else {
+                ErrorKind::PairingFailed
+            };
+            self.fail_status(kind, method, response.code, None, wrong_pin);
             return;
         }
         match in_flight.step {

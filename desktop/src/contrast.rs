@@ -998,7 +998,9 @@ fn keyboard_shortcuts_are_declared() {
 /// for the one AirPlay 2 slot show only while the sender's AirPlay 2 path
 /// is on. The row note and notice for a speaker that plays only AirPlay 2
 /// show only for a receiver the sender found; so does the note on a zone's
-/// stereo pair or home theater that needs it.
+/// stereo pair or home theater that needs it. The notice for a speaker that
+/// won't show a pairing code names a Mac's AirPlay
+/// Receiver setting, and shows only after a pairing the sender ran.
 /// The calibration results' AirPlay lines, a zone run's line on whom the
 /// shared AirPlay delay moves included, show only when an AirPlay speaker
 /// took part, so the sender ran. The live input note shows only while an
@@ -1023,6 +1025,7 @@ fn no_text_promises_airplay() {
                 || line.contains("doesn't support yet")
                 || line.contains("return @tr(\"{} needs AirPlay 2, which this launch of AudioSync")
                 || line.contains("return @tr(\"AirPlay 2 is off\");")
+                || line.contains("set Allow AirPlay for to Anyone on the Same Network in AirPlay Receiver settings,")
                 || line.contains("property <string> airplay-delay-")
                 || line
                     .contains("notice-airplay-stopped: @tr(\"AirPlay stopped or couldn't start.")

@@ -9,7 +9,7 @@ mod common;
 use std::time::{Duration, Instant};
 
 use audiosync_airplay::ap2::{Ap2Event, PinPairing};
-use audiosync_airplay::error::ErrorKind;
+use audiosync_airplay::error::{ErrorKind, UserReason};
 use audiosync_airplay::homekit::HomeKitCredentials;
 use audiosync_airplay::pairing::{Output, PairingEvent, PairingState, PinError};
 use audiosync_airplay::rtsp::Method;
@@ -493,4 +493,31 @@ fn a_cancel_or_a_close_while_waiting_ends_the_pairing() {
     rig.pump();
     assert_eq!(rig.failure(), Some((ErrorKind::PairingCancelled, false)));
     assert_eq!(rig.pairing.state(), PairingState::Closed);
+}
+
+// covers: P58, P136
+#[test]
+fn a_403_to_the_code_request_is_a_refused_code_request() {
+    // A receiving Mac that lets only its own user AirPlay to it answers
+    // `/info` and then turns `/pair-pin-start` down with 403.
+    let mut fake = pin_receiver();
+    fake.hap
+        .answers
+        .push((("/pair-pin-start", 0), Answer::Status(403)));
+    let rig = PinRig::new(fake);
+    assert_eq!(rig.failure(), Some((ErrorKind::CodeRefused, false)));
+    assert_eq!(
+        ErrorKind::CodeRefused.user_reason(),
+        UserReason::CodeRefused
+    );
+    assert!(ErrorKind::CodeRefused.needs_user());
+
+    // A 403 to a later step is no code request: PairingFailed as before.
+    let mut fake = pin_receiver();
+    fake.hap
+        .answers
+        .push((("/pair-setup", 1), Answer::Status(403)));
+    let mut rig = PinRig::new(fake);
+    assert_eq!(rig.submit(PIN), Ok(()));
+    assert_eq!(rig.failure(), Some((ErrorKind::PairingFailed, false)));
 }
