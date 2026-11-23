@@ -7759,6 +7759,30 @@ mod tests {
 
     // covers: S486
     #[test]
+    fn a_leftover_call_pin_waits_for_a_sound_session_without_rewriting_the_record() {
+        let mut backend = backend();
+        let (apps, store) = with_a_call_app(&mut backend);
+        backend.play_on(CALL_PID, switch_fakes::CABLE);
+        backend.listen(CALL_PID, true);
+        backend.poll();
+        backend.listen(CALL_PID, false);
+        backend.pause_on(CALL_PID, switch_fakes::CABLE);
+        backend.quit_app(CALL_PID);
+        backend.calls_clock -= Duration::from_secs_f64(HOLD);
+        backend.poll();
+        backend.add_app(CALL_PID, "call.exe");
+        apps.0.borrow_mut().sessionless.push(CALL_PID);
+        store.0.borrow().calls.borrow_mut().clear();
+        for _ in 0..5 {
+            backend.poll();
+        }
+        assert_eq!(*store.0.borrow().calls.borrow(), Vec::<String>::new());
+        assert_ne!(store.0.borrow().record, None);
+        backend.stop();
+    }
+
+    // covers: S486
+    #[test]
     fn a_call_app_still_on_the_silent_endpoint_stays_in_the_stream() {
         let mut backend = backend();
         let (apps, _) = with_a_call_app(&mut backend);
