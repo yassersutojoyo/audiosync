@@ -69,7 +69,10 @@ impl CallListeners {
     /// out (Windows pins it once it plays): the stayed check counts from
     /// here.
     pub fn acted(&mut self, app: &str, now: Seconds) {
-        let _ = (app, now);
+        if let Some(out) = self.out.get_mut(app) {
+            out.acted_at = now;
+            out.checked = false;
+        }
     }
 
     /// One poll at `now`.

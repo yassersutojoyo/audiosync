@@ -445,15 +445,17 @@ impl Graph {
         processes: &ProcessTable,
         pin: bool,
     ) -> Vec<u32> {
+        // Keyed by `object.serial`: PipeWire gives a freed node ID to the
+        // next node, never a serial.
+        let serial = |id: &u32| self.nodes.get(id)?.prop("object.serial");
+        let live: BTreeSet<&str> = self.streams().filter_map(|id| serial(&id)).collect();
+        targeted.retain(|key| live.contains(key.as_str()));
         self.streams_of(pids, processes)
             .into_iter()
-            .filter(|id| {
-                let key = id.to_string();
-                if pin {
-                    targeted.insert(key)
-                } else {
-                    targeted.remove(&key)
-                }
+            .filter(|id| match serial(id) {
+                Some(key) if pin => targeted.insert(key.to_owned()),
+                Some(key) => targeted.remove(key),
+                None => false,
             })
             .collect()
     }

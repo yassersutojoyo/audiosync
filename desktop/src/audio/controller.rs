@@ -1517,6 +1517,7 @@ impl<D: Driver> Controller<D> {
         let mut running: Vec<Process> = record
             .apps
             .iter()
+            .chain(&record.calls)
             .flat_map(|app| {
                 table.running(&app.exe).map(|pid| Process {
                     pid,
@@ -1759,7 +1760,21 @@ impl<D: Driver> Controller<D> {
     fn sync_call_listeners(&mut self) {
         let whole_system = self.default_switch.switched()
             && (self.app_output.is_some() || self.driver.targets_streams());
-        if !whole_system && self.call_listeners.left_out().next().is_none() {
+        // A pin the rule no longer holds (an earlier run's, or one whose app
+        // quit before it rejoined) is put back once the app runs.
+        let leftover: Vec<String> = self
+            .app_redirect
+            .record()
+            .map(|record| {
+                record
+                    .calls
+                    .iter()
+                    .map(|app| app.exe.clone())
+                    .filter(|exe| !self.call_listeners.left_out().any(|out| out == exe))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !whole_system && self.call_listeners.left_out().next().is_none() && leftover.is_empty() {
             return;
         }
         let Ok(table) = self.driver.processes() else {
@@ -1854,12 +1869,26 @@ impl<D: Driver> Controller<D> {
                 }
             }
         }
+        if let Some((endpoints, store)) = self.app_output.as_mut() {
+            for exe in leftover {
+                let running = running(&exe);
+                if !running.is_empty() {
+                    lines.extend(self.app_redirect.unpin(
+                        endpoints.as_mut(),
+                        store.as_mut(),
+                        &exe,
+                        &running,
+                    ));
+                }
+            }
+        }
         let Some(original) = original else {
             for line in lines {
                 self.log.log(|| line);
             }
             return;
         };
+        let mut acted = Vec::new();
         for exe in self.call_listeners.left_out() {
             if self.calls_stayed.iter().any(|stayed| stayed == exe) {
                 continue;
@@ -1884,7 +1913,13 @@ impl<D: Driver> Controller<D> {
                     &original,
                     std::slice::from_ref(&process),
                 ));
+                if self.app_redirect.pinned(exe) {
+                    acted.push(exe.to_owned());
+                }
             }
+        }
+        for exe in acted {
+            self.call_listeners.acted(&exe, now);
         }
         for line in lines {
             self.log.log(|| line);
