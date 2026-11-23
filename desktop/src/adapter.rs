@@ -15447,6 +15447,40 @@ mod tests {
         });
     }
 
+    // covers: S181, S237
+    #[test]
+    fn calibrate_alls_airplay_line_shows_the_extra_delay_as_its_field_does() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.audio.set_airplay_adjustment(78.0);
+        keep(
+            &mut adapter,
+            crate::audio::calibrate_all::tests::sheet_of(&[
+                (Class::Local, SPEAKERS, Some(0.0), 2010.0),
+                (Class::Local, HEADPHONES, Some(0.0), 2060.0),
+                (Class::AirPlay, "kitchen", Some(278.0), 2110.0),
+            ]),
+        );
+        read_with_sender(&mut adapter, 200.0);
+        let measured = adapter
+            .calibrate_all
+            .sheet
+            .as_ref()
+            .and_then(|kept| kept.sheet.airplay().copied())
+            .expect("an AirPlay line");
+        let shown = adapter
+            .snapshot()
+            .calibrate_all
+            .sheet
+            .expect("results")
+            .airplay
+            .expect("an AirPlay line");
+        assert_eq!(measured.old_ms, Some(278.0), "the run reads L");
+        assert!(measured.new_ms.is_some(), "a certain AirPlay row");
+        assert_eq!(shown.old_ms, Some(78.0));
+        assert_eq!(shown.new_ms, measured.new_ms.map(|ms| ms - 200.0));
+    }
+
     // The Mac's againEnded(name, .failed(failure)) (AppDelegate+CalibrateAll.swift:260-262).
     #[test]
     fn a_measure_again_that_fails_midway_names_its_speaker_and_why() {

@@ -13714,8 +13714,10 @@ do {
             }
             return out
         }
+        // An AirPlay row read L = 1750 ms as a sender latency of 1700 ms plus an extra delay A of 50 ms.
         func speaker(_ id: String, _ kind: CalibrateAllKind, _ offset: Double?) -> CalibrateAllSpeaker {
-            CalibrateAllSpeaker(id: id, name: id, kind: kind, offsetMs: offset, latencyMs: 100)
+            CalibrateAllSpeaker(id: id, name: id, kind: kind, offsetMs: offset, latencyMs: 100,
+                                adjustmentMs: kind == .airPlay ? 50 : nil, senderMs: kind == .airPlay ? 1700 : nil)
         }
         let speakers = [speaker("mac", .local, nil), speaker("usb", .local, 150), speaker("hdmi", .local, 0),
                         speaker("bt", .local, -200), speaker("native:a", .airPlay, 1750),
@@ -13772,8 +13774,9 @@ do {
             let airPlay = shown?.airPlay
             let airPlayText = airPlay.map(t.calibrateAllAirPlay) ?? ""
             // covers: S237
-            check(airPlay?.state == .spread && airPlay?.newMs == 1965 && airPlay?.certainRows == 2
-                    && airPlayText.contains("AirPlay delay: was 1750 ms. New: 1965 ms")
+            // covers: S181 (the sheet names the extra delay A, as the field does)
+            check(airPlay?.state == .spread && airPlay?.newMs == 265 && airPlay?.certainRows == 2
+                    && airPlayText.contains("AirPlay delay: was 50 ms. New: 265 ms")
                     && airPlayText.contains("differ by 30 ms") && airPlayText.contains("one delay for all AirPlay speakers"),
                   "calibrate all: the AirPlay delay is the median, and a spread over 10 ms is said in plain words (S237)",
                   airPlayText)
