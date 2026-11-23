@@ -803,6 +803,8 @@ struct Linker {
     status: Arc<Status>,
     /// Whether the graph changed since the last relink.
     dirty: bool,
+    /// The sync whose reply relinks, once the daemon's burst of changes is in.
+    relink_sync: Option<spa::utils::result::AsyncSeq>,
 }
 
 /// A link the linker made, and whether the daemon put it in its error
@@ -841,6 +843,7 @@ impl MadeLink {
 struct Following {
     linker: Rc<RefCell<Linker>>,
     _listener: pw::registry::Listener,
+    _core_listener: pw::core::Listener,
     _clients: Rc<RefCell<HashMap<u32, registry::FollowedClient>>>,
     /// The `default` metadata, for the output whose monitor it may take.
     _defaults: Rc<RefCell<Option<(Metadata, MetadataListener)>>>,
@@ -947,6 +950,7 @@ impl Linker {
             links: BTreeMap::new(),
             status: Arc::clone(status),
             dirty: true,
+            relink_sync: None,
         }));
         let clients: Rc<RefCell<HashMap<u32, registry::FollowedClient>>> = Rc::default();
         let defaults: Rc<RefCell<Option<(Metadata, MetadataListener)>>> = Rc::default();
@@ -974,6 +978,12 @@ impl Linker {
                     if let Ok(mut linker) = linker.try_borrow_mut() {
                         linker.graph.add(global.id, kind, registry::owned(props));
                         linker.dirty = true;
+                        // A stream moved by the session manager is followed at
+                        // once, not on the next tick, so the capture neither
+                        // loses it nor takes it twice.
+                        if kind == graph::Kind::Link {
+                            linker.relink_soon();
+                        }
                     }
                     if kind == graph::Kind::Client {
                         let id = global.id;
@@ -996,8 +1006,29 @@ impl Linker {
                 move |id| {
                     clients.borrow_mut().remove(&id);
                     if let Ok(mut linker) = linker.try_borrow_mut() {
+                        let link = linker.graph.links.contains_key(&id);
                         linker.graph.remove(id);
                         linker.dirty = true;
+                        if link {
+                            linker.relink_soon();
+                        }
+                    }
+                }
+            })
+            .register();
+        let core_listener = core
+            .add_listener_local()
+            .done({
+                let linker = Rc::clone(&linker);
+                move |id, seq| {
+                    if id != pw::core::PW_ID_CORE {
+                        return;
+                    }
+                    if let Ok(mut linker) = linker.try_borrow_mut()
+                        && linker.relink_sync == Some(seq)
+                    {
+                        linker.relink_sync = None;
+                        linker.tick();
                     }
                 }
             })
@@ -1005,6 +1036,7 @@ impl Linker {
         Following {
             linker,
             _listener: listener,
+            _core_listener: core_listener,
             _clients: clients,
             _defaults: defaults,
         }
@@ -1014,6 +1046,16 @@ impl Linker {
         self.quit.follow(roots_of(&filter));
         self.filter = filter;
         self.dirty = true;
+    }
+
+    /// Relinks as soon as the daemon has answered a sync, so the changes it
+    /// sent before it, a whole burst, cost one walk of `/proc`; the timer's
+    /// tick relinks when the sync cannot be sent.
+    fn relink_soon(&mut self) {
+        self.dirty = true;
+        if self.relink_sync.is_none() {
+            self.relink_sync = self.core.sync(0).ok();
+        }
     }
 
     /// Relinks after the graph changed.
@@ -1088,7 +1130,7 @@ fn follow_default_sink(
                 && let Ok(mut linker) = linker.try_borrow_mut()
             {
                 linker.graph.default_sink = value.and_then(registry::default_name);
-                linker.dirty = true;
+                linker.relink_soon();
             }
             0
         })
