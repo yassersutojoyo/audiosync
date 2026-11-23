@@ -9,8 +9,8 @@ use std::process::Child;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_TIMEOUT};
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
 
-use crate::audio::app_output::AppRecordStore;
-use crate::audio::default_output::RecordStore;
+use crate::audio::app_output::{AppRecord, AppRecordStore};
+use crate::audio::default_output::{Record, RecordStore};
 use crate::debug_log::DebugLog;
 use crate::settings::{AppRecordFile, DefaultRecordFile, SettingsFile};
 
@@ -100,6 +100,60 @@ pub fn guard(parent: u32, records: &mut dyn Records) {
     }
 }
 
+/// The per-user sign-in entry of S481, which runs the restore argument.
+pub trait SignInEntry: Send {
+    fn write(&mut self);
+    fn remove(&mut self);
+}
+
+/// The restore argument: restores, then removes the sign-in entry unless a
+/// record is still on disk, so an entry left without one goes too.
+pub fn restore(records: &mut dyn Records, _entry: &mut dyn SignInEntry) {
+    records.restore();
+}
+
+/// A restore record store that keeps the sign-in entry while any record is
+/// on disk (S481): written before a record, removed once none is left.
+pub struct WithSignIn<S> {
+    store: S,
+    entry: Box<dyn SignInEntry>,
+    on_disk: Box<dyn FnMut() -> bool + Send>,
+}
+
+impl<S> WithSignIn<S> {
+    pub fn new(
+        store: S,
+        entry: Box<dyn SignInEntry>,
+        on_disk: Box<dyn FnMut() -> bool + Send>,
+    ) -> Self {
+        WithSignIn {
+            store,
+            entry,
+            on_disk,
+        }
+    }
+}
+
+impl<S: RecordStore> RecordStore for WithSignIn<S> {
+    fn load(&mut self) -> Result<Option<Record>, String> {
+        self.store.load()
+    }
+
+    fn save(&mut self, record: Option<&Record>) -> Result<(), String> {
+        self.store.save(record)
+    }
+}
+
+impl<S: AppRecordStore> AppRecordStore for WithSignIn<S> {
+    fn load(&mut self) -> Result<Option<AppRecord>, String> {
+        self.store.load()
+    }
+
+    fn save(&mut self, record: Option<&AppRecord>) -> Result<(), String> {
+        self.store.save(record)
+    }
+}
+
 /// A process handle that can only be waited on.
 struct Parent(HANDLE);
 
@@ -150,6 +204,8 @@ impl Records for SettingsRecords {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use super::*;
 
     #[derive(Default)]
@@ -165,6 +221,67 @@ mod tests {
 
         fn restore(&mut self) {
             self.restored += 1;
+        }
+    }
+
+    type Log = Arc<Mutex<Vec<&'static str>>>;
+
+    struct Entry(Log);
+
+    impl SignInEntry for Entry {
+        fn write(&mut self) {
+            self.0.lock().unwrap().push("entry written");
+        }
+
+        fn remove(&mut self) {
+            self.0.lock().unwrap().push("entry removed");
+        }
+    }
+
+    struct Store {
+        log: Log,
+        record: Arc<Mutex<Option<Record>>>,
+    }
+
+    impl RecordStore for Store {
+        fn load(&mut self) -> Result<Option<Record>, String> {
+            Ok(self.record.lock().unwrap().clone())
+        }
+
+        fn save(&mut self, record: Option<&Record>) -> Result<(), String> {
+            let what = if record.is_some() {
+                "record written"
+            } else {
+                "record deleted"
+            };
+            self.log.lock().unwrap().push(what);
+            *self.record.lock().unwrap() = record.cloned();
+            Ok(())
+        }
+    }
+
+    /// A store whose entry also counts the other kind's record as on disk
+    /// when `other` is.
+    fn signed_in(other: bool) -> (Log, WithSignIn<Store>) {
+        let log = Log::default();
+        let record = Arc::new(Mutex::new(None));
+        let mine = Arc::clone(&record);
+        let store = WithSignIn::new(
+            Store {
+                log: Arc::clone(&log),
+                record,
+            },
+            Box::new(Entry(Arc::clone(&log))),
+            Box::new(move || other || mine.lock().unwrap().is_some()),
+        );
+        (log, store)
+    }
+
+    fn a_record() -> Record {
+        Record {
+            console: "speakers".to_owned(),
+            multimedia: "speakers".to_owned(),
+            silent: "cable".to_owned(),
         }
     }
 
@@ -198,5 +315,49 @@ mod tests {
         guard(parent.id(), &mut records);
         assert_eq!(records.restored, 0);
         parent.wait().expect("cmd ended");
+    }
+
+    // covers: S481
+    #[test]
+    fn the_sign_in_entry_is_written_before_the_record_and_removed_after_it() {
+        let (log, mut store) = signed_in(false);
+        store.save(Some(&a_record())).unwrap();
+        store.save(None).unwrap();
+        assert_eq!(
+            *log.lock().unwrap(),
+            [
+                "entry written",
+                "record written",
+                "record deleted",
+                "entry removed"
+            ]
+        );
+    }
+
+    // covers: S481
+    #[test]
+    fn the_sign_in_entry_stays_while_the_other_record_is_on_disk() {
+        let (log, mut store) = signed_in(true);
+        store.save(Some(&a_record())).unwrap();
+        store.save(None).unwrap();
+        assert_eq!(
+            *log.lock().unwrap(),
+            ["entry written", "record written", "record deleted"]
+        );
+    }
+
+    // covers: S481
+    #[test]
+    fn the_restore_argument_removes_the_entry_once_no_record_is_left() {
+        let log = Log::default();
+        let mut restored = Fake::default();
+        restore(&mut restored, &mut Entry(Arc::clone(&log)));
+        let mut kept = Fake {
+            present: true,
+            ..Fake::default()
+        };
+        restore(&mut kept, &mut Entry(Arc::clone(&log)));
+        assert_eq!((restored.restored, kept.restored), (1, 1));
+        assert_eq!(*log.lock().unwrap(), ["entry removed"]);
     }
 }
