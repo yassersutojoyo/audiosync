@@ -329,8 +329,11 @@ jobs:
 
       # As the stranger session, plus the accessibility bus, the AT-SPI
       # bindings, ImageMagick's import, xdotool and a tray host.
+      # A stalled mirror connection held apt-get update until the job limit
+      # (23 Nov 2026), so every apt call here gives up and retries instead.
       - name: System packages and the installed package
         run: |
+          echo 'Acquire::http::Timeout "30"; Acquire::https::Timeout "30"; Acquire::Retries "3";' | sudo tee /etc/apt/apt.conf.d/99stranger-timeouts
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends pipewire pipewire-bin wireplumber pipewire-pulse             pulseaudio-utils dbus dbus-user-session xvfb libx11-xcb1 libxcursor1 libxkbcommon-x11-0 libxi6 libxrandr2             at-spi2-core python3-gi gir1.2-atspi-2.0 imagemagick xdotool stalonetray
           sudo apt-get install -y --no-install-recommends snixembed || echo "snixembed: not in the archive, the stand-in watcher hosts the tray"
@@ -412,6 +415,7 @@ jobs:
       # A pass takes about 3 min. The harness deadline ends a hang with its
       # log and the process list; the step timeout is the net behind it.
       - name: Install, stream to the default output, change its volume and mute
+        id: device
         shell: pwsh
         timeout-minutes: 10
         run: ./scripts/stranger/with_deadline.ps1 -Minutes 7 -Work default-device -Script scripts/stranger/windows_default_device.ps1 -Setup pkg/AudioSync-Setup.exe
@@ -423,8 +427,10 @@ jobs:
           path: harness
 
       # A1.8: the System slider's backend call on the virtual card, muted first.
+      # Skipped after a hang: a second call into a stuck audio stack would hang
+      # past the job limit too, and the upload below would never run.
       - name: System slider harness (mute, set_device_volume, read back)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.device.outputs.hung != 'true' }}
         shell: pwsh
         timeout-minutes: 3
         env:
