@@ -83,6 +83,30 @@ impl Previous {
 pub struct AppRecord {
     pub silent: String,
     pub apps: Vec<Previous>,
+    /// The device interface the apps in `calls` are pinned to: the default
+    /// output before S469's switch (S486).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub original: String,
+    /// Each app listening to a microphone pinned to `original`, with its
+    /// earlier choice (S486).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub calls: Vec<Previous>,
+}
+
+/// Which of a record's lists a move goes to.
+#[derive(Clone, Copy)]
+enum List {
+    Apps,
+    Calls,
+}
+
+impl AppRecord {
+    fn list(&mut self, list: List) -> (&mut String, &mut Vec<Previous>) {
+        match list {
+            List::Apps => (&mut self.silent, &mut self.apps),
+            List::Calls => (&mut self.original, &mut self.calls),
+        }
+    }
 }
 
 /// A running process of the captured tree, or one a restore can reach its
@@ -131,13 +155,46 @@ impl AppRedirect {
         silent_endpoint: &str,
         processes: &[Process],
     ) -> Vec<String> {
-        let mut record = self.record.clone().unwrap_or_else(|| AppRecord {
-            silent: render_interface(silent_endpoint),
-            apps: Vec::new(),
-        });
+        self.move_to(endpoints, store, List::Apps, silent_endpoint, processes)
+    }
+
+    /// Pins each app in `processes` not pinned yet to `original`, the
+    /// default output before S469's switch, while it listens to a
+    /// microphone (S486).
+    pub fn pin(
+        &mut self,
+        endpoints: &mut dyn AppEndpoints,
+        store: &mut dyn AppRecordStore,
+        original: &str,
+        processes: &[Process],
+    ) -> Vec<String> {
+        self.move_to(endpoints, store, List::Calls, original, processes)
+    }
+
+    /// Whether `exe` is pinned for a call (S486).
+    pub fn pinned(&self, exe: &str) -> bool {
+        self.record
+            .as_ref()
+            .is_some_and(|record| record.calls.iter().any(|app| app.exe == exe))
+    }
+
+    fn move_to(
+        &mut self,
+        endpoints: &mut dyn AppEndpoints,
+        store: &mut dyn AppRecordStore,
+        list: List,
+        endpoint: &str,
+        processes: &[Process],
+    ) -> Vec<String> {
+        let mut record = self.record.clone().unwrap_or_default();
+        let (target, apps) = record.list(list);
+        if apps.is_empty() {
+            *target = render_interface(endpoint);
+        }
+        let target = target.clone();
         let mut lines = Vec::new();
         for process in processes {
-            if record.apps.iter().any(|app| app.exe == process.exe) {
+            if record.list(list).1.iter().any(|app| app.exe == process.exe) {
                 continue;
             }
             let exe = &process.exe;
@@ -159,21 +216,21 @@ impl AppRedirect {
                     continue;
                 }
             };
-            record.apps.push(previous.clone());
+            record.list(list).1.push(previous.clone());
             if let Err(error) = self.save(store, &record) {
-                record.apps.pop();
+                record.list(list).1.pop();
                 lines.push(format!(
                     "app output: {exe} not moved, the restore record couldn't be written: {error}"
                 ));
                 continue;
             }
             let failed = ROLES.iter().enumerate().find_map(|(done, &role)| {
-                moved(endpoints, process.pid, role, &record.silent)
+                moved(endpoints, process.pid, role, &target)
                     .err()
                     .map(|error| (done, role, error))
             });
             let Some((done, role, error)) = failed else {
-                lines.push(format!("app output: {exe} moved to {}", record.silent));
+                lines.push(format!("app output: {exe} moved to {target}"));
                 continue;
             };
             lines.push(format!(
@@ -183,7 +240,7 @@ impl AppRedirect {
                 .iter()
                 .all(|&role| moved(endpoints, process.pid, role, previous.get(role)).is_ok());
             if undone {
-                record.apps.pop();
+                record.list(list).1.pop();
                 if let Err(error) = self.save(store, &record) {
                     lines.push(format!(
                         "app output: the restore record couldn't be written: {error}"
@@ -199,7 +256,7 @@ impl AppRedirect {
     }
 
     fn save(&mut self, store: &mut dyn AppRecordStore, record: &AppRecord) -> Result<(), String> {
-        let kept = (!record.apps.is_empty()).then_some(record);
+        let kept = (!record.apps.is_empty() || !record.calls.is_empty()).then_some(record);
         store.save(kept)?;
         self.record = kept.cloned();
         Ok(())
@@ -218,50 +275,37 @@ impl AppRedirect {
             return Vec::new();
         };
         let mut lines = Vec::new();
-        record.apps.retain(|app| {
-            let mut tried = running.iter().filter(|process| process.exe == app.exe);
-            let Some(mut process) = tried.next() else {
-                lines.push(format!(
-                    "app output: {} isn't running, it is put back when it runs again",
-                    app.exe
-                ));
-                return true;
-            };
-            while endpoints.app_default(process.pid, Role::Console).is_err() {
-                match tried.next() {
-                    Some(next) => process = next,
-                    None => break,
-                }
-            }
-            let mut kept = false;
-            for role in ROLES {
-                match endpoints.app_default(process.pid, role) {
-                    Ok(now) if now == record.silent => {
-                        if let Err(error) = moved(endpoints, process.pid, role, app.get(role)) {
-                            kept = true;
-                            lines.push(format!(
-                                "app output: {} {role:?} couldn't be put back: {error}",
-                                app.exe
-                            ));
-                        }
-                    }
-                    Ok(_) => lines.push(format!(
-                        "app output: {} {role:?} left as it is, it was changed meanwhile",
-                        app.exe
-                    )),
-                    Err(error) => {
-                        kept = true;
-                        lines.push(format!(
-                            "app output: {} {role:?} can't be read: {error}",
-                            app.exe
-                        ));
-                    }
-                }
-            }
-            if !kept {
-                lines.push(format!("app output: {} put back", app.exe));
-            }
-            kept
+        let silent = record.silent.clone();
+        record
+            .apps
+            .retain(|app| put_back(endpoints, app, &silent, running, &mut lines));
+        let original = record.original.clone();
+        record
+            .calls
+            .retain(|app| put_back(endpoints, app, &original, running, &mut lines));
+        if let Err(error) = self.save(store, &record) {
+            lines.push(format!(
+                "app output: the restore record couldn't be written: {error}"
+            ));
+        }
+        lines
+    }
+
+    /// Puts back the app pinned for a call that rejoins the stream (S486).
+    pub fn unpin(
+        &mut self,
+        endpoints: &mut dyn AppEndpoints,
+        store: &mut dyn AppRecordStore,
+        exe: &str,
+        running: &[Process],
+    ) -> Vec<String> {
+        let Some(mut record) = self.record.clone() else {
+            return Vec::new();
+        };
+        let mut lines = Vec::new();
+        let original = record.original.clone();
+        record.calls.retain(|app| {
+            app.exe != exe || put_back(endpoints, app, &original, running, &mut lines)
         });
         if let Err(error) = self.save(store, &record) {
             lines.push(format!(
@@ -289,6 +333,61 @@ impl AppRedirect {
             )],
         }
     }
+}
+
+/// Puts `app` back through its `running` processes, trying them in order
+/// until one answers, for each role still reading `target`; true keeps it
+/// in the record.
+fn put_back(
+    endpoints: &mut dyn AppEndpoints,
+    app: &Previous,
+    target: &str,
+    running: &[Process],
+    lines: &mut Vec<String>,
+) -> bool {
+    let mut tried = running.iter().filter(|process| process.exe == app.exe);
+    let Some(mut process) = tried.next() else {
+        lines.push(format!(
+            "app output: {} isn't running, it is put back when it runs again",
+            app.exe
+        ));
+        return true;
+    };
+    while endpoints.app_default(process.pid, Role::Console).is_err() {
+        match tried.next() {
+            Some(next) => process = next,
+            None => break,
+        }
+    }
+    let mut kept = false;
+    for role in ROLES {
+        match endpoints.app_default(process.pid, role) {
+            Ok(now) if now == target => {
+                if let Err(error) = moved(endpoints, process.pid, role, app.get(role)) {
+                    kept = true;
+                    lines.push(format!(
+                        "app output: {} {role:?} couldn't be put back: {error}",
+                        app.exe
+                    ));
+                }
+            }
+            Ok(_) => lines.push(format!(
+                "app output: {} {role:?} left as it is, it was changed meanwhile",
+                app.exe
+            )),
+            Err(error) => {
+                kept = true;
+                lines.push(format!(
+                    "app output: {} {role:?} can't be read: {error}",
+                    app.exe
+                ));
+            }
+        }
+    }
+    if !kept {
+        lines.push(format!("app output: {} put back", app.exe));
+    }
+    kept
 }
 
 #[cfg(test)]

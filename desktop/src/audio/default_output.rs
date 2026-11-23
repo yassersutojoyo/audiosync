@@ -50,6 +50,9 @@ pub struct Candidate {
     /// Whether something records the same device's input side, as with a
     /// loopback cable an app listens to: such an endpoint is taken last.
     pub listened: bool,
+    /// Whether it holds Windows' communications role, where a call plays:
+    /// such an endpoint is never the silent one (S486).
+    pub communications: bool,
 }
 
 /// Windows' default output per role, and the active render endpoints.
@@ -95,7 +98,9 @@ pub(crate) fn silent_endpoint<'a>(endpoints: &'a [Candidate], chosen: &[&str]) -
     endpoints
         .iter()
         .filter(|candidate| {
-            candidate.kind == OutputKind::Virtual && !chosen.contains(&candidate.id.as_str())
+            candidate.kind == OutputKind::Virtual
+                && !candidate.communications
+                && !chosen.contains(&candidate.id.as_str())
         })
         .min_by(|a, b| (a.listened, &a.id).cmp(&(b.listened, &b.id)))
         .map(|candidate| candidate.id.as_str())
@@ -125,7 +130,6 @@ impl DefaultSwitch {
     }
 
     /// Whether the switch is in effect.
-    #[cfg(test)]
     pub fn switched(&self) -> bool {
         matches!(self.state, State::Switched(_))
     }
@@ -546,6 +550,7 @@ pub(crate) mod tests {
             id: id.to_owned(),
             kind,
             listened: false,
+            communications: false,
         }
     }
 
@@ -837,5 +842,18 @@ pub(crate) mod tests {
         assert_eq!(silent_endpoint(&listed, &[]), Some(MIXER));
         assert_eq!(silent_endpoint(&listed, &[MIXER]), Some(CABLE));
         assert_eq!(silent_endpoint(&listed[..1], &[]), None);
+    }
+
+    // covers: S486
+    #[test]
+    fn the_communications_endpoint_is_never_the_silent_one() {
+        let mut listed = vec![
+            candidate(MIXER, OutputKind::Virtual),
+            candidate(CABLE, OutputKind::Virtual),
+        ];
+        listed[1].communications = true;
+        assert_eq!(silent_endpoint(&listed, &[]), Some(MIXER));
+        listed[0].communications = true;
+        assert_eq!(silent_endpoint(&listed, &[]), None);
     }
 }

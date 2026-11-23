@@ -419,6 +419,8 @@ pub struct MockDriver {
     /// The processes with an active audio session on each output, besides
     /// AudioSync's own, by endpoint ID.
     active_sessions: BTreeMap<String, Vec<u32>>,
+    /// The processes with an active stream from an input (S485).
+    listening: Vec<u32>,
     /// The mute and volume of the outputs set otherwise than unmuted at full
     /// volume; `None` when they can't be read.
     volumes: BTreeMap<String, Option<EndpointVolume>>,
@@ -504,6 +506,7 @@ impl MockDriver {
             capture: None,
             renderers: Vec::new(),
             active_sessions: BTreeMap::new(),
+            listening: Vec::new(),
             volumes: BTreeMap::new(),
             device_volumes: DeviceVolumes::default(),
             endpoint_audio_error: None,
@@ -792,6 +795,10 @@ impl Driver for MockDriver {
             return Err(error.clone());
         }
         Ok(self.inputs.clone())
+    }
+
+    fn listening_pids(&mut self) -> Result<Vec<u32>, BackendError> {
+        Ok(self.listening.clone())
     }
 
     fn endpoint_audio(&mut self) -> Result<Vec<EndpointAudio>, BackendError> {
@@ -1517,6 +1524,15 @@ impl Controller<MockDriver> {
             .or_default();
         if !pids.contains(&pid) {
             pids.push(pid);
+        }
+    }
+
+    /// Process `pid` opens (`true`) or closes a stream from a microphone.
+    pub fn listen(&mut self, pid: u32, on: bool) {
+        let listening = &mut self.driver_mut().listening;
+        listening.retain(|&listener| listener != pid);
+        if on {
+            listening.push(pid);
         }
     }
 

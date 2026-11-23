@@ -2169,6 +2169,7 @@ mod tests {
                     console: String::new(),
                     multimedia: String::new(),
                 }],
+                ..AppRecord::default()
             }),
             local_volumes: LocalVolumes {
                 remembered: BTreeMap::from([("cx".to_owned(), 0.6)]),

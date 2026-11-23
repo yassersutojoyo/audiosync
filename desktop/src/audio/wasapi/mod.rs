@@ -134,6 +134,10 @@ impl Driver for WasapiDriver {
         routing::endpoint_audio()
     }
 
+    fn listening_pids(&mut self) -> Result<Vec<u32>, BackendError> {
+        routing::listening_pids()
+    }
+
     fn new_audio_sessions(&mut self) -> bool {
         self.sessions
             .as_ref()

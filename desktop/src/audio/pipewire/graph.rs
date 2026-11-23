@@ -18,6 +18,7 @@ pub const SINK_CLASS: &str = "Audio/Sink";
 /// The node name of AudioSync's own null sink (S477).
 pub const OWN_SINK: &str = "audiosync-silent";
 pub const STREAM_CLASS: &str = "Stream/Output/Audio";
+const INPUT_STREAM_CLASS: &str = "Stream/Input/Audio";
 const SOURCE_CLASSES: [&str; 2] = ["Audio/Source", "Audio/Source/Virtual"];
 
 /// The factories of Bluetooth hands-free nodes, for calls only: opening one
@@ -403,6 +404,36 @@ impl Graph {
             .iter()
             .filter(|(_, node)| node.class() == STREAM_CLASS)
             .map(|(&id, _)| id)
+    }
+
+    /// The owners of every running capture stream linked from a source:
+    /// the apps listening to a microphone (S487).
+    pub fn listening_pids(&self, processes: &ProcessTable) -> Vec<u32> {
+        let sources: BTreeSet<u32> = self
+            .nodes
+            .iter()
+            .filter(|(_, node)| SOURCE_CLASSES.contains(&node.class()))
+            .map(|(&id, _)| id)
+            .collect();
+        let pids: BTreeSet<u32> = self
+            .nodes
+            .iter()
+            .filter(|(_, node)| node.class() == INPUT_STREAM_CLASS && node.running)
+            .map(|(&id, _)| id)
+            .filter(|&id| sources.iter().any(|&source| self.linked_into(source, id)))
+            .filter_map(|id| self.owner_pid(id, processes))
+            .collect();
+        pids.into_iter().collect()
+    }
+
+    /// The playback streams owned by one of `pids`.
+    pub fn streams_of(&self, pids: &[u32], processes: &ProcessTable) -> Vec<u32> {
+        self.streams()
+            .filter(|&id| {
+                self.owner_pid(id, processes)
+                    .is_some_and(|pid| pids.contains(&pid))
+            })
+            .collect()
     }
 
     /// Whether stream `id` is linked into node `sink`.
@@ -1076,6 +1107,34 @@ mod tests {
         assert_eq!(input_channels("RL"), ["FL"]);
         assert_eq!(input_channels("SR"), ["FR"]);
         assert!(input_channels("LFE").is_empty());
+    }
+
+    // covers: S487
+    #[test]
+    fn a_running_capture_stream_from_a_source_is_an_app_listening() {
+        let (mut graph, processes) = playing_graph();
+        graph.add(3, Kind::Node, props(&[("media.class", "Audio/Source")]));
+        // App 60's capture stream (node 30) from the source, AudioSync's own
+        // (node 90) left unlinked.
+        graph.add(
+            30,
+            Kind::Node,
+            props(&[("media.class", "Stream/Input/Audio"), ("client.id", "122")]),
+        );
+        graph.add(
+            3001,
+            Kind::Link,
+            props(&[
+                ("link.output.node", "3"),
+                ("link.output.port", "31"),
+                ("link.input.node", "30"),
+                ("link.input.port", "32"),
+            ]),
+        );
+        assert_eq!(graph.listening_pids(&processes), Vec::<u32>::new());
+        graph.nodes.get_mut(&30).unwrap().running = true;
+        assert_eq!(graph.listening_pids(&processes), vec![60]);
+        assert_eq!(graph.streams_of(&[60], &processes), vec![22]);
     }
 
     // covers: S382
