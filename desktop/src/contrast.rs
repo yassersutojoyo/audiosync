@@ -1035,7 +1035,6 @@ fn no_text_promises_airplay() {
                     "return @tr(\"AirPlay speakers can wait at most 20 s for a Google Cast speaker,"
                 )
                 || line.contains("return @tr(\"AirPlay adds a {} s delay to every speaker.")
-                || line.contains("return @tr(\"{0} · AirPlay delay {1} s\", status, seconds);")
                 || line.contains(
                     "live-input-airplay-unknown: @tr(\"AirPlay adds a delay to every speaker."
                 )

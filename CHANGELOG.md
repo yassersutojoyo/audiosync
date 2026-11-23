@@ -4,6 +4,10 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
+### Changed
+
+- The AirPlay Delay field now shows only the extra delay you set, so a TV that read 278 ms now reads 78 ms; the part AudioSync sets on its own is no longer shown, the main window's status line no longer names it, and the hints under the delay fields are shorter. What you hear stays the same.
+
 ### Fixed
 
 - On Linux, each preset's … button stays visible while Orca runs, as on the Mac with VoiceOver and on Windows with Narrator.

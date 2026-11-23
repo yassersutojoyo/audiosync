@@ -33,7 +33,7 @@ enum RemoteDelay: Equatable {
         switch self {
         case .fixed: return nil
         case .offset: return LocalDelay.sanitizedOffset
-        case .airPlay: return LocalDelay.sanitizedAirPlayDelay
+        case .airPlay: return LocalDelay.sanitizedAdjustment
         case .cast: return CastModel.clampedOffset
         }
     }

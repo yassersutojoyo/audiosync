@@ -10857,7 +10857,7 @@ do {
           "delay field input: a negative AirPlay delay is marked until Return applies 0", "text: \(air.text)")
 
     check(t.delayOutOfRange(lowest: "−2000", highest: "+20000", applies: "−2000")
-              == "The range is −2000 to +20000 ms. Return applies −2000.",
+              == "−2000 to +20000 ms. Return sets −2000.",
           "delay field input: the out-of-range hint names the range and the value Return applies")
 }
 
@@ -13291,7 +13291,7 @@ do {
           "calibration: a long hold-back at a high microphone rate is refused up front (S232, S234)")
 
     // covers: S232
-    check(t.calibrationMessage(.cancelled) == "Calibration cancelled. The delay wasn't changed."
+    check(t.calibrationMessage(.cancelled) == "Cancelled. Delay unchanged."
             && t.calibrationMessage(.running(.preparing)) == nil && t.calibrationMessage(.idle) == nil,
           "calibration: a cancel says nothing changed")
 
@@ -17480,19 +17480,6 @@ do {
     let note = UIStrings(locale: Locale(identifier: "en_US")).liveInputAirPlayHint(tenths: 18)
     // covers: S244
     check(note.hasPrefix("AirPlay adds a 1.8 s delay") && !note.contains("\u{2014}"), "live input note: \(note)")
-}
-
-// MARK: The AirPlay delay in the main window's status line (Localization.swift)
-do {
-    let t = UIStrings()
-    let shown = t.mainStatus("Streaming to 2 speakers", running: true, airPlayOn: true, airPlayDelayMs: 1960)
-    // covers: S181 (the status line)
-    check(shown == "Streaming to 2 speakers · AirPlay delay 2.0 s",
-          "main window status: names the AirPlay delay in use, to a tenth of a second", shown)
-    // covers: S181 (the status line)
-    check(t.mainStatus("Streaming", running: true, airPlayOn: false, airPlayDelayMs: 1960) == "Streaming"
-            && t.mainStatus("Off", running: false, airPlayOn: true, airPlayDelayMs: 1960) == "Off",
-          "main window status: no AirPlay delay with no AirPlay speaker on or streaming off")
 }
 
 // MARK: Microphone permission request (MicrophoneRequestGate.swift)

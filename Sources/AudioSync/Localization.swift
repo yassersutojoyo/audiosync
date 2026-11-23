@@ -144,11 +144,11 @@ struct UIStrings {
     /// Under a delay field, in place of `delayDraftHint`, while it holds a
     /// number out of the delay's range; also the field's VoiceOver hint then.
     func delayOutOfRange(lowest: String, highest: String, applies: String) -> String {
-        "The range is \(lowest) to \(highest) \(millisecondsUnit). Return applies \(applies)."
+        "\(lowest) to \(highest) \(millisecondsUnit). Return sets \(applies)."
     }
     /// Under a delay field, for a moment, after it blocked a keystroke it
     /// can't take; VoiceOver announces it.
-    let delayFieldTakes = "Only digits, with + or − in front"
+    let delayFieldTakes = "Digits only, + or − first"
 
     func statusStreaming(speakers: Int) -> String {
         switch speakers {
@@ -185,14 +185,6 @@ struct UIStrings {
 
     /// VoiceOver's action on the menu bar icon that opens its right-click menu.
     let statusItemShowMenu = "Show Menu"
-
-    /// The main window's status line: `status`, then the AirPlay delay in use
-    /// while streaming to an AirPlay speaker, to a tenth of a second.
-    func mainStatus(_ status: String, running: Bool, airPlayOn: Bool, airPlayDelayMs: Double) -> String {
-        guard running, airPlayOn else { return status }
-        let tenths = AirPlayDelayTenths.of(airPlayDelayMs)
-        return status + " · AirPlay delay \(tenths / 10).\(tenths % 10) s"
-    }
 
     func speakerOptions(name: String) -> String { "Options for \(name)" }
     func presetOptions(name: String) -> String { "Options for \(name)" }
@@ -281,9 +273,7 @@ struct UIStrings {
 
     let calibrateWithMicrophone = "Calibrate with Microphone"
     func calibrateLabel(of name: String) -> String { "\(calibrateWithMicrophone), \(name)" }
-    let calibrationHint = "Put the microphone where you listen. AudioSync fades the music out, plays a short, "
-        + "quiet sweep on the built-in speakers and then on this speaker, sets this speaker's delay from the "
-        + "difference and fades the music back in."
+    let calibrationHint = "Put the mic where you listen. A short sweep plays, then the delay is set."
     let calibrationCancel = "Cancel"
     func calibrationCancelLabel(of name: String) -> String { "Cancel calibrating \(name)" }
     let openMicrophoneSettings = "Open Microphone Settings"
@@ -348,7 +338,7 @@ struct UIStrings {
         case .failed(let failure):
             return reason == nil ? calibrationFailure(failure) + " The delay wasn't changed." : nil
         case .cancelled:
-            return "Calibration cancelled. The delay wasn't changed."
+            return "Cancelled. Delay unchanged."
         }
     }
 
@@ -1621,15 +1611,12 @@ struct UIStrings {
     /// relative to (S181). Without the Mac's built-in speakers listed, the
     /// values only count against each other.
     func offsetHint(hasReference: Bool) -> String {
-        (hasReference
-            ? "Relative to the built-in speakers. Use a negative value for a speaker that sounds late, such as Bluetooth."
-            : "The speaker with the lowest value plays first; the others wait by the difference.")
-            + " Heard this speaker first? Raise the value. Heard it late? Lower it."
+        (hasReference ? "Compared with the built-in speakers." : "Lowest value plays first.")
+            + " Early? Raise it. Late? Lower it."
     }
-    /// The AirPlay delay (S178, S181): one field for every local speaker.
+    /// The AirPlay delay (S178, S181): one field, the user's extra delay A.
     let airPlayDelay = "AirPlay Delay"
-    let airPlayDelayHint = "While an AirPlay speaker is on, local speakers wait this long for it. "
-        + "Heard the AirPlay speakers late? Raise it."
+    let airPlayDelayHint = "Extra delay for AirPlay speakers. Late? Raise it."
     let millisecondsUnit = "ms"
 
     // MARK: Google Cast speakers
@@ -1732,10 +1719,7 @@ struct UIStrings {
     let volumeSpeakerOff = "Turn this speaker on to change its volume."
     let castVolumeNotLive = "This speaker's volume can be changed while AudioSync plays to it."
     /// Under a Cast speaker's delay field, in place of the sync hint (CAST_SPEC C74-C77).
-    let castSyncHint = "AudioSync can't sync Google Cast speakers automatically, so it keeps the others only "
-        + "roughly in step with this one. Set this by ear: heard this speaker late? Raise the value, and the "
-        + "other speakers wait longer. Heard it early? Lower it. AudioSync keeps it for this speaker; check it "
-        + "again when you start it."
+    let castSyncHint = "Set by ear. Check it each time it starts. Late? Raise it. Early? Lower it."
 
     /// What Connected Speakers says about the network speakers it doesn't
     /// list: no AirPlay speaker (`airPlayNone`), then how the Google Cast
@@ -1993,8 +1977,9 @@ struct UIStrings {
           measure it (see Calibration below). A positive value holds the
           speaker back; a negative one is for a speaker that sounds late, such
           as Bluetooth. While an AirPlay
-          speaker is on, every local speaker also waits the AirPlay Delay
-          under Connected Speakers for it.
+          speaker is on, every local speaker also waits for it. AudioSync sets
+          that wait on its own; the AirPlay Delay under Connected Speakers is
+          only the extra delay you add on top.
         - Zones: turn on the speakers you want, then choose “New Zone from Active
           Speakers” in the gear menu, or press Command-N. A speaker is in one
           zone at a time. It shows under its zone and keeps a short row under

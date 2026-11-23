@@ -75,7 +75,8 @@ use audiosync_core::policy::airplay_reconnect::{
     NoticeClear, NoticeEnd, notice_clear, ptp_notice_clears, ptp_notice_raised,
 };
 use audiosync_core::policy::delay::{
-    native_airplay_adjustment_ms, native_airplay_latency_ms, sanitize_offset_ms,
+    native_airplay_adjustment_ms, native_airplay_latency_ms, sanitize_airplay_adjustment_ms,
+    sanitize_offset_ms,
 };
 use audiosync_core::policy::presets::{
     self, LeftOff, Preset, RecallAction, RecallMember, RecallOther, RecallStep,
@@ -5173,6 +5174,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         let mut state = AppState {
             reference_name,
             airplay_delay_ms: self.airplay_delay_ms(),
+            airplay_extra_ms: self.audio.airplay_adjustment(),
             airplay_none_found: self.airplay_none_found(),
             airplay_searching: self.airplay_searching(),
             running: self.running(),
@@ -5609,12 +5611,9 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.stop_if_idle();
     }
 
-    /// Stores the adjustment that makes L what the user entered, against
-    /// the sender's latency of this moment or the last one known (spec
-    /// S178, S181).
+    /// Stores the extra delay A the user entered (spec S178, S181).
     fn set_airplay_delay(&mut self, ms: f64) {
-        let sender = self.audio.airplay_adjustment_base_ms();
-        if let Some(adjustment) = native_airplay_adjustment_ms(ms, sender) {
+        if let Some(adjustment) = sanitize_airplay_adjustment_ms(ms) {
             self.audio.set_airplay_adjustment(adjustment);
         }
     }

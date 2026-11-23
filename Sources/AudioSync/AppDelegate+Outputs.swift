@@ -145,6 +145,14 @@ extension AppDelegate {
         pushModel()
     }
 
+    /// The user's extra AirPlay delay A, as the field shows it (S178, S181).
+    func setAirPlayExtra(_ rawMs: Double) {
+        guard let adjustment = LocalDelay.sanitizedAdjustment(rawMs) else { return }
+        airPlayDelay.adjustmentMs = adjustment
+        retimeLocalOutputs()
+        pushModel()
+    }
+
     /// The native sender's latency L_s (its configured default until it
     /// reports one) plus E, the largest latency the AirPlay speakers in the
     /// stream reported (S283).

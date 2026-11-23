@@ -157,8 +157,8 @@ pub fn delay_field(state: &AppState, speaker: &Speaker) -> Option<(f64, i64, i64
     if is_airplay(speaker) {
         // Every AirPlay speaker shares the window's AirPlay delay (spec S178).
         return state
-            .airplay_delay_ms
-            .map(|ms| (ms, 0, MAX_DELAY_MS as i64));
+            .airplay_field_ms()
+            .map(|ms| (ms, MIN_DELAY_MS as i64, MAX_DELAY_MS as i64));
     }
     let ms = speaker.delay_ms?;
     // A Cast speaker's offset only holds the others back (spec C77).
@@ -1010,6 +1010,7 @@ pub(crate) mod tests {
             password_prompt: None,
             reference_name: Some("pc".to_owned()),
             airplay_delay_ms: Some(0.0),
+            airplay_extra_ms: 0.0,
             airplay_none_found: false,
             airplay_searching: false,
             when_source_quits: Default::default(),
