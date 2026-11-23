@@ -100,6 +100,7 @@ jobs:
             packages="$packages pipewire pipewire-bin wireplumber pipewire-pulse pulseaudio-utils
               dbus dbus-user-session xvfb libx11-xcb1 libxcursor1 libxkbcommon-x11-0 libxi6 libxrandr2"
           fi
+          echo 'Acquire::http::Timeout "30"; Acquire::https::Timeout "30"; Acquire::Retries "3";' | sudo tee /etc/apt/apt.conf.d/99stranger-timeouts
           sudo apt-get update -q
           # shellcheck disable=SC2086
           sudo apt-get install -y --no-install-recommends $packages

@@ -22,10 +22,10 @@ $Work = (Resolve-Path $Work).Path
 $out = Join-Path $Work 'harness-output.txt'
 $done = Join-Path $Work 'harness-exit.txt'
 $pidFile = Join-Path $Work 'harness-pid.txt'
-Remove-Item $done, $pidFile -ErrorAction SilentlyContinue
+Remove-Item $done, "$done.tmp", $pidFile -ErrorAction SilentlyContinue
 $quoted = @(@($Rest) + '-Work' + $Work | ForEach-Object { if ($_ -like '-*') { $_ } else { "'$($_ -replace "'", "''")'" } }) -join ' '
 # A throw ends the harness outside its redirection, so the catch writes it.
-$command = "`$code = 1; try { & '$((Resolve-Path $Script).Path)' $quoted *> '$out'; `$code = [int] `$LASTEXITCODE } catch { `$_ | Out-File -Append '$out' }; Set-Content '$done' `$code; exit `$code"
+$command = "`$code = 1; try { & '$((Resolve-Path $Script).Path)' $quoted *> '$out'; `$code = [int] `$LASTEXITCODE } catch { `$_ | Out-File -Append '$out' }; Set-Content '$done.tmp' `$code; Move-Item -Force '$done.tmp' '$done'; exit `$code"
 $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
 $shell = (Get-Process -Id $PID).Path
 
@@ -39,9 +39,13 @@ function Start-Hidden([string] $Command) {
 $launcher = Start-Hidden "`$env:RUNNER_TRACKING_ID = ''; (Start-Process -FilePath '$shell' -WindowStyle Hidden -PassThru -ArgumentList '-NoProfile', '-EncodedCommand', '$encoded').Id | Set-Content '$pidFile'"
 if (-not $launcher.WaitForExit(60000) -or -not (Test-Path $pidFile)) { "::error::$Script did not start"; exit 1 }
 $harness = [int] (Get-Content $pidFile)
+# The open handle keeps the PID from being reused before the kill.
+$hp = Get-Process -Id $harness -ErrorAction SilentlyContinue
+if ($hp) { $null = $hp.Handle }
+function Test-Running { $hp -and -not $hp.HasExited }
 $stop = (Get-Date).AddMinutes($Minutes)
 $shown = 0
-while (-not (Test-Path $done) -and (Get-Process -Id $harness -ErrorAction SilentlyContinue) -and (Get-Date) -lt $stop) {
+while (-not (Test-Path $done) -and (Test-Running) -and (Get-Date) -lt $stop) {
   Start-Sleep -Seconds 5
   $lines = @(Get-Content $out -ErrorAction SilentlyContinue)
   if ($lines.Count -gt $shown) { $lines[$shown..($lines.Count - 1)]; $shown = $lines.Count }
@@ -51,7 +55,7 @@ if ($lines.Count -gt $shown) { $lines[$shown..($lines.Count - 1)] }
 $code = Get-Content $done -ErrorAction SilentlyContinue
 if ($code -eq '0') { exit 0 }
 
-$hung = -not $code -and (Get-Process -Id $harness -ErrorAction SilentlyContinue)
+$hung = -not $code -and (Test-Running)
 if ($hung) {
   "::error::$Script still running after $Minutes min; last step: $(@(Get-Content (Join-Path $Work 'result.txt') -ErrorAction SilentlyContinue | Where-Object { $_ -like 'step *' })[-1])"
   if ($env:GITHUB_OUTPUT) { Add-Content -Path $env:GITHUB_OUTPUT -Value 'hung=true' }
