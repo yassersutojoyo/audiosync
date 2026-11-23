@@ -44,14 +44,21 @@ final class CallListenerWatch {
         Set([own] + leftOut.compactMap { pid_t($0) }.flatMap(processesOf)).sorted()
     }
 
-    private struct NotMoved: Error {}
+    /// The set whose in-place change was last refused, so a retry doesn't log it again.
+    private var refused: [AudioObjectID]?
 
-    /// Moves the whole-system tap to exclude `excluded`.
+    /// Moves the whole-system tap to exclude `excluded` as an app retap does
+    /// (`AppRetap`): in place, else by a new tap.
     func moveTap<Tap>(to excluded: [AudioObjectID], changeInPlace: () -> Bool, log: (String) -> Void,
                       makeTap: () throws -> Tap, rateFits: (Tap) -> Bool, discard: (Tap) -> Void,
                       closeOld: () -> Void, startReading: (Tap) throws -> Void) throws -> AppRetap.Outcome {
-        if changeInPlace() { return .updated }
-        log("[AudioSync] capture: the tap can't be changed in place")
-        throw NotMoved()
+        try AppRetap.run(
+            updateInPlace: {
+                if changeInPlace() { return true }
+                if refused != excluded { log("[AudioSync] capture: the tap can't be changed in place; building a new one") }
+                refused = excluded
+                return false
+            },
+            makeTap: makeTap, rateFits: rateFits, discard: discard, closeOld: closeOld, startReading: startReading)
     }
 }

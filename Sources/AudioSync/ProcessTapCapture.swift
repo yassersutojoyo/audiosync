@@ -505,13 +505,13 @@ final class SourceCapture {
     /// place: the tap, its aggregate device and the IOProc keep running, so the
     /// app stays muted and the audio doesn't stop. False when there is no
     /// running tap or Core Audio refuses the change.
-    private func updateTap(to processes: [AudioObjectID]) -> Bool {
+    private func updateTap(to processes: [AudioObjectID], logsRefusal: Bool = true) -> Bool {
         guard let tap else { return false }
         let description = Self.describe(processes, excluding: tapExcludes)
         Self.configureTap(description)
         description.uuid = tap.uuid   // the same tap, which the aggregate device names by its UID
         let status = HAL.setTapDescription(of: tap.tap, to: description)
-        if status != noErr { DebugTrace.log("[AudioSync] capture: the tap can't be changed in place (status \(status))") }
+        if status != noErr && logsRefusal { DebugTrace.log("[AudioSync] capture: the tap can't be changed in place (status \(status))") }
         return status == noErr
     }
 
@@ -529,8 +529,8 @@ final class SourceCapture {
     }
 
     /// Feeds the apps listening now to the core's rule and changes the tap
-    /// in place when what it should exclude differs from what it does; a
-    /// tap still being made, or a refused change, is tried again next poll.
+    /// in place when what it should exclude differs from what it does, else
+    /// builds it again as a retap does; a tap still being made is tried again next poll.
     private func pollCalls() {
         guard let callWatch, let own = AudioProcesses.processObject(for: getpid()) else { return }
         let listening = AudioProcesses.listeningApps().map { String($0) }
@@ -540,7 +540,25 @@ final class SourceCapture {
         }
         let excluded = CallListenerWatch.excluded(own: own, leftOut: callWatch.leftOut,
                                                   processesOf: AudioProcesses.objects(forAppPID:))
-        guard excluded != tapped, tap != nil, !tapOpening, updateTap(to: excluded) else { return }
+        guard excluded != tapped, tap != nil, !tapOpening else { return }
+        let outcome: AppRetap.Outcome
+        do {
+            outcome = try callWatch.moveTap(
+                to: excluded, changeInPlace: { updateTap(to: excluded, logsRefusal: false) },
+                log: { DebugTrace.log($0) },
+                makeTap: { () throws -> TapObjects in
+                    try Self.makeTapOnMain(Self.describe(excluded, excluding: tapExcludes))
+                },
+                rateFits: { !CaptureRate.needsRestart(current: sampleRate, reported: Self.rate(of: $0)) },
+                discard: { retire($0) },
+                closeOld: { closeCapture() },
+                startReading: { try startReading($0) })
+        } catch { retapFailed("the whole system", error); return }
+        guard outcome != .rateChanged else {
+            DebugTrace.log("[AudioSync] capture rate changed: the whole system's new tap runs at another rate than \(sampleRate) Hz")
+            interrupt(.formatChanged)
+            return
+        }
         tapped = excluded
     }
 
