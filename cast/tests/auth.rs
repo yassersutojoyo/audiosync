@@ -862,6 +862,42 @@ fn a_lapsed_intermediate_with_any_other_fault_is_refused() {
     }
 }
 
+// covers: C125, C129, C131
+#[test]
+fn a_group_with_a_lapsed_intermediate_plays_with_one_notice_and_no_pin() {
+    let chain = lapsed_chain();
+    let outcome = judge(&chain, response(&chain));
+    let mut book = DeviceKeyBook::new();
+    let first = book.judge("group", &outcome, true);
+    assert_eq!(first.verdict, Verdict::Proceed);
+    assert!(first.warn);
+    assert_eq!(book.entry("group"), Some(Entry::Unauthenticated));
+    let again = book.judge("group", &outcome, true);
+    assert_eq!(again.verdict, Verdict::Proceed);
+    assert!(!again.warn);
+    assert_eq!(book.entry("group"), Some(Entry::Unauthenticated));
+}
+
+// covers: C125, C130
+#[test]
+fn a_group_whose_device_certificate_lapsed_is_refused() {
+    let mut lapsed_device = device_params();
+    lapsed_device.not_after = rcgen::date_time_ymd(2030, 1, 1);
+    let chain = chain_with(
+        ca("Test Root", None),
+        ca("Test Intermediate", None),
+        lapsed_device,
+    );
+    let outcome = judge(&chain, response(&chain));
+    assert_eq!(outcome, Outcome::Failed(Failure::Chain));
+    for entry in [None, Some(Entry::Unauthenticated)] {
+        let (decision, after) = decide("group", entry, &outcome, true);
+        assert_eq!(decision.verdict, Verdict::Refused);
+        assert!(!decision.warn);
+        assert_eq!(after, None);
+    }
+}
+
 // covers: C124, C129
 #[test]
 fn a_host_clock_before_the_tls_certificate_fails_the_connect_and_keeps_the_pin() {
