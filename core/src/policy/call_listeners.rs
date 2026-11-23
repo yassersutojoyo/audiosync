@@ -67,7 +67,41 @@ impl CallListeners {
 
     /// One poll at `now`.
     pub fn update(&mut self, facts: Facts<'_>, now: Seconds) -> Vec<ListenerAction> {
-        let _ = (facts, now);
-        Vec::new()
+        let mut actions = Vec::new();
+        if !facts.whole_system {
+            let out = std::mem::take(&mut self.out);
+            actions.extend(out.into_keys().map(ListenerAction::Rejoin));
+            return actions;
+        }
+        for app in facts.listening {
+            match self.out.get_mut(app) {
+                Some(out) => out.heard_at = now,
+                None => {
+                    self.out.insert(
+                        app.clone(),
+                        Out {
+                            acted_at: now,
+                            heard_at: now,
+                            checked: false,
+                        },
+                    );
+                    actions.push(ListenerAction::LeaveOut(app.clone()));
+                }
+            }
+        }
+        self.out.retain(|app, out| {
+            if now - out.heard_at >= HOLD {
+                actions.push(ListenerAction::Rejoin(app.clone()));
+                return false;
+            }
+            if !out.checked && now - out.acted_at >= STAYED_AFTER {
+                out.checked = true;
+                if facts.on_silent.contains(app) {
+                    actions.push(ListenerAction::Stayed(app.clone()));
+                }
+            }
+            true
+        });
+        actions
     }
 }
