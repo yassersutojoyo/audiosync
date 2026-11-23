@@ -445,6 +445,9 @@ pub(crate) struct Driver {
     evidence_window: Option<Duration>,
     /// Every `groupUUID` this sender used, lowercased (P249).
     own_groups: BTreeSet<String>,
+    /// Speakers removed after the receiver closed them, so a Busy answer
+    /// once the host adds them again is still Taken (P249).
+    closed_removed: BTreeSet<DeviceKey>,
     /// How often an AirPlay 2 session posts its feedback (P132).
     feedback_interval: Duration,
     /// AirPlay 2 sessions at once (P204).
@@ -557,6 +560,7 @@ impl Driver {
             retry_unit: Duration::from_secs(1),
             evidence_window: Some(crate::takeover::EVIDENCE_WINDOW),
             own_groups: BTreeSet::new(),
+            closed_removed: BTreeSet::new(),
             feedback_interval: crate::ap2::session::FEEDBACK_INTERVAL,
             ap2_sessions: super::AIRPLAY2_SESSIONS,
             stream_ids: HashMap::new(),
@@ -1747,8 +1751,12 @@ impl Driver {
             .speakers
             .get(key)
             .is_some_and(|speaker| speaker.removing)
+            && self
+                .speakers
+                .remove(key)
+                .is_some_and(|speaker| speaker.after_close)
         {
-            self.speakers.remove(key);
+            self.closed_removed.insert(key.clone());
         }
         self.emit_speaker(key, SpeakerEvent::State(SpeakerState::Stopped));
     }
@@ -2115,10 +2123,9 @@ impl Driver {
         }
         let key = device.key.clone();
         let Some(speaker) = self.speakers.get_mut(&key) else {
-            self.speakers.insert(
-                key.clone(),
-                Speaker::new(device, options, counters, None, self.retry_unit),
-            );
+            let mut speaker = Speaker::new(device, options, counters, None, self.retry_unit);
+            speaker.after_close = self.closed_removed.remove(&key);
+            self.speakers.insert(key.clone(), speaker);
             if self.controls_driven_target(&key) {
                 let reason = crate::error::UnsupportedReason::PlaysThroughSpeakers;
                 return self.refuse(&key, SessionError::new(ErrorKind::Unsupported(reason)), now);
