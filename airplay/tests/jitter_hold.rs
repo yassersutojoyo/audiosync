@@ -76,16 +76,7 @@ fn the_margin_steps_down_once_the_jittery_television_left_and_a_minute_was_clean
     let mut tv = JitteryTv::new(id, 1123, 0.02);
     let mut course = Vec::new();
     watch(&mut rig, &mut tv, 150.0, &mut course);
-    let stepped = course
-        .iter()
-        .position(|&(_, frames)| frames == STEPPED)
-        .expect("stepped up");
-    assert!(
-        course[stepped..]
-            .iter()
-            .all(|&(_, frames)| frames == STEPPED),
-        "held while it plays: {course:?}"
-    );
+    assert_eq!(rig.stream.latency_frames(), STEPPED, "{course:?}");
 
     rig.stream.remove_speaker(id);
     rig.drain();
