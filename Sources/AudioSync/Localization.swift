@@ -847,8 +847,8 @@ struct UIStrings {
     /// A pairing's receiver refused to show a code (403 to the code request).
     /// A Mac's Allow AirPlay for setting is one known cause, not the only one.
     func nativeAirPlayCodeRefused(name: String) -> String {
-        "\(name) turned down the request to show a pairing code, so it's off. "
-            + "If it's a Mac, check Allow AirPlay for in its AirPlay Receiver settings, then turn it on again."
+        "\(name) won't show a pairing code, so it's off. "
+            + "On a Mac, set Allow AirPlay for to Anyone on the Same Network in AirPlay Receiver settings, then turn it on again."
     }
 
     /// AudioSync's own AirPlay sender couldn't start (or browse the network

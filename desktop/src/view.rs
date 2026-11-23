@@ -21220,7 +21220,7 @@ pub(crate) mod tests {
             (
                 ui_model::AirPlayProblem::CodeRefused,
                 "Mac mini",
-                "Mac mini turned down the request to show a pairing code, so it's off. If it's a Mac, check Allow AirPlay for in its AirPlay Receiver settings, then turn it on again.",
+                "Mac mini won't show a pairing code, so it's off. On a Mac, set Allow AirPlay for to Anyone on the Same Network in AirPlay Receiver settings, then turn it on again.",
             ),
             (
                 ui_model::AirPlayProblem::ReceiverUnverified,
