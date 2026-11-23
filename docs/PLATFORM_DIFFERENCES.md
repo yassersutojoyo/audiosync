@@ -1,6 +1,6 @@
 # Platform differences
 
-AudioSync is meant to behave the same on macOS, Windows and Linux. This page lists the places where it can't, because the system it runs on doesn't offer what the other two do or has its own rules. I keep it current with each release. If you find a difference that isn't here, it's a bug, so please [open an issue](https://github.com/yassersutojoyo/audiosync/issues).
+AudioSync is meant to behave the same on macOS, Windows and Linux. This page lists the places where it can't, because the system it runs on doesn't offer what the other two do or has its own rules. If you find a difference that isn't here, it's a bug, so please [open an issue](https://github.com/yassersutojoyo/audiosync/issues).
 
 ## Hearing the source twice
 
@@ -13,16 +13,11 @@ AudioSync is meant to behave the same on macOS, Windows and Linux. This page lis
 - **Mac:** the Now Playing card shows Spotify and Music only, and macOS asks once whether AudioSync may control each of them. macOS doesn't let other apps read its system-wide Now Playing info, so AudioSync talks to those two players directly.
 - **Windows and Linux:** any player that reports what it plays shows up (Windows' media sessions, MPRIS on Linux), with no permission prompt.
 
-## Volume keys
-
-- **Mac and Windows:** the volume keys can move AudioSync's master volume, through Volume Keys Control AudioSync. On the Mac this also needs Accessibility access in System Settings.
-- **Linux:** the switch isn't there. The desktop keeps those keys for itself, and Wayland gives an app no way to take them.
-
 ## Where the app lives
 
 - **Mac:** a menu bar item plus a main window. About, Check for Updates and the Guide sit in the app's menus in the macOS menu bar, since every Mac app has them there. Hide Dock Icon When Window Closes is a Mac-only setting, because only macOS has a Dock.
 - **Windows and Linux:** a window plus a tray icon. Those menu items sit in the gear menu in the window, since there's no app menu bar at the top of the screen.
-- **Linux:** the tray icon needs a desktop that shows StatusNotifier icons (KDE does; GNOME needs an extension). Without one, AudioSync runs as a window only: closing the window quits, and a launch at sign-in opens the window. Clicking the icon opens the tray panel by the pointer, since the desktop doesn't say where the icon is, and on Wayland the desktop places the panel itself. A desktop that only shows the icon's menu keeps Open AudioSync in it.
+- **Linux:** the tray icon needs a desktop that shows StatusNotifier icons. Without one, AudioSync runs as a window only: closing the window quits, and a launch at sign-in opens the window. Clicking the icon opens the tray panel by the pointer, since the desktop doesn't say where the icon is, and on Wayland the desktop places the panel itself. A desktop that only shows the icon's menu keeps Open AudioSync in it.
 - **Linux on Wayland:** opening AudioSync while it already runs brings its window up, but maybe without the focus. Wayland only hands the focus over with a token the toolkit can't pass on yet.
 
 ## Permissions and the network
@@ -32,7 +27,7 @@ AudioSync is meant to behave the same on macOS, Windows and Linux. This page lis
 
 ## Motion
 
-AudioSync's animations follow the system's own switch, which has a different name on each: Reduce Motion on the Mac, Animation effects on Windows, and GNOME's animations setting on Linux. Desktops that don't share that setting through the settings portal always get the animations.
+AudioSync's animations follow the system's own switch, which has a different name on each: Reduce Motion on the Mac, Animation effects on Windows, and GNOME's animations setting on Linux. Linux reads GNOME's setting; on other desktops the animations stay on.
 
 ## Text
 
