@@ -1516,12 +1516,7 @@ impl AirPlaySpeakers {
             self.turn_off(&owner, AirPlayProblem::NeedsPassword, events);
         }
         for id in pairings.into_keys() {
-            if pairing_rules::off_at_sender_stop(
-                DESKTOP.open_pairing_at_sender_stop,
-                self.asks_every_time(&id),
-            ) {
-                self.turn_off(&id, AirPlayProblem::NeedsPin, events);
-            }
+            self.turn_off(&id, AirPlayProblem::NeedsPin, events);
         }
         if changed || !self.stopped {
             self.log.log(|| {
