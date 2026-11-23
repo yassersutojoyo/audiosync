@@ -31,6 +31,8 @@
 //! `AUDIOSYNC_AIRPLAY2` with no saved setting, and each summary line ends
 //! with the protocol the sender planned for that receiver and why; `path=`
 //! is the one it ended on.
+//! `--every <s>` prints one `every` line per receiver at that interval:
+//! the sender's latency and the receiver's resend counters so far.
 //! `delay=<ms>` is the speaker's d_s (P99), set through the speaker options
 //! as a host sets it, so the click shows the sender's own timing; the
 //! example `rx_onset` and `scripts/two_speaker_sync_wsl.sh` measure it.
@@ -100,6 +102,7 @@ struct Args {
     source: Source,
     verbose: bool,
     auto: bool,
+    every: Option<Duration>,
 }
 
 #[derive(Default)]
@@ -118,7 +121,7 @@ struct Outcome {
 }
 
 fn usage() -> &'static str {
-    "usage: rx_pair --rx <host:port>[,ap1|ap2|both][,delay=<ms>] [--rx ...] [--seconds <n>] [--join <s> [--leave <s>]] [--tone|--click] [--verbose] [--auto]"
+    "usage: rx_pair --rx <host:port>[,ap1|ap2|both][,delay=<ms>] [--rx ...] [--seconds <n>] [--join <s> [--leave <s>]] [--tone|--click] [--verbose] [--auto] [--every <s>]"
 }
 
 fn parse_rx(text: &str) -> Result<Rx, String> {
@@ -149,6 +152,7 @@ fn parse_args() -> Result<Args, String> {
         source: Source::Silence,
         verbose: false,
         auto: false,
+        every: None,
     };
     let mut items = std::env::args().skip(1);
     while let Some(item) = items.next() {
@@ -184,6 +188,15 @@ fn parse_args() -> Result<Args, String> {
             "--click" => args.source = Source::Click,
             "--verbose" => args.verbose = true,
             "--auto" => args.auto = true,
+            "--every" => {
+                let value = items.next().ok_or("--every needs a number")?;
+                let seconds: u64 = value
+                    .parse()
+                    .ok()
+                    .filter(|&s| s > 0)
+                    .ok_or_else(|| format!("--every {value}: not a whole number above 0"))?;
+                args.every = Some(Duration::from_secs(seconds));
+            }
             other => return Err(format!("unknown argument '{other}'")),
         }
     }
@@ -477,7 +490,31 @@ fn main() -> ExitCode {
     let mut leave_at = args.leave.map(|leave| Instant::now() + leave);
     let last = args.receivers.len() - 1;
     let end = Instant::now() + Duration::from_secs(args.seconds);
+    let mut report_at = args.every.map(|every| Instant::now() + every);
     while let Some(mut left) = end.checked_duration_since(Instant::now()) {
+        if let (Some(at), Some(every)) = (report_at, args.every) {
+            match at.checked_duration_since(Instant::now()) {
+                Some(wait) => left = left.min(wait),
+                None => {
+                    report_at = Some(at + every);
+                    left = left.min(every);
+                    let t = clock.seconds(Instant::now());
+                    for (rx, c) in args.receivers.iter().zip(&counters) {
+                        println!(
+                            "every t_s={t:.1} rx {} latency_ms={:.1} packets_sent={} resend_requests={} \
+                             packets_resent={} not_held={} late_packets={}",
+                            rx.address,
+                            sender.latency().as_secs_f64() * 1000.0,
+                            c.packets_sent(),
+                            c.resend_requests(),
+                            c.packets_resent(),
+                            c.not_held(),
+                            c.late_packets(),
+                        );
+                    }
+                }
+            }
+        }
         if let Some(at) = join_at.filter(|_| joiner.is_some()) {
             match at.checked_duration_since(Instant::now()) {
                 Some(wait) => left = left.min(wait),
