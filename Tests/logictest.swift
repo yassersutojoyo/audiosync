@@ -20457,5 +20457,31 @@ do {
           "device icons: a member that isn't listed keeps its remembered glyph rather than the generic device")
 }
 
+// MARK: Calls while the whole system streams (CallListeners.swift)
+do {
+    // covers: S485
+    let callRule = CallListenerWatch()
+    let callLeftAtOnce = callRule.update(wholeSystem: true, listening: ["412"], now: 1)
+    check(callLeftAtOnce && callRule.leftOut == ["412"],
+          "calls: an app listening to a microphone is left out of the whole system at the first poll",
+          "\(callLeftAtOnce) \(callRule.leftOut)")
+    callRule.update(wholeSystem: true, listening: [], now: 1.5)
+    let callHeld = callRule.update(wholeSystem: true, listening: [], now: 3.9)
+    check(!callHeld && callRule.leftOut == ["412"], "calls: a call that just ended stays out for the 3 s hold",
+          "\(callHeld) \(callRule.leftOut)")
+    let callRejoined = callRule.update(wholeSystem: true, listening: [], now: 4.5)
+    check(callRejoined && callRule.leftOut.isEmpty, "calls: the app rejoins the stream 3 s after its call ends",
+          "\(callRejoined) \(callRule.leftOut)")
+    callRule.update(wholeSystem: true, listening: ["412", "977"], now: 5)
+    let callStopped = callRule.update(wholeSystem: false, listening: ["412"], now: 5.5)
+    check(callStopped && callRule.leftOut.isEmpty, "calls: every app rejoins when the whole system stops streaming",
+          "\(callStopped) \(callRule.leftOut)")
+    let callExcluded = CallListenerWatch.excluded(own: 7, leftOut: ["412", "not a pid"],
+                                                  processesOf: { $0 == 412 ? [32, 31, 7] : [] })
+    check(callExcluded == [7, 31, 32],
+          "calls: the tap excludes AudioSync and every process of each app left out, once each",
+          "\(callExcluded)")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)

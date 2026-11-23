@@ -1281,6 +1281,40 @@ const char *asc_device_volume_decision_name(uint32_t decision_code);
  */
 uint32_t asc_source_quit_decide(const char *setting, const char *source, const char *quit_app, uint32_t streaming);
 
+/* ---- Apps listening to a microphone -------------------------------------- */
+
+/*
+ * The apps a whole-system stream leaves out while they listen to a
+ * microphone (S485): an app is left out at the first poll that names it and
+ * rejoins once no poll has named it for 3 s, or at once when the whole
+ * system stops streaming. Apps are the host's own keys. Every call is for
+ * the control thread.
+ */
+typedef struct AscCallListeners AscCallListeners;
+
+/* A rule with no app left out; NULL only when it can't be made. */
+AscCallListeners *asc_call_listeners_create(void);
+
+/* Frees a rule; NULL is ignored. */
+void asc_call_listeners_destroy(AscCallListeners *rule);
+
+/*
+ * One poll at `now` seconds: whether the whole system streams and the
+ * `count` apps with an active microphone stream, AudioSync left out. True
+ * when the apps left out changed. A NULL rule, a NULL array with a nonzero
+ * count, or a NULL or non-UTF-8 entry changes nothing.
+ */
+bool asc_call_listeners_update(AscCallListeners *rule, bool whole_system, const char *const *listening, size_t count, double now);
+
+/* The number of apps left out; 0 for a NULL rule. */
+size_t asc_call_listeners_left_out_count(const AscCallListeners *rule);
+
+/*
+ * The app left out at `index`, valid until the next update or the destroy;
+ * NULL for a NULL rule or an index past the count.
+ */
+const char *asc_call_listeners_left_out(const AscCallListeners *rule, size_t index);
+
 /* ---- Zones ---------------------------------------------------------------- */
 
 /* One zone member as the host sees it when the zone is clicked. */
