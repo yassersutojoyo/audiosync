@@ -4130,6 +4130,15 @@ impl App {
         });
         let w = weak.clone();
         main.on_refresh_devices(move || with_app(&w, |app| app.update(|b| b.refresh_devices())));
+        #[cfg(target_os = "linux")]
+        {
+            let main = main.as_weak();
+            crate::platform::screen_reader_changed(move |on| {
+                let _ = main.upgrade_in_event_loop(move |main| {
+                    main.global::<ScreenReader>().set_on(on);
+                });
+            });
+        }
         let w = weak.clone();
         main.on_presets_open_changed({
             let w = w.clone();
@@ -9343,6 +9352,30 @@ pub(crate) mod tests {
         draw_frames();
         assert_eq!(dialog_at(&app), None);
         assert_eq!(app.main.get_notices().row_count(), 1);
+    }
+
+    /// A closing slot takes no clicks, as the Mac's (NoticeMotion.swift:51):
+    /// Dismiss All, closing once one of two notices goes, leaves the other.
+    #[test]
+    fn a_closing_dismiss_all_takes_no_click() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = two_notices_shown();
+        app.rows_ease.set(true);
+        let titles = main_notice_titles(&app);
+        click_dismiss(&app, titles[0].clone());
+        let label = app.main.global::<Strings>().get_dismiss_all_notices();
+        let link = ElementHandle::find_by_accessible_label(&app.main, &label)
+            .next()
+            .expect("the Dismiss All link, still fading");
+        let (at, size) = (link.absolute_position(), link.size());
+        click(
+            app.main.window(),
+            at.x + size.width / 2.0,
+            at.y + size.height / 2.0,
+        );
+        advance_clock(Duration::from_millis(600));
+        draw_frames();
+        assert_eq!(main_notice_titles(&app), vec![titles[1].clone()]);
     }
 
     /// A notice raised again under its ID with new text while its old text

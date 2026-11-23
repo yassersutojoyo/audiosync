@@ -29,6 +29,11 @@ AudioSync is meant to behave the same on macOS, Windows and Linux. This page lis
 
 AudioSync's animations follow the system's own switch, which has a different name on each: Reduce Motion on the Mac, Animation effects on Windows, and GNOME's animations setting on Linux. Linux reads GNOME's setting; on other desktops the animations stay on.
 
+## Screen readers
+
+- **Mac:** a notice that is closing drops out of VoiceOver at once and takes no clicks (`Sources/AudioSync/NoticeMotion.swift:51-52`).
+- **Windows and Linux:** a closing notice takes no clicks, but Narrator or Orca can still reach it during its fade, about a third of a second. The toolkit the app is built with can't hide a control from a screen reader while it is still drawn.
+
 ## Text
 
 The app's text uses the system font on the Mac and Segoe UI Variable on Windows. Linux has no font every distribution ships, so AudioSync brings Inter along and looks the same everywhere.

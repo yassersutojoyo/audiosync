@@ -128,14 +128,68 @@ pub fn screen_reader_on() -> bool {
     screen_reader_read(read.is_ok(), on.as_bool())
 }
 
-/// No desktop-wide screen reader flag is read off Windows.
-#[cfg(not(windows))]
+/// Whether AT-SPI reports a screen reader such as Orca, which sets its
+/// `ScreenReaderEnabled`. Read off the UI thread, since a missing bus can take
+/// its timeout to answer, so a call returns what the previous read found and
+/// a read that changes it is handed to the `screen_reader_changed` hook.
+#[cfg(target_os = "linux")]
+pub fn screen_reader_on() -> bool {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static ON: AtomicBool = AtomicBool::new(false);
+    static READING: AtomicBool = AtomicBool::new(false);
+    if !READING.swap(true, Ordering::AcqRel) {
+        std::thread::spawn(|| {
+            let on = at_spi_screen_reader();
+            if ON.swap(on, Ordering::AcqRel) != on
+                && let Some(changed) = SCREEN_READER_CHANGED.get()
+            {
+                changed(on);
+            }
+            READING.store(false, Ordering::Release);
+        });
+    }
+    ON.load(Ordering::Acquire)
+}
+
+/// AT-SPI's `ScreenReaderEnabled`, read on the calling thread; off when the
+/// bus or the property can't be read.
+#[cfg(target_os = "linux")]
+fn at_spi_screen_reader() -> bool {
+    let read = || -> zbus::Result<bool> {
+        let reply = zbus::blocking::Connection::session()?.call_method(
+            Some("org.a11y.Bus"),
+            "/org/a11y/bus",
+            Some("org.freedesktop.DBus.Properties"),
+            "Get",
+            &("org.a11y.Status", "ScreenReaderEnabled"),
+        )?;
+        let value: zbus::zvariant::OwnedValue = reply.body().deserialize()?;
+        Ok(bool::try_from(value)?)
+    };
+    let read = read();
+    screen_reader_read(read.is_ok(), read.unwrap_or(false))
+}
+
+#[cfg(target_os = "linux")]
+static SCREEN_READER_CHANGED: std::sync::OnceLock<Box<dyn Fn(bool) + Send + Sync>> =
+    std::sync::OnceLock::new();
+
+/// Called off the UI thread with a screen reader read that differs from the
+/// last one, so Orca started while the window has focus shows on the next open.
+#[cfg(target_os = "linux")]
+pub fn screen_reader_changed(changed: impl Fn(bool) + Send + Sync + 'static) {
+    let _ = SCREEN_READER_CHANGED.set(Box::new(changed));
+}
+
+/// No desktop-wide screen reader flag is read off Windows and Linux.
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn screen_reader_on() -> bool {
     false
 }
 
 /// Off when the setting can't be read, so nothing shows that hover would hide.
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
 pub fn screen_reader_read(read_ok: bool, on: bool) -> bool {
     read_ok && on
 }
@@ -1456,6 +1510,36 @@ mod tests {
         assert!(!screen_reader_read(true, false));
         assert!(!screen_reader_read(false, true));
         assert!(!screen_reader_read(false, false));
+    }
+
+    #[cfg(target_os = "linux")]
+    struct A11yStatus;
+
+    #[cfg(target_os = "linux")]
+    #[zbus::interface(name = "org.a11y.Status")]
+    impl A11yStatus {
+        #[zbus(property)]
+        fn screen_reader_enabled(&self) -> bool {
+            true
+        }
+    }
+
+    /// Orca sets AT-SPI's ScreenReaderEnabled, which Linux reads as Windows
+    /// reads Narrator. The read is tested on its own, since view tests install
+    /// the window's hook and share the cached read. Run under
+    /// `dbus-run-session`, which gives a private bus.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_screen_reader_counts_on_linux_when_at_spi_reports_it() {
+        let _bus = zbus::blocking::connection::Builder::session()
+            .expect("a session bus: run the tests under dbus-run-session")
+            .name("org.a11y.Bus")
+            .unwrap()
+            .serve_at("/org/a11y/bus", A11yStatus)
+            .unwrap()
+            .build()
+            .expect("the fake AT-SPI status is on the bus");
+        assert!(at_spi_screen_reader());
     }
 
     #[test]

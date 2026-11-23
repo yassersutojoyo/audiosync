@@ -2,6 +2,13 @@
 
 User-visible changes in each version. Loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/). Downloads are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page.
 
+## [Unreleased]
+
+### Fixed
+
+- On Linux, each preset's … button stays visible while Orca runs, as on the Mac with VoiceOver and on Windows with Narrator.
+- On Windows and Linux, a notice that is closing no longer takes clicks, as on the Mac.
+
 ## [0.9.3] - 2026-11-20
 
 ### Added

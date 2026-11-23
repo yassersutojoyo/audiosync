@@ -6166,6 +6166,9 @@ export component NoticeStack inherits VerticalLayout {
                 }
             }
         }
+
+        // A closing slot takes no clicks, as the Mac's (NoticeMotion.swift:51).
+        if slot.closing: TouchArea { }
     }
 
     if root.notices.length > 1: all-slot := Rectangle {
@@ -6214,5 +6217,7 @@ export component NoticeStack inherits VerticalLayout {
                 }
             }
         }
+
+        if all-slot.closing: TouchArea { }
     }
 }
