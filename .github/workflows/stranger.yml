@@ -409,11 +409,12 @@ jobs:
           name: stranger-windows-setup
           path: pkg
 
-      # Shorter than the job, so a hang still leaves time for the upload.
+      # A pass takes about 3 min. The harness deadline ends a hang with its
+      # log and the process list; the step timeout is the net behind it.
       - name: Install, stream to the default output, change its volume and mute
         shell: pwsh
-        timeout-minutes: 25
-        run: ./scripts/stranger/windows_default_device.ps1 -Setup pkg/AudioSync-Setup.exe -Work default-device
+        timeout-minutes: 10
+        run: ./scripts/stranger/with_deadline.ps1 -Minutes 7 -Work default-device -Script scripts/stranger/windows_default_device.ps1 -Setup pkg/AudioSync-Setup.exe
 
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         if: ${{ !cancelled() }}
