@@ -104,7 +104,7 @@ pub fn guard(parent: u32, records: &mut dyn Records) {
     }
 }
 
-/// The per-user sign-in entry of S481, which runs the restore argument.
+/// The per-user sign-in entry of S484, which runs the restore argument.
 pub trait SignInEntry: Send {
     fn write(&mut self);
     fn remove(&mut self);
@@ -120,7 +120,7 @@ pub fn restore(records: &mut dyn Records, entry: &mut dyn SignInEntry) {
 }
 
 /// A restore record store that keeps the sign-in entry while any record is
-/// on disk (S481): written before a record, removed once none is left.
+/// on disk (S484): written before a record, removed once none is left.
 pub struct WithSignIn<S> {
     store: S,
     entry: Box<dyn SignInEntry>,
@@ -187,7 +187,7 @@ impl<S: AppRecordStore> AppRecordStore for WithSignIn<S> {
     }
 }
 
-/// S481's entry: a value under the current user's Run key, which Windows
+/// S484's entry: a value under the current user's Run key, which Windows
 /// runs at each sign-in until it is removed.
 struct RunEntry;
 
@@ -195,7 +195,7 @@ const RUN_KEY: PCWSTR = w!(r"Software\Microsoft\Windows\CurrentVersion\Run");
 const RUN_VALUE: PCWSTR = w!("AudioSync Restore Outputs");
 
 // A failed write or removal leaves the restore to the guard and the next
-// launch, as before S481, so the switch goes ahead either way.
+// launch, as before S484, so the switch goes ahead either way.
 impl SignInEntry for RunEntry {
     fn write(&mut self) {
         let Ok(exe) = std::env::current_exe() else {
@@ -393,7 +393,7 @@ mod tests {
         parent.wait().expect("cmd ended");
     }
 
-    // covers: S481
+    // covers: S484
     #[test]
     fn the_sign_in_entry_is_written_before_the_record_and_removed_after_it() {
         let (log, mut store) = signed_in(false);
@@ -410,7 +410,7 @@ mod tests {
         );
     }
 
-    // covers: S481
+    // covers: S484
     #[test]
     fn the_sign_in_entry_stays_while_the_other_record_is_on_disk() {
         let (log, mut store) = signed_in(true);
@@ -422,7 +422,7 @@ mod tests {
         );
     }
 
-    // covers: S481
+    // covers: S484
     #[test]
     fn the_restore_argument_removes_the_entry_once_no_record_is_left() {
         let log = Log::default();
