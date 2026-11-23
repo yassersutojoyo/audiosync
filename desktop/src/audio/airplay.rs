@@ -78,7 +78,6 @@ use audiosync_airplay::latency::{
 };
 use audiosync_airplay::metadata::MetadataError;
 use audiosync_airplay::pairing::{Credentials, PairingEvent, PinError};
-use audiosync_airplay::rtsp::Method;
 use audiosync_airplay::secret::Secret;
 use audiosync_airplay::sender::{
     AIRPLAY_PCM_ENV, AIRPLAY2_AUTO_ENV, AIRPLAY2_SWITCH_ENV, NowPlaying, ReceiverEvent,
@@ -99,6 +98,10 @@ use audiosync_core::policy::airplay_pairing::{
 };
 use audiosync_core::policy::airplay_reconnect::{
     self as reconnect, ErrorReaction, Retries, SessionState,
+};
+use audiosync_core::policy::airplay_volume::{
+    self as volume_rules, Reads, VOLUME_READ_INTERVAL, kept_volume, refuses_reads, slider_held,
+    within_echo_window,
 };
 use audiosync_core::policy::remote::{
     Action, App, Command, Control, Event as RemoteEvent, OwnVolume, Playback, Remote,
@@ -820,18 +823,6 @@ fn held_level(level: f64, zone: f64) -> Option<f64> {
     }
 }
 
-/// How often playing speakers are asked for their own volume (P122, S291).
-const VOLUME_READ_INTERVAL: Duration = Duration::from_secs(1);
-
-/// How long after a set a DACP volume on the row sent is the speaker's
-/// echo, not a person's change (S271, S276).
-const VOLUME_SETTLE: Duration = Duration::from_secs(3);
-
-/// How long a slider that started editing holds its row with no move: a
-/// screen reader's set never sends the release (S271). It mirrors
-/// [`VOLUME_SETTLE`], a design value, not a measurement.
-const DRAG_IDLE: Duration = Duration::from_secs(3);
-
 /// The address a receiver announces first, AirPlay service before RAOP.
 fn first_address(device: &Device) -> Option<IpAddr> {
     device
@@ -851,17 +842,13 @@ const MAX_LISTED_PER_ADDRESS: usize = 64;
 /// The volume reads of one row in the sender.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct VolumeRead {
-    /// A read was asked since the volume was last set.
-    reading: bool,
+    reads: Reads,
     /// The row's slider started editing and wasn't released; it holds the
     /// row only while [`VolumeRead::held`] (S271).
     dragging: bool,
     /// When the volume was last set (its own, the master or a calibration)
     /// or the held slider last moved.
     set_at: Instant,
-    /// It turned a read down, or its AirPlay 2 reads stopped (P184): it
-    /// isn't asked again.
-    unreadable: bool,
     /// The echo of the level last sent and the baseline of its reads (S291).
     echo: ReadBack,
 }
@@ -869,23 +856,24 @@ struct VolumeRead {
 impl VolumeRead {
     fn new(now: Instant) -> VolumeRead {
         VolumeRead {
-            reading: false,
+            reads: Reads::default(),
             dragging: false,
             set_at: now,
-            unreadable: false,
             echo: ReadBack::default(),
         }
     }
 
     /// The last set is recent enough for a reading near it to be its echo.
     fn recent(&self, now: Instant) -> bool {
-        now.saturating_duration_since(self.set_at) < VOLUME_SETTLE
+        within_echo_window(now.saturating_duration_since(self.set_at))
     }
 
     /// The slider is held, so a reading must not move the row: it started
-    /// editing and moved within [`DRAG_IDLE`] (S271).
+    /// editing and, under the desktop's rule, moved within
+    /// [`volume_rules::DRAG_IDLE`] (S271).
     fn held(&self, now: Instant) -> bool {
-        self.dragging && now.saturating_duration_since(self.set_at) < DRAG_IDLE
+        let since_move = now.saturating_duration_since(self.set_at);
+        slider_held(volume_rules::DESKTOP.held_slider, self.dragging, since_move)
     }
 
     /// The held slider moved without a set, so its hold restarts.
@@ -897,23 +885,8 @@ impl VolumeRead {
 
     /// The volume was set: an answer to a read asked before is old.
     fn set(&mut self, now: Instant) {
-        self.reading = false;
+        self.reads.set();
         self.set_at = now;
-    }
-
-    /// Asks unless it can't answer; returns whether it asked.
-    fn ask(&mut self) -> bool {
-        if self.unreadable {
-            return false;
-        }
-        self.reading = true;
-        true
-    }
-
-    /// Whether an answer arriving now counts: one was asked since the last
-    /// set. The read is answered either way.
-    fn answered(&mut self) -> bool {
-        std::mem::take(&mut self.reading)
     }
 }
 
@@ -2902,7 +2875,7 @@ impl AirPlaySpeakers {
     pub fn set_volume_dragging(&mut self, id: &str, dragging: bool) {
         if let Some(added) = self.added.get_mut(id) {
             added.read.dragging = dragging;
-            added.read.reading = false;
+            added.read.reads.set();
             if dragging {
                 added.read.set_at = Instant::now();
             }
@@ -3028,10 +3001,8 @@ impl AirPlaySpeakers {
                 .and_then(|listed| listed.device().raop_txt.as_ref())
                 .and_then(|txt| txt.software_volume)
                 == Some(true);
-            if software || added.state != SpeakerState::Playing {
-                continue;
-            }
-            if added.read.ask() {
+            let playing = added.state == SpeakerState::Playing;
+            if added.read.reads.ask(playing, software) {
                 added.read_volume(self.link.as_mut());
             }
         }
@@ -3269,7 +3240,7 @@ impl AirPlaySpeakers {
         let Some(added) = self.added.get_mut(&row) else {
             return false;
         };
-        if !added.read.answered() || added.read.held(Instant::now()) {
+        if !added.read.reads.answered() || added.read.held(Instant::now()) {
             return false;
         }
         if !added.read.echo.set_on_speaker(db, grid) {
@@ -3279,11 +3250,7 @@ impl AirPlaySpeakers {
             return false;
         };
         // The sender keeps the level as read, past the wire range its nearest.
-        let level = if db <= MUTED_DB {
-            Volume::Muted
-        } else {
-            Volume::from_db(db).unwrap_or(Volume::Muted)
-        };
+        let level = kept_volume(db);
         // A silenced speaker that reconnects during the solo starts muted; the solo end sends the new level.
         let kept = if silenced { Volume::Muted } else { level };
         added.keep_volume(self.link.as_mut(), kept);
@@ -4588,7 +4555,7 @@ impl AirPlaySpeakers {
             && let Some(row) = self.row_of(id)
             && let Some(added) = self.added.get_mut(&row)
         {
-            added.read.unreadable = false;
+            added.read.reads.session_stopped();
         }
         if let Some(target) = self.added_target_of(id)
             && let Some(changed) = self.member_event(&target, id, &event, events)
@@ -4723,19 +4690,11 @@ impl AirPlaySpeakers {
             SpeakerEvent::Warning(warning) => {
                 self.log
                     .log(|| format!("AirPlay speaker {} warning: {warning:?}", self.label(id)));
-                let unreadable = matches!(
-                    warning,
-                    Warning::RequestFailed {
-                        method: Method::GetParameter,
-                        ..
-                    } | Warning::VolumeReadsStopped
-                );
-                if unreadable
+                if refuses_reads(&warning)
                     && let Some(row) = self.row_of(id)
                     && let Some(added) = self.added.get_mut(&row)
                 {
-                    added.read.unreadable = true;
-                    added.read.reading = false;
+                    added.read.reads.refused();
                 }
                 if warning == Warning::PtpUnavailable {
                     events.push(BackendEvent::AirPlayPtpPortsTaken);
@@ -9192,7 +9151,7 @@ pub mod tests {
     fn settle(airplay: &mut AirPlaySpeakers, id: &str) {
         let read = &mut airplay.added.get_mut(id).expect("added").read;
         read.set_at = Instant::now()
-            .checked_sub(VOLUME_SETTLE * 2)
+            .checked_sub(volume_rules::VOLUME_SETTLE * 2)
             .expect("the clock runs past a few seconds");
     }
 
@@ -9778,18 +9737,18 @@ pub mod tests {
         let t0 = Instant::now();
         let at = |ms: u64| t0 + Duration::from_millis(ms);
         let mut read = VolumeRead::new(t0);
-        assert!(!read.answered(), "nobody asked");
-        assert!(read.ask());
-        assert!(read.answered());
-        assert!(!read.answered(), "one answer per read");
+        assert!(!read.reads.answered(), "nobody asked");
+        assert!(read.reads.ask(true, false));
+        assert!(read.reads.answered());
+        assert!(!read.reads.answered(), "one answer per read");
         // A set after the read: its answer is old.
-        assert!(read.ask());
+        assert!(read.reads.ask(true, false));
         read.set(at(2100));
-        assert!(!read.answered());
+        assert!(!read.reads.answered());
         assert!(read.recent(at(5000)));
         assert!(!read.recent(at(5100)), "the echo window is 3 s");
-        read.unreadable = true;
-        assert!(!read.ask(), "it turned a read down");
+        read.reads.refused();
+        assert!(!read.reads.ask(true, false), "it turned a read down");
     }
 
     // covers: S291
