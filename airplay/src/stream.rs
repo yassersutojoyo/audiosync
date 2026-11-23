@@ -1439,9 +1439,9 @@ impl Stream {
     ) -> SpeakerId {
         self.handle_timeout(now);
         let t = self.clock.seconds(now);
-        // A receiver whose resend rate stepped this stream joins at that
-        // level again while nothing sounds; next to a sounding speaker its
-        // rate steps again instead (P200, P201).
+        // A receiver whose late request or resend rate stepped this stream
+        // joins at that level again while nothing sounds; next to a sounding
+        // speaker its rate steps again instead (P200, P201).
         let ip = config.destinations.control.ip();
         if let Some(&(_, frames)) = self.rate_levels.iter().find(|(at, _)| *at == ip)
             && frames > self.step_floor
