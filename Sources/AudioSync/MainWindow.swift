@@ -188,12 +188,8 @@ struct FoldTurn: ViewModifier, Animatable {
         set { progress = newValue }
     }
 
-    static func degrees(_ progress: Double, reduceMotion: Bool) -> Double {
-        90 * DisclosedPane.edge(progress, reduceMotion: reduceMotion)
-    }
-
     func body(content: Content) -> some View {
-        content.rotationEffect(.degrees(Self.degrees(progress, reduceMotion: reduceMotion)))
+        content.rotationEffect(.degrees(90 * DisclosedPane.edge(progress, reduceMotion: reduceMotion)))
     }
 }
 
