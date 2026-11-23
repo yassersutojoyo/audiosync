@@ -237,6 +237,8 @@ fn a_host_pause_flushes_the_receiver_over_loopback() {
     let _serial = serial();
     let receiver = NetReceiver::start(Behavior::default());
     let (sender, writer) = Sender::start(SenderConfig::default()).expect("the sender starts");
+    // A loaded runner's timeline restart (P143) would add a FLUSH at 100 ms.
+    sender.set_latency(88_200);
     let _host = HostAudio::start(writer);
     let mut events = Events::default();
     let device = receiver.device(1, PCM_TXT);
@@ -602,6 +604,8 @@ fn timing_and_volume_go_on_while_paused() {
     let _serial = serial();
     let receiver = NetReceiver::start(Behavior::default());
     let (sender, writer) = Sender::start(SenderConfig::default()).expect("the sender starts");
+    // A loaded runner's timeline restart (P143) would add a FLUSH at 100 ms.
+    sender.set_latency(88_200);
     let _host = HostAudio::start(writer);
     let mut events = Events::default();
     let device = receiver.device(1, PCM_TXT);
