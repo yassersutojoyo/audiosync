@@ -491,6 +491,8 @@ pub mod atv;
 
 pub mod hap;
 
+pub mod jitter;
+
 pub mod rig;
 
 pub mod net;
