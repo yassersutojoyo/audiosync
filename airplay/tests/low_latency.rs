@@ -569,6 +569,7 @@ fn a_step_waits_while_the_programme_is_loud() {
 fn a_session_steps_up_once_and_back_down_once() {
     let mut rig = quiet_rig();
     let id = rig.add(speaker(1, Codec::Pcm));
+    let other = rig.add(speaker(2, Codec::Pcm));
     run_to(&mut rig, 1.0);
     gap(&mut rig, id);
     run_to(&mut rig, 5.0);
@@ -577,6 +578,9 @@ fn a_session_steps_up_once_and_back_down_once() {
         run_to(&mut rig, second);
         gap(&mut rig, id);
     }
+    // The step holds while the receiver whose gap asked for it plays.
+    rig.stream.remove_speaker(id);
+    rig.drain();
     // The last gap starts the clean minute again.
     run_to(&mut rig, 79.9);
     assert_eq!(rig.stream.latency_frames(), 8_820, "not before 60 s clean");
@@ -591,10 +595,10 @@ fn a_session_steps_up_once_and_back_down_once() {
         moved.position > 80 * 44_100 - PAUSE,
         "in the pause the clean minute ends in"
     );
-    assert!(programme_unchanged(&rig, id));
+    assert!(programme_unchanged(&rig, other));
 
     run_to(&mut rig, 86.0);
-    gap(&mut rig, id);
+    gap(&mut rig, other);
     run_to(&mut rig, 160.0);
     assert_eq!(rig.stream.latency_frames(), LOW, "no step after the cycle");
     assert_eq!(timelines(&rig), [(200, false), (100, false)]);
@@ -625,8 +629,13 @@ fn received_timestamps_run_on_across_both_steps() {
     let mut later = speaker(2, Codec::Pcm);
     later.delay = Duration::from_millis(250);
     let two = rig.add(later);
+    let gapping = rig.add(speaker(3, Codec::Pcm));
     run_to(&mut rig, 1.0);
-    gap(&mut rig, one);
+    gap(&mut rig, gapping);
+    run_to(&mut rig, 5.0);
+    // The step holds while the receiver whose gap asked for it plays.
+    rig.stream.remove_speaker(gapping);
+    rig.drain();
     run_to(&mut rig, 72.0);
     assert_eq!(timelines(&rig), [(200, false), (100, false)]);
     assert!(
@@ -692,10 +701,13 @@ fn a_step_down_returns_to_the_lf_a_clamped_step_up_left() {
     let mut rig = quiet_rig();
     rig.stream.set_latency(87_000, rig.now);
     let id = rig.add(speaker(1, Codec::Pcm));
+    rig.add(speaker(2, Codec::Pcm));
     run_to(&mut rig, 3.0);
     gap(&mut rig, id);
     run_to(&mut rig, 7.0);
     assert_eq!(rig.stream.latency_frames(), 88_200, "clamped");
+    rig.stream.remove_speaker(id);
+    rig.drain();
     run_to(&mut rig, 75.0);
     assert_eq!(rig.stream.latency_frames(), 87_000);
 }
@@ -723,12 +735,15 @@ fn a_step_down_never_goes_below_a_host_value_a_restart_applied() {
 fn a_step_down_returns_to_a_host_value_the_step_up_dropped() {
     let mut rig = quiet_rig();
     let id = rig.add(speaker(1, Codec::Pcm));
+    rig.add(speaker(2, Codec::Pcm));
     run_to(&mut rig, 1.0);
     rig.stream.set_latency(6_000, rig.now);
     assert_eq!(rig.stream.pending_latency_frames(), Some(6_000));
     gap(&mut rig, id);
     run_to(&mut rig, 5.0);
     assert_eq!(rig.stream.latency_frames(), 8_820);
+    rig.stream.remove_speaker(id);
+    rig.drain();
     run_to(&mut rig, 75.0);
     assert_eq!(rig.stream.latency_frames(), 6_000);
 }
@@ -765,10 +780,14 @@ fn dropped_late(rig: &Rig, id: SpeakerId, jitter: f64, rng: &mut Rng) -> usize {
         .iter()
         .filter(|packet| {
             let arrival = packet.at + rng.uniform(0.0, jitter);
+            // Syncs carry NTP-era seconds; the packets, seconds on the clock.
             syncs
                 .iter()
                 .rfind(|(at, _)| *at <= packet.at)
-                .is_some_and(|(_, sync)| arrival > heard_by(sync, packet.header.timestamp))
+                .is_some_and(|(_, sync)| {
+                    let skew = rig.clock.seconds_of(sync.time) - sync_seconds(sync);
+                    arrival > heard_by(sync, packet.header.timestamp) + skew
+                })
         })
         .count()
 }
@@ -925,12 +944,18 @@ fn a_rate_step_comes_back_with_its_receiver_and_comes_again_after_a_step_down() 
         "the same receiver joins again at its level"
     );
 
+    // It leaves while another speaker plays: a clean minute steps down.
+    rig.add(speaker(2, Codec::Pcm));
+    run_to(&mut rig, 60.0);
+    rig.stream.remove_speaker(again);
+    rig.drain();
     run_to(&mut rig, 130.0);
     assert_eq!(
         rig.stream.latency_frames(),
         LOW,
         "a clean minute steps down"
     );
+    let again = rig.add(speaker(1, Codec::Pcm));
     let mut second = 131.0;
     while second < 180.0 {
         run_to(&mut rig, second);
@@ -1011,4 +1036,55 @@ fn a_receiver_that_rejoins_next_to_a_sounding_speaker_can_still_step_on_its_rate
         8_820,
         "its rate steps up again"
     );
+}
+
+// covers: P200
+#[test]
+fn every_receiver_that_asks_while_a_step_waits_holds_it() {
+    let mut rig = quiet_rig();
+    let first = rig.add(speaker(1, Codec::Pcm));
+    let second = rig.add(speaker(2, Codec::Pcm));
+    run_to(&mut rig, 1.0);
+    gap(&mut rig, first);
+    // Still before the quiet window the step waits for.
+    run_to(&mut rig, 1.5);
+    gap(&mut rig, second);
+    run_to(&mut rig, 5.0);
+    assert_eq!(rig.stream.latency_frames(), 8_820, "stepped up");
+    rig.stream.remove_speaker(second);
+    rig.drain();
+    run_to(&mut rig, 75.0);
+    assert_eq!(
+        rig.stream.latency_frames(),
+        8_820,
+        "held by the first receiver that asked"
+    );
+}
+
+// covers: P200
+#[test]
+fn a_late_request_step_comes_back_with_its_receiver_and_holds() {
+    let mut rig = quiet_rig();
+    let id = rig.add(speaker(1, Codec::Pcm));
+    run_to(&mut rig, 1.0);
+    gap(&mut rig, id);
+    run_to(&mut rig, 5.0);
+    assert_eq!(rig.stream.latency_frames(), 8_820, "stepped up");
+    rig.stream.remove_speaker(id);
+    rig.drain();
+    rig.stream.set_latency(LOW, rig.now);
+    rig.drain();
+    run_to(&mut rig, 10.0);
+
+    rig.add(speaker(1, Codec::Pcm));
+    rig.stream.set_latency(LOW, rig.now);
+    rig.drain();
+    run_to(&mut rig, 15.0);
+    assert_eq!(
+        rig.stream.latency_frames(),
+        8_820,
+        "joins again at its level"
+    );
+    run_to(&mut rig, 140.0);
+    assert_eq!(rig.stream.latency_frames(), 8_820, "held while it plays");
 }
