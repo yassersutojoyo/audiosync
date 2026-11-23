@@ -18,6 +18,8 @@
 //!   (S232-S234).
 //! - [`calibrate_all`]: Calibrate All Speakers, a run the host drives step
 //!   by step and its results sheet.
+//! - [`call_listeners`]: the apps a whole-system stream leaves out while
+//!   they listen to a microphone (S485).
 //! - [`zones`]: a zone click's plan and the migration of groups to zones
 //!   (S246-S248).
 //! - [`presets`]: what a speaker preset keeps, a recall's plan and the
@@ -57,6 +59,7 @@ use crate::volume;
 pub mod airplay;
 pub mod calibrate;
 pub mod calibrate_all;
+pub mod call_listeners;
 pub mod cast;
 pub mod device_volume;
 pub mod presets;
@@ -70,6 +73,7 @@ pub mod zones;
 pub use self::airplay::*;
 pub use self::calibrate::*;
 pub use self::calibrate_all::*;
+pub use self::call_listeners::*;
 pub use self::cast::*;
 pub use self::device_volume::*;
 pub use self::presets::*;
@@ -627,11 +631,15 @@ mod tests {
     const HEADER: &str = include_str!("../include/audiosync_core.h");
 
     /// Every source file of the C interface, by its path under `src/`.
-    const SOURCES: [(&str, &str); 13] = [
+    const SOURCES: [(&str, &str); 14] = [
         ("ffi.rs", include_str!("ffi.rs")),
         ("ffi/airplay.rs", include_str!("ffi/airplay.rs")),
         ("ffi/calibrate.rs", include_str!("ffi/calibrate.rs")),
         ("ffi/calibrate_all.rs", include_str!("ffi/calibrate_all.rs")),
+        (
+            "ffi/call_listeners.rs",
+            include_str!("ffi/call_listeners.rs"),
+        ),
         ("ffi/cast.rs", include_str!("ffi/cast.rs")),
         ("ffi/device_volume.rs", include_str!("ffi/device_volume.rs")),
         ("ffi/presets.rs", include_str!("ffi/presets.rs")),

@@ -609,6 +609,19 @@ enum AudioProcesses {
         return found
     }
 
+    /// The apps with a process reading an input now, each as the PID of the
+    /// app macOS holds responsible for it; AudioSync is never among them (S485).
+    static func listeningApps() -> [pid_t] {
+        let own = ProcessInfo.processInfo.processIdentifier
+        var apps: [pid_t] = []
+        for process in listed() where process.pid != own
+            && HALRead.flag(of: process.object, kAudioProcessPropertyIsRunningInput) {
+            let app = responsiblePID(of: process.pid) ?? process.pid
+            if app != own, !apps.contains(app) { apps.append(app) }
+        }
+        return apps
+    }
+
     /// Core Audio's process list with each object's PID. Objects whose PID
     /// can't be read (the process just exited) are left out.
     private static func listed() -> [Listed] {
@@ -643,7 +656,7 @@ enum AudioProcesses {
     }()
 }
 
-/// The two Core Audio reads the process lookup needs (main element, global
+/// The Core Audio reads the process lookup needs (main element, global
 /// scope). Each returns nil or an empty list when the object doesn't answer.
 private enum HALRead {
     static func address(_ selector: AudioObjectPropertySelector) -> AudioObjectPropertyAddress {
@@ -657,6 +670,13 @@ private enum HALRead {
         var size = UInt32(MemoryLayout<pid_t>.size)
         guard AudioObjectGetPropertyData(object, &prop, 0, nil, &size, &value) == noErr else { return nil }
         return value
+    }
+
+    static func flag(of object: AudioObjectID, _ selector: AudioObjectPropertySelector) -> Bool {
+        var prop = address(selector)
+        var value: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        return AudioObjectGetPropertyData(object, &prop, 0, nil, &size, &value) == noErr && value != 0
     }
 
     /// A list of object IDs. The list can grow between asking its size and
