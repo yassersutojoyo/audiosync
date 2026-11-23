@@ -3000,6 +3000,15 @@ mod tests {
         assert_eq!(code(ConnectError::NoStatus), CAST_ERROR_CONNECT);
     }
 
+    // CAST_SPEC: C124
+    #[test]
+    fn a_tls_certificate_outside_the_host_clock_has_its_own_code() {
+        let retry_in = Duration::from_secs(1);
+        let error = ConnectError::Clock("cast auth dev: failed, TLS certificate window".into());
+        let event = session_event(SessionEvent::ConnectFailed { error, retry_in }, |_| {});
+        assert_eq!(event.error, CAST_ERROR_CLOCK);
+    }
+
     // CAST_SPEC: C131, C132
     #[test]
     fn only_the_first_unauthenticated_line_carries_the_warning() {
