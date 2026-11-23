@@ -5,7 +5,8 @@
 //! explicit pause's timing (P213). The level mapping is [`crate::volume`]'s,
 //! a speaker's remote commands [`super::remote`]'s.
 //!
-//! Plain data in and out, so the Mac host can reach it through the FFI.
+//! Plain data in and out; the Mac host reaches it through the Rust glue in
+//! `ffi::airplay`, not through the C ABI.
 //! Where the hosts still differ, a [`HostRules`] field names the difference
 //! and each host's constant holds what it does today.
 

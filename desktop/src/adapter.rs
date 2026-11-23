@@ -67,10 +67,13 @@ use audiosync_airplay::discovery::shown_text;
 use audiosync_core::channels::InputPair;
 use audiosync_core::clock;
 use audiosync_core::eq::{EqSettings, UserCurve, sanitized_curves};
+use audiosync_core::policy::airplay_groups::has_row;
 use audiosync_core::policy::airplay_pairing::{
     self as pairing_rules, Appeared, EveryTimeAction, EveryTimeListed, OffReason,
 };
-use audiosync_core::policy::airplay_reconnect::{NoticeClear, NoticeEnd, notice_clear};
+use audiosync_core::policy::airplay_reconnect::{
+    NoticeClear, NoticeEnd, notice_clear, ptp_notice_clears, ptp_notice_raised,
+};
 use audiosync_core::policy::delay::{
     native_airplay_adjustment_ms, native_airplay_latency_ms, sanitize_offset_ms,
 };
@@ -3561,7 +3564,15 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 pairing_rules::auto_connects(Appeared {
                     auto_connect: self.auto_connect.contains(&key),
                     hidden: self.is_hidden(&key),
-                    refused: self.airplay_refused.contains_key(id),
+                    refused: self.airplay_refused.get(id).is_some_and(|&problem| {
+                        pairing_rules::refusal_holds(
+                            pairing_rules::DESKTOP.refused_reappears,
+                            matches!(
+                                problem,
+                                AirPlayProblem::NeedsPin | AirPlayProblem::NeedsPassword
+                            ),
+                        )
+                    }),
                     every_time: false,
                 })
             })
@@ -4036,7 +4047,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// Once a speaker played since the clash report, the port notice goes
     /// with the last row off for PTP timing (S358).
     fn ptp_rows_changed(&mut self) {
-        if self.ptp_played && self.ptp_off.is_empty() {
+        if ptp_notice_clears(self.ptp_played, self.ptp_off.len()) {
             self.notices.clear(&[NoticeSubject::AirPlayPtp]);
         }
     }
@@ -4651,10 +4662,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     self.ptp_rows_changed();
                 }
                 let raises = timing
-                    && self
-                        .ptp_taken
-                        .as_mut()
-                        .is_some_and(|raised| raised.insert(id.clone()));
+                    && ptp_notice_raised(
+                        self.ptp_taken.is_some(),
+                        self.ptp_taken
+                            .as_mut()
+                            .is_some_and(|raised| raised.insert(id.clone())),
+                    );
                 self.airplay_cant_play(&id, problem);
                 if raises {
                     self.post(
@@ -5144,13 +5157,15 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                         .into_iter()
                         // A single receiver that can't play isn't listed, as on the Mac (S222).
                         .filter(|speaker| {
-                            speaker.group.is_some()
-                                || !matches!(
+                            has_row(
+                                speaker.group.is_some(),
+                                matches!(
                                     speaker.availability,
                                     AirPlayAvailability::PairingNotYet
                                         | AirPlayAvailability::AirPlay2NotYet
                                         | AirPlayAvailability::Unsupported
-                                )
+                                ),
+                            )
                         })
                         .map(|speaker| self.airplay_speaker(speaker, prompted)),
                 )
