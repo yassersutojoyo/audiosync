@@ -122,7 +122,7 @@ pub fn decide(
                 decision(
                     Verdict::Proceed,
                     true,
-                    format!("{outcome}, group not pinned, warned"),
+                    format!("{outcome}, unauthenticated, warned"),
                 ),
                 Some(Entry::Unauthenticated),
             ),
@@ -130,7 +130,7 @@ pub fn decide(
                 decision(
                     Verdict::Proceed,
                     false,
-                    format!("{outcome}, group not pinned"),
+                    format!("{outcome}, unauthenticated"),
                 ),
                 None,
             ),
