@@ -1037,3 +1037,26 @@ fn a_receiver_that_rejoins_next_to_a_sounding_speaker_can_still_step_on_its_rate
         "its rate steps up again"
     );
 }
+
+// covers: P200
+#[test]
+fn every_receiver_that_asks_while_a_step_waits_holds_it() {
+    let mut rig = quiet_rig();
+    let first = rig.add(speaker(1, Codec::Pcm));
+    let second = rig.add(speaker(2, Codec::Pcm));
+    run_to(&mut rig, 1.0);
+    gap(&mut rig, first);
+    // Still before the quiet window the step waits for.
+    run_to(&mut rig, 1.5);
+    gap(&mut rig, second);
+    run_to(&mut rig, 5.0);
+    assert_eq!(rig.stream.latency_frames(), 8_820, "stepped up");
+    rig.stream.remove_speaker(second);
+    rig.drain();
+    run_to(&mut rig, 75.0);
+    assert_eq!(
+        rig.stream.latency_frames(),
+        8_820,
+        "held by the first receiver that asked"
+    );
+}
