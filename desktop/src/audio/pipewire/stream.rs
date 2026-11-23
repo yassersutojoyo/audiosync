@@ -974,6 +974,12 @@ impl Linker {
                     if let Ok(mut linker) = linker.try_borrow_mut() {
                         linker.graph.add(global.id, kind, registry::owned(props));
                         linker.dirty = true;
+                        // A stream moved by the session manager is followed at
+                        // once, not on the next tick, so the capture neither
+                        // loses it nor takes it twice.
+                        if kind == graph::Kind::Link {
+                            linker.tick();
+                        }
                     }
                     if kind == graph::Kind::Client {
                         let id = global.id;
@@ -996,8 +1002,12 @@ impl Linker {
                 move |id| {
                     clients.borrow_mut().remove(&id);
                     if let Ok(mut linker) = linker.try_borrow_mut() {
+                        let link = linker.graph.links.contains_key(&id);
                         linker.graph.remove(id);
                         linker.dirty = true;
+                        if link {
+                            linker.tick();
+                        }
                     }
                 }
             })
@@ -1089,6 +1099,7 @@ fn follow_default_sink(
             {
                 linker.graph.default_sink = value.and_then(registry::default_name);
                 linker.dirty = true;
+                linker.tick();
             }
             0
         })
