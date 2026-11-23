@@ -20492,6 +20492,28 @@ do {
     check(callExcluded == [7, 31, 32],
           "calls: the tap excludes AudioSync and every process of each app left out, once each",
           "\(callExcluded)")
+    struct CallTapFailed: Error {}
+    var callTapLog: [String] = []
+    var callTapSteps: [String] = []
+    func callTapPoll(startFails: Bool) -> AppRetap.Outcome? {
+        try? callRule.moveTap(
+            to: [7, 31, 32], changeInPlace: { callTapSteps.append("update in place"); return false },
+            log: { callTapLog.append($0) },
+            makeTap: { () throws -> String in callTapSteps.append("make new"); return "new" },
+            rateFits: { _ in true }, discard: { callTapSteps.append("discard \($0)") },
+            closeOld: { callTapSteps.append("close old") },
+            startReading: { tap in
+                callTapSteps.append("start \(tap)")
+                if startFails { throw CallTapFailed() }
+            })
+    }
+    _ = callTapPoll(startFails: true)
+    let callTapMoved = callTapPoll(startFails: false)
+    let callTapRetried = ["update in place", "make new", "close old", "start new"]
+    check(callTapMoved == .rebuilt && callTapSteps == callTapRetried + ["discard new"] + callTapRetried
+            && callTapLog.count == 1,
+          "calls: a tap macOS won't change in place is built again, and the refusal is logged once for the set",
+          "\(String(describing: callTapMoved)) \(callTapSteps) \(callTapLog.count)")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

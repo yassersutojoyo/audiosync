@@ -43,4 +43,15 @@ final class CallListenerWatch {
                          processesOf: (pid_t) -> [AudioObjectID]) -> [AudioObjectID] {
         Set([own] + leftOut.compactMap { pid_t($0) }.flatMap(processesOf)).sorted()
     }
+
+    private struct NotMoved: Error {}
+
+    /// Moves the whole-system tap to exclude `excluded`.
+    func moveTap<Tap>(to excluded: [AudioObjectID], changeInPlace: () -> Bool, log: (String) -> Void,
+                      makeTap: () throws -> Tap, rateFits: (Tap) -> Bool, discard: (Tap) -> Void,
+                      closeOld: () -> Void, startReading: (Tap) throws -> Void) throws -> AppRetap.Outcome {
+        if changeInPlace() { return .updated }
+        log("[AudioSync] capture: the tap can't be changed in place")
+        throw NotMoved()
+    }
 }
