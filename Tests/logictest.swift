@@ -19214,9 +19214,14 @@ do {
     check(auditSwitch.contains(".overlay(alignment: on ? .trailing : .leading) {") && auditSwitch.contains(".drawingGroup()")
             && !auditSwitch.contains("ZStack(alignment: on ? .trailing : .leading)"),
           "streaming switch source: the knob sits on the track and both draw in one pass, so the off knob is not a pixel low")
-    let auditTitle = auditPart("MainWindow.swift", "struct ScrollingTitle: View")
-    check(auditTitle.contains(".mask(MarqueeEdges(") && auditTitle.contains("Marquee.edges(offset:"),
-          "scrolling title source: a running name fades out at the edge it is cut on, so no cut letter meets the dot beside it")
+    func auditMask(_ offset: CGFloat) -> [CGFloat] {
+        Marquee.maskStops(fades: Marquee.edges(offset: offset, overflow: 60), width: 256).map { $0.location }
+    }
+    let auditCutMask = auditMask(30), auditStartMask = auditMask(0), auditEndMask = auditMask(60)
+    check(auditCutMask[2] == 8.0 / 256 && auditCutMask[3] == 1 - 4.0 / 256
+            && auditStartMask[2] == 0 && auditStartMask[3] < 1 && auditEndMask[2] > 0 && auditEndMask[3] == 1,
+          "scrolling title: a running name fades out at the edge it is cut on, so no cut letter meets the dot beside it",
+          "\(auditCutMask) \(auditStartMask) \(auditEndMask)")
     let auditEdges = ([0, 3, 30, 57, 60] as [CGFloat]).map { Marquee.edges(offset: $0, overflow: 60) }
     check(auditEdges.map(\.leading) == [0, 3, 8, 8, 8] && auditEdges.map(\.trailing) == [4, 4, 4, 3, 0]
             && Marquee.edges(offset: 0, overflow: 0) == (0, 0),
