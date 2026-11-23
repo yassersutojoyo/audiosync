@@ -412,7 +412,7 @@ extension AppDelegate {
         a.applyCalibrateAll = { [weak self] in self?.applyCalibrateAll() }
         a.undoCalibrateAll = { [weak self] in self?.undoCalibrateAll() }
         a.closeCalibrateAll = { [weak self] in self?.closeCalibrateAll() }
-        a.setAirPlayDelay = { [weak self] ms in self?.setAirPlayDelay(ms) }
+        a.setAirPlayDelay = { [weak self] ms in self?.setAirPlayExtra(ms) }
         a.setCastEnabled = { [weak self] id, on, origin in self?.setCastEnabled(id, on, origin: origin) }
         a.setCastVolume = { [weak self] id, position in self?.setCastVolume(id, position) }
         a.stepCastVolume = { [weak self] id, up in self?.stepCastVolume(id, up: up) }
@@ -653,6 +653,7 @@ extension AppDelegate {
         appModel.speakersListed(Set(appModel.airplay.map(\.id) + appModel.local.map(\.id) + appModel.cast.map(\.id)))
         publish(\.hasLocalReference, localReference != nil)
         publish(\.airPlayDelayMs, airPlayLatencyMs.rounded())
+        publish(\.airPlayExtraMs, airPlayDelay.adjustmentMs.rounded())
         // When the sender stopped after an internal error, the AirPlay
         // section says so, with Retry.
         publish(\.airplaySenderFailed, nativeStarts.stopped)

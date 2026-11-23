@@ -46,6 +46,7 @@ use audiosync_core::eq::{BAND_COUNT, EqSettings, UserCurve, sanitized_curves};
 use audiosync_core::policy::delay::{
     MAX_DELAY_MS, MAX_OFFSET_MS, MIN_OFFSET_MS, sanitize_airplay_adjustment_ms,
 };
+use audiosync_core::policy::on_demand;
 use audiosync_core::policy::presets::{self, Preset, PresetMember, PresetZone};
 use audiosync_core::policy::source_quit::WhenSourceQuits;
 use audiosync_core::policy::speakers::SpeakerKey;
@@ -834,6 +835,13 @@ pub struct Settings {
     /// The main window's Presets list is open (spec S259).
     #[serde(deserialize_with = "bool_or_false")]
     pub presets_list_open: bool,
+    /// Release speakers when nothing plays (S483), off by default; no
+    /// control shows it yet.
+    #[serde(deserialize_with = "bool_or_false")]
+    pub release_when_quiet: bool,
+    /// Its idle time in whole minutes (S483).
+    #[serde(deserialize_with = "minutes_or_default")]
+    pub release_minutes: u32,
     /// Settings > Appearance.
     pub appearance: Appearance,
     /// The main window's place and size, once it has been shown; an
@@ -978,6 +986,15 @@ pub(crate) fn bool_or_false<'de, D: serde::Deserializer<'de>>(
     Ok(value.as_bool().unwrap_or(false))
 }
 
+fn minutes_or_default<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value
+        .as_u64()
+        .filter(|minutes| *minutes >= 1)
+        .and_then(|minutes| u32::try_from(minutes).ok())
+        .unwrap_or(on_demand::DEFAULT_RELEASE_MINUTES))
+}
+
 fn bool_or_true<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
     let value = serde_json::Value::deserialize(deserializer)?;
     Ok(value.as_bool().unwrap_or(true))
@@ -1047,6 +1064,8 @@ impl Default for Settings {
             equalizer_curves: Vec::new(),
             show_virtual_devices: false,
             presets_list_open: false,
+            release_when_quiet: false,
+            release_minutes: on_demand::DEFAULT_RELEASE_MINUTES,
             appearance: Appearance::System,
             window: None,
             guide_window: None,
@@ -1357,6 +1376,8 @@ impl Settings {
                 .collect(),
             show_virtual_devices: self.show_virtual_devices,
             presets_list_open: self.presets_list_open,
+            release_when_quiet: self.release_when_quiet,
+            release_minutes: self.release_minutes.max(1),
             appearance: self.appearance,
             window: self.window.and_then(clamp_window),
             guide_window: self.guide_window.map(|place| WindowPlace {
@@ -1579,6 +1600,8 @@ fn unreadable_fields(text: &str) -> Vec<String> {
         ("equalizer_curves", Value::is_array),
         ("show_virtual_devices", Value::is_boolean),
         ("presets_list_open", Value::is_boolean),
+        ("release_when_quiet", Value::is_boolean),
+        ("release_minutes", Value::is_u64),
         ("appearance", is_appearance),
         ("window", reads::<Option<WindowFrame>>),
         ("guide_window", reads::<Option<WindowPlace>>),
@@ -2132,6 +2155,8 @@ mod tests {
             }],
             show_virtual_devices: sample.show_virtual_devices,
             presets_list_open: true,
+            release_when_quiet: true,
+            release_minutes: 30,
             appearance: sample.appearance,
             window: sample.window,
             guide_window: Some(WindowPlace {
@@ -2681,6 +2706,8 @@ mod tests {
             default_output,
             app_output,
             local_volumes,
+            release_when_quiet,
+            release_minutes,
             other_fields: _,
         } = every_field();
         assert_ne!(source, default.source);
@@ -2725,6 +2752,8 @@ mod tests {
         assert_ne!(default_output, default.default_output);
         assert_ne!(app_output, default.app_output);
         assert_ne!(local_volumes, default.local_volumes);
+        assert_ne!(release_when_quiet, default.release_when_quiet);
+        assert_ne!(release_minutes, default.release_minutes);
     }
 
     // covers: S212

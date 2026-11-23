@@ -24,7 +24,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: call-mic-probe-${{ github.ref }}
+  group: call-mic-probe.yml-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:

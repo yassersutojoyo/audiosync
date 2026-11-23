@@ -73,6 +73,7 @@ pub mod sender;
 pub mod session;
 pub mod store;
 pub mod stream;
+pub mod takeover;
 pub mod targets;
 mod transport;
 pub mod volume;

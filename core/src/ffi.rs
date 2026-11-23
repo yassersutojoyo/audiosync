@@ -1332,6 +1332,10 @@ mod tests {
                 AIRPLAY_ERROR_RECEIVER_UNVERIFIED.to_string(),
             ),
             (
+                "ASC_AIRPLAY_ERROR_CODE_REFUSED",
+                AIRPLAY_ERROR_CODE_REFUSED.to_string(),
+            ),
+            (
                 "ASC_AIRPLAY_EVENT_PIN_NEEDED",
                 AIRPLAY_EVENT_PIN_NEEDED.to_string(),
             ),

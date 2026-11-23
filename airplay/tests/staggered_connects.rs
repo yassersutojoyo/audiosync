@@ -87,6 +87,8 @@ fn start_limited(sessions: usize) -> (Sender, HostAudio) {
         airplay2: true,
         airplay2_device_id: Some([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]),
         airplay2_sessions: sessions,
+        // A receiver's close stands for any loss (P142), not a takeover (P249).
+        evidence_window: None,
         ..SenderConfig::default()
     };
     let (sender, writer) = Sender::start(config).expect("the sender starts");

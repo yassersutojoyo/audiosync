@@ -282,6 +282,8 @@ enum NativeSpeakerEvent: Equatable {
         /// A paired receiver didn't prove it is the one that was paired; its
         /// stored pairing stays (P56).
         case receiverUnverified = "receiver unverified"
+        /// A pairing's receiver won't show a code to this sender (P58).
+        case codeRefused = "code refused"
 
         /// The sender tries again by itself, so the speaker stays on; any
         /// other problem turns it off, except a speaker that waits, which
@@ -311,6 +313,7 @@ enum NativeSpeakerEvent: Equatable {
             case .timingUnavailable: return .timingUnavailable
             case .playsThroughSpeakers: return .playsThroughSpeakers
             case .receiverUnverified: return .receiverUnverified
+            case .codeRefused: return .codeRefused
             }
         }
     }
@@ -448,6 +451,8 @@ enum NativeTurnOff: Equatable {
     case playsThroughSpeakers
     /// It didn't prove it is the receiver that was paired (P56).
     case receiverUnverified
+    /// Its pairing asked it to show a code and it refused (P58).
+    case codeRefused
     /// A member of the target (its receiver ID) asks for a password
     /// AudioSync doesn't have, outside the user's attempt (P176).
     case memberNeedsPassword(String)
@@ -1185,6 +1190,7 @@ struct NativeAirPlayModel {
             case .notResponding, .connectionLost: reason = .unreachable
             case .unsupported, .incompatible: reason = .cantPlay
             case .airPlay2Only: reason = .needsAirPlay2
+            case .codeRefused: reason = .codeRefused
             default: reason = .pairingFailed
             }
             return .turnOff(NativeAirPlayID.app(promptTargets.removeValue(forKey: id) ?? id), reason)

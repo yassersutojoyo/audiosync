@@ -670,6 +670,9 @@ pub struct CastSpeakers {
     reach: Reachability,
     /// See [`CastSpeakers::set_file_unread`].
     file_unread: bool,
+    /// The device that is on is released: it stays on but runs no
+    /// session (C142).
+    let_go: bool,
 }
 
 impl CastSpeakers {
@@ -696,6 +699,7 @@ impl CastSpeakers {
             members: BTreeMap::new(),
             streaming: false,
             asleep: false,
+            let_go: false,
             track: Some(CastTrack::default()),
             sent: None,
             log,
@@ -1343,6 +1347,7 @@ impl CastSpeakers {
                 self.log
                     .log(|| format!("Cast: {} switched off", self.name(device)));
                 self.enabled = None;
+                self.let_go = false;
                 self.sync();
             }
             return Ok(());
@@ -1359,10 +1364,22 @@ impl CastSpeakers {
         }
         self.saved_on = None;
         self.enabled = Some(device);
+        self.let_go = false;
         self.log
             .log(|| format!("Cast: {} switched on", self.name(device)));
         self.sync();
         Ok(())
+    }
+
+    /// Lets the device that is on go, or takes it back: let go, it stays
+    /// on and its session stops as a switch off stops it (C142).
+    pub fn set_let_go(&mut self, let_go: bool) {
+        if self.let_go != let_go {
+            self.let_go = let_go;
+            self.log
+                .log(|| format!("Cast: {}", if let_go { "let go" } else { "taken back" }));
+            self.sync();
+        }
     }
 
     /// The PC is going to sleep, or it woke (S412).
@@ -1381,11 +1398,11 @@ impl CastSpeakers {
     /// is on is listed.
     fn sync(&mut self) {
         if let Some(attempt) = self.attempt
-            && (self.enabled != Some(attempt.device) || !self.streaming)
+            && (self.enabled != Some(attempt.device) || !self.streaming || self.let_go)
         {
             self.stop_session();
         }
-        if self.attempt.is_some() || !self.streaming || self.track.is_none() {
+        if self.attempt.is_some() || !self.streaming || self.let_go || self.track.is_none() {
             return;
         }
         let listed = self
@@ -2616,6 +2633,23 @@ pub mod tests {
         let kitchen = &cast.speakers()[1];
         assert!(!kitchen.enabled);
         assert_eq!(kitchen.status, CastStatus::Idle);
+    }
+
+    // covers: C142
+    #[test]
+    fn a_released_speaker_stays_on_with_its_session_stopped_until_taken_back() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        cast.set_let_go(true);
+        assert_eq!(fake.state().stops, 1, "stopped as a deselect");
+        assert!(cast.speakers()[1].enabled);
+        assert_eq!(cast.speakers()[1].status, CastStatus::Idle);
+        cast.poll();
+        assert_eq!(fake.state().started.len(), 1, "not relaunched on its own");
+
+        cast.set_let_go(false);
+        assert_eq!(fake.state().started.len(), 2);
     }
 
     // covers: C81

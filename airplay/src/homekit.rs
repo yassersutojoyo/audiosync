@@ -50,6 +50,7 @@ const PRIVATE_BYTES: usize = 32;
 const MAX_DRAWS: usize = 64;
 const GROUP: SrpGroup = SrpGroup::RFC5054_3072;
 const STATUS_UNAUTHORIZED: u16 = 401;
+const STATUS_FORBIDDEN: u16 = 403;
 const STATUS_CONFLICT: u16 = 409;
 const STATUS_PAIRING: u16 = 470;
 const BLOB_VERSION: u8 = 1;
@@ -779,6 +780,13 @@ impl PairSetup {
                     ErrorKind::PairingRequired,
                     STATUS_PAIRING,
                     "the receiver wants a PIN pairing",
+                ));
+            }
+            STATUS_FORBIDDEN if self.stage == SetupStage::PinStart => {
+                return self.fail(PairingFailure::status(
+                    ErrorKind::CodeRefused,
+                    STATUS_FORBIDDEN,
+                    "code request refused",
                 ));
             }
             code => {

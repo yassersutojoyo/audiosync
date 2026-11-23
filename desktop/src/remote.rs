@@ -157,8 +157,8 @@ pub fn delay_field(state: &AppState, speaker: &Speaker) -> Option<(f64, i64, i64
     if is_airplay(speaker) {
         // Every AirPlay speaker shares the window's AirPlay delay (spec S178).
         return state
-            .airplay_delay_ms
-            .map(|ms| (ms, 0, MAX_DELAY_MS as i64));
+            .airplay_field_ms()
+            .map(|ms| (ms, MIN_DELAY_MS as i64, MAX_DELAY_MS as i64));
     }
     let ms = speaker.delay_ms?;
     // A Cast speaker's offset only holds the others back (spec C77).
@@ -1010,6 +1010,7 @@ pub(crate) mod tests {
             password_prompt: None,
             reference_name: Some("pc".to_owned()),
             airplay_delay_ms: Some(0.0),
+            airplay_extra_ms: 0.0,
             airplay_none_found: false,
             airplay_searching: false,
             when_source_quits: Default::default(),
@@ -1319,6 +1320,7 @@ pub(crate) mod tests {
         tv.availability = availability;
         state.speakers.push(tv);
         state.airplay_delay_ms = Some(1750.0);
+        state.airplay_extra_ms = 78.0;
         state
     }
 
@@ -1464,7 +1466,7 @@ pub(crate) mod tests {
         let tv = snapshot.speakers.iter().find(|s| s.id == "tv").unwrap();
         assert_eq!(
             (tv.delay_ms, tv.delay_min_ms, tv.delay_max_ms),
-            (1750, 0, 20_000)
+            (78, -2000, 20_000)
         );
         let change = |ms| SpeakerChange {
             delay_ms: Some(ms),
@@ -1476,6 +1478,7 @@ pub(crate) mod tests {
             delay(20_001),
             Ok(vec![Action::AirPlayDelay { ms: 20_000.0 }])
         );
+        assert_eq!(delay(-2001), Ok(vec![Action::AirPlayDelay { ms: -2000.0 }]));
         let mut no_sender = state.clone();
         no_sender.airplay_delay_ms = None;
         assert_eq!(
@@ -1769,11 +1772,7 @@ pub(crate) mod tests {
             Ok(Vec::new()),
             "clamped to its own"
         );
-        assert_eq!(
-            delay(&state, "tv", 1750),
-            Ok(Vec::new()),
-            "the AirPlay delay"
-        );
+        assert_eq!(delay(&state, "tv", 78), Ok(Vec::new()), "the AirPlay delay");
         state.speakers[0].delay_ms = Some(120.4);
         assert_eq!(
             delay(&state, "desk", 120),
