@@ -1781,6 +1781,7 @@ mod tests {
                 CAST_ERROR_NO_ADDRESS.to_string(),
             ),
             ("ASC_CAST_ERROR_REFUSED", CAST_ERROR_REFUSED.to_string()),
+            ("ASC_CAST_ERROR_CLOCK", CAST_ERROR_CLOCK.to_string()),
             ("ASC_CAST_FORMAT_WAV", CAST_FORMAT_WAV.to_string()),
             ("ASC_CAST_FORMAT_FLAC", CAST_FORMAT_FLAC.to_string()),
             ("ASC_REMOTE_DEFAULT_PORT", REMOTE_DEFAULT_PORT.to_string()),

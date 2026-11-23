@@ -2502,6 +2502,14 @@ pub mod tests {
         assert_eq!(problem_of(&end), Some(CastProblem::NotGenuine));
     }
 
+    // covers: C124
+    #[test]
+    fn a_tls_certificate_outside_the_clock_is_not_read_as_not_genuine() {
+        let clock = ConnectError::Clock("cast auth dev: failed, TLS certificate window".into());
+        let end = SessionEnd::Failed(SessionError::Connect(clock));
+        assert_eq!(problem_of(&end), Some(CastProblem::NotResponding));
+    }
+
     // covers: C107
     #[test]
     fn a_fault_inside_the_sender_reads_as_a_lost_connection() {

@@ -14418,6 +14418,10 @@ do {
     // covers: C130
     check(CastEnd.failed(CastError(ASC_CAST_ERROR_REFUSED)).problem == .notGenuine,
           "cast: a device that fails authentication reads as not genuine, as on Windows (C130)")
+    // covers: C124
+    check(CastEnd.failed(CastError(ASC_CAST_ERROR_CLOCK)) == .failed(.clock)
+            && CastEnd.failed(CastError(ASC_CAST_ERROR_CLOCK)).problem == .notResponding,
+          "cast: a TLS certificate outside this Mac's clock has its own error and is not read as not genuine (C124)")
 
     // covers: C112
     final class SavedCast { var values: [String: Any] = [:] }
