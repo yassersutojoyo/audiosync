@@ -508,20 +508,48 @@ fn the_whole_system_leaves_audiosync_out() {
     drop(echo);
 }
 
-/// Whether a stream of process `pid` plays into sink `name`.
-fn plays_into(pid: u32, name: &str) -> bool {
+/// A detached player, stopped however the test ends so its tone never
+/// reaches the next test.
+struct Player(u32);
+
+impl Drop for Player {
+    fn drop(&mut self) {
+        kill(self.0);
+    }
+}
+
+/// The default output and the outputs the streams of process `pid` play
+/// into, by name.
+fn landed(pid: u32) -> (Option<String>, Vec<String>) {
     let graph = Registry::start().unwrap().graph().unwrap();
-    let Some((sink, _)) = graph.named(name) else {
-        return false;
-    };
-    let pid = pid.to_string();
-    graph.links.values().any(|link| {
-        link.input_node == sink
-            && graph
-                .nodes
-                .get(&link.output_node)
-                .is_some_and(|node| node.prop("application.process.id") == Some(pid.as_str()))
-    })
+    let processes = super::procfs::snapshot().unwrap();
+    let sinks = graph
+        .links
+        .values()
+        .filter(|link| graph.owner_pid(link.output_node, &processes) == Some(pid))
+        .filter_map(|link| graph.nodes.get(&link.input_node))
+        .map(|node| node.name().to_owned())
+        .collect();
+    (graph.default_sink, sinks)
+}
+
+/// Waits up to 3 s for a stream of process `pid` to play into `name`;
+/// where it played instead when it never did.
+fn wait_until_in(pid: u32, name: &str) -> Result<(), String> {
+    let start = Instant::now();
+    loop {
+        let (default, sinks) = landed(pid);
+        if sinks.iter().any(|sink| sink == name) {
+            return Ok(());
+        }
+        if start.elapsed() > Duration::from_secs(3) {
+            return Err(format!(
+                "player {pid} plays into {sinks:?}, not {name}; default {default:?}; {:?}",
+                processes_listed()
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 #[test]
@@ -542,9 +570,11 @@ fn the_whole_system_follows_a_new_default_without_a_gap() {
     )
     .unwrap();
     let path = tone("switch", 440.0, 0.5, 30.0);
-    let app = detached(&format!("pw-play {}", path.display()));
-    std::thread::sleep(Duration::from_millis(1500));
-    assert!(plays_into(app, "as-a"), "the player is not in as-a");
+    let app = Player(detached(&format!("pw-play {}", path.display())));
+    if let Err(failure) = wait_until_in(app.0, "as-a") {
+        panic!("{failure}");
+    }
+    std::thread::sleep(Duration::from_millis(500));
 
     let began = Instant::now();
     let stop = Arc::new(AtomicBool::new(false));
@@ -564,9 +594,9 @@ fn the_whole_system_follows_a_new_default_without_a_gap() {
     std::thread::sleep(Duration::from_millis(1500));
     stop.store(true, Ordering::Relaxed);
     let polls = poller.join().unwrap();
-    let moved = plays_into(app, "as-b");
+    let moved = wait_until_in(app.0, "as-b");
     let state = capture.state();
-    kill(app);
+    drop(app);
     drop(capture);
     set_default("as-a");
 
@@ -594,7 +624,9 @@ fn the_whole_system_follows_a_new_default_without_a_gap() {
     let loudest = polls
         .iter()
         .fold(0.0_f32, |most, (_, peak)| most.max(*peak));
-    assert!(moved, "the player did not follow the default to as-b");
+    if let Err(failure) = moved {
+        panic!("the player did not follow the default: {failure}");
+    }
     assert_eq!(state, CaptureState::Running);
     // Between two loud writes: one relink poll (100 ms), one 1024-frame
     // quantum (21 ms) and this thread's own 2 ms polling with its jitter.
