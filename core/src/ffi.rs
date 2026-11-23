@@ -1425,6 +1425,11 @@ mod tests {
                 AIRPLAY_EVENT_LATENCY_HELD.to_string(),
             ),
             ("ASC_AIRPLAY_EVENT_STORED", AIRPLAY_EVENT_STORED.to_string()),
+            ("ASC_AIRPLAY_EVENT_LET_GO", AIRPLAY_EVENT_LET_GO.to_string()),
+            (
+                "ASC_AIRPLAY_EVENT_TAKE_BACK",
+                AIRPLAY_EVENT_TAKE_BACK.to_string(),
+            ),
             (
                 "ASC_AIRPLAY_PAIRED_FOR_SESSION",
                 AIRPLAY_PAIRED_FOR_SESSION.to_string(),

@@ -356,6 +356,20 @@ pub unsafe extern "C" fn asc_ring_take_peak(ring: *const AscRing) -> f32 {
     })
 }
 
+/// Any thread: [`Ring::take_demand_peak`], for the lasting-sound policy
+/// (S481); 0 for a null handle.
+///
+/// # Safety
+///
+/// `ring` is null or a live ring handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_ring_take_demand_peak(ring: *const AscRing) -> f32 {
+    guard(0.0, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        unsafe { ring_of(ring) }.map_or(0.0, |ring| ring.take_demand_peak())
+    })
+}
+
 /// Any thread: [`Ring::take_band_peaks`] into `bands`, three floats for bass,
 /// mid and treble, for a capture at `rate`. False, with zeros written, for a
 /// null handle or a rate outside the supported range; false and nothing

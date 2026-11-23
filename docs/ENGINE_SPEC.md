@@ -5822,6 +5822,7 @@ The Windows app updates itself from the same Sparkle appcast the Mac app reads, 
 
   *Why 5 s of 6 s:*
   - All 70 system sounds that ship with Windows 11 were measured on the PC (`C:\Windows\Media`, length of each file, 2026-11-23). The notification, error, email, calendar and messaging sounds run 0.06 to 2.11 s (median 1.29 s), and the unlock sound runs 2.74 s.
+  - All 14 macOS alert sounds (`/System/Library/Sounds`, `afinfo`, Mac sitting 2026-11-24) run 0.56 s (Tink) to 2.16 s (Funk), inside the Windows notification range.
   - Only the sign-in sound (4.36 s) and the alarm and ring sounds (3.46 to 12.84 s, which apps loop for alarms and calls) come close to or pass the threshold.
   - So 5 s keeps every notification out with more than twice the margin. It also counts music, video and calls within 5 s of their start.
   - The 1 s of slack in the 6 s window lets brief quiet moments in music still add up.
@@ -5831,7 +5832,7 @@ The Windows app updates itself from the same Sparkle appcast the Mac app reads, 
   - (1) Play each `C:\Windows\Media` file through the capture with `AUDIOSYNC_DEBUG=1`, log the policy's audible coverage, and confirm no notification sound reaches Playing.
   - (2) Do the same for the freedesktop sound theme in WSL (`/usr/share/sounds/freedesktop/stereo`), and on the next Mac sitting for `/System/Library/Sounds`. Read lengths with `afinfo`.
   - (3) Play an album with gaps between tracks, and pause and resume a song, and log when Playing starts and ends.
-  - Record the measured macOS and Linux lengths here as *Observed* before the clause leaves review. Until then they are unmeasured. From public user knowledge, macOS alert sounds are short (around 1 to 2 s), but there is no source yet.
+  - Record the measured Linux lengths here as *Observed* before the clause leaves review; the macOS lengths are recorded above.
 
   *Systems:* one rule in the core. Mac, Windows and Linux feed it the same captured frames. The Mac calls the core policy through its FFI and keeps no Swift copy. An input device as the source (S14, S355) counts its own noise floor. Whether a line-in's floor stays under −60 dBFS is unknown, so that goes to the measurement list.
 

@@ -1221,7 +1221,8 @@ struct NativeAirPlayModel {
     /// while its records lapse), waits, and so does one that just
     /// paired while the sender's new listing of it is still on its way.
     /// While the Mac sleeps speakers only leave; the wake's reconcile starts
-    /// what waited (S412).
+    /// what waited (S412). A speaker the core let go stays on but out of the
+    /// sender (`letGo`).
     func plan(streaming: Bool, enabled: Set<String>) -> NativeAirPlayPlan {
         let wanted = Set(enabled.compactMap(NativeAirPlayID.receiver))
         var plan = NativeAirPlayPlan()
@@ -1229,9 +1230,11 @@ struct NativeAirPlayModel {
             memberOf[id].map { wanted.contains($0) && (receivers[$0] != nil || states[$0] != nil) } ?? false
         }
         plan.release = released.sorted()
-        plan.remove = states.keys.filter { !streaming || !wanted.contains($0) || released.contains($0) }.sorted()
+        plan.remove = states.keys.filter {
+            !streaming || !wanted.contains($0) || released.contains($0) || letGo.contains($0)
+        }.sorted()
         guard streaming, !asleep else { return plan }
-        for id in wanted.sorted() where states[id] == nil && !released.contains(id) {
+        for id in wanted.sorted() where states[id] == nil && !released.contains(id) && !letGo.contains(id) {
             // A target waits while a member's password prompt is open.
             if promptTargets.values.contains(id) { continue }
             switch availability(id) {
@@ -1269,6 +1272,17 @@ struct NativeAirPlayModel {
     /// 60 a local output starts at (S399).
     static func ownVolume(_ appID: String, stored: [String: Double]) -> Double {
         stored[appID] ?? AppSettings.defaultVolume
+    }
+
+    /// Switched-on receivers the core let go, yielded to another sender or
+    /// released when nothing plays, until it takes them back or the user
+    /// switches them (S482, S483).
+    var letGo: Set<String> = []
+
+    /// Forgets the let-go receivers whose switch is off (app IDs in
+    /// `enabled`), however it was switched: one switched on again joins.
+    mutating func keepLetGo(enabled: Set<String>) {
+        letGo.formIntersection(enabled.compactMap(NativeAirPlayID.receiver))
     }
 
     /// The app added a speaker to the sender.

@@ -41,6 +41,8 @@ extension AppDelegate {
             onEvent: { [weak self] event, outcome in self?.nativeSpeakerEvent(event, outcome) })
         native.onRemote = { [weak self] command in self?.sendTransport(command) }
         native.onOffsetsMoved = { [weak self] in self?.syncNetworkHoldBacks() }   // the AirPlay-ahead amount (S401)
+        native.demandPeak = { [weak self] in self?.engine.takeDemandPeak() }
+        native.onDemand = { [weak self] receiver, letGo in self?.nativeDemand(receiver, letGo: letGo) }
         nativeAirPlay = native   // reconciles meanwhile don't start a second one
         sendPlayback()
         native.setZones(nativeZoneVolumes())
@@ -60,6 +62,23 @@ extension AppDelegate {
         // Queued after `start`, whose block creates the sender they go to.
         for id in nativeRunMarks.passwords { native.setPassword(id, nativePasswords[id]) }
         for id in nativeRunMarks.credentialsTurnedDown { native.markCredentialsTurnedDown(id) }
+        native.setReleaseMinutes(store.load().releaseAfterMinutes)
+    }
+
+    /// The core lets a switched-on speaker go, yielded to another sender or
+    /// released when nothing plays, or takes it back, which starts it again
+    /// from a removal as a switch off and on does (S482, S483). Its row
+    /// keeps its switch; one switched off meanwhile is passed over.
+    func nativeDemand(_ receiver: String, letGo: Bool) {
+        guard let native = nativeAirPlay, enabledAirPlay.contains(NativeAirPlayID.app(receiver)) else { return }
+        DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(receiver)) " + (letGo ? "let go" : "taken back"))
+        native.model.letGo.insert(receiver)
+        syncNativeSpeakers()
+        if !letGo {
+            native.model.letGo.remove(receiver)
+            syncNativeSpeakers()
+        }
+        pushModel()
     }
 
     /// A failed start left nothing running: the sender goes, the user hears
@@ -473,6 +492,7 @@ extension AppDelegate {
     /// `reconcilePlan` for a reconcile).
     func syncNativeSpeakers(reconcile: Bool = false) {
         guard let native = nativeAirPlay else { return }
+        native.model.keepLetGo(enabled: enabledAirPlay)
         let plan = reconcile ? native.model.reconcilePlan(streaming: engine.isRunning, enabled: enabledAirPlay)
                              : native.model.plan(streaming: engine.isRunning, enabled: enabledAirPlay)
         guard !plan.isEmpty else { return }
@@ -515,6 +535,8 @@ extension AppDelegate {
         if on, refusedAsTargetMember(id, origin: origin) || refusedByHomeTheater(id, origin: origin)
             || refusedAsCantPlay(id, origin: origin) { return }
         if on { clearNotices([SpeakerKey.make(id: id, airplay: true)]) }   // a new attempt
+        // The user's switch brings back a speaker the core let go (S482, S483).
+        if let receiver = NativeAirPlayID.receiver(id) { nativeAirPlay?.model.letGo.remove(receiver) }
         if on { enabledAirPlay.insert(id) } else { enabledAirPlay.remove(id) }
         if !on { endNativeAttempt(id) } else if let ids = origin.attemptsToBegin([id]) { beginNativeAttempts(ids) }
         if on, origin == .remote { everyTimeGuard.turnedOnByPhone([id]) }

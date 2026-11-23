@@ -75,6 +75,10 @@ struct AppSettings: Equatable {
         static let webRemote = "webRemoteEnabled"
         /// Resume Playback After Sleep (S465), off unless turned on.
         static let resumesAfterSleep = "resumePlaybackAfterSleep"
+        /// Release speakers when nothing plays (S483), and after how many
+        /// whole minutes; stored, with no control yet.
+        static let releaseWhenQuiet = "releaseSpeakersWhenQuiet"
+        static let releaseMinutes = "releaseSpeakersAfterMinutes"
         static let webRemotePort = "webRemotePort"
         /// The main window's preset list is folded open (S259).
         static let presetsListOpen = "presetsListOpen"
@@ -130,6 +134,8 @@ struct AppSettings: Equatable {
 
     /// Where a speaker without a volume of its own starts (S71, S399).
     static let defaultVolume: Double = 60
+    /// The idle time a new release setting starts with (S483).
+    static let defaultReleaseMinutes = 15
     static let defaultMaster: Double = 100
     /// Where a local speaker without a delay of its own started before the
     /// local delay model, unless an older single delay was stored (S77).
@@ -170,6 +176,11 @@ struct AppSettings: Equatable {
     var systemVolumesFound: [String: Double] = [:]
     var systemVolumesLeft: [String: Double] = [:]
     var resumesAfterSleep = false
+    var releaseWhenQuiet = false
+    var releaseMinutes = AppSettings.defaultReleaseMinutes
+
+    /// The idle minutes the sender releases speakers after, 0 for never (S483).
+    var releaseAfterMinutes: Int { releaseWhenQuiet ? releaseMinutes : 0 }
 
     /// Whether AUDIOSYNC_AIRPLAY2=1 turns the sender's AirPlay 2 path on; the
     /// core reads it too, and CI and debug runs use it (P2).
@@ -234,6 +245,8 @@ struct AppSettings: Equatable {
         s.systemVolumesFound = levels(read(Keys.systemVolumesFound)) { min(1, max(0, $0)) }
         s.systemVolumesLeft = levels(read(Keys.systemVolumesLeft)) { min(1, max(0, $0)) }
         s.resumesAfterSleep = read(Keys.resumesAfterSleep) as? Bool ?? false
+        s.releaseWhenQuiet = read(Keys.releaseWhenQuiet) as? Bool ?? false
+        if let minutes = read(Keys.releaseMinutes) as? Int, minutes >= 1 { s.releaseMinutes = minutes }
         return s
     }
 

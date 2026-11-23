@@ -93,6 +93,7 @@ use audiosync_airplay::sender::{
 use audiosync_airplay::stream::{
     MAX_DELAY, MAX_LATENCY_FRAMES, MIN_LATENCY_FRAMES, SpeakerCounters, SpeakerLatency,
 };
+use audiosync_airplay::takeover::TakeoverReport;
 use audiosync_airplay::targets::{Target, TargetChange, TargetId};
 use audiosync_airplay::volume::Volume;
 
@@ -103,9 +104,11 @@ use crate::airplay2_identity::IdentityStore;
 use crate::airplay2_timing::{self, TimingStore};
 use crate::eq::{self, BAND_COUNT, EqSettings};
 use crate::fade::InputFade;
+use crate::policy::Seconds;
 use crate::policy::airplay_volume::{
     MAC, Reads, kept_volume, refuses_reads, slider_held, within_echo_window,
 };
+use crate::policy::on_demand::{self, OnDemand};
 use crate::policy::remote::{
     Action, App, Command, Control, Event as RemoteEvent, MUTED_DB, OwnVolume, Playback, Remote,
 };
@@ -299,6 +302,15 @@ pub const AIRPLAY_EVENT_LATENCY_HELD: i32 = 14;
 /// [`AscAirPlayEvent::detail`] is "" when they were written to the file, or
 /// why they last only until the handle is destroyed.
 pub const AIRPLAY_EVENT_STORED: i32 = 15;
+/// The host lets the speaker go while it stays switched on: another sender
+/// took it, or nothing played for the idle time (S482, S483). It removes
+/// the speaker and adds it again only on [`AIRPLAY_EVENT_TAKE_BACK`] or the
+/// user's switch. A removal never switches a speaker off for the policy: the
+/// host passes over events for one the user switched off.
+pub const AIRPLAY_EVENT_LET_GO: i32 = 16;
+/// The host starts the speaker again from a removal and an add, as a switch
+/// off and on does (S482, S483).
+pub const AIRPLAY_EVENT_TAKE_BACK: i32 = 17;
 
 /// A paired event's [`AscAirPlayEvent::error`]: paired for this session
 /// only, with nothing stored or written; the receiver asks for a code every
@@ -673,6 +685,9 @@ enum Pending {
     LatencyHeld(u32),
     /// The sender is dead ([`AIRPLAY_EVENT_FAILED`]).
     Failed,
+    /// [`AIRPLAY_EVENT_LET_GO`] (true) or [`AIRPLAY_EVENT_TAKE_BACK`]
+    /// (false) for the added ID.
+    Demand(String, bool),
     /// A pairing event for the host: its kind (`AIRPLAY_EVENT_PIN_NEEDED`
     /// to `AIRPLAY_EVENT_PAIRED`, or `AIRPLAY_EVENT_STORED`), the receiver ID, the error and
     /// unsupported codes and the detail. Never a secret.
@@ -821,6 +836,13 @@ pub struct AscAirPlay {
     playback: Option<(String, Playback)>,
     /// The clock the remote decisions count on.
     created_at: Instant,
+    /// Lasting sound, yielded and released speakers by added ID (S481 to
+    /// S483), on seconds since `created_at`.
+    on_demand: OnDemand<String>,
+    /// The start of the window the policy takes next, and the largest
+    /// peak handed over since.
+    demand_fed: Option<Instant>,
+    demand_peak: f32,
 }
 
 /// Opens the browser discovery runs on; `None` when it can't start.
@@ -1222,6 +1244,10 @@ impl AscAirPlay {
                 let id = receiver_id(&key);
                 if let SpeakerEvent::Path(path) = event {
                     self.note_session_path(&id, Some(path));
+                    return;
+                }
+                if let SpeakerEvent::Takeover(report) = event {
+                    self.takeover(&id, report, Instant::now());
                     return;
                 }
                 if matches!(
@@ -1871,6 +1897,78 @@ impl AscAirPlay {
         self.events.push_back((self.receivers_queued, pending));
     }
 
+    fn demand_now(&self, at: Instant) -> Seconds {
+        at.saturating_duration_since(self.created_at).as_secs_f64()
+    }
+
+    /// The host added `id`: switched on for the policy, as a user's switch
+    /// (S482, S483).
+    fn demand_switched_on(&mut self, id: &str) {
+        self.on_demand.switched_on(id.to_owned());
+    }
+
+    /// Asks the host to let `id` go, or to start it again (S482, S483).
+    fn let_go(&mut self, id: String, let_go: bool) {
+        self.queue_event(Pending::Demand(id, let_go));
+    }
+
+    fn carry_out(&mut self, actions: Vec<on_demand::Action<String>>) {
+        for action in actions {
+            match action {
+                on_demand::Action::Release(id) => self.let_go(id, true),
+                on_demand::Action::Start(id) => self.let_go(id, false),
+            }
+        }
+    }
+
+    /// What the sender reported about a receiver that closed the session
+    /// of `id` or of a member of it (P249, S482).
+    fn takeover(&mut self, id: &str, report: TakeoverReport, at: Instant) {
+        let Some(owner) = self.reporting_for(id) else {
+            return;
+        };
+        let now = self.demand_now(at);
+        match report {
+            TakeoverReport::ClosedByReceiver => self.on_demand.closed_by_receiver(&owner),
+            TakeoverReport::Taken { .. } => {
+                self.on_demand.taken(&owner, now);
+                self.let_go(owner, true);
+            }
+            TakeoverReport::NoEvidence => match self.on_demand.no_evidence(&owner, now) {
+                Some(action) => self.carry_out(vec![action]),
+                None => self.let_go(owner, true),
+            },
+        }
+    }
+
+    /// Hands the policy `peak`, the source's largest sample magnitude since
+    /// the last call, in whole windows of [`on_demand::WINDOW`] up to `at`
+    /// (S481). A call inside one window keeps the peak and the window's
+    /// start for the next call; each window of a longer gap gets its peak.
+    fn feed_demand(&mut self, peak: f32, at: Instant) {
+        self.demand_peak = self.demand_peak.max(peak);
+        let fed = *self.demand_fed.get_or_insert(at);
+        let windows = (at.saturating_duration_since(fed).as_secs_f64() / on_demand::WINDOW) as u32;
+        if windows == 0 {
+            return;
+        }
+        let peak = std::mem::take(&mut self.demand_peak);
+        self.demand_fed = Some(if windows > 100 {
+            at
+        } else {
+            fed + Duration::from_secs_f64(f64::from(windows) * on_demand::WINDOW)
+        });
+        let now = self.demand_now(at);
+        let mut actions = Vec::new();
+        for n in (0..windows.min(100)).rev() {
+            actions.extend(
+                self.on_demand
+                    .window(peak, now - f64::from(n) * on_demand::WINDOW),
+            );
+        }
+        self.carry_out(actions);
+    }
+
     /// Tells the debug log how early the speaker `id` plays when `wanted`
     /// passes the delay cap the sender holds it at (P99).
     fn trace_capped_delay(&mut self, id: &str, wanted: Duration) {
@@ -2245,6 +2343,14 @@ impl AscAirPlay {
                 event.latency_ms = f64::from(frames) * 1000.0 / 44_100.0;
                 (String::new(), String::new())
             }
+            Pending::Demand(id, let_go) => {
+                event.kind = if let_go {
+                    AIRPLAY_EVENT_LET_GO
+                } else {
+                    AIRPLAY_EVENT_TAKE_BACK
+                };
+                (id, String::new())
+            }
             Pending::Failed => {
                 event.kind = AIRPLAY_EVENT_FAILED;
                 (String::new(), self.failure_detail())
@@ -2588,8 +2694,6 @@ fn sender_config(switch: Option<&str>, auto: Option<&str>) -> SenderConfig {
     SenderConfig {
         on_driver_thread: Some(raise_driver_thread),
         host_answers_latency: true,
-        // The Mac doesn't run the yield rule (S482) yet.
-        evidence_window: None,
         ..SenderConfig::default()
     }
     .with_airplay2_switch(airplay2_auto(auto), airplay2_switch(switch))
@@ -2618,6 +2722,13 @@ pub(crate) fn create_with(open_browser: OpenBrowser) -> *mut AscAirPlay {
             std::env::var(AIRPLAY2_SWITCH_ENV).ok().as_deref(),
             std::env::var(AIRPLAY2_AUTO_ENV).ok().as_deref(),
         );
+        #[cfg(test)]
+        let config = SenderConfig {
+            evidence_window: config
+                .evidence_window
+                .filter(|_| !tests::NO_EVIDENCE.with(Cell::get)),
+            ..config
+        };
         let airplay2 = config.airplay2;
         let airplay2_preferred = config.airplay2_preferred;
         match Sender::start(config) {
@@ -2670,6 +2781,9 @@ pub(crate) fn create_with(open_browser: OpenBrowser) -> *mut AscAirPlay {
                 remote: Remote::default(),
                 playback: None,
                 created_at: Instant::now(),
+                on_demand: OnDemand::new(0.0),
+                demand_fed: None,
+                demand_peak: 0.0,
             })),
             Err(_) => ptr::null_mut(),
         }
@@ -2946,6 +3060,7 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
                 airplay.added.insert(id.to_owned(), added);
                 airplay.trace_capped_delay(id, airplay.hold_back + offset);
                 airplay.remote.forget(id);
+                airplay.demand_switched_on(id);
                 return true;
             }
             let Some(info) = airplay.listed.get(id) else {
@@ -2983,6 +3098,7 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
             airplay.added.insert(id.to_owned(), added);
             airplay.trace_capped_delay(id, airplay.hold_back + offset);
             airplay.remote.forget(id);
+            airplay.demand_switched_on(id);
             true
         })
     }
@@ -3428,6 +3544,49 @@ pub unsafe extern "C" fn asc_airplay_sounding(airplay: *const AscAirPlay) -> boo
         live(airplay.cast_mut(), false, |airplay| {
             airplay.sender.sounding()
         })
+    }
+}
+
+/// Hands the lasting-sound policy the source's peak since the last call
+/// (`asc_ring_take_demand_peak`), measured now; a speaker it lets go or
+/// takes back comes as an event (S481 to S483). NULL does nothing.
+///
+/// # Safety
+///
+/// `airplay` is null or a live handle, called under the threading
+/// contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_airplay_feed_demand(airplay: *mut AscAirPlay, peak: f32) {
+    // SAFETY: by the caller's contract null or a live handle that no other
+    // call uses now.
+    unsafe {
+        live(airplay, (), |airplay| {
+            airplay.pump();
+            airplay.feed_demand(peak, Instant::now());
+        });
+    }
+}
+
+/// Releases the speakers after `minutes` with nothing playing, or never
+/// with 0 (S483); turned off, released speakers come back as events.
+/// NULL does nothing.
+///
+/// # Safety
+///
+/// `airplay` is null or a live handle, called under the threading
+/// contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_airplay_set_release_minutes(airplay: *mut AscAirPlay, minutes: u32) {
+    // SAFETY: by the caller's contract null or a live handle that no other
+    // call uses now.
+    unsafe {
+        live(airplay, (), |airplay| {
+            let now = airplay.demand_now(Instant::now());
+            let actions = airplay
+                .on_demand
+                .set_release((minutes > 0).then_some(minutes), now);
+            airplay.carry_out(actions);
+        });
     }
 }
 
@@ -7124,6 +7283,9 @@ mod tests {
     thread_local! {
         /// The next guarded call on this thread panics inside its guard.
         pub(super) static PANIC_NEXT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        /// Handles this thread creates retry a receiver's close at once:
+        /// it stands for any loss (P142), not a takeover (P249).
+        pub(super) static NO_EVIDENCE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
 
     /// The next guarded call on this thread panics inside its guard.
@@ -8766,6 +8928,7 @@ mod tests {
 
     #[test]
     fn a_speaker_reconnects_at_the_volume_changed_on_it() {
+        NO_EVIDENCE.with(|off| off.set(true));
         let receiver = Loopback::start();
         let id = "02005E005364";
         let mut handle = listing(vec![loopback_record(id, "Shelf", receiver.port)]);
@@ -8810,6 +8973,7 @@ mod tests {
     // covers: S291
     #[test]
     fn a_reading_below_the_wire_range_is_kept_at_its_bottom_not_muted() {
+        NO_EVIDENCE.with(|off| off.set(true));
         let receiver = Loopback::start();
         let id = "02005E005365";
         let mut handle = listing(vec![loopback_record(id, "Shelf", receiver.port)]);
@@ -11527,5 +11691,127 @@ mod tests {
             "Stale.row",
             "Kitchen withdrawn: 1 GONE (Kitchen), 0 events for Den in 500 ms, Den still listed; Kitchen announced again: listed and playing",
         );
+    }
+
+    // The Mac holds a receiver's close for evidence, as Windows and Linux
+    // do, so a speaker another sender took is yielded, not retried.
+    // covers: P249
+    #[test]
+    fn the_mac_sender_holds_a_close_for_evidence() {
+        assert_eq!(
+            sender_config(None, None).evidence_window,
+            Some(audiosync_airplay::takeover::EVIDENCE_WINDOW)
+        );
+    }
+
+    /// The let-go (true) and take-back (false) events waiting now.
+    fn demand_events(handle: *mut AscAirPlay) -> Vec<(String, bool)> {
+        std::iter::from_fn(|| take_event(handle))
+            .filter(|e| e.kind == AIRPLAY_EVENT_LET_GO || e.kind == AIRPLAY_EVENT_TAKE_BACK)
+            .map(|e| (e.id, e.kind == AIRPLAY_EVENT_LET_GO))
+            .collect()
+    }
+
+    /// Feeds `seconds` of windows at `peak` from `*at`.
+    fn feed_for(handle: *mut AscAirPlay, at: &mut Instant, seconds: f64, peak: f32) {
+        for _ in 0..(seconds / on_demand::WINDOW).round() as u32 {
+            *at += Duration::from_secs_f64(on_demand::WINDOW);
+            inside(handle).feed_demand(peak, *at);
+        }
+    }
+
+    // The Mac host runs the core's yield rule over its FFI: a taken speaker
+    // is let go, its removal keeps it switched on, and fresh lasting sound
+    // takes it back.
+    // covers: S482
+    #[test]
+    fn a_taken_speaker_is_let_go_and_comes_back_on_fresh_lasting_sound() {
+        let id = "02005E005341";
+        let mut handle = listing(vec![loopback_record(id, "Den", closed_port())]);
+        let c_id = c_string(id);
+        // SAFETY: a live handle, used by this thread only; a C string.
+        assert!(unsafe { asc_airplay_add_speaker(handle, c_id.as_ptr(), 40.0) });
+        let key = inside(handle).listed[id].device.key.clone();
+        let mut at = inside(handle).created_at;
+        feed_for(handle, &mut at, 8.0, 0.1);
+        inside(handle).take_in(SenderEvent::Speaker {
+            key,
+            event: SpeakerEvent::Takeover(TakeoverReport::Taken { group: None }),
+        });
+        assert_eq!(demand_events(handle), [(id.to_owned(), true)]);
+        // SAFETY: as above.
+        assert!(unsafe { asc_airplay_remove_speaker(handle, c_id.as_ptr()) });
+        assert!(matches!(
+            inside(handle).on_demand.status(&id.to_owned()),
+            Some(on_demand::Status::Waiting { .. })
+        ));
+        // Sound running straight on never brings it back; a fresh start does.
+        feed_for(handle, &mut at, 10.0, 0.1);
+        assert_eq!(demand_events(handle), []);
+        feed_for(handle, &mut at, 2.5, 0.0);
+        feed_for(handle, &mut at, 5.0, 0.1);
+        assert_eq!(demand_events(handle), [(id.to_owned(), false)]);
+        // SAFETY: as above.
+        assert!(unsafe { asc_airplay_add_speaker(handle, c_id.as_ptr(), 40.0) });
+        assert_eq!(
+            inside(handle).on_demand.status(&id.to_owned()),
+            Some(on_demand::Status::Active)
+        );
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: S483
+    #[test]
+    fn speakers_are_released_after_the_idle_time_and_a_stream_stop_keeps_them() {
+        let id = "02005E005342";
+        let mut handle = listing(vec![loopback_record(id, "Den", closed_port())]);
+        let c_id = c_string(id);
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe {
+            assert!(asc_airplay_add_speaker(handle, c_id.as_ptr(), 40.0));
+            asc_airplay_set_release_minutes(handle, 1);
+        }
+        let mut at = inside(handle).created_at;
+        feed_for(handle, &mut at, 59.0, 0.0);
+        assert_eq!(demand_events(handle), []);
+        feed_for(handle, &mut at, 1.5, 0.0);
+        assert_eq!(demand_events(handle), [(id.to_owned(), true)]);
+        // Turned off, the release ends at once.
+        // SAFETY: as above.
+        unsafe { asc_airplay_set_release_minutes(handle, 0) };
+        assert_eq!(demand_events(handle), [(id.to_owned(), false)]);
+        // A stream stop removes it, and the policy keeps it as the desktop
+        // does; the host passes over events for a speaker switched off.
+        // SAFETY: as above.
+        unsafe {
+            assert!(asc_airplay_add_speaker(handle, c_id.as_ptr(), 40.0));
+            assert!(asc_airplay_remove_speaker(handle, c_id.as_ptr()));
+        }
+        assert_eq!(
+            inside(handle).on_demand.status(&id.to_owned()),
+            Some(on_demand::Status::Active)
+        );
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // A poll shorter than a window keeps its peak for the window it ends in.
+    // covers: S481
+    #[test]
+    fn the_demand_feed_takes_whole_windows_only() {
+        let mut handle = create_with(quiet);
+        let start = inside(handle).created_at;
+        inside(handle).feed_demand(0.0, start);
+        inside(handle).feed_demand(0.5, start + Duration::from_millis(40));
+        assert_eq!(inside(handle).demand_peak, 0.5);
+        inside(handle).feed_demand(0.0, start + Duration::from_millis(250));
+        assert_eq!(inside(handle).demand_peak, 0.0);
+        assert_eq!(
+            inside(handle).demand_fed,
+            Some(start + Duration::from_millis(200))
+        );
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
     }
 }
