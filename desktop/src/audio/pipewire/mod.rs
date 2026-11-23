@@ -95,7 +95,7 @@ mod driver {
         own_pid: u32,
         registry: Registry,
         /// The streams pointed at the recorded sink for a call (S487).
-        targeted: std::collections::BTreeSet<u32>,
+        targeted: std::collections::BTreeSet<String>,
     }
 
     impl PipeWireDriver {
@@ -150,17 +150,8 @@ mod driver {
             let (Ok(graph), Ok(processes)) = (self.registry.graph(), self.snapshot()) else {
                 return;
             };
-            for node in graph.streams_of(pids, &processes) {
-                let moved = self.targeted.contains(&node);
-                if moved == sink.is_some() {
-                    continue;
-                }
+            for node in graph.to_target(&mut self.targeted, pids, &processes, sink.is_some()) {
                 self.registry.target(node, sink);
-                if sink.is_some() {
-                    self.targeted.insert(node);
-                } else {
-                    self.targeted.remove(&node);
-                }
             }
         }
 

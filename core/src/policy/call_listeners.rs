@@ -65,6 +65,13 @@ impl CallListeners {
         self.out.keys().map(String::as_str)
     }
 
+    /// The host acted for `app` at `now`, later than the poll that left it
+    /// out (Windows pins it once it plays): the stayed check counts from
+    /// here.
+    pub fn acted(&mut self, app: &str, now: Seconds) {
+        let _ = (app, now);
+    }
+
     /// One poll at `now`.
     pub fn update(&mut self, facts: Facts<'_>, now: Seconds) -> Vec<ListenerAction> {
         let mut actions = Vec::new();

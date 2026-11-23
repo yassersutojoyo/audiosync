@@ -436,6 +436,28 @@ impl Graph {
             .collect()
     }
 
+    /// The playback streams of `pids` whose `target.object` must be set
+    /// (`pin`) or cleared to match, `targeted` holding those set (S487).
+    pub fn to_target(
+        &self,
+        targeted: &mut BTreeSet<String>,
+        pids: &[u32],
+        processes: &ProcessTable,
+        pin: bool,
+    ) -> Vec<u32> {
+        self.streams_of(pids, processes)
+            .into_iter()
+            .filter(|id| {
+                let key = id.to_string();
+                if pin {
+                    targeted.insert(key)
+                } else {
+                    targeted.remove(&key)
+                }
+            })
+            .collect()
+    }
+
     /// Whether stream `id` is linked into node `sink`.
     fn linked_into(&self, id: u32, sink: u32) -> bool {
         self.links
@@ -1135,6 +1157,37 @@ mod tests {
         graph.nodes.get_mut(&30).unwrap().running = true;
         assert_eq!(graph.listening_pids(&processes), vec![60]);
         assert_eq!(graph.streams_of(&[60], &processes), vec![22]);
+    }
+
+    // covers: S487
+    #[test]
+    fn a_new_stream_on_a_reused_node_id_is_pointed_again() {
+        let (mut graph, processes) = playing_graph();
+        let serial = |graph: &mut Graph, value: &str| {
+            let node = graph.nodes.get_mut(&22).unwrap();
+            node.props.insert("object.serial".into(), value.into());
+        };
+        serial(&mut graph, "220");
+        let mut targeted = BTreeSet::new();
+        assert_eq!(
+            graph.to_target(&mut targeted, &[60], &processes, true),
+            vec![22]
+        );
+        assert_eq!(
+            graph.to_target(&mut targeted, &[60], &processes, true),
+            Vec::<u32>::new()
+        );
+        // The stream ended and PipeWire gave its ID to the app's next one.
+        serial(&mut graph, "231");
+        assert_eq!(
+            graph.to_target(&mut targeted, &[60], &processes, true),
+            vec![22]
+        );
+        assert_eq!(
+            graph.to_target(&mut targeted, &[60], &processes, false),
+            vec![22]
+        );
+        assert!(targeted.is_empty());
     }
 
     // covers: S382

@@ -121,6 +121,29 @@ fn a_listener_still_on_the_silent_endpoint_stays_and_is_reported_once() {
 
 // covers: S485
 #[test]
+fn the_stayed_check_counts_from_a_later_act() {
+    let mut watch = CallListeners::default();
+    poll(&mut watch, true, &[CALL], &[], 0.0);
+    poll(&mut watch, true, &[CALL], &[], STAYED_AFTER);
+    watch.acted(CALL, 2.0);
+    assert_eq!(
+        poll(
+            &mut watch,
+            true,
+            &[CALL],
+            &[CALL],
+            2.0 + STAYED_AFTER - 0.01
+        ),
+        vec![]
+    );
+    assert_eq!(
+        poll(&mut watch, true, &[CALL], &[CALL], 2.0 + STAYED_AFTER),
+        vec![ListenerAction::Stayed(CALL.to_owned())]
+    );
+}
+
+// covers: S485
+#[test]
 fn a_listener_that_moved_is_never_reported_as_stayed() {
     let mut watch = CallListeners::default();
     poll(&mut watch, true, &[CALL], &[CALL], 0.0);

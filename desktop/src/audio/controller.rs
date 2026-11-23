@@ -7668,6 +7668,62 @@ mod tests {
 
     // covers: S486
     #[test]
+    fn a_call_pin_left_by_an_earlier_run_is_put_back_at_launch() {
+        let mut backend = backend();
+        backend.add_app(CALL_PID, "call.exe");
+        let calls = app_fakes::Calls::default();
+        let fake = app_fakes::Shared(Arc::new(SyncRefCell::new(app_fakes::Fake::new(
+            &calls,
+            &[app_fakes::process(CALL_PID, "call.exe")],
+        ))));
+        let original = render_interface(switch_fakes::SPEAKERS);
+        for role in [Role::Console, Role::Multimedia] {
+            fake.0.borrow_mut().put("call.exe", role, &original);
+        }
+        let record = AppRecord {
+            original,
+            calls: vec![Previous {
+                exe: "call.exe".into(),
+                console: String::new(),
+                multimedia: String::new(),
+            }],
+            ..AppRecord::default()
+        };
+        let store = app_fakes::Shared(Arc::new(SyncRefCell::new(app_fakes::Store {
+            calls,
+            record: Some(record),
+            failing: false,
+        })));
+        backend.set_app_output(Box::new(fake.clone()), Box::new(store.clone()));
+        assert_eq!(call_output(&fake), "");
+        assert_eq!(store.0.borrow().record, None);
+    }
+
+    // covers: S486
+    #[test]
+    fn a_call_app_that_quit_before_it_rejoined_is_put_back_when_it_runs_again() {
+        let mut backend = backend();
+        let (apps, store) = with_a_call_app(&mut backend);
+        backend.play_on(CALL_PID, switch_fakes::CABLE);
+        backend.listen(CALL_PID, true);
+        backend.poll();
+        assert_ne!(call_output(&apps), "");
+        backend.listen(CALL_PID, false);
+        backend.pause_on(CALL_PID, switch_fakes::CABLE);
+        backend.quit_app(CALL_PID);
+        backend.calls_clock -= Duration::from_secs_f64(HOLD);
+        backend.poll();
+        assert_ne!(call_output(&apps), "");
+        backend.add_app(CALL_PID, "call.exe");
+        backend.play_on(CALL_PID, SPEAKERS);
+        backend.poll();
+        assert_eq!(call_output(&apps), "");
+        assert_eq!(store.0.borrow().record, None);
+        backend.stop();
+    }
+
+    // covers: S486
+    #[test]
     fn a_call_app_still_on_the_silent_endpoint_stays_in_the_stream() {
         let mut backend = backend();
         let (apps, _) = with_a_call_app(&mut backend);
