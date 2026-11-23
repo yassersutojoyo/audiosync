@@ -934,11 +934,12 @@ pub struct Stream {
     /// A step on its way: when the end of its packet sounds, and the new Lf
     /// (P200).
     step_due: Option<(f64, u32)>,
-    /// The Lf a resend-rate step took the stream to, by receiver address,
-    /// for the stream's life; it is the receiver's floor when it joins
-    /// again (P200).
+    /// The Lf a step up took the stream to, by the address of the receiver
+    /// whose gap or resend rate asked for it, for the stream's life: no step
+    /// down while that receiver is in the stream, and its floor when it
+    /// joins again (P200).
     rate_levels: Vec<(IpAddr, u32)>,
-    /// The receiver whose resend rate started the step on its way.
+    /// The receiver whose gap or resend rate asked for the step on its way.
     rate_ip: Option<IpAddr>,
     /// The first packet cut at full gain again after a forced step's
     /// fade-out and silence; only the test-only `step_up` sets it (P200).
@@ -1237,6 +1238,7 @@ impl Stream {
             && self
                 .clean_since
                 .is_some_and(|since| t - since >= CLEAN_WINDOW)
+            && !self.held()
         {
             self.step_wait_told = false;
             self.step_wanted = Some(
@@ -1317,15 +1319,13 @@ impl Stream {
 
     /// Starts a wanted step without a quiet window: the next packet cut
     /// fades out and the 4 after it are silent (P200).
-    fn fade_step(&mut self, t: f64) -> bool {
+    fn fade_step(&mut self, t: f64) {
         let fade = self.next_cut;
         if let Some(frames) = self.step_wanted
             && self.start_step(t, frames, fade)
         {
             self.silence_until = fade + 1 + STEP_SILENCE_PACKETS;
-            return true;
         }
-        false
     }
 
     /// A speaker played without a packet (P200): the session's one step up
@@ -1973,10 +1973,22 @@ impl Stream {
         }
         if gap || steady {
             self.note_gap(t);
+            if self.step_wanted.is_some() {
+                self.rate_ip = Some(ip);
+            }
         }
-        if steady && self.fade_step(t) {
-            self.rate_ip = Some(ip);
+        if steady {
+            self.fade_step(t);
         }
+    }
+
+    /// A receiver whose gap or resend rate stepped Lf up is in the stream,
+    /// so the step holds (P200).
+    fn held(&self) -> bool {
+        self.speakers.iter().any(|speaker| {
+            let ip = speaker.destinations.control.ip();
+            self.rate_levels.iter().any(|(at, _)| *at == ip)
+        })
     }
 
     /// Answers a timing request from `source` that reached a speaker's
