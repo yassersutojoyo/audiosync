@@ -1060,3 +1060,31 @@ fn every_receiver_that_asks_while_a_step_waits_holds_it() {
         "held by the first receiver that asked"
     );
 }
+
+// covers: P200
+#[test]
+fn a_late_request_step_comes_back_with_its_receiver_and_holds() {
+    let mut rig = quiet_rig();
+    let id = rig.add(speaker(1, Codec::Pcm));
+    run_to(&mut rig, 1.0);
+    gap(&mut rig, id);
+    run_to(&mut rig, 5.0);
+    assert_eq!(rig.stream.latency_frames(), 8_820, "stepped up");
+    rig.stream.remove_speaker(id);
+    rig.drain();
+    rig.stream.set_latency(LOW, rig.now);
+    rig.drain();
+    run_to(&mut rig, 10.0);
+
+    rig.add(speaker(1, Codec::Pcm));
+    rig.stream.set_latency(LOW, rig.now);
+    rig.drain();
+    run_to(&mut rig, 15.0);
+    assert_eq!(
+        rig.stream.latency_frames(),
+        8_820,
+        "joins again at its level"
+    );
+    run_to(&mut rig, 140.0);
+    assert_eq!(rig.stream.latency_frames(), 8_820, "held while it plays");
+}
