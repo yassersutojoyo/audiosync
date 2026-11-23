@@ -939,8 +939,8 @@ pub struct Stream {
     /// down while that receiver is in the stream, and its floor when it
     /// joins again (P200).
     rate_levels: Vec<(IpAddr, u32)>,
-    /// The receiver whose gap or resend rate asked for the step on its way.
-    rate_ip: Option<IpAddr>,
+    /// Every receiver whose gap or resend rate asked for the step on its way.
+    askers: Vec<IpAddr>,
     /// The first packet cut at full gain again after a forced step's
     /// fade-out and silence; only the test-only `step_up` sets it (P200).
     silence_until: u64,
@@ -1004,7 +1004,7 @@ impl Stream {
             host_latency: 0,
             step_due: None,
             rate_levels: Vec::new(),
-            rate_ip: None,
+            askers: Vec::new(),
             silence_until: 0,
             input: reader,
             model: RateModel::new(start),
@@ -1390,7 +1390,7 @@ impl Stream {
         let old = self.latency_frames;
         self.latency_frames = frames;
         if frames > old {
-            if let Some(ip) = self.rate_ip.take() {
+            for ip in std::mem::take(&mut self.askers) {
                 self.rate_levels.retain(|(at, _)| *at != ip);
                 self.rate_levels.push((ip, frames));
             }
@@ -1973,8 +1973,8 @@ impl Stream {
         }
         if gap || steady {
             self.note_gap(t);
-            if self.step_wanted.is_some() {
-                self.rate_ip = Some(ip);
+            if self.step_wanted.is_some() && !self.askers.contains(&ip) {
+                self.askers.push(ip);
             }
         }
         if steady {
