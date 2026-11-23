@@ -16025,22 +16025,39 @@ mod tests {
 
     // covers: S178, S181
     #[test]
-    fn the_airplay_delay_field_shows_l_plus_a_and_follows_a_new_l() {
-        let (mut with_sender, fake, _, _) = airplay_adapter();
-        let shown = |adapter: &AudioAdapter<MockBackend>| adapter.snapshot().airplay_delay_ms;
-        assert_eq!(shown(&with_sender), Some(1750.0), "L_s + 0");
-        with_sender.set_airplay_delay(2000.0);
-        assert_eq!(shown(&with_sender), Some(2000.0));
-        assert_eq!(with_sender.audio.airplay_adjustment(), 250.0);
-        fake.set_latency(std::time::Duration::from_secs(1));
+    fn the_airplay_delay_field_shows_only_the_extra_delay_and_an_upgrade_keeps_what_plays() {
+        let (mut with_sender, fake, kitchen, _) = airplay_adapter();
+        let field = |adapter: &AudioAdapter<MockBackend>| {
+            let state = adapter.snapshot();
+            let speaker = state
+                .speakers
+                .iter()
+                .find(|speaker| speaker.id == ap(&kitchen))
+                .expect("listed");
+            crate::remote::delay_field(&state, speaker)
+        };
+        // An extra delay of 78 ms stored by an earlier version, which showed
+        // it as 278 against a sender latency of 200 ms.
+        with_sender.audio.set_airplay_adjustment(78.0);
+        fake.set_latency(std::time::Duration::from_millis(200));
         with_sender.poll();
-        assert_eq!(shown(&with_sender), Some(1250.0));
+        assert_eq!(field(&with_sender), Some((78.0, -2000, 20_000)));
+        assert_eq!(with_sender.airplay_delay_ms(), Some(278.0), "what plays");
+        // The automatic part steps from 200 to 300 ms on its own.
+        fake.set_latency(std::time::Duration::from_millis(300));
+        with_sender.poll();
+        assert_eq!(field(&with_sender), Some((78.0, -2000, 20_000)));
+        assert_eq!(with_sender.airplay_delay_ms(), Some(378.0));
+        with_sender.set_airplay_delay(120.0);
+        assert_eq!(with_sender.audio.airplay_adjustment(), 120.0);
+        assert_eq!(field(&with_sender).map(|(ms, _, _)| ms), Some(120.0));
+        assert_eq!(with_sender.airplay_delay_ms(), Some(420.0));
         with_sender.set_airplay_delay(f64::NAN);
-        assert_eq!(shown(&with_sender), Some(1250.0));
-        with_sender.set_airplay_delay(-500.0);
-        assert_eq!(shown(&with_sender), Some(0.0), "clamped");
+        assert_eq!(with_sender.audio.airplay_adjustment(), 120.0);
+        with_sender.set_airplay_delay(-2500.0);
+        assert_eq!(with_sender.audio.airplay_adjustment(), -2000.0, "clamped");
         // Without an AirPlay sender there is no field.
-        assert_eq!(shown(&adapter()), None);
+        assert_eq!(adapter().snapshot().airplay_delay_ms, None);
     }
 
     // covers: S383

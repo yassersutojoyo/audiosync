@@ -10133,6 +10133,19 @@ do {
           "AirPlay delay: the native sender's field shows L + A, follows a new L and an edit stores the difference",
           "shown \(shown), followed \(followed), A \(native.adjustmentMs)")
 
+    // covers: S178, S181 (the field shows only the extra delay A)
+    let upgraded = AirPlayDelay(adjustmentMs: 78)
+    let windowsSource = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+Windows.swift", encoding: .utf8)) ?? ""
+    let delayRowSource = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
+    let extraRange = RemoteDelay.airPlay(78).range
+    check(upgraded.latencyMs(senderMs: 200) == 278 && upgraded.latencyMs(senderMs: 300) == 378
+            && windowsSource.contains("publish(\\.airPlayExtraMs, airPlayDelay.adjustmentMs.rounded())")
+            && delayRowSource.contains("kind: .airPlay, ms: model.airPlayExtraMs")
+            && extraRange.min == -2000 && extraRange.max == 20000,
+          "AirPlay delay: the field shows and takes only the stored extra delay, so an upgrade or a step of the "
+            + "sender's latency changes what is shown, never what plays",
+          "range \(extraRange)")
+
     // covers: S179 (the stored absolute delays become offsets, once)
     func migrate(_ stored: [String: Double], legacy: Double? = nil, enabled: Set<String> = [],
                  listed: [String], reference: String? = "BuiltInSpeakerDevice") -> LocalDelay.Migration? {
