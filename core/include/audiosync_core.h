@@ -147,6 +147,8 @@ extern "C" {
 #define ASC_AIRPLAY_EVENT_REMOTE 13         /* a speaker's remote asked for .remote: send it through the now-playing control */
 #define ASC_AIRPLAY_EVENT_LATENCY_HELD 14   /* an Lf set while a speaker sounds is held (.latency_ms, the held L) until the stream is empty or restarts */
 #define ASC_AIRPLAY_EVENT_STORED 15         /* a PIN pairing whose verify failed stored its credentials; the PAIRING_FAILED that follows ends it: .detail "" or why they last this run only */
+#define ASC_AIRPLAY_EVENT_LET_GO 16         /* let the speaker go while it stays switched on (taken by another sender, or released when nothing plays): remove it, and add it again only on TAKE_BACK or the user's switch */
+#define ASC_AIRPLAY_EVENT_TAKE_BACK 17      /* start the speaker again: remove it if added, then add it */
 
 /* A PAIRED event's .error. */
 #define ASC_AIRPLAY_PAIRED_FOR_SESSION 1 /* paired for this session only: nothing stored or written, it asks for a code every time */
@@ -598,6 +600,12 @@ uint64_t asc_ring_frames_written(const AscRing *ring);
  * its own pace; 0 for NULL.
  */
 float asc_ring_take_peak(const AscRing *ring);
+
+/*
+ * Any thread: the same peak kept apart for the lasting-sound policy (S481),
+ * which polls at its own pace; 0 for NULL.
+ */
+float asc_ring_take_demand_peak(const AscRing *ring);
 
 /*
  * Any thread: the peak of each band of the signal written since the last call
@@ -1944,6 +1952,21 @@ void asc_airplay_set_latency(AscAirPlay *airplay, uint32_t frames);
  * set now is held; false for a NULL or dead handle.
  */
 bool asc_airplay_sounding(const AscAirPlay *airplay);
+
+/*
+ * Hands the lasting-sound policy the source's peak since the last call
+ * (asc_ring_take_demand_peak), measured now; a speaker it lets go or takes
+ * back comes as ASC_AIRPLAY_EVENT_LET_GO or _TAKE_BACK (S481 to S483). NULL
+ * does nothing.
+ */
+void asc_airplay_feed_demand(AscAirPlay *airplay, float peak);
+
+/*
+ * Releases the speakers after `minutes` with nothing playing, or never with 0
+ * (S483); turned off, released speakers come back as TAKE_BACK events. NULL
+ * does nothing.
+ */
+void asc_airplay_set_release_minutes(AscAirPlay *airplay, uint32_t minutes);
 
 /*
  * The stream's Lf in frames from every speaker's reported latency, count
