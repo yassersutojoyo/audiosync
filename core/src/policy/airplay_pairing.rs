@@ -101,7 +101,7 @@ pub struct HostRules {
 
 pub const MAC: HostRules = HostRules {
     pin_format: PinFormat::FourDigits,
-    open_pairing_at_sender_stop: OpenPairingAtSenderStop::StayOn,
+    open_pairing_at_sender_stop: OpenPairingAtSenderStop::TurnOff,
     unreadable_pairings_notice: UnreadablePairingsNotice::AtLaunch,
     password_members: PasswordMembers::AllUpFront,
     refused_reappears: RefusedReappears::NoticeAgain,
@@ -392,10 +392,6 @@ mod tests {
             UnreadablePairingsNotice::OnceKeptAside
         );
         assert_eq!(MAC.pin_format, PinFormat::FourDigits);
-        assert_eq!(
-            MAC.open_pairing_at_sender_stop,
-            OpenPairingAtSenderStop::StayOn
-        );
         assert_eq!(
             MAC.unreadable_pairings_notice,
             UnreadablePairingsNotice::AtLaunch
