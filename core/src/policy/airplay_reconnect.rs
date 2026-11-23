@@ -4,7 +4,7 @@
 //! ports notice (S358) and speakers across a sleep (S412). The sender's own
 //! backoff is the airplay crate's (P142).
 //!
-//! Plain data in and out, so the Mac host can reach it through the FFI.
+//! Plain data in and out; the Mac host keeps its own copy in Swift for now.
 
 use super::Seconds;
 

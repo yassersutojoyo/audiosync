@@ -4,7 +4,7 @@
 //! is asked for its password (P176) and the pairings file's notices (S224).
 //! The pairing exchange itself is the airplay crate's.
 //!
-//! Plain data in and out, so the Mac host can reach it through the FFI.
+//! Plain data in and out; the Mac host keeps its own copy in Swift for now.
 //! Where the hosts still differ, a [`HostRules`] field names the difference
 //! and each host's constant holds what it does today.
 
