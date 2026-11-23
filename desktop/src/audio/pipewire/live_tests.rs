@@ -508,6 +508,109 @@ fn the_whole_system_leaves_audiosync_out() {
     drop(echo);
 }
 
+/// Whether a stream of process `pid` plays into sink `name`.
+fn plays_into(pid: u32, name: &str) -> bool {
+    let graph = Registry::start().unwrap().graph().unwrap();
+    let Some((sink, _)) = graph.named(name) else {
+        return false;
+    };
+    let pid = pid.to_string();
+    graph.links.values().any(|link| {
+        link.input_node == sink
+            && graph
+                .nodes
+                .get(&link.output_node)
+                .is_some_and(|node| node.prop("application.process.id") == Some(pid.as_str()))
+    })
+}
+
+#[test]
+#[ignore = "needs the CI job's PipeWire daemon and sinks as-a and as-b"]
+fn the_whole_system_follows_a_new_default_without_a_gap() {
+    set_default("as-a");
+    let ring = Ring::for_rate(SESSION_RATE).unwrap();
+    let (_control, processor) = equalizer();
+    let capture = stream::start_plan(
+        stream::Plan {
+            wiring: stream::Wiring::Links,
+            filter: Some(graph::Filter::Except(std::process::id())),
+            serial: None,
+        },
+        ring.writer().unwrap(),
+        processor,
+        Feeds::default(),
+    )
+    .unwrap();
+    let path = tone("switch", 440.0, 0.5, 30.0);
+    let app = detached(&format!("pw-play {}", path.display()));
+    std::thread::sleep(Duration::from_millis(1500));
+    assert!(plays_into(app, "as-a"), "the player is not in as-a");
+
+    let began = Instant::now();
+    let stop = Arc::new(AtomicBool::new(false));
+    let poll_stop = Arc::clone(&stop);
+    let poll_ring = Arc::clone(&ring);
+    let poller = std::thread::spawn(move || {
+        let mut polls = Vec::new();
+        while !poll_stop.load(Ordering::Relaxed) {
+            polls.push((began.elapsed(), poll_ring.take_peak()));
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        polls
+    });
+    std::thread::sleep(Duration::from_millis(1000));
+    let switched = began.elapsed();
+    set_default("as-b");
+    std::thread::sleep(Duration::from_millis(1500));
+    stop.store(true, Ordering::Relaxed);
+    let polls = poller.join().unwrap();
+    let moved = plays_into(app, "as-b");
+    let state = capture.state();
+    kill(app);
+    drop(capture);
+    set_default("as-a");
+
+    // The polls' start and end count as loud, so a tone that never came
+    // back, or never came, is one long gap.
+    let loud: Vec<Duration> = std::iter::once(Duration::ZERO)
+        .chain(
+            polls
+                .iter()
+                .filter(|(_, peak)| *peak > 0.1)
+                .map(|(at, _)| *at),
+        )
+        .chain(polls.last().map(|(at, _)| *at))
+        .collect();
+    let gap = loud
+        .windows(2)
+        .map(|pair| pair[1] - pair[0])
+        .max()
+        .unwrap_or_default();
+    let quiet: Vec<Duration> = polls
+        .windows(2)
+        .filter(|pair| pair[0].1 > 0.1 && pair[1].1 <= 0.1)
+        .map(|pair| pair[1].0)
+        .collect();
+    let loudest = polls
+        .iter()
+        .fold(0.0_f32, |most, (_, peak)| most.max(*peak));
+    assert!(moved, "the player did not follow the default to as-b");
+    assert_eq!(state, CaptureState::Running);
+    // Between two loud writes: one relink poll (100 ms), one 1024-frame
+    // quantum (21 ms) and this thread's own 2 ms polling with its jitter.
+    assert!(
+        gap <= Duration::from_millis(130),
+        "longest stretch without the tone {gap:?}; switched at {switched:?}, \
+         first loud poll at {:?}, quiet from {quiet:?}",
+        loud.get(1)
+    );
+    // The tone is at 0.5; captured twice it would read near 1.0.
+    assert!(
+        loudest < 0.75,
+        "peak {loudest}: the player was captured twice"
+    );
+}
+
 #[test]
 #[ignore = "needs the CI job's PipeWire daemon and sinks as-a and as-b"]
 fn one_app_is_captured_alone_and_followed() {
