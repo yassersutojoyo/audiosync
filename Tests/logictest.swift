@@ -3970,6 +3970,14 @@ do {
             && yielding.plan(streaming: true, enabled: ["native:A1"]).add == ["A1"],
           "native airplay: a speaker the core let go leaves the sender and stays out while on, and joins when taken back",
           "\(yieldPlan) \(waitPlan)")
+    var zoneOff = model
+    zoneOff.letGo.insert("A1")
+    zoneOff.removed("A1")
+    zoneOff.keepLetGo(enabled: [])
+    zoneOff.keepLetGo(enabled: ["native:A1"])
+    // covers: S482
+    check(zoneOff.plan(streaming: true, enabled: ["native:A1"]).add == ["A1"],
+          "native airplay: a let-go speaker switched off and on another way (its zone) joins again", "\(zoneOff.letGo)")
 
     // covers: S222
     check(model.apply(.state(id: "A1", .connecting, retryMs: nil)) == nil

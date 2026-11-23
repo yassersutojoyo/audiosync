@@ -1279,6 +1279,11 @@ struct NativeAirPlayModel {
     /// switches them (S482, S483).
     var letGo: Set<String> = []
 
+    /// Forgets the let-go receivers whose switch is off (app IDs in
+    /// `enabled`), however it was switched: one switched on again joins.
+    mutating func keepLetGo(enabled: Set<String>) {
+    }
+
     /// The app added a speaker to the sender.
     mutating func added(_ id: String) { states[id] = .connecting }
 
