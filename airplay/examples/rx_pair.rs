@@ -33,6 +33,8 @@
 //! is the one it ended on.
 //! `--every <s>` prints one `every` line per receiver at that interval:
 //! the sender's latency and the receiver's resend counters so far.
+//! `--latency-frames <n>` sets Lf before the first speaker, as the app
+//! sets it from the receivers' reports (P200).
 //! `delay=<ms>` is the speaker's d_s (P99), set through the speaker options
 //! as a host sets it, so the click shows the sender's own timing; the
 //! example `rx_onset` and `scripts/two_speaker_sync_wsl.sh` measure it.
@@ -103,6 +105,7 @@ struct Args {
     verbose: bool,
     auto: bool,
     every: Option<Duration>,
+    latency_frames: Option<u32>,
 }
 
 #[derive(Default)]
@@ -121,7 +124,7 @@ struct Outcome {
 }
 
 fn usage() -> &'static str {
-    "usage: rx_pair --rx <host:port>[,ap1|ap2|both][,delay=<ms>] [--rx ...] [--seconds <n>] [--join <s> [--leave <s>]] [--tone|--click] [--verbose] [--auto] [--every <s>]"
+    "usage: rx_pair --rx <host:port>[,ap1|ap2|both][,delay=<ms>] [--rx ...] [--seconds <n>] [--join <s> [--leave <s>]] [--tone|--click] [--verbose] [--auto] [--every <s>] [--latency-frames <n>]"
 }
 
 fn parse_rx(text: &str) -> Result<Rx, String> {
@@ -153,6 +156,7 @@ fn parse_args() -> Result<Args, String> {
         verbose: false,
         auto: false,
         every: None,
+        latency_frames: None,
     };
     let mut items = std::env::args().skip(1);
     while let Some(item) = items.next() {
@@ -196,6 +200,14 @@ fn parse_args() -> Result<Args, String> {
                     .filter(|&s| s > 0)
                     .ok_or_else(|| format!("--every {value}: not a whole number above 0"))?;
                 args.every = Some(Duration::from_secs(seconds));
+            }
+            "--latency-frames" => {
+                let value = items.next().ok_or("--latency-frames needs a number")?;
+                args.latency_frames = Some(
+                    value
+                        .parse()
+                        .map_err(|_| format!("--latency-frames {value}: not a whole number"))?,
+                );
             }
             other => return Err(format!("unknown argument '{other}'")),
         }
@@ -457,6 +469,9 @@ fn main() -> ExitCode {
         }
     };
     let clock = sender.clock();
+    if let Some(frames) = args.latency_frames {
+        sender.set_latency(frames);
+    }
     let stop = Arc::new(AtomicBool::new(false));
     let audio = capture(writer, args.source, stop.clone());
 
