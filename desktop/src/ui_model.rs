@@ -208,6 +208,8 @@ pub enum AirPlayProblem {
     NotAccepted,
     /// Pairing with an Apple TV failed, so it is off.
     PairingFailed,
+    /// It turned down the request to show a pairing code, so it is off.
+    CodeRefused,
     /// It needs pairing, which AudioSync for Windows can't do yet.
     PairingNotYet,
     /// Only AirPlay 2 can play it.

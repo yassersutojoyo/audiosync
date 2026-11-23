@@ -4062,7 +4062,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             | AirPlayProblem::NeedsPin
             | AirPlayProblem::StillNeedsCode
             | AirPlayProblem::NotAccepted
-            | AirPlayProblem::PairingFailed => DropReason::NeedsCode,
+            | AirPlayProblem::PairingFailed
+            | AirPlayProblem::CodeRefused => DropReason::NeedsCode,
             _ => DropReason::Unreachable,
         };
         let reaction = reaction(&Incident::SpeakerDropped {
@@ -6492,6 +6493,7 @@ fn ui_problem(problem: AirPlayProblem) -> ui_model::AirPlayProblem {
         AirPlayProblem::StillNeedsCode => P::StillNeedsCode,
         AirPlayProblem::NotAccepted => P::NotAccepted,
         AirPlayProblem::PairingFailed => P::PairingFailed,
+        AirPlayProblem::CodeRefused => P::CodeRefused,
         AirPlayProblem::PairingNotYet => P::PairingNotYet,
         AirPlayProblem::AirPlay2NotYet => P::AirPlay2NotYet,
         AirPlayProblem::TimingUnavailable => P::TimingUnavailable,

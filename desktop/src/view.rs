@@ -6614,6 +6614,7 @@ fn airplay_problem(problem: ui_model::AirPlayProblem) -> AirPlayProblem {
         P::StillNeedsCode => AirPlayProblem::StillNeedsCode,
         P::NotAccepted => AirPlayProblem::NotAccepted,
         P::PairingFailed => AirPlayProblem::PairingFailed,
+        P::CodeRefused => AirPlayProblem::CodeRefused,
         P::PairingNotYet => AirPlayProblem::PairingNotYet,
         P::AirPlay2NotYet => AirPlayProblem::Airplay2NotYet,
         P::TimingUnavailable => AirPlayProblem::TimingUnavailable,
@@ -21215,6 +21216,11 @@ pub(crate) mod tests {
                 ui_model::AirPlayProblem::PlaysInGroup,
                 "Right",
                 "Right plays as part of its stereo pair or home theater group",
+            ),
+            (
+                ui_model::AirPlayProblem::CodeRefused,
+                "Mac mini",
+                "Mac mini turned down the request to show a pairing code, so it's off. If it's a Mac, check Allow AirPlay for in its AirPlay Receiver settings, then turn it on again.",
             ),
             (
                 ui_model::AirPlayProblem::ReceiverUnverified,

@@ -4751,6 +4751,14 @@ do {
         // covers: S223
         check(NativeAirPlay.event(rawFailure) == .pairingFailed(id: "", wrongPin: false, .airPlay2Only, detail: ""),
               "native airplay: a pairing failure keeps its unsupported reason")
+        var refusedCode = AscAirPlayEvent()
+        refusedCode.kind = ASC_AIRPLAY_EVENT_PAIRING_FAILED
+        refusedCode.error = ASC_AIRPLAY_ERROR_CODE_REFUSED
+        _ = c.turnedOnByUser("B2")
+        // covers: S223
+        check(NativeAirPlay.event(refusedCode) == .pairingFailed(id: "", wrongPin: false, .codeRefused, detail: "")
+                && c.apply(.pairingFailed(id: "B2", wrongPin: false, .codeRefused, detail: "")) == .turnOff("native:B2", .codeRefused),
+              "native pairing: a refused code request turns the speaker off saying so")
 
         // An Apple TV that also has a password.
         _ = c.turnedOnByUser("B2")

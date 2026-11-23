@@ -794,6 +794,7 @@ pub fn problem(reason: UserReason) -> AirPlayProblem {
         // receiver that wants another kind of pairing.
         UserReason::PairingRequired => AirPlayProblem::PairingNotYet,
         UserReason::ReceiverUnverified => AirPlayProblem::ReceiverUnverified,
+        UserReason::CodeRefused => AirPlayProblem::CodeRefused,
         UserReason::Unsupported(UnsupportedReason::AirPlay2Only) => AirPlayProblem::AirPlay2NotYet,
         UserReason::Unsupported(UnsupportedReason::Timing) => AirPlayProblem::TimingUnavailable,
         UserReason::Unsupported(UnsupportedReason::TooManyAirPlay2Sessions) => {
@@ -3913,6 +3914,7 @@ impl AirPlaySpeakers {
                     | UserReason::NotResponding
                     | UserReason::ConnectionLost) => problem(reason),
                     UserReason::Incompatible => AirPlayProblem::Unsupported,
+                    UserReason::CodeRefused => AirPlayProblem::CodeRefused,
                     _ => AirPlayProblem::PairingFailed,
                 };
                 events.push(BackendEvent::AirPlayFailed { id: owner, problem });
@@ -6221,6 +6223,25 @@ pub mod tests {
             "{events:?}"
         );
         assert_eq!(airplay.pin_prompt(), None);
+        assert!(!airplay.speakers()[0].enabled);
+    }
+
+    // covers: S223
+    #[test]
+    fn a_pairing_whose_code_request_is_refused_stops_saying_so() {
+        let tv = airplay2_tv(9, "Loft");
+        let id = id_of(&tv);
+        let fake = FakeAirPlay::new();
+        let mut airplay = loft_turns_its_key_down_on_a_switch_on(&fake, &tv);
+        fake.pairing(&tv, pairing_failed(ErrorKind::CodeRefused, false));
+        let events = airplay.poll();
+        assert!(
+            events.contains(&BackendEvent::AirPlayFailed {
+                id: id.clone(),
+                problem: AirPlayProblem::CodeRefused,
+            }),
+            "{events:?}"
+        );
         assert!(!airplay.speakers()[0].enabled);
     }
 

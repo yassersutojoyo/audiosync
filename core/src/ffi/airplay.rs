@@ -416,6 +416,8 @@ pub const AIRPLAY_ERROR_WRONG_PIN: i32 = 10;
 /// A paired speaker didn't prove it is the one that was paired, so the
 /// sender didn't connect; its stored credentials stay (P56).
 pub const AIRPLAY_ERROR_RECEIVER_UNVERIFIED: i32 = 11;
+/// A pairing's receiver won't show a code to this sender (P58).
+pub const AIRPLAY_ERROR_CODE_REFUSED: i32 = 12;
 
 /// What [`asc_airplay_open_pairings`] returns when it can't open a store:
 /// a null or dead handle, or a path that isn't UTF-8.
@@ -925,6 +927,7 @@ fn error_code(reason: UserReason) -> (i32, i32) {
         UserReason::PairingRequired => (AIRPLAY_ERROR_PAIRING_REQUIRED, AIRPLAY_REASON_NONE),
         UserReason::Unsupported(reason) => (AIRPLAY_ERROR_UNSUPPORTED, reason_code(reason)),
         UserReason::ReceiverUnverified => (AIRPLAY_ERROR_RECEIVER_UNVERIFIED, AIRPLAY_REASON_NONE),
+        UserReason::CodeRefused => (AIRPLAY_ERROR_CODE_REFUSED, AIRPLAY_REASON_NONE),
     }
 }
 
@@ -7085,6 +7088,10 @@ mod tests {
         assert_eq!(
             error_code(UserReason::ReceiverUnverified),
             (AIRPLAY_ERROR_RECEIVER_UNVERIFIED, AIRPLAY_REASON_NONE)
+        );
+        assert_eq!(
+            error_code(UserReason::CodeRefused),
+            (AIRPLAY_ERROR_CODE_REFUSED, AIRPLAY_REASON_NONE)
         );
         assert_eq!(
             error_code(UserReason::Unsupported(UnsupportedReason::Timing)),
