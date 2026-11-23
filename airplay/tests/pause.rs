@@ -289,7 +289,8 @@ fn play(receiver: &NetReceiver, id: u8) -> (Sender, HostAudio, Events, DeviceKey
         // The receiver's close stands for any loss (P142), not a takeover (P249).
         evidence_window: None,
         ..SenderConfig::default()
-    }).expect("the sender starts");
+    })
+    .expect("the sender starts");
     let host = HostAudio::start(writer);
     let mut events = Events::default();
     let device = receiver.device(id, PCM_TXT);

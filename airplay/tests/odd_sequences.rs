@@ -118,7 +118,8 @@ fn a_level_set_while_a_speaker_reconnects_is_the_level_it_plays_at() {
         // The receiver's close stands for any loss (P142), not a takeover (P249).
         evidence_window: None,
         ..SenderConfig::default()
-    }).expect("the sender starts");
+    })
+    .expect("the sender starts");
     let _host = HostAudio::start(writer);
     let mut events = Events::default();
     let device = receiver.device(1, PCM_TXT);
@@ -158,7 +159,8 @@ fn a_track_changed_while_a_speaker_reconnects_reaches_it_once_it_plays() {
         // The receiver's close stands for any loss (P142), not a takeover (P249).
         evidence_window: None,
         ..SenderConfig::default()
-    }).expect("the sender starts");
+    })
+    .expect("the sender starts");
     let _host = HostAudio::start(writer);
     let mut events = Events::default();
     let device = receiver.device(1, PCM_TXT);

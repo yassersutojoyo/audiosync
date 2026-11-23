@@ -209,7 +209,8 @@ fn an_unannounced_pair_member_is_retried_at_once_when_announced_again() {
         // The receiver's close stands for any loss (P142), not a takeover (P249).
         evidence_window: None,
         ..SenderConfig::default()
-    }).expect("the sender starts");
+    })
+    .expect("the sender starts");
     let _host = HostAudio::start(writer);
     let mut events = Events::default();
     let script = Script::default();
@@ -382,7 +383,8 @@ fn a_pair_whose_airplay_records_lapse_first_is_unannounced() {
         // The receiver's close stands for any loss (P142), not a takeover (P249).
         evidence_window: None,
         ..SenderConfig::default()
-    }).expect("the sender starts");
+    })
+    .expect("the sender starts");
     let _host = HostAudio::start(writer);
     let mut events = Events::default();
     let script = Script::default();

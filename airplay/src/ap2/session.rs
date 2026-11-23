@@ -1225,6 +1225,11 @@ impl Ap2Session {
                         return;
                     }
                 }
+                // A receiver's TEARDOWN or other request after RECORD counts
+                // as its close (P249).
+                Ok(Some(Message::Request(_))) if self.recorded => {
+                    return self.fail(ErrorKind::Lost, None, None, Some("connection closed"));
+                }
                 Ok(Some(Message::Request(_))) | Err(crate::rtsp::ParseError::UnknownMethod) => {
                     return self.fail(
                         ErrorKind::ProtocolError,

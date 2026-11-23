@@ -531,7 +531,7 @@ fn a_rejected_verification_reports_pairing_required() {
     assert!(link.closed);
 }
 
-// covers: P21, P40, P140
+// covers: P21, P40, P140, P249
 #[test]
 fn rtsp_cseq_starts_at_zero_and_any_stray_message_is_a_protocol_error() {
     let link = playing();
@@ -553,12 +553,17 @@ fn rtsp_cseq_starts_at_zero_and_any_stray_message_is_a_protocol_error() {
     assert_eq!(error.method.map(|m| m.as_str()), Some("OPTIONS"));
     assert!(link.closed);
 
-    // A request from the receiver (P40).
+    // A request from the receiver while it plays, such as its TEARDOWN,
+    // counts as its close and is no protocol error (P249, T5).
     let mut link = playing();
     link.session
-        .handle_input(b"POST /command RTSP/1.0\r\nCSeq: 1\r\n\r\n", link.now);
+        .handle_input(b"TEARDOWN rtsp://x/1 RTSP/1.0\r\nCSeq: 1\r\n\r\n", link.now);
     link.pump();
-    assert_eq!(kinds(&link), [ErrorKind::ProtocolError]);
+    assert_eq!(kinds(&link), [ErrorKind::Lost]);
+    assert!(
+        link.failure()
+            .is_some_and(|error| error.closed_by_receiver())
+    );
     assert!(link.closed);
 
     // A response while nothing is outstanding (P40).

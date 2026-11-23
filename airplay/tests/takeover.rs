@@ -245,3 +245,45 @@ fn a_close_with_no_evidence_waits_for_the_host_and_a_busy_retry_is_taken() {
     assert!(!stopped(&events, &key));
     sender.shutdown();
 }
+
+// A release ends the session as a deselect does: TEARDOWN, then Stopped,
+// with no error and no retry (P250).
+// covers: P250
+#[test]
+fn a_released_speaker_gets_a_teardown_and_no_retry() {
+    let _serial = serial();
+    let Rig {
+        receiver: a,
+        sender,
+        _host,
+        mut events,
+        key,
+        ..
+    } = playing(Duration::from_secs(2));
+    let seen = events.of(&key).len();
+    let connections = a.log().connections.len();
+    sender.remove_speaker(&key);
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Stopped)
+            .is_some(),
+        "{:?}",
+        events.of(&key)
+    );
+    watch(
+        &mut events,
+        &sender,
+        Instant::now() + Duration::from_secs(3),
+    );
+    assert_eq!(a.log().count("TEARDOWN"), 1);
+    assert_eq!(a.log().connections.len(), connections);
+    assert_eq!(retries_or_connects(&events, &key, seen), []);
+    assert!(
+        !events
+            .of(&key)
+            .iter()
+            .skip(seen)
+            .any(|event| matches!(event, SpeakerEvent::Error(_) | SpeakerEvent::Takeover(_)))
+    );
+    sender.shutdown();
+}
