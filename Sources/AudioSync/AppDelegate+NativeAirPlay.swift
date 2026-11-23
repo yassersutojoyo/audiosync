@@ -378,7 +378,7 @@ extension AppDelegate {
     /// the main queue), its rows with it, and the AirPlay section and a
     /// notice show it as failed, both with Retry. The switches stay as
     /// they are, so the speakers rejoin once a new sender runs, except one
-    /// whose password prompt it took (`EveryTimeGuard.streamEnded`).
+    /// whose password prompt or PIN pairing it took (`EveryTimeGuard.streamEnded`).
     private func nativeSenderFailed() {
         guard let native = nativeAirPlay else { return }
         DebugTrace.log("[AudioSync] native AirPlay: the sender stopped after an internal error; Retry starts a new one")

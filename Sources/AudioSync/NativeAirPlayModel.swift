@@ -115,7 +115,8 @@ struct EveryTimeGuard: Equatable {
     /// The same for `model`'s rows that ask for a code every time, also one
     /// that still plays: its PIN session ends at a stream end too (S223).
     /// A failed sender also turns off, with the needs-a-password notice,
-    /// each other row whose password prompt it took with it, as on Windows.
+    /// each other row whose password prompt it took with it, and with the
+    /// needs-a-PIN notice each one whose PIN pairing it took, as on Windows.
     mutating func streamEnded(_ cause: StreamEnd, streaming: Bool, midRebuild: Bool = false,
                               model: NativeAirPlayModel, enabled: Set<String>) -> [NativeAirPlayPlan.TurnOff] {
         let rows = model.rows(enabled: enabled)
@@ -130,7 +131,12 @@ struct EveryTimeGuard: Equatable {
             enabled.contains(id) && !everyTime.contains(id)
                 && NativeAirPlayID.receiver(id).flatMap(model.codeWait) == .password
         }
-        return off + asked.map { NativeAirPlayPlan.TurnOff(id: $0, reason: .needsPassword) }
+        let pairing = rows.filter { id in
+            enabled.contains(id) && !everyTime.contains(id)
+                && NativeAirPlayID.receiver(id).flatMap { model.stages[$0] }?.pairingRuns == true
+        }
+        return off + pairing.map { NativeAirPlayPlan.TurnOff(id: $0, reason: .needsCode) }
+            + asked.map { NativeAirPlayPlan.TurnOff(id: $0, reason: .needsPassword) }
     }
 
     /// A new stream started: a pairing that outlived the last one now
