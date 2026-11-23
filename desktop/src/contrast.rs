@@ -2709,3 +2709,15 @@ fn shuffle_and_repeat_match_the_mac() {
         );
     }
 }
+
+/// A quit switches to All System Audio on every system with no setting for
+/// it (S227), so the Guide neither says streaming stops nor names a switch.
+#[test]
+fn the_guide_on_notices_names_no_quit_switch() {
+    let strings = include_str!("../ui/strings.slint");
+    for name in ["help-notices", "help-notices-linux"] {
+        let text = tr_text(strings, name);
+        assert!(!text.contains("streaming stops"), "{name}: {text}");
+        assert!(!text.contains("Source App Quits"), "{name}: {text}");
+    }
+}
