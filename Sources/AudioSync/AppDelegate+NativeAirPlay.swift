@@ -464,6 +464,7 @@ extension AppDelegate {
             if let name = nativeAirPlay?.model.names[off.id] { airplayNames[id] = name }
             enabledAirPlay.insert(id)
             turnOffNativeSpeaker(id, reason: off.reason, origin: .automatic)
+            if off.reason == .needsCode { nativeAirPlay?.model.turnedOffAsking(off.id) }
         }
     }
 

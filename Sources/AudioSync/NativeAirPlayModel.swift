@@ -841,7 +841,7 @@ struct NativeAirPlayModel {
             guard !known.contains(id), let receiver = NativeAirPlayID.receiver(id),
                   !asksEveryTime(receiver), stages[receiver] == nil else { return nil }
             switch receivers[receiver]?.availability {
-            case .needsPin? where !pairedInAttempt.contains(receiver):
+            case .needsPin? where !pairedInAttempt.contains(receiver) && !refusedOff.contains(receiver):
                 return .init(id: receiver, reason: .needsCode)
             case .needsPassword? where !passwords.contains(receiver):
                 return .init(id: receiver, reason: .needsPassword)
@@ -875,7 +875,7 @@ struct NativeAirPlayModel {
 
     /// Auto-connect turned the receiver `id` off as it appeared asking for a
     /// PIN: it stays off with no new notice until the user turns it on (S349).
-    mutating func turnedOffAsking(_ id: String) {}
+    mutating func turnedOffAsking(_ id: String) { refusedOff.insert(id) }
 
     /// Whether the listed receiver asks for a code every time it connects.
     func asksEveryTime(_ receiver: String) -> Bool {

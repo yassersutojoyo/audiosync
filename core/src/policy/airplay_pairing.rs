@@ -104,7 +104,7 @@ pub const MAC: HostRules = HostRules {
     open_pairing_at_sender_stop: OpenPairingAtSenderStop::TurnOff,
     unreadable_pairings_notice: UnreadablePairingsNotice::AtLaunch,
     password_members: PasswordMembers::AllUpFront,
-    refused_reappears: RefusedReappears::NoticeAgain,
+    refused_reappears: RefusedReappears::Quiet,
 };
 
 /// The Windows and Linux app.
@@ -498,10 +498,10 @@ mod tests {
     }
 
     #[test]
-    fn a_code_refusal_reappearing_posts_again_on_the_mac_and_stays_quiet_on_desktop() {
+    fn a_code_refusal_reappearing_posts_again_or_stays_quiet_by_rule() {
         // covers: S349
-        assert!(!refusal_holds(MAC.refused_reappears, true));
-        assert!(refusal_holds(MAC.refused_reappears, false));
+        assert!(!refusal_holds(RefusedReappears::NoticeAgain, true));
+        assert!(refusal_holds(RefusedReappears::NoticeAgain, false));
         assert!(refusal_holds(DESKTOP.refused_reappears, true));
         assert!(refusal_holds(DESKTOP.refused_reappears, false));
     }
