@@ -3959,6 +3959,18 @@ do {
             && model.plan(streaming: true, enabled: []).remove == ["A1"],
           "EC13 native airplay: a speaker leaves when switched off or when streaming stops")
 
+    var yielding = model
+    yielding.letGo.insert("A1")
+    let yieldPlan = yielding.plan(streaming: true, enabled: ["native:A1"])
+    yielding.removed("A1")
+    let waitPlan = yielding.plan(streaming: true, enabled: ["native:A1"])
+    yielding.letGo.remove("A1")
+    // covers: S482, S483
+    check(yieldPlan.remove == ["A1"] && waitPlan.isEmpty
+            && yielding.plan(streaming: true, enabled: ["native:A1"]).add == ["A1"],
+          "native airplay: a speaker the core let go leaves the sender and stays out while on, and joins when taken back",
+          "\(yieldPlan) \(waitPlan)")
+
     // covers: S222
     check(model.apply(.state(id: "A1", .connecting, retryMs: nil)) == nil
             && model.apply(.state(id: "A1", .playing, retryMs: nil)) == .playingChanged("native:A1", playing: true),
@@ -19873,6 +19885,13 @@ do {
     check(!AppSettings.load { _ in nil }.resumesAfterSleep
             && AppSettings.load { key -> Any? in key == AppSettings.Keys.resumesAfterSleep ? true : nil }.resumesAfterSleep,
           "wake resume: Resume Playback After Sleep is off unless turned on")
+    let releaseStored: [String: Any] = [AppSettings.Keys.releaseWhenQuiet: true, AppSettings.Keys.releaseMinutes: 30]
+    let releaseDamaged: [String: Any] = [AppSettings.Keys.releaseWhenQuiet: true, AppSettings.Keys.releaseMinutes: 0]
+    // covers: S483
+    check(AppSettings.load { _ in nil }.releaseAfterMinutes == 0
+            && AppSettings.load { releaseStored[$0] }.releaseAfterMinutes == 30
+            && AppSettings.load { releaseDamaged[$0] }.releaseAfterMinutes == 15,
+          "settings: releasing speakers when nothing plays is off by default, and a stored idle time under a minute keeps 15")
     check(NowPlayingMonitor.polls(shown: false, sending: false, casting: false, remote: false, resumeArmed: true)
             && !NowPlayingMonitor.polls(shown: false, sending: false, casting: false, remote: false, resumeArmed: false)
             && NowPlayingMonitor.polls(shown: true, sending: false, casting: false, remote: false, resumeArmed: false),

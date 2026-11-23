@@ -53,6 +53,8 @@ final class CoreDelayRing {
     /// Any thread: the largest sample magnitude written since the last call
     /// (1 is full scale), for the input level meter.
     func takePeak() -> Float { asc_ring_take_peak(handle) }
+    /// Any thread: the same peak kept apart for the lasting-sound policy (S481).
+    func takeDemandPeak() -> Float { asc_ring_take_demand_peak(handle) }
     /// Any thread: the peak of the bass, mid and treble bands written since
     /// the last call, for a capture at `rate` Hz; zeros for a rate the core
     /// doesn't take. The first call turns the band split on.

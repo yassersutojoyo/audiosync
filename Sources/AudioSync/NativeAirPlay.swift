@@ -53,6 +53,12 @@ final class NativeAirPlay {
     private var playback: (app: String?, state: Int32) = (nil, ASC_AIRPLAY_PLAYBACK_UNKNOWN)
     /// Gets each transport control a speaker's remote asked for (main queue).
     var onRemote: ((NowPlayingMonitor.Command) -> Void)?
+    /// The source's peak since the last call, for the lasting-sound policy
+    /// (main queue, S481).
+    var demandPeak: (() -> Float?)?
+    /// Gets each receiver the core lets go (true) or takes back (false) while
+    /// it stays switched on (main queue, S482, S483).
+    var onDemand: ((String, Bool) -> Void)?
     /// Whether the user paused the speakers on purpose (main queue, P213).
     private var explicitPause = ExplicitPause()
     /// While paused, checks whether the capture carries sound again (main queue).
@@ -726,21 +732,44 @@ final class NativeAirPlay {
         }
         var events: [NativeSpeakerEvent] = []
         var remotes: [NowPlayingMonitor.Command] = []
+        var demands: [(String, Bool)] = []
         var rawEvent = AscAirPlayEvent()
         while asc_airplay_next_event(handle, &rawEvent) {
             if rawEvent.kind == ASC_AIRPLAY_EVENT_REMOTE {
                 if let command = Self.remote(rawEvent.remote) { remotes.append(command) }
+            } else if rawEvent.kind == ASC_AIRPLAY_EVENT_LET_GO || rawEvent.kind == ASC_AIRPLAY_EVENT_TAKE_BACK {
+                demands.append((Self.text(rawEvent.id), rawEvent.kind == ASC_AIRPLAY_EVENT_LET_GO))
             } else if let event = Self.event(rawEvent) {
                 events.append(event)
             }
         }
+        // The peak is taken on the main queue, which owns the engine; its
+        // let-go and take-back events come with the next poll.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.active else { return }
+            let peak = self.demandPeak?() ?? 0
+            self.queue.async { [weak self] in
+                if let handle = self?.handle { asc_airplay_feed_demand(handle, peak) }
+            }
+        }
         let sounding = asc_airplay_sounding(handle)
-        guard !changes.isEmpty || !events.isEmpty || !remotes.isEmpty || sounding != lastSounding else { return }
+        guard !changes.isEmpty || !events.isEmpty || !remotes.isEmpty || !demands.isEmpty
+                || sounding != lastSounding else { return }
         lastSounding = sounding
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.apply(changes, events, sounding: sounding)
             self.handOver(remotes)
+            if self.active { for (id, letGo) in demands { self.onDemand?(id, letGo) } }
+        }
+    }
+
+    /// Releases the speakers after `minutes` with nothing playing, or never
+    /// with 0 (S483).
+    func setReleaseMinutes(_ minutes: Int) {
+        let minutes = UInt32(clamping: max(0, minutes))
+        queue.async { [weak self] in
+            if let handle = self?.handle { asc_airplay_set_release_minutes(handle, minutes) }
         }
     }
 

@@ -412,6 +412,9 @@ final class StreamEngine {
     /// scale), for the input level meter; nil while no session runs.
     func takePeak() -> Float? { parts?.ring.takePeak() }
 
+    /// The same for the lasting-sound policy (S481), which polls at its own pace.
+    func takeDemandPeak() -> Float? { parts?.ring.takeDemandPeak() }
+
     /// The bass, mid and treble peaks captured since the last call, for the
     /// Now Playing art; nil while no session runs.
     func takeBandPeaks() -> [Float]? { parts?.ring.takeBandPeaks(captureRate: capture.sampleRate) }
