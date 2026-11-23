@@ -29,7 +29,6 @@ impl App {
             on_appearance_chosen => invoke_appearance_chosen(choice),
             on_launch_at_login_toggled => invoke_launch_at_login_toggled(on),
             on_resume_after_sleep_toggled => invoke_resume_after_sleep_toggled(on),
-            on_switch_source_on_quit_toggled => invoke_switch_source_on_quit_toggled(on),
             on_volume_keys_toggled => invoke_volume_keys_toggled(on),
             on_show_virtual_devices_toggled => invoke_show_virtual_devices_toggled(on),
             on_speaker_unhide_requested => invoke_speaker_unhide_requested(id),
@@ -120,8 +119,6 @@ impl App {
         s.set_appearance(m.get_appearance());
         s.set_launch_at_login(m.get_launch_at_login());
         s.set_resume_after_sleep(m.get_resume_after_sleep());
-        s.set_switch_source_on_quit(m.get_switch_source_on_quit());
-        s.set_switch_source_on_quit_available(m.get_switch_source_on_quit_available());
         s.set_volume_keys_available(m.get_volume_keys_available());
         s.set_volume_keys(m.get_volume_keys());
         s.set_show_virtual_devices(m.get_show_virtual_devices());

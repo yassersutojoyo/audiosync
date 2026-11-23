@@ -491,10 +491,6 @@ export global Strings {
     out property <string> remote-source-not-connected: @tr("not connected");
     out property <string> remote-failed: @tr("The web remote couldn't start. Turn it off and on again.");
     out property <string> remote-forget-failed: @tr("AudioSync couldn't save the list of paired devices, so they are paired again once you exit AudioSync and open it again. Select Forget All Remote Devices again.");
-    // A check item in File: on, the captured app quitting moves streaming to
-    // the whole system; off, streaming stops. "Source app", since "the app"
-    // in AudioSync's own File menu can read as AudioSync itself.
-    out property <string> switch-source-on-quit: @tr("Switch to All System Audio When the Source App Quits");
     out property <string> resume-after-sleep: @tr("Resume Playback After Sleep");
     out property <string> resume-after-sleep-info: @tr("When your PC wakes, the song that was playing continues once your speakers are back.");
 
@@ -1173,7 +1169,7 @@ export global Strings {
     out property <string> help-remote-linux: @tr("Control AudioSync from a phone on the same network as this PC: each speaker's switch, volume and delay, Master Volume, the source or a mix of several apps, each zone's switch and volume, and the presets. It also shows what's playing. Choose Web Remote… in the gear menu, turn Web Remote on, and open the address it shows on the phone (or scan its QR code). Add the page to the Home Screen before you enter the code, then open AudioSync from the new icon and pair there: on iPhone, a pairing made in Safari doesn't carry over to the Home Screen app. The window shows these steps for iPhone and Android. Each code works once and for 10 minutes; the window shows the next one, and New Code makes a fresh one.\n\nThe page uses plain HTTP, so use the web remote only on your home network. Forget All Remote Devices unpairs every phone, also while the remote is off. If another app already uses the port, the window says so and lets you pick another one.");
     out property <string> help-notices-title: @tr("Notices");
     out property <string> help-notices: @tr("When something needs your attention, such as a speaker that was disconnected or an app that quit, a notice appears at the top of the main window, and the newest one in the AudioSync tray panel. Use its close button to dismiss it, or Dismiss All when there is more than one. Many notices also clear themselves once the cause is gone.\n\nWhen the app you picked as the source quits, streaming stops and a notice says so. To keep playing instead, turn on Switch to All System Audio When the Source App Quits in Settings: AudioSync then moves to All System Audio, and stays there when the app opens again.");
-    out property <string> help-notices-linux: @tr("When something needs your attention, such as a speaker that was disconnected or an app that quit, a notice appears at the top of the main window. Use its close button to dismiss it, or Dismiss All when there is more than one. Many notices also clear themselves once the cause is gone.\n\nWhen the app you picked as the source quits, streaming stops and a notice says so. To keep playing instead, turn on Switch to All System Audio When the Source App Quits in Settings: AudioSync then moves to All System Audio, and stays there when the app opens again.");
+    out property <string> help-notices-linux: @tr("When something needs your attention, such as a speaker that was disconnected or an app that quit, a notice appears at the top of the main window. Use its close button to dismiss it, or Dismiss All when there is more than one. Many notices also clear themselves once the cause is gone.");
 
     // A notice's dismiss button, for Narrator: it names the notice in a few
     // words (its title), so the next notice's button, which takes the focus

@@ -25,7 +25,6 @@ use audiosync_core::eq::{self, CurveMatch, EqSettings};
 use audiosync_core::meter;
 use audiosync_core::policy::device_volume::Hint;
 use audiosync_core::policy::presets::new_preset_name;
-use audiosync_core::policy::source_quit::WhenSourceQuits;
 use audiosync_core::policy::speakers::MAX_NOTICES;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 
@@ -3424,8 +3423,6 @@ impl App {
         self.main
             .set_check_updates_automatically(check_updates_automatically);
         self.main.set_volume_keys_available(cfg!(windows));
-        self.main
-            .set_switch_source_on_quit_available(!cfg!(windows));
         self.main.set_volume_keys(keys_switch);
         self.show_settings_state();
         self.take_volume_keys(volume_keys::keys_taken(
@@ -3813,15 +3810,6 @@ impl App {
         let w = weak.clone();
         main.on_mix_mode_selected(move |on| {
             with_app(&w, |app| app.update(|b| b.set_mix_all_except(on)));
-        });
-        let w = weak.clone();
-        main.on_switch_source_on_quit_toggled(move |on| {
-            let setting = if on {
-                WhenSourceQuits::SwitchToSystem
-            } else {
-                WhenSourceQuits::Stop
-            };
-            with_app(&w, |app| app.update(|b| b.set_when_source_quits(setting)))
         });
         let w = weak.clone();
         main.on_resume_after_sleep_toggled(move |on| {
@@ -6115,7 +6103,6 @@ impl WindowState for MainWindow {
             self.window(),
             &self.global::<Motion>(),
         ));
-        self.set_switch_source_on_quit(state.when_source_quits == WhenSourceQuits::SwitchToSystem);
         self.set_resume_after_sleep(state.resume_after_sleep);
     }
 
@@ -25526,9 +25513,8 @@ pub(crate) mod tests {
         assert!(app.main.invoke_shortcut(",".into(), true, false));
         app.main.invoke_speaker_hide_requested("local:desk".into());
         let strings = app.main.global::<crate::Strings>();
-        // Volume Keys shows on Windows only, the quit switch on Linux only.
+        // Volume Keys shows on Windows only.
         let labels: Vec<_> = [
-            (!cfg!(windows)).then(|| strings.get_switch_source_on_quit()),
             cfg!(windows).then(|| strings.get_volume_keys()),
             Some(strings.get_unhide()),
         ]
