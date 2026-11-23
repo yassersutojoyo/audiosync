@@ -19214,24 +19214,32 @@ do {
     check(auditSwitch.contains(".overlay(alignment: on ? .trailing : .leading) {") && auditSwitch.contains(".drawingGroup()")
             && !auditSwitch.contains("ZStack(alignment: on ? .trailing : .leading)"),
           "streaming switch source: the knob sits on the track and both draw in one pass, so the off knob is not a pixel low")
-    let auditTitle = auditPart("MainWindow.swift", "struct ScrollingTitle: View")
-    check(auditTitle.contains(".mask(MarqueeEdges(") && auditTitle.contains("Marquee.edges(offset:"),
-          "scrolling title source: a running name fades out at the edge it is cut on, so no cut letter meets the dot beside it")
+    func auditMask(_ offset: CGFloat) -> [CGFloat] {
+        Marquee.maskStops(fades: Marquee.edges(offset: offset, overflow: 60), width: 256).map { $0.location }
+    }
+    let auditCutMask = auditMask(30), auditStartMask = auditMask(0), auditEndMask = auditMask(60)
+    check(auditCutMask[2] == 8.0 / 256 && auditCutMask[3] == 1 - 4.0 / 256
+            && auditStartMask[2] == 0 && auditStartMask[3] < 1 && auditEndMask[2] > 0 && auditEndMask[3] == 1,
+          "scrolling title: a running name fades out at the edge it is cut on, so no cut letter meets the dot beside it",
+          "\(auditCutMask) \(auditStartMask) \(auditEndMask)")
     let auditEdges = ([0, 3, 30, 57, 60] as [CGFloat]).map { Marquee.edges(offset: $0, overflow: 60) }
     check(auditEdges.map(\.leading) == [0, 3, 8, 8, 8] && auditEdges.map(\.trailing) == [4, 4, 4, 3, 0]
             && Marquee.edges(offset: 0, overflow: 0) == (0, 0),
           "scrolling title: only an edge that cuts a letter fades, the leading one up to 8 pt so the first letter while it scrolls stays near the artist's, the trailing one half that")
-    let auditZone = auditPart("MainWindow.swift", "ZoneCard: View")
-    check(auditZone.contains(".modifier(FoldTurn(open: expanded))")
-            && !auditZone.contains(".rotationEffect(.degrees(expanded ? 90 : 0))")
-            && auditZone.contains("withAnimation(AppModel.delayPanelMotion(reduceMotion: reduceMotion))"),
-          "zone card source: the chevron turns on the fold's own progress and curve, reading Reduce Motion from the view")
+    let auditTurns = [0, 0.125, 0.25, 0.5, 1].map { FoldTurn.degrees($0, reduceMotion: false) }
+    check(FoldTurn(open: true).animatableData == 1 && FoldTurn(open: false).animatableData == 0
+            && auditTurns == [0, 0.125, 0.25, 0.5, 1].map { 90 * DisclosedPane.edge($0, reduceMotion: false) }
+            && auditTurns.first == 0 && auditTurns[3] == 90 && auditTurns[2] > 0 && auditTurns[2] < 90
+            && FoldTurn.degrees(0.1, reduceMotion: true) == 90 && FoldTurn.degrees(0, reduceMotion: true) == 0
+            && AppModel.delayPanelMotion(reduceMotion: true) == .linear(duration: MainMotion.reducedFade)
+            && AppModel.delayPanelMotion(reduceMotion: false) == .linear(duration: PowerMotion.duration),
+          "fold chevron: it turns on the fold's own progress and curve, done when the pane's edge stops, jumping under Reduce Motion",
+          "\(auditTurns)")
 }
 
 // MARK: The panel's zone fold fades its rows before it folds and after it unfolds, as the main window does (MenuBar.swift, PanelZoneHeader.swift)
 do {
     let panelFoldBar = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
-    let panelFoldHeader = (try? String(contentsOfFile: "Sources/AudioSync/PanelZoneHeader.swift", encoding: .utf8)) ?? ""
     let panelFoldRows = panelFoldBar.components(separatedBy: "private var speakerRows: some View {").dropFirst().first?
         .components(separatedBy: "\n    }\n").first ?? ""
     let panelFoldBody = panelFoldBar.components(separatedBy: "private func fold(").dropFirst().first?
@@ -19242,9 +19250,6 @@ do {
     check(panelFoldBody.contains("foldStart = Self.uptime") && !panelFoldBody.contains("asyncAfter(")
             && panelFoldBar.contains("{ $0.size.height } action: { model.panelContentHeight($0) }"),
           "menu bar panel source: a fold resizes the panel on each frame its rows move, from the content's own laid-out height, with nothing scheduled for later")
-    check(panelFoldHeader.contains(".modifier(FoldTurn(open: expanded))")
-            && !panelFoldHeader.contains(".rotationEffect(.degrees(expanded ? 90 : 0))"),
-          "panel zone header source: the chevron turns on the fold's own progress and curve")
 }
 
 // MARK: The menu bar panel's height moves with a fold's rows; a running title's cut edge shows no sliver (WindowRules.swift)
