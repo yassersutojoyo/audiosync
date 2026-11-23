@@ -4,8 +4,8 @@
 
 mod common;
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -150,12 +150,19 @@ fn a_level_set_while_the_device_is_paused_reaches_it_and_stays_after_play() {
     session.set_volume(0.3).expect("sent while paused");
     let until = Instant::now() + Duration::from_secs(3);
     while last_level(&device) != Some(json!(0.3)) {
-        assert!(Instant::now() < until, "the level never reached the paused device");
+        assert!(
+            Instant::now() < until,
+            "the level never reached the paused device"
+        );
         session.run_for(Duration::from_millis(50));
     }
     play_on_device(&device, &mut session);
     session.run_for(Duration::from_millis(500));
-    assert_eq!(last_level(&device), Some(json!(0.3)), "no older level after play");
+    assert_eq!(
+        last_level(&device),
+        Some(json!(0.3)),
+        "no older level after play"
+    );
     session.stop();
     device.join();
 }
@@ -261,9 +268,11 @@ fn a_speaker_toggled_off_and_on_fast_plays_again_on_the_same_device() {
         );
     }
     let last = last.expect("started");
-    wait_for(&host, Duration::from_secs(15), |event| {
-        matches!(event, HostEvent::Started { attempt, .. } if *attempt == last)
-    });
+    wait_for(
+        &host,
+        Duration::from_secs(15),
+        |event| matches!(event, HostEvent::Started { attempt, .. } if *attempt == last),
+    );
     host.set_volume(0.25);
     let until = Instant::now() + Duration::from_secs(3);
     while last_level(&device) != Some(json!(0.25)) {
