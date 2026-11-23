@@ -5529,6 +5529,32 @@ do {
           "off \(sfOff), idle \(sfIdleOff), rejoin \(sfRejoin), relisted \(sfRelisted), reopened \(String(describing: sfReopened))")
 }
 
+// MARK: A sender that fails while an Apple TV's PIN pairing runs turns it off with the needs-a-PIN notice, as on Windows
+do {
+    var psoModel = NativeAirPlayModel()
+    for id in ["T1", "T2"] {
+        psoModel.apply(.appeared(NativeReceiver(id: id, name: id, model: "", availability: .needsPin, reason: nil, hints: [])))
+    }
+    psoModel.apply(.appeared(NativeReceiver(id: "O2", name: "O2", model: "", availability: .available, reason: nil, hints: [])))
+    psoModel.added("O2")
+    _ = psoModel.apply(.state(id: "O2", .playing, retryMs: nil))
+    let psoPairing = psoModel.turnedOnByUser("T1")
+    _ = psoModel.turnedOnByUser("T2")
+    _ = psoModel.apply(.pinNeeded(id: "T2"))
+    let psoOn: Set<String> = ["native:T1", "native:T2", "native:O2"]
+    var psoHand = EveryTimeGuard()
+    psoHand.turnedOnByHand(["native:T1", "native:T2"])
+    let psoOff = psoHand.streamEnded(.senderFailed, streaming: true, model: psoModel, enabled: psoOn)
+    var psoIdleHand = EveryTimeGuard()
+    let psoIdleOff = psoIdleHand.streamEnded(.senderFailed, streaming: false, model: psoModel, enabled: psoOn)
+    // covers: S223
+    check(psoPairing == .startPairing("T1")
+            && psoOff == [.init(id: "native:T1", reason: .needsCode), .init(id: "native:T2", reason: .needsCode)]
+            && psoIdleOff == psoOff,
+          "sender failure: an Apple TV whose PIN pairing runs or whose PIN prompt is open goes off with the needs-a-PIN notice, the others rejoin",
+          "off \(psoOff), idle \(psoIdleOff)")
+}
+
 // MARK: A sender Retry keeps what the run learned: passwords typed, refused speakers, turned-down credentials
 do {
     func rkReceiver(_ id: String, _ availability: NativeReceiver.Availability) -> NativeReceiver {

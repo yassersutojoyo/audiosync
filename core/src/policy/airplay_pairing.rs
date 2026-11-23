@@ -361,6 +361,15 @@ mod tests {
     }
 
     #[test]
+    fn the_mac_turns_an_open_pin_pairing_off_at_a_sender_stop_as_desktop_does() {
+        // covers: S223
+        assert_eq!(
+            MAC.open_pairing_at_sender_stop,
+            DESKTOP.open_pairing_at_sender_stop
+        );
+    }
+
+    #[test]
     fn an_unreadable_pairings_file_is_told_at_launch_or_once_kept_aside_by_rule() {
         // covers: S224
         use PairingsMoment::{KeptAside, Launch};
