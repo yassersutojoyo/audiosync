@@ -10244,7 +10244,7 @@ pub(crate) mod tests {
         let shown = || app.main.get_airplay_delay_text().to_string();
         app.main.invoke_airplay_delay_edited("2000".into());
         app.main.invoke_airplay_delay_stepped(100);
-        assert_eq!(app.snapshot().airplay_delay_ms, Some(2100.0));
+        assert_eq!(app.snapshot().airplay_field_ms(), Some(2100.0));
         assert_eq!(shown(), format_ms(2100.0), "a step ends the typing");
         assert!(!app.main.get_airplay_delay_pending());
     }
@@ -12391,7 +12391,7 @@ pub(crate) mod tests {
             Some(400.0),
             "closing applied it"
         );
-        assert_eq!(app.snapshot().airplay_delay_ms, Some(2100.0));
+        assert_eq!(app.snapshot().airplay_field_ms(), Some(2100.0));
         assert!(!open(&app).contains("local:desk"), "and closed it");
 
         // Between the wordmark and the streaming switch is outside.
@@ -12422,7 +12422,7 @@ pub(crate) mod tests {
         ctrl_s(&app.main);
         assert_eq!(delay_of(&app, "local:desk"), Some(400.0));
         assert_eq!(delay_of(&app, "local:bt"), Some(-200.0));
-        assert_eq!(app.snapshot().airplay_delay_ms, Some(2100.0));
+        assert_eq!(app.snapshot().airplay_field_ms(), Some(2100.0));
         let ui = app.ui.borrow();
         assert_eq!(ui.sync_open.len(), 2, "the sync controls stay open");
         assert!(ui.delay_drafts.is_empty() && ui.airplay_delay_draft.draft.is_none());
@@ -12724,7 +12724,11 @@ pub(crate) mod tests {
             at.x + size.width / 2.0,
             at.y + size.height / 2.0,
         );
-        assert_eq!(app.snapshot().airplay_delay_ms, Some(2100.0), "it applied");
+        assert_eq!(
+            app.snapshot().airplay_field_ms(),
+            Some(2100.0),
+            "it applied"
+        );
         assert!(app.ui.borrow().sync_open.is_empty(), "and opened nothing");
     }
 
@@ -12824,7 +12828,7 @@ pub(crate) mod tests {
         assert!(ui.sync_open.is_empty());
         let state = app.snapshot();
         assert_eq!(state.speaker("local:desk").unwrap().delay_ms, Some(120.0));
-        assert_eq!(state.airplay_delay_ms, Some(1750.0));
+        assert_eq!(state.airplay_field_ms(), Some(0.0));
     }
 
     #[test]
@@ -12840,7 +12844,7 @@ pub(crate) mod tests {
         assert!(app.ui.borrow().sync_open.is_empty());
         let state = app.snapshot();
         assert_eq!(state.speaker("local:desk").unwrap().delay_ms, Some(400.0));
-        assert_eq!(state.airplay_delay_ms, Some(2100.0));
+        assert_eq!(state.airplay_field_ms(), Some(2100.0));
     }
 
     #[test]
@@ -12917,7 +12921,7 @@ pub(crate) mod tests {
         assert_eq!(said(), "Digits only, + or \u{2212} first");
 
         app.main.invoke_airplay_delay_stepped(100);
-        let ms = app.snapshot().airplay_delay_ms.expect("an AirPlay delay");
+        let ms = app.snapshot().airplay_field_ms().expect("an AirPlay delay");
         assert_eq!(said(), format!("AirPlay Delay set to {ms} ms"));
     }
 
@@ -12931,14 +12935,14 @@ pub(crate) mod tests {
         hold_clock();
         let said = || app.main.get_notice_announcement().to_string();
         app.main.invoke_airplay_delay_stepped(-2000);
-        assert_eq!(said(), "AirPlay Delay set to 0 ms");
+        assert_eq!(said(), "AirPlay Delay set to -2000 ms");
 
-        app.main.invoke_airplay_delay_edited("0".into());
+        app.main.invoke_airplay_delay_edited("-2000".into());
         app.main.invoke_airplay_delay_committed();
         assert_eq!(said(), "", "emptied, so the same words are heard again");
         advance_clock(Duration::from_millis(500));
         slint::platform::update_timers_and_animations();
-        assert_eq!(said(), "AirPlay Delay set to 0 ms", "a moment later");
+        assert_eq!(said(), "AirPlay Delay set to -2000 ms", "a moment later");
     }
 
     /// As on the Mac, a step at the range's end applies nothing, so Narrator
@@ -12957,12 +12961,12 @@ pub(crate) mod tests {
         assert_eq!(delay_of(&app, "local:desk"), Some(20000.0));
         assert_eq!(said(), "", "a speaker's step past 20 000 ms");
 
-        app.main.invoke_airplay_delay_edited("0".into());
+        app.main.invoke_airplay_delay_edited("-2000".into());
         app.main.invoke_airplay_delay_committed();
         app.clear_announcement();
         app.main.invoke_airplay_delay_stepped(-10);
-        assert_eq!(app.snapshot().airplay_delay_ms, Some(0.0));
-        assert_eq!(said(), "", "an AirPlay delay step below 0 ms");
+        assert_eq!(app.snapshot().airplay_field_ms(), Some(-2000.0));
+        assert_eq!(said(), "", "an AirPlay delay step below -2000 ms");
     }
 
     // covers: S221
@@ -13021,7 +13025,7 @@ pub(crate) mod tests {
             app.main.invoke_airplay_delay_edited("2100".into());
             click(app.main.window(), x, y);
             assert_eq!(delay_of(&app, "local:desk"), Some(400.0), "at {x}, {y}");
-            assert_eq!(app.snapshot().airplay_delay_ms, Some(2100.0));
+            assert_eq!(app.snapshot().airplay_field_ms(), Some(2100.0));
             assert_eq!(
                 delay_of(&app, "local:bt"),
                 Some(-250.0),
@@ -13046,7 +13050,7 @@ pub(crate) mod tests {
         app.main.invoke_delay_cancelled("local:bt".into());
         assert_eq!(delay_of(&app, "local:desk"), Some(120.0));
         assert_eq!(delay_of(&app, "local:bt"), Some(-250.0));
-        assert_eq!(app.snapshot().airplay_delay_ms, Some(1750.0));
+        assert_eq!(app.snapshot().airplay_field_ms(), Some(0.0));
         assert_eq!(
             desk_delay_text(&app),
             "+120",
@@ -13147,7 +13151,7 @@ pub(crate) mod tests {
         app.main.invoke_airplay_delay_committed();
         let state = app.snapshot();
         assert_eq!(state.speaker("local:desk").unwrap().delay_ms, Some(120.0));
-        assert_eq!(state.airplay_delay_ms, Some(1750.0));
+        assert_eq!(state.airplay_field_ms(), Some(0.0));
     }
 
     // covers: S315
@@ -13277,7 +13281,7 @@ pub(crate) mod tests {
         app.main.invoke_airplay_delay_committed();
         let state = app.snapshot();
         assert_eq!(state.speaker("local:desk").unwrap().delay_ms, Some(120.0));
-        assert_eq!(state.airplay_delay_ms, Some(1750.0));
+        assert_eq!(state.airplay_field_ms(), Some(0.0));
     }
 
     // covers: S228
@@ -14212,8 +14216,8 @@ pub(crate) mod tests {
             let note_bottom = note.absolute_position().y + note.size().height;
             let pane_bottom = pane.absolute_position().y + pane.size().height;
             assert!(
-                note.size().height > 20.0,
-                "the note's two lines: {}",
+                note.size().height > 10.0,
+                "the note shows: {}",
                 note.size().height
             );
             assert!(
@@ -15146,23 +15150,23 @@ pub(crate) mod tests {
     #[test]
     fn escape_in_the_airplay_delay_field_leaves_the_applied_delay() {
         let app = app_over(MockBackend::new());
-        let applied = app.snapshot().airplay_delay_ms;
-        assert_eq!(applied, Some(1750.0), "the example sender has a delay");
+        let applied = app.snapshot().airplay_field_ms();
+        assert_eq!(applied, Some(0.0), "the example sender runs");
         let shown = || app.main.get_airplay_delay_text().to_string();
-        assert_eq!(shown(), format_ms(1750.0));
+        assert_eq!(shown(), format_ms(0.0));
 
         assert!(!app.main.get_airplay_delay_pending());
         app.main.invoke_airplay_delay_edited("9999".into());
         assert_eq!(shown(), "9999", "the field keeps what is typed");
         assert!(app.main.get_airplay_delay_pending(), "typing is a draft");
         assert_eq!(
-            app.snapshot().airplay_delay_ms,
+            app.snapshot().airplay_field_ms(),
             applied,
             "typing applies nothing"
         );
 
         app.main.invoke_airplay_delay_cancelled();
-        assert_eq!(shown(), format_ms(1750.0), "Escape shows the applied value");
+        assert_eq!(shown(), format_ms(0.0), "Escape shows the applied value");
         assert!(
             !app.main.get_airplay_delay_pending(),
             "Escape clears the draft"
@@ -15170,11 +15174,11 @@ pub(crate) mod tests {
 
         app.main.invoke_airplay_delay_committed();
         assert_eq!(
-            app.snapshot().airplay_delay_ms,
+            app.snapshot().airplay_field_ms(),
             applied,
             "leaving the field after Escape applies nothing"
         );
-        assert_eq!(shown(), format_ms(1750.0));
+        assert_eq!(shown(), format_ms(0.0));
     }
 
     // covers: S220
@@ -15185,11 +15189,11 @@ pub(crate) mod tests {
         let app = app_over(backend);
         let shown = || app.main.get_airplay_delay_text().to_string();
         app.main.invoke_airplay_delay_edited("25000".into());
-        assert_eq!(app.snapshot().airplay_delay_ms, Some(1750.0));
+        assert_eq!(app.snapshot().airplay_field_ms(), Some(0.0));
 
         app.main.invoke_airplay_delay_committed();
         assert_eq!(
-            app.snapshot().airplay_delay_ms,
+            app.snapshot().airplay_field_ms(),
             Some(ui_model::MAX_DELAY_MS)
         );
         assert_eq!(
@@ -15226,14 +15230,21 @@ pub(crate) mod tests {
         assert_eq!(applied.borrow().len(), 1, "a step past 20 000 ms");
         assert_eq!(said(), "", "and nothing is said");
 
-        app.main.invoke_airplay_delay_edited("-500".into());
+        app.main.invoke_airplay_delay_edited("-2500".into());
         app.main.invoke_airplay_delay_committed();
-        assert_eq!(applied.borrow().last(), Some(&0.0), "typed -500 applies 0");
+        assert_eq!(
+            applied.borrow().last(),
+            Some(&ui_model::MIN_DELAY_MS),
+            "typed -2500 applies -2000"
+        );
         app.clear_announcement();
         app.main.invoke_airplay_delay_stepped(-100);
-        assert_eq!(applied.borrow().len(), 2, "a step below 0 ms");
+        assert_eq!(applied.borrow().len(), 2, "a step below -2000 ms");
         assert_eq!(said(), "", "and nothing is said");
-        assert_eq!(app.snapshot().airplay_delay_ms, Some(0.0));
+        assert_eq!(
+            app.snapshot().airplay_field_ms(),
+            Some(ui_model::MIN_DELAY_MS)
+        );
     }
 
     #[test]

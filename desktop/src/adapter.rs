@@ -15635,7 +15635,7 @@ mod tests {
         assert_eq!(adapter.audio.airplay_sender_latency_ms(), None);
         assert!(adapter.snapshot().calibrate_all.sheet.is_some());
 
-        adapter.set_airplay_delay(base + 120.0);
+        adapter.set_airplay_delay(120.0);
         adapter.poll();
         assert!(adapter.snapshot().calibrate_all.sheet.is_some());
         adapter.apply_calibrate_all();
@@ -15672,8 +15672,9 @@ mod tests {
 
         fake.set_latency(std::time::Duration::from_millis(1750));
         adapter.poll();
-        // A becomes 18 150 ms; against the run's L_s it still clamps to 20 000.
-        adapter.set_airplay_delay(19_900.0);
+        // The user enters A = 18 150 ms; against the run's L_s it still clamps
+        // to 20 000.
+        adapter.set_airplay_delay(18_150.0);
         adapter.apply_calibrate_all();
         let state = adapter.snapshot().calibrate_all;
         assert!(state.sheet.is_some_and(|sheet| !sheet.applied));
@@ -15739,7 +15740,10 @@ mod tests {
     #[test]
     fn an_airplay_delay_changed_after_apply_still_drops_undo() {
         let (mut adapter, _sender, written) = applied_before_a_new_sender();
-        let shown = adapter.snapshot().airplay_delay_ms.expect("a sender runs");
+        let shown = adapter
+            .snapshot()
+            .airplay_field_ms()
+            .expect("a sender runs");
         adapter.set_airplay_delay(shown + 40.0);
         adapter.poll();
         assert_ne!(adapter.audio.airplay_adjustment(), written);

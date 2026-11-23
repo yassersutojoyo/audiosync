@@ -16064,7 +16064,7 @@ do {
     check(clamped && range("builtin") == [0, 0, 0],
           "web remote: the reference has no delay to change and its volume stays in 0 to 100", "\(range("builtin"))")
     let usbRange = range("usb") == [-2000, 150, 20000]
-    let airPlayRange = range("hp") == [0, 1750, 20000]
+    let airPlayRange = range("hp") == [-2000, 1750, 20000]
     let castRange = range("cast") == [0, 300, 20000]
     // covers: S175 (a local output's offset range)
     check(usbRange && airPlayRange && castRange, "web remote: each delay carries the range its field in the window takes",

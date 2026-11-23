@@ -1320,6 +1320,7 @@ pub(crate) mod tests {
         tv.availability = availability;
         state.speakers.push(tv);
         state.airplay_delay_ms = Some(1750.0);
+        state.airplay_extra_ms = 78.0;
         state
     }
 
@@ -1465,7 +1466,7 @@ pub(crate) mod tests {
         let tv = snapshot.speakers.iter().find(|s| s.id == "tv").unwrap();
         assert_eq!(
             (tv.delay_ms, tv.delay_min_ms, tv.delay_max_ms),
-            (1750, 0, 20_000)
+            (78, -2000, 20_000)
         );
         let change = |ms| SpeakerChange {
             delay_ms: Some(ms),
@@ -1477,6 +1478,7 @@ pub(crate) mod tests {
             delay(20_001),
             Ok(vec![Action::AirPlayDelay { ms: 20_000.0 }])
         );
+        assert_eq!(delay(-2001), Ok(vec![Action::AirPlayDelay { ms: -2000.0 }]));
         let mut no_sender = state.clone();
         no_sender.airplay_delay_ms = None;
         assert_eq!(
@@ -1770,11 +1772,7 @@ pub(crate) mod tests {
             Ok(Vec::new()),
             "clamped to its own"
         );
-        assert_eq!(
-            delay(&state, "tv", 1750),
-            Ok(Vec::new()),
-            "the AirPlay delay"
-        );
+        assert_eq!(delay(&state, "tv", 78), Ok(Vec::new()), "the AirPlay delay");
         state.speakers[0].delay_ms = Some(120.4);
         assert_eq!(
             delay(&state, "desk", 120),
