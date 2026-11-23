@@ -4,7 +4,7 @@
 //! is asked for its password (P176) and the pairings file's notices (S224).
 //! The pairing exchange itself is the airplay crate's.
 //!
-//! Plain data in and out, so the Mac host can reach it through the FFI.
+//! Plain data in and out; the Mac host keeps its own copy in Swift for now.
 //! Where the hosts still differ, a [`HostRules`] field names the difference
 //! and each host's constant holds what it does today.
 
@@ -96,6 +96,7 @@ pub struct HostRules {
     pub open_pairing_at_sender_stop: OpenPairingAtSenderStop,
     pub unreadable_pairings_notice: UnreadablePairingsNotice,
     pub password_members: PasswordMembers,
+    pub refused_reappears: RefusedReappears,
 }
 
 pub const MAC: HostRules = HostRules {
@@ -103,6 +104,7 @@ pub const MAC: HostRules = HostRules {
     open_pairing_at_sender_stop: OpenPairingAtSenderStop::StayOn,
     unreadable_pairings_notice: UnreadablePairingsNotice::AtLaunch,
     password_members: PasswordMembers::AllUpFront,
+    refused_reappears: RefusedReappears::NoticeAgain,
 };
 
 /// The Windows and Linux app.
@@ -111,6 +113,7 @@ pub const DESKTOP: HostRules = HostRules {
     open_pairing_at_sender_stop: OpenPairingAtSenderStop::TurnOff,
     unreadable_pairings_notice: UnreadablePairingsNotice::OnceKeptAside,
     password_members: PasswordMembers::FirstThenNext,
+    refused_reappears: RefusedReappears::Quiet,
 };
 
 /// What a speaker that is on but hasn't joined would ask the user for.
@@ -226,6 +229,23 @@ pub struct Appeared {
 /// code every time, never (P61, S349).
 pub fn auto_connects(speaker: Appeared) -> bool {
     speaker.auto_connect && !speaker.hidden && !speaker.refused && !speaker.every_time
+}
+
+/// What auto-connect does with a speaker it turned off for a code earlier
+/// this run (S349) once it leaves the network and appears again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefusedReappears {
+    /// Switched on and off again with why: the notice comes each time.
+    NoticeAgain,
+    /// It stays off with no notice for the rest of the run.
+    Quiet,
+}
+
+/// Whether a refusal kept this run still holds a speaker that appears again,
+/// so auto-connect passes it over in silence; `asks_code`: it went off
+/// because it asks for a PIN or a password (S349).
+pub fn refusal_holds(rule: RefusedReappears, asks_code: bool) -> bool {
+    rule == RefusedReappears::Quiet || !asks_code
 }
 
 /// A listed speaker that asks for a code every time.
@@ -464,6 +484,15 @@ mod tests {
         assert!(password_marked_wrong(true, false));
         assert!(password_marked_wrong(false, true));
         assert!(!password_marked_wrong(false, false));
+    }
+
+    #[test]
+    fn a_code_refusal_reappearing_posts_again_on_the_mac_and_stays_quiet_on_desktop() {
+        // covers: S349
+        assert!(!refusal_holds(MAC.refused_reappears, true));
+        assert!(refusal_holds(MAC.refused_reappears, false));
+        assert!(refusal_holds(DESKTOP.refused_reappears, true));
+        assert!(refusal_holds(DESKTOP.refused_reappears, false));
     }
 
     #[test]

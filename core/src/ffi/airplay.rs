@@ -1618,9 +1618,6 @@ impl AscAirPlay {
                 Some(_) => self.target_states.get(id) == Some(&SpeakerState::Playing),
                 None => added.playing,
             };
-            if !playing {
-                continue;
-            }
             // A speaker that scales the samples itself reports a level of
             // its own, not the one the slider sets (P121).
             let software = self

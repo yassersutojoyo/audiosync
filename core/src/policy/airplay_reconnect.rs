@@ -1,9 +1,10 @@
 //! The host's side of an AirPlay speaker the sender retries: when the
 //! reconnecting notice shows and clears (S222, S412), a speaker the sender
-//! makes wait (P169, S285), and a sender that couldn't start (S101). The
-//! sender's own backoff is the airplay crate's (P142).
+//! makes wait (P169, S285), a sender that couldn't start (S101), the PTP
+//! ports notice (S358) and speakers across a sleep (S412). The sender's own
+//! backoff is the airplay crate's (P142).
 //!
-//! Plain data in and out, so the Mac host can reach it through the FFI.
+//! Plain data in and out; the Mac host keeps its own copy in Swift for now.
 
 use super::Seconds;
 
@@ -155,6 +156,31 @@ impl SenderRestart {
     }
 }
 
+/// Whether the PTP ports notice goes: a speaker played since the clash
+/// report and no row is off for PTP timing (S358).
+pub fn ptp_notice_clears(played_since_report: bool, rows_off_for_timing: usize) -> bool {
+    played_since_report && rows_off_for_timing == 0
+}
+
+/// Whether a speaker refused for PTP timing raises the ports notice: within
+/// an episode, from a report to a bind, each speaker raises it once (S358).
+pub fn ptp_notice_raised(in_episode: bool, first_refusal_in_episode: bool) -> bool {
+    in_episode && first_refusal_in_episode
+}
+
+/// Whether speakers join the stream: asleep, they only leave, and the
+/// wake's reconcile starts the ones held back (S412).
+pub fn speakers_join(streaming: bool, asleep: bool) -> bool {
+    streaming && !asleep
+}
+
+/// Whether a receiver's changed records wait for the wake: asleep, nothing
+/// restarts; awake, a speaker the sender retries takes them at once (P142,
+/// S412).
+pub fn records_wait_for_wake(asleep: bool) -> bool {
+    asleep
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -255,5 +281,26 @@ mod tests {
         restart.cancel();
         assert!(!restart.pending());
         assert!(!restart.poll());
+    }
+
+    #[test]
+    fn the_ptp_notice_shows_until_a_speaker_plays_and_no_row_is_off_for_timing() {
+        // covers: S358
+        assert!(!ptp_notice_clears(false, 0));
+        assert!(!ptp_notice_clears(true, 1));
+        assert!(ptp_notice_clears(true, 0));
+        assert!(ptp_notice_raised(true, true));
+        assert!(!ptp_notice_raised(true, false), "once per speaker");
+        assert!(!ptp_notice_raised(false, true), "no clash reported");
+    }
+
+    #[test]
+    fn asleep_speakers_only_leave_and_new_records_wait_for_the_wake() {
+        // covers: S412
+        assert!(speakers_join(true, false));
+        assert!(!speakers_join(true, true));
+        assert!(!speakers_join(false, false));
+        assert!(records_wait_for_wake(true));
+        assert!(!records_wait_for_wake(false));
     }
 }

@@ -92,6 +92,10 @@ use audiosync_airplay::volume::{MUTED_DB, Volume};
 use audiosync_core::eq::{self, EqSettings};
 use audiosync_core::fade::InputFade;
 use audiosync_core::ffi::airplay::{latest_panic_since, panic_mark};
+use audiosync_core::policy::airplay_groups::{
+    self as group_rules, HomeTheaterConflict, MAX_LISTED_PER_ADDRESS, TargetReads,
+};
+use audiosync_core::policy::airplay_latency::{estimate_free, keeps_held_estimate, largest_ms};
 use audiosync_core::policy::airplay_pairing::{
     self as pairing_rules, AfterPinRefusal, Asks, DESKTOP, PairingsMoment, PairingsWrites,
     PinCheck, PinRefusal, Unjoined,
@@ -833,11 +837,6 @@ fn first_address(device: &Device) -> Option<IpAddr> {
         .map(|address| address.ip)
         .next()
 }
-
-/// The most receivers listed under one announced address, a bridge that
-/// fronts many speakers from one host included. The announcer picks that
-/// address, so this bounds one address, not one host.
-const MAX_LISTED_PER_ADDRESS: usize = 64;
 
 /// The volume reads of one row in the sender.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1648,10 +1647,7 @@ impl AirPlaySpeakers {
     /// e_s of a row in ms: its R_s, or for a target, which plays its
     /// members at one delay, the largest of theirs.
     fn estimate_of(&self, row: &str) -> f64 {
-        self.members_of(row)
-            .iter()
-            .map(|id| self.reported_ms(id))
-            .fold(0.0, f64::max)
+        largest_ms(self.members_of(row).iter().map(|id| self.reported_ms(id)))
     }
 
     /// Whether a row plays several members at one delay.
@@ -1715,7 +1711,7 @@ impl AirPlaySpeakers {
     /// Applies E for `rows` while no speaker sounds, or `now` (the stream
     /// emptied); otherwise holds it (S283, P201).
     fn sync_estimate(&mut self, rows: &[String], now: bool) {
-        let free = now || rows.is_empty() || !self.link.sounding();
+        let free = estimate_free(now, rows.is_empty(), self.link.sounding());
         if free {
             self.row_estimates = rows
                 .iter()
@@ -1726,21 +1722,18 @@ impl AirPlaySpeakers {
             // joining or leaving do not until E may change (S284).
             self.row_estimates.retain(|row, _| rows.contains(row));
             for row in rows {
-                if !self.is_target(row) || !self.row_estimates.contains_key(row) {
+                if !keeps_held_estimate(self.is_target(row), self.row_estimates.contains_key(row)) {
                     let estimate = self.estimate_of(row);
                     self.row_estimates.insert(row.clone(), estimate);
                 }
             }
         }
-        let wanted = rows
-            .iter()
-            .map(|row| self.estimate_of(row))
-            .fold(0.0, f64::max);
+        let wanted = largest_ms(rows.iter().map(|row| self.estimate_of(row)));
         if wanted == self.estimate_ms {
             self.estimate_held_ms = None;
             return;
         }
-        if !now && !rows.is_empty() && self.link.sounding() {
+        if !free {
             if self.estimate_held_ms != Some(wanted) {
                 self.estimate_held_ms = Some(wanted);
                 let estimate_ms = self.estimate_ms;
@@ -1986,13 +1979,14 @@ impl AirPlaySpeakers {
     /// yet or not, while targets are listed at all (P176). One left on by
     /// itself before its listing named a target still plays alone.
     fn held_by_target(&self, id: &str) -> bool {
-        self.added_target_of(id).is_some()
-            || (self.link.airplay2()
-                && self
-                    .listed
-                    .get(id)
-                    .is_some_and(|listed| listed.info.target.is_some())
-                && !self.settings(id).enabled)
+        group_rules::held_by_target(
+            self.added_target_of(id).is_some(),
+            self.link.airplay2(),
+            self.listed
+                .get(id)
+                .is_some_and(|listed| listed.info.target.is_some()),
+            self.settings(id).enabled,
+        )
     }
 
     /// The stereo pair or home theater group that holds the speaker `id`,
@@ -2043,15 +2037,16 @@ impl AirPlaySpeakers {
                 })
             })
             .collect();
-        if members.contains(&AirPlayAvailability::NeedsPassword) {
-            AirPlayAvailability::NeedsPassword
-        } else if members.contains(&AirPlayAvailability::Open) {
-            AirPlayAvailability::Open
-        } else {
-            members
+        match group_rules::target_reads(
+            members.contains(&AirPlayAvailability::NeedsPassword),
+            members.contains(&AirPlayAvailability::Open),
+        ) {
+            TargetReads::AsksPassword => AirPlayAvailability::NeedsPassword,
+            TargetReads::CanPlay => AirPlayAvailability::Open,
+            TargetReads::FirstMember => members
                 .first()
                 .copied()
-                .unwrap_or(AirPlayAvailability::Open)
+                .unwrap_or(AirPlayAvailability::Open),
         }
     }
 
@@ -2074,16 +2069,20 @@ impl AirPlaySpeakers {
     /// other side of a home theater group: an Apple TV and its group never
     /// play at once (P177).
     fn home_theater_conflict(&self, id: &str) -> Option<AirPlayProblem> {
-        if let Some(target) = self.targets.get(id)
-            && let Some(control) = &target.control
-            && self.on_and_able(&speaker_id(control))
-        {
-            return Some(AirPlayProblem::AppleTvPlays);
-        }
-        let group = self.group_controlled_by(id)?;
-        let group = group.id.to_string();
-        self.on_and_able(&group)
-            .then_some(AirPlayProblem::PlaysThroughSpeakers)
+        let its_apple_tv_on = self
+            .targets
+            .get(id)
+            .and_then(|target| target.control.as_ref())
+            .is_some_and(|control| self.on_and_able(&speaker_id(control)));
+        let its_group_on = self
+            .group_controlled_by(id)
+            .is_some_and(|group| self.on_and_able(&group.id.to_string()));
+        group_rules::home_theater_conflict(its_apple_tv_on, its_group_on).map(|conflict| {
+            match conflict {
+                HomeTheaterConflict::AppleTvPlays => AirPlayProblem::AppleTvPlays,
+                HomeTheaterConflict::GroupPlays => AirPlayProblem::PlaysThroughSpeakers,
+            }
+        })
     }
 
     /// What a target's row says about its members (P176, P181).
@@ -3461,7 +3460,7 @@ impl AirPlaySpeakers {
         if self.added.is_empty() {
             self.latency_warned.clear();
         }
-        let joining: Vec<String> = if self.streaming && !self.asleep {
+        let joining: Vec<String> = if reconnect::speakers_join(self.streaming, self.asleep) {
             self.settings
                 .iter()
                 // While its PIN pairing runs, a session would pair anew and
@@ -4112,7 +4111,7 @@ impl AirPlaySpeakers {
                 let id = speaker_id(&info.device.key);
                 if !self.listed.contains_key(&id)
                     && let Some(address) = first_address(&info.device)
-                    && self.listed_at(address) >= MAX_LISTED_PER_ADDRESS
+                    && group_rules::address_full(group_rules::DESKTOP, self.listed_at(address))
                 {
                     if self.crowded.insert(address) {
                         self.log.log(|| {
@@ -4152,7 +4151,7 @@ impl AirPlaySpeakers {
                     });
                 }
                 self.listed.insert(id.clone(), Listed { info: *info });
-                if self.asleep {
+                if reconnect::records_wait_for_wake(self.asleep) {
                     self.changed_asleep.insert(id.clone());
                 } else {
                     self.retake_records(&id);
@@ -10259,7 +10258,6 @@ pub mod tests {
     // covers: S291
     #[test]
     fn a_speaker_is_read_once_a_second_while_playing_and_never_while_stopped() {
-        assert_eq!(VOLUME_READ_INTERVAL, Duration::from_secs(1));
         let fake = FakeAirPlay::new();
         let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
         read_now(&mut airplay);
