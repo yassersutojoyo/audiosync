@@ -347,6 +347,8 @@ struct Shared {
     quitting: Arc<AtomicBool>,
     /// The device key pins every connect judges against (C129).
     device_keys: Arc<Mutex<DeviceKeyBook>>,
+    /// The host policy is Quiet (C141).
+    quiet: Arc<AtomicBool>,
     /// How many of the next starts make the worker panic.
     #[cfg(test)]
     panic_in_start: std::sync::atomic::AtomicU32,
@@ -447,6 +449,7 @@ impl CastHost {
             memory: Mutex::new(memory),
             quitting: Arc::new(AtomicBool::new(false)),
             device_keys: Arc::new(Mutex::new(device_keys)),
+            quiet: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
             panic_in_start: std::sync::atomic::AtomicU32::new(0),
         });
@@ -589,6 +592,13 @@ impl CastHost {
         {
             active.announced.store(true, Ordering::SeqCst);
         }
+    }
+
+    /// Whether the host policy is Quiet (S481): a session whose channel
+    /// dies then and finds its app gone ends with [`LaunchError::Quiet`](crate::error::LaunchError::Quiet)
+    /// instead of a relaunch (C141).
+    pub fn set_quiet(&self, quiet: bool) {
+        self.shared.quiet.store(quiet, Ordering::SeqCst);
     }
 
     fn deselect(&self) {
@@ -997,6 +1007,7 @@ impl Worker {
             Ok(mut session) => {
                 session.set_recovery_sink(self.recovery_sink(attempt, device));
                 session.set_announcements(announced);
+                session.set_quiet(Arc::clone(&self.shared.quiet));
                 let format = session.format();
                 if lock(&self.shared.memory).remember_format(device, format.codec()) {
                     self.emit(HostEvent::MemoryChanged);
@@ -1166,6 +1177,7 @@ mod tests {
             memory: Mutex::new(DeviceMemory::default()),
             quitting: Arc::new(AtomicBool::new(false)),
             device_keys: Arc::new(Mutex::new(DeviceKeyBook::new())),
+            quiet: Arc::new(AtomicBool::new(false)),
             panic_in_start: std::sync::atomic::AtomicU32::new(0),
         });
         let mut worker = Worker::new(inbox, outbox, shared, FingerprintBook::new());

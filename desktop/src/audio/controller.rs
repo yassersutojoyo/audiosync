@@ -1111,6 +1111,9 @@ impl<D: Driver> Controller<D> {
             }
         }
         let mut actions = Vec::new();
+        if let Some(id) = self.cast.as_mut().and_then(CastSpeakers::take_waiting) {
+            self.on_demand.taken(&id, now);
+        }
         let takeovers = self
             .airplay
             .as_mut()
@@ -1147,6 +1150,9 @@ impl<D: Driver> Controller<D> {
                 let window_at = now - f64::from(n) * on_demand::WINDOW;
                 actions.extend(self.on_demand.window(peak, window_at));
             }
+        }
+        if let Some(cast) = self.cast.as_mut() {
+            cast.set_quiet(!self.on_demand.playing());
         }
         self.apply_on_demand(actions);
     }
@@ -8445,6 +8451,38 @@ mod tests {
             !feed.fading_out(),
             "the new capture's lease starts its fade-in from silence"
         );
+    }
+
+    // C141, S482: with nothing playing the Cast sender is told Quiet, and a
+    // session that ended as Quiet leaves the speaker waiting for sound,
+    // with no new start.
+    #[test]
+    fn a_quiet_cast_outage_leaves_the_speaker_waiting_for_sound() {
+        use crate::audio::cast::tests::{FakeCast, KITCHEN, id};
+        use audiosync_cast::error::LaunchError;
+        use audiosync_cast::host::{AttemptId, HostEvent};
+        use audiosync_cast::session::{SessionEnd, SessionError};
+        use audiosync_core::policy::on_demand::Status;
+        let mut backend = backend();
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        backend.poll();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.poll();
+        assert!(cast.state().quiet);
+        let attempt = cast.state().next;
+        cast.report(HostEvent::Ended {
+            attempt: AttemptId(attempt),
+            device: id(KITCHEN),
+            end: SessionEnd::Failed(SessionError::Launch(LaunchError::Quiet)),
+        });
+        backend.poll();
+        backend.poll();
+        let status = backend.on_demand.status(&KITCHEN.to_owned());
+        assert!(matches!(status, Some(Status::Waiting { .. })), "{status:?}");
+        assert_eq!(cast.state().started.len(), 1, "not relaunched");
     }
 
     // covers: S186, S189

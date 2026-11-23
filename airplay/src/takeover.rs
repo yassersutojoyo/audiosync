@@ -5,7 +5,11 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use crate::discovery::Device;
+use plist::Value;
+
+use crate::ap2::bodies;
+use crate::discovery::txt::group_key;
+use crate::discovery::{AirPlayTxt, Device, StatusFlags, Txt};
 
 /// How long after a receiver's close no retry starts while evidence of a
 /// takeover may still arrive (P249).
@@ -37,10 +41,42 @@ pub fn foreign_group(
 ) -> Option<String> {
     let txt = device.airplay_txt.as_ref()?;
     let gid = txt.group.gid.as_deref()?;
+    foreign(gid, txt.pairing_id.as_deref(), gid_at_close, own)
+}
+
+/// The group key of another sender in an `/info` answer (P249 (b)): flags
+/// bit 17 together with a `gid` that [`foreign_group`] would count, read
+/// from the answer's own keys or from its `txtAirPlay`.
+pub fn info_evidence(
+    body: &[u8],
+    gid_at_close: Option<&str>,
+    own: &BTreeSet<String>,
+) -> Option<String> {
+    let flags = bodies::read_info(body).status_flags?;
+    if !StatusFlags(flags as u32).has(StatusFlags::SESSION_ACTIVE) {
+        return None;
+    }
+    let dictionary = bodies::read_dictionary(body)?;
+    let txt = dictionary
+        .get("txtAirPlay")
+        .and_then(Value::as_data)
+        .map(|data| AirPlayTxt::read(&Txt::parse(&bodies::wire_strings(data))));
+    let text = |key: &str| dictionary.get(key)?.as_string().map(str::to_owned);
+    let gid = text("gid").or_else(|| txt.as_ref()?.group.gid.clone())?;
+    let pi = text("pi").or_else(|| txt.as_ref()?.pairing_id.clone());
+    foreign(gid.trim(), pi.as_deref(), gid_at_close, own)
+}
+
+fn foreign(
+    gid: &str,
+    pi: Option<&str>,
+    gid_at_close: Option<&str>,
+    own: &BTreeSet<String>,
+) -> Option<String> {
     if gid_at_close.is_some_and(|old| old.eq_ignore_ascii_case(gid)) {
         return None;
     }
-    let pi = txt.pairing_id.as_deref().map(str::to_ascii_lowercase);
+    let pi = pi.map(str::to_ascii_lowercase);
     let ours = gid
         .split('+')
         .map(|field| field.trim().to_ascii_lowercase())
@@ -50,7 +86,7 @@ pub fn foreign_group(
     if ours {
         return None;
     }
-    txt.group.group_key()
+    group_key(gid)
 }
 
 #[cfg(test)]
@@ -108,5 +144,39 @@ mod tests {
         let ours = OURS.to_ascii_uppercase();
         assert!(foreign_group(&with_gid(&ours, "0x4"), Some(PI), &own()).is_none());
         assert!(foreign_group(&with_gid("", "0x4"), Some(PI), &own()).is_none());
+    }
+
+    fn info(entries: Vec<(&str, Value)>) -> Vec<u8> {
+        let dictionary = entries
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value))
+            .collect();
+        bodies::binary(Value::Dictionary(dictionary))
+    }
+
+    // T3: an `/info` answer with bit 17 and another sender's gid is
+    // evidence, in its own keys or in its `txtAirPlay`; without bit 17, or
+    // with the receiver's own pi, it is not.
+    // covers: P249
+    #[test]
+    fn an_info_answer_with_bit_17_and_another_gid_is_evidence() {
+        let flags = |value: u64| ("statusFlags", Value::Integer(value.into()));
+        let text = |value: &str| Value::String(value.to_owned());
+        let keys = info(vec![flags(0x20004), ("gid", text(OTHER)), ("pi", text(PI))]);
+        let found = info_evidence(&keys, Some(PI), &own());
+        assert_eq!(found, Some(OTHER.to_ascii_lowercase()));
+        let no_bit = info(vec![flags(0x4), ("gid", text(OTHER))]);
+        assert!(info_evidence(&no_bit, Some(PI), &own()).is_none());
+        let pi = info(vec![flags(0x20004), ("gid", text(PI)), ("pi", text(PI))]);
+        assert!(info_evidence(&pi, Some(OURS), &own()).is_none());
+
+        let mut wire = Vec::new();
+        for entry in ["flags=0x20004".to_owned(), format!("gid={OTHER}")] {
+            wire.push(entry.len() as u8);
+            wire.extend_from_slice(entry.as_bytes());
+        }
+        let txt = info(vec![("txtAirPlay", Value::Data(wire))]);
+        let found = info_evidence(&txt, Some(PI), &own());
+        assert_eq!(found, Some(OTHER.to_ascii_lowercase()));
     }
 }

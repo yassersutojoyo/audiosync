@@ -309,7 +309,7 @@ pub struct InfoAnswer {
 
 /// A TXT record in DNS wire form: each string a length byte, then the
 /// string. A length that runs past the end drops the rest.
-fn wire_strings(mut bytes: &[u8]) -> Vec<&[u8]> {
+pub(crate) fn wire_strings(mut bytes: &[u8]) -> Vec<&[u8]> {
     let mut strings = Vec::new();
     while let Some((&length, rest)) = bytes.split_first() {
         let length = usize::from(length);

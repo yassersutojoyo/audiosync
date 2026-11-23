@@ -28,7 +28,7 @@ use audiosync_airplay::ptp::{PtpPorts, service_bind_ip};
 use audiosync_airplay::rtp::{
     HEADER_BYTES, ResendRequest, RtpHeader, SyncPacket, TYPE_RESEND_REPLY, TimingPacket,
 };
-use audiosync_airplay::rtsp::{Message, Method, Parser, Request, TransportPorts};
+use audiosync_airplay::rtsp::{Message, Method, Parser, Request, Response, TransportPorts};
 use audiosync_airplay::sender::{Sender, SenderEvent, SpeakerEvent, SpeakerState};
 
 use super::{FakeReceiver, PasswordGate, key};
@@ -134,6 +134,9 @@ pub struct Behavior {
     /// Requests answered only after this long, by key; read per request,
     /// so a test may change it mid-session.
     pub answer_delay: HashMap<String, Duration>,
+    /// The body of a 200 to `GET /info`, which then answers nothing else
+    /// on that connection.
+    pub info: Option<Vec<u8>>,
 }
 
 impl Default for Behavior {
@@ -152,6 +155,7 @@ impl Default for Behavior {
             timing_quirks: None,
             public: None,
             answer_delay: HashMap::new(),
+            info: None,
         }
     }
 }
@@ -497,7 +501,17 @@ fn serve(shared: Arc<Shared>, mut stream: TcpStream, peer: SocketAddr) {
                     if request.method == Method::Setup {
                         on_setup(&shared, &request, peer);
                     }
-                    let answer = fake.feed(&request.encode());
+                    let info = lock(&shared.behavior).info.clone();
+                    let answer = match info {
+                        Some(body) if key(&request) == "GET /info" => {
+                            let mut response = Response::new(200, "OK");
+                            let cseq = request.headers.get("CSeq").unwrap_or("0");
+                            response.headers.push("CSeq", cseq.to_owned());
+                            response.body = body;
+                            response.encode()
+                        }
+                        _ => fake.feed(&request.encode()),
+                    };
                     let delay = lock(&shared.behavior)
                         .answer_delay
                         .get(&key(&request))

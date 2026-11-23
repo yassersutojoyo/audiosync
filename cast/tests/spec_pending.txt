@@ -2,4 +2,4 @@
 # so no test covers them yet. One per line: the clause ID, a space, the reason.
 # tests/spec_coverage.rs fails if a clause listed here gains a `// covers:`
 # test, so this list only shrinks. "Partly done" names what already exists.
-C141 a Cast takeover keeps today's switch-off with its notice on all three systems (S246, S265, C2); Taken as a yield and the quiet outage come with the Mac twin
+C141 a Cast takeover keeps today's switch-off with its notice on all three systems (S246, S265, C2); Taken as a yield comes with the Mac twin. Partly done: the outage while Quiet (CastHost::set_quiet, Windows and Linux)

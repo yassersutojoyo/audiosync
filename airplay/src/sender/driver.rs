@@ -448,6 +448,8 @@ pub(crate) struct Driver {
     /// Speakers removed after the receiver closed them, so a Busy answer
     /// once the host adds them again is still Taken (P249).
     closed_removed: BTreeSet<DeviceKey>,
+    /// The `GET /info` probes waiting for an answer (P249 (b)).
+    info_probes: HashMap<SessionKey, DeviceKey>,
     /// How often an AirPlay 2 session posts its feedback (P132).
     feedback_interval: Duration,
     /// AirPlay 2 sessions at once (P204).
@@ -561,6 +563,7 @@ impl Driver {
             evidence_window: Some(crate::takeover::EVIDENCE_WINDOW),
             own_groups: BTreeSet::new(),
             closed_removed: BTreeSet::new(),
+            info_probes: HashMap::new(),
             feedback_interval: crate::ap2::session::FEEDBACK_INTERVAL,
             ap2_sessions: super::AIRPLAY2_SESSIONS,
             stream_ids: HashMap::new(),
@@ -1361,7 +1364,10 @@ impl Driver {
                     run.pairing.handle_connection_closed(now);
                 }
             }
-            IoEvent::Control { .. } | IoEvent::TimingRequest { .. } | IoEvent::Ptp { .. } => {}
+            IoEvent::Control { .. }
+            | IoEvent::TimingRequest { .. }
+            | IoEvent::Ptp { .. }
+            | IoEvent::Info { .. } => {}
         }
     }
 
@@ -1643,6 +1649,12 @@ impl Driver {
             let gid = speaker.device.group_keys().gid.clone();
             speaker.evidence = Some((now + window, gid));
             speaker.after_close = true;
+            let address = (speaker.device.airplay_socket_addrs().into_iter())
+                .chain(speaker.device.connect_socket_addrs())
+                .next();
+            if let Some(address) = address {
+                self.probe_info(key, address);
+            }
             TakeoverReport::ClosedByReceiver
         } else {
             TakeoverReport::Taken { group: None }
@@ -1671,19 +1683,56 @@ impl Driver {
     /// A TXT update during a speaker's evidence window that shows another
     /// sender's group (P249).
     fn check_evidence(&mut self, device: &Device) {
-        let Some(speaker) = self.speakers.get_mut(&device.key) else {
+        self.evidence_found(&device.key, |gid, own| {
+            crate::takeover::foreign_group(device, gid, own)
+        });
+    }
+
+    /// The one `GET /info` of a speaker's evidence window, on a connection
+    /// of its own with no pairing or session (P249 (b)).
+    fn probe_info(&mut self, key: &DeviceKey, address: std::net::SocketAddr) {
+        let mut request = crate::rtsp::Request::new(crate::rtsp::Method::Get, "/info");
+        request.headers.push("CSeq", "1");
+        request
+            .headers
+            .push(crate::ap2::bodies::PROTOCOL_VERSION_HEADER, "1");
+        request.headers.push("User-Agent", crate::user_agent());
+        let probe = SessionKey(self.next_session);
+        self.next_session += 1;
+        if transport::probe_info(probe, address, request.encode(), self.notify()).is_ok() {
+            self.info_probes.insert(probe, key.clone());
+        }
+    }
+
+    /// An answer to a speaker's `/info` probe (P249 (b)).
+    fn info_answer(&mut self, probe: SessionKey, body: Option<Vec<u8>>) {
+        let (Some(key), Some(body)) = (self.info_probes.remove(&probe), body) else {
+            return;
+        };
+        self.evidence_found(&key, |gid, own| {
+            crate::takeover::info_evidence(&body, gid, own)
+        });
+    }
+
+    /// Reports `key` as Taken when its evidence window is open and `find`
+    /// gives a foreign group from the `gid` at the close and our own groups.
+    fn evidence_found(
+        &mut self,
+        key: &DeviceKey,
+        find: impl FnOnce(Option<&str>, &BTreeSet<String>) -> Option<String>,
+    ) {
+        let Some(speaker) = self.speakers.get_mut(key) else {
             return;
         };
         let Some((_, gid)) = &speaker.evidence else {
             return;
         };
-        let Some(group) = crate::takeover::foreign_group(device, gid.as_deref(), &self.own_groups)
-        else {
+        let Some(group) = find(gid.as_deref(), &self.own_groups) else {
             return;
         };
         speaker.evidence = None;
         let report = TakeoverReport::Taken { group: Some(group) };
-        self.emit_speaker(&device.key, SpeakerEvent::Takeover(report));
+        self.emit_speaker(key, SpeakerEvent::Takeover(report));
     }
 
     /// A teardown finished.
@@ -1925,6 +1974,9 @@ impl Driver {
             }
             return;
         }
+        if let IoEvent::Info { probe, body } = event {
+            return self.info_answer(probe, body);
+        }
         let session = match &event {
             IoEvent::Connected { session, .. }
             | IoEvent::ConnectFailed { session, .. }
@@ -1932,7 +1984,7 @@ impl Driver {
             | IoEvent::RtspClosed { session, .. }
             | IoEvent::Control { session, .. }
             | IoEvent::TimingRequest { session, .. } => *session,
-            IoEvent::Ptp { .. } => return,
+            IoEvent::Ptp { .. } | IoEvent::Info { .. } => return,
         };
         if let Some(key) = self.pairing_sessions.get(&session).cloned() {
             return self.pairing_io_event(&key, event, now);
@@ -2004,7 +2056,7 @@ impl Driver {
                 }
             }
             IoEvent::TimingRequest { at, .. } => active.session.handle_timing_request(at),
-            IoEvent::Ptp { .. } => {}
+            IoEvent::Ptp { .. } | IoEvent::Info { .. } => {}
         }
     }
 

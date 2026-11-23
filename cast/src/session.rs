@@ -362,6 +362,8 @@ pub struct CastSession {
     pacer: ReconnectPacer,
     /// Set by the host when the device announces itself (C81).
     announced: Arc<AtomicBool>,
+    /// Set by the host while its policy is Quiet (C141).
+    quiet: Arc<AtomicBool>,
 }
 
 /// The most multizone types logged in one session, and the longest a
@@ -523,6 +525,7 @@ impl CastSession {
             auth: config.auth,
             pacer: ReconnectPacer::default(),
             announced: Arc::new(AtomicBool::new(false)),
+            quiet: Arc::new(AtomicBool::new(false)),
         };
         if let Err(error) = session.load_with_fallback() {
             let error = if session.server.failed() {
@@ -723,6 +726,12 @@ impl CastSession {
     /// reconnect waiting for its turn goes at once (C81).
     pub fn set_announcements(&mut self, announced: Arc<AtomicBool>) {
         self.announced = announced;
+    }
+
+    /// The flag the host sets while its policy is Quiet: an outage that
+    /// finds our session gone ends it instead of a relaunch (C141).
+    pub fn set_quiet(&mut self, quiet: Arc<AtomicBool>) {
+        self.quiet = quiet;
     }
 
     /// Drives the session for `duration`: the channel, recovery and the
@@ -1089,6 +1098,9 @@ impl CastSession {
                     .map_err(SessionError::from)
             } else if self.client.status().is_some_and(|status| !status.is_idle()) {
                 return self.end(SessionEnd::TakenOver);
+            } else if self.quiet.load(Ordering::SeqCst) {
+                let quiet = SessionError::Launch(LaunchError::Quiet);
+                return self.end(SessionEnd::Failed(quiet));
             } else {
                 match self.client.launch() {
                     Ok(app) => {

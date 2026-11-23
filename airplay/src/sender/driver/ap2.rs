@@ -1116,7 +1116,7 @@ impl Driver {
             | IoEvent::RtspClosed { session, .. }
             | IoEvent::Control { session, .. }
             | IoEvent::TimingRequest { session, .. } => *session,
-            IoEvent::Ptp { .. } => return,
+            IoEvent::Ptp { .. } | IoEvent::Info { .. } => return,
         };
         if session == active.events_key {
             return events_io_event(active, event, notify, now);
@@ -1160,7 +1160,7 @@ impl Driver {
                 }
             }
             IoEvent::TimingRequest { at, .. } => active.session.handle_timing_request(at),
-            IoEvent::Ptp { .. } => {}
+            IoEvent::Ptp { .. } | IoEvent::Info { .. } => {}
         }
     }
 }
@@ -1201,6 +1201,9 @@ fn events_io_event(
                 active.session.handle_events_closed(now);
             }
         }
-        IoEvent::Control { .. } | IoEvent::TimingRequest { .. } | IoEvent::Ptp { .. } => {}
+        IoEvent::Control { .. }
+        | IoEvent::TimingRequest { .. }
+        | IoEvent::Ptp { .. }
+        | IoEvent::Info { .. } => {}
     }
 }

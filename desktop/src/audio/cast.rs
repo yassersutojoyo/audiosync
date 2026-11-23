@@ -49,7 +49,7 @@ use audiosync_cast::discovery::reach::Reachability;
 use audiosync_cast::discovery::{
     Announcements, BrowseEvent, DeviceId, DeviceKey, DeviceList, Entry, ListEvent,
 };
-use audiosync_cast::error::ConnectError;
+use audiosync_cast::error::{ConnectError, LaunchError};
 use audiosync_cast::group::{GroupMember, GroupRecords};
 use audiosync_cast::host::{
     AttemptId, CastHost, CastTarget, CommandError, DeviceMemory, HostEvent, StartRefused,
@@ -395,6 +395,9 @@ pub trait CastLink: Send {
     fn poll_browse(&mut self) -> Option<BrowseEvent>;
     /// The device announced itself: a reconnect to it goes at once (C81).
     fn announced(&mut self, device: DeviceId);
+    /// The host policy is Quiet: an outage that finds our app gone is not
+    /// relaunched (C141).
+    fn set_quiet(&mut self, quiet: bool);
     fn discovery(&self) -> CastDiscovery;
     /// Whether the sender's worker ended on its own (C107 covers a panic it survives).
     fn failed(&self) -> bool;
@@ -505,6 +508,10 @@ impl CastLink for HostLink {
 
     fn announced(&mut self, device: DeviceId) {
         self.host.announced(device);
+    }
+
+    fn set_quiet(&mut self, quiet: bool) {
+        self.host.set_quiet(quiet);
     }
 
     fn discovery(&self) -> CastDiscovery {
@@ -673,6 +680,9 @@ pub struct CastSpeakers {
     /// The device that is on is released: it stays on but runs no
     /// session (C142).
     let_go: bool,
+    /// Its session ended on an outage while Quiet, not yet handed to the
+    /// policy as waiting for sound (C141).
+    waiting: bool,
 }
 
 impl CastSpeakers {
@@ -700,6 +710,7 @@ impl CastSpeakers {
             streaming: false,
             asleep: false,
             let_go: false,
+            waiting: false,
             track: Some(CastTrack::default()),
             sent: None,
             log,
@@ -1348,6 +1359,7 @@ impl CastSpeakers {
                     .log(|| format!("Cast: {} switched off", self.name(device)));
                 self.enabled = None;
                 self.let_go = false;
+                self.waiting = false;
                 self.sync();
             }
             return Ok(());
@@ -1365,6 +1377,7 @@ impl CastSpeakers {
         self.saved_on = None;
         self.enabled = Some(device);
         self.let_go = false;
+        self.waiting = false;
         self.log
             .log(|| format!("Cast: {} switched on", self.name(device)));
         self.sync();
@@ -1380,6 +1393,22 @@ impl CastSpeakers {
                 .log(|| format!("Cast: {}", if let_go { "let go" } else { "taken back" }));
             self.sync();
         }
+    }
+
+    /// Whether the policy is Quiet (S481), for the sender's outages (C141).
+    pub fn set_quiet(&mut self, quiet: bool) {
+        if let Some(link) = self.link.as_mut() {
+            link.set_quiet(quiet);
+        }
+    }
+
+    /// The device that is on, once after its session ended on an outage
+    /// while Quiet: it stays on and let go until the policy starts it
+    /// (C141, S482).
+    pub fn take_waiting(&mut self) -> Option<String> {
+        std::mem::take(&mut self.waiting)
+            .then(|| self.enabled_id())
+            .flatten()
     }
 
     /// The PC is going to sleep, or it woke (S412).
@@ -2020,6 +2049,15 @@ impl CastSpeakers {
                 self.list.set_in_session(key, false);
                 self.log
                     .log(|| format!("Cast: {} ended: {}", self.name(device), describe_end(&end)));
+                if matches!(
+                    end,
+                    SessionEnd::Failed(SessionError::Launch(LaunchError::Quiet))
+                ) {
+                    self.let_go = true;
+                    self.waiting = true;
+                    self.pending.push(BackendEvent::CastChanged);
+                    return;
+                }
                 self.enabled = None;
                 match problem_of(&end) {
                     Some(problem) => self.fail(device, problem),
@@ -2247,6 +2285,7 @@ pub mod tests {
         pub resyncs: usize,
         pub shutdowns: usize,
         pub announced: Vec<DeviceId>,
+        pub quiet: bool,
         /// The latest start's group address at each announcement.
         pub announced_with: Vec<Vec<SocketAddr>>,
         pub memory: DeviceMemory,
@@ -2265,7 +2304,7 @@ pub mod tests {
         /// The sender's worker ended on its own.
         pub sender_failed: bool,
         pub browses_again: usize,
-        next: u64,
+        pub next: u64,
     }
 
     /// A sender that answers at once; the test drives what it reports.
@@ -2382,6 +2421,10 @@ pub mod tests {
             let with = group.map_or_else(Vec::new, |records| records.get().group);
             state.announced_with.push(with);
             state.announced.push(device);
+        }
+
+        fn set_quiet(&mut self, quiet: bool) {
+            self.state().quiet = quiet;
         }
 
         fn discovery(&self) -> CastDiscovery {
@@ -2633,6 +2676,56 @@ pub mod tests {
         let kitchen = &cast.speakers()[1];
         assert!(!kitchen.enabled);
         assert_eq!(kitchen.status, CastStatus::Idle);
+    }
+
+    // Partly C141: a session that ended on an outage while Quiet leaves the
+    // speaker on and let go, handed once to the policy as waiting, with no
+    // notice and no start until the policy takes it back.
+    #[test]
+    fn an_outage_while_quiet_leaves_the_speaker_on_and_waiting() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        cast.set_quiet(true);
+        assert!(fake.state().quiet);
+        fake.report(HostEvent::Ended {
+            attempt: AttemptId(1),
+            device: id(KITCHEN),
+            end: SessionEnd::Failed(SessionError::Launch(LaunchError::Quiet)),
+        });
+        let events = cast.poll();
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, BackendEvent::CastFailed { .. }))
+        );
+        assert!(cast.speakers()[1].enabled);
+        assert_eq!(cast.take_waiting().as_deref(), Some(KITCHEN));
+        assert_eq!(cast.take_waiting(), None);
+        cast.poll();
+        assert_eq!(fake.state().started.len(), 1, "not relaunched on its own");
+
+        cast.set_let_go(false);
+        assert_eq!(fake.state().started.len(), 2);
+    }
+
+    // A switch off and on before the policy took the waiting mark starts a
+    // session that is not waiting (C141, S482).
+    #[test]
+    fn a_switch_off_and_on_clears_a_waiting_mark_the_policy_did_not_take() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        fake.report(HostEvent::Ended {
+            attempt: AttemptId(1),
+            device: id(KITCHEN),
+            end: SessionEnd::Failed(SessionError::Launch(LaunchError::Quiet)),
+        });
+        cast.poll();
+        cast.set_enabled(KITCHEN, false).unwrap();
+        cast.set_enabled(KITCHEN, true).unwrap();
+        assert_eq!(fake.state().started.len(), 2);
+        assert_eq!(cast.take_waiting(), None);
     }
 
     // covers: C142

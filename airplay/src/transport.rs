@@ -73,6 +73,7 @@ use std::time::{Duration, Instant};
 
 use crate::clock::SenderClock;
 use crate::rtp::{self, ResendRequest};
+use crate::rtsp;
 use crate::session::{CONNECT_TIMEOUT, Connection, RESPONSE_TIMEOUT, UdpSendResult};
 use crate::stream::{LocalSocket, SpeakerCounters};
 
@@ -134,6 +135,12 @@ pub(crate) enum IoEvent {
         bytes: Vec<u8>,
         source: SocketAddr,
         at: Instant,
+    },
+    /// The body of a successful answer to the `GET /info` probe `probe`,
+    /// or none (P249).
+    Info {
+        probe: SessionKey,
+        body: Option<Vec<u8>>,
     },
 }
 
@@ -205,6 +212,52 @@ pub(crate) fn connect(
         },
     )
     .map(drop)
+}
+
+/// Sends `request`, a single `GET /info`, to `address` on a connection of
+/// its own that carries nothing else, and reports the answer as
+/// [`IoEvent::Info`] within [`CONNECT_TIMEOUT`] plus [`RESPONSE_TIMEOUT`]
+/// (P249 (b)). The thread is not joined.
+pub(crate) fn probe_info(
+    probe: SessionKey,
+    address: SocketAddr,
+    request: Vec<u8>,
+    notify: impl Notify,
+) -> io::Result<()> {
+    let failed = notify.clone();
+    spawn(
+        "airplay-info",
+        move || {
+            let body = info_answer(address, &request);
+            notify(IoEvent::Info { probe, body });
+        },
+        move || {
+            failed(IoEvent::Info { probe, body: None });
+        },
+    )
+    .map(drop)
+}
+
+fn info_answer(address: SocketAddr, request: &[u8]) -> Option<Vec<u8>> {
+    let mut stream = TcpStream::connect_timeout(&address, CONNECT_TIMEOUT).ok()?;
+    stream.set_write_timeout(Some(RTSP_WRITE_TIMEOUT)).ok()?;
+    stream.set_read_timeout(Some(RESPONSE_TIMEOUT)).ok()?;
+    stream.write_all(request).ok()?;
+    let deadline = Instant::now() + RESPONSE_TIMEOUT;
+    let mut parser = rtsp::Parser::new();
+    let mut buf = vec![0; READ_BYTES];
+    while Instant::now() < deadline && parser.buffered() <= READ_BYTES * 4 {
+        let len = stream.read(&mut buf).ok().filter(|&len| len > 0)?;
+        parser.push(&buf[..len]);
+        match parser.next_message().ok()? {
+            Some(rtsp::Message::Response(response)) => {
+                return response.is_success().then_some(response.body);
+            }
+            Some(rtsp::Message::Request(_)) => return None,
+            None => {}
+        }
+    }
+    None
 }
 
 /// Whether a send error says the destination can't be reached (P141).

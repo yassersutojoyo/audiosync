@@ -70,6 +70,9 @@ pub enum LaunchError {
     Timeout,
     /// The channel ended during the launch.
     Ended(EndReason),
+    /// Not launched again after an outage while the host was Quiet, so
+    /// the speaker waits for sound (C141).
+    Quiet,
 }
 
 impl fmt::Display for LaunchError {
@@ -81,6 +84,7 @@ impl fmt::Display for LaunchError {
             }
             LaunchError::Timeout => f.write_str("the media player did not start in time"),
             LaunchError::Ended(reason) => write!(f, "the connection ended: {reason}"),
+            LaunchError::Quiet => f.write_str("not launched again while nothing plays"),
         }
     }
 }

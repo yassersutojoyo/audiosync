@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use audiosync_cast::audio::{AudioReader, AudioWriter, Codec, StreamFormat, audio_ring};
 use audiosync_cast::client::{Fingerprint, FingerprintBook, FingerprintChange};
 use audiosync_cast::discovery::DeviceId;
+use audiosync_cast::error::LaunchError;
 use audiosync_cast::host::{
     AttemptId, CastHost, CastTarget, DeviceMemory, HostEvent, MAX_HOST_EVENTS, MAX_MEMORY_DEVICES,
     MAX_OFFSET, MEMORY_VERSION, OUTPUT_SYNC, OutputSync, StartRefused,
@@ -922,6 +923,37 @@ fn reconnects_are_spaced_and_an_announcement_cuts_the_wait_short() {
     wait_for(&host, Duration::from_secs(10), recovered);
     host.stop();
     wait_for(&host, Duration::from_secs(3), ended(A));
+    assert!(host.shutdown());
+}
+
+// Partly C141: a channel that dies while the host is Quiet and finds our
+// app gone from an idle device ends the session as Quiet, with no LAUNCH.
+#[test]
+fn an_outage_while_quiet_that_finds_our_app_gone_does_not_relaunch() {
+    let backdrop = json!({
+        "appId": "E8C28D3C", "sessionId": "idle-1", "transportId": "idle-1", "isIdleScreen": true,
+    });
+    let device = FakeDevice::start(Behavior::default());
+    let mut host = CastHost::new(DeviceMemory::default()).expect("worker");
+    let (_feed, reader) = ring();
+    host.start(target(A, &device), 48_000, Metadata::default(), reader)
+        .expect("starts");
+    wait_for(&host, Duration::from_secs(10), started(A));
+    host.set_quiet(true);
+    device.send(Command::SetApps(vec![backdrop]));
+    device.send(Command::DropConnection);
+    let events = wait_for(&host, Duration::from_secs(10), ended(A));
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            HostEvent::Ended {
+                end: SessionEnd::Failed(SessionError::Launch(LaunchError::Quiet)),
+                ..
+            }
+        )),
+        "{events:?}"
+    );
+    assert_eq!(device.payloads(NS_RECEIVER, "LAUNCH").len(), 1);
     assert!(host.shutdown());
 }
 

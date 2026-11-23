@@ -7,14 +7,17 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use audiosync_airplay::ap2::bodies;
 use audiosync_airplay::discovery::{
     BrowseEvent, Browser, Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
 };
+use audiosync_airplay::rtsp::Method;
 use audiosync_airplay::sender::{
     Sender, SenderConfig, SenderEvent, SpeakerEvent, SpeakerOptions, SpeakerState,
 };
 use audiosync_airplay::takeover::TakeoverReport;
 use audiosync_airplay::volume::Volume;
+use plist::Value;
 
 use common::net::{Behavior, Events, HostAudio, NetReceiver, serial};
 
@@ -100,6 +103,15 @@ fn stopped(events: &Events, key: &DeviceKey) -> bool {
         matches!(event, SenderEvent::Speaker { key: k, event: SpeakerEvent::State(SpeakerState::Stopped) }
             if k == key)
     })
+}
+
+/// The `GET /info` requests the receiver got: the probe's (P249 (b)).
+fn info_requests(receiver: &NetReceiver) -> usize {
+    let log = receiver.log();
+    let probes = log.requests.iter().filter(|(_, request)| {
+        request.method == Method::Get && request.uri == "/info" && request.body.is_empty()
+    });
+    probes.count()
 }
 
 /// Drains events until `until`.
@@ -190,7 +202,8 @@ fn a_receiver_taken_by_another_sender_is_not_connected_again() {
         "{:?}",
         &events.of(&key)[seen..]
     );
-    assert_eq!(a.log().connections.len(), connections);
+    assert_eq!(a.log().connections.len(), connections + 1);
+    assert_eq!(info_requests(&a), 1);
     assert_eq!(
         takeovers(&events, &key),
         [
@@ -201,6 +214,59 @@ fn a_receiver_taken_by_another_sender_is_not_connected_again() {
         ]
     );
     assert!(!stopped(&events, &key));
+    sender.shutdown();
+}
+
+// T3: the receiver closes our connection and its TXT never changes, but
+// the one `GET /info` on a connection of its own reports bit 17 with
+// another sender's gid: Taken inside the window, and no attempt follows.
+// covers: P249
+#[test]
+fn an_info_probe_finds_the_sender_that_took_the_receiver() {
+    let _serial = serial();
+    let window = Duration::from_secs(3);
+    let Rig {
+        receiver: a,
+        sender,
+        _host,
+        mut events,
+        key,
+        ..
+    } = playing(window);
+    let seen = events.of(&key).len();
+    let connections = a.log().connections.len();
+    let info = [
+        ("statusFlags", Value::Integer(0x20004.into())),
+        ("gid", Value::String(FOREIGN.to_owned())),
+        ("pi", Value::String(PI.to_owned())),
+    ];
+    let info = info.into_iter().map(|(k, v)| (k.to_owned(), v)).collect();
+    a.behavior().info = Some(bodies::binary(Value::Dictionary(info)));
+
+    a.kill();
+    let closed = Instant::now();
+    watch(
+        &mut events,
+        &sender,
+        closed + window + Duration::from_secs(1),
+    );
+    assert_eq!(
+        retries_or_connects(&events, &key, seen),
+        [],
+        "{:?}",
+        &events.of(&key)[seen..]
+    );
+    assert_eq!(a.log().connections.len(), connections + 1);
+    assert_eq!(info_requests(&a), 1);
+    assert_eq!(
+        takeovers(&events, &key),
+        [
+            TakeoverReport::ClosedByReceiver,
+            TakeoverReport::Taken {
+                group: Some(FOREIGN.to_owned())
+            }
+        ]
+    );
     sender.shutdown();
 }
 
@@ -237,7 +303,8 @@ fn a_close_with_no_evidence_waits_for_the_host_and_a_busy_retry_is_taken() {
         "{:?}",
         &events.of(&key)[seen..]
     );
-    assert_eq!(a.log().connections.len(), connections);
+    assert_eq!(a.log().connections.len(), connections + 1);
+    assert_eq!(info_requests(&a), 1);
     assert_eq!(
         takeovers(&events, &key),
         [TakeoverReport::ClosedByReceiver, TakeoverReport::NoEvidence]
@@ -247,7 +314,7 @@ fn a_close_with_no_evidence_waits_for_the_host_and_a_busy_retry_is_taken() {
     sender.add_speaker(device, SpeakerOptions::new(Volume::Db(-20.0)));
     let asked = Instant::now();
     watch(&mut events, &sender, asked + Duration::from_secs(4));
-    assert_eq!(a.log().connections.len(), connections + 1);
+    assert_eq!(a.log().connections.len(), connections + 2);
     assert_eq!(
         takeovers(&events, &key).last(),
         Some(&TakeoverReport::Taken { group: None })
