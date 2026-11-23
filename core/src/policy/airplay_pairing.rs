@@ -469,6 +469,12 @@ mod tests {
     }
 
     #[test]
+    fn the_mac_keeps_a_reappearing_code_refusal_quiet_as_desktop_does() {
+        // covers: S349
+        assert_eq!(MAC.refused_reappears, DESKTOP.refused_reappears);
+    }
+
+    #[test]
     fn a_code_refusal_reappearing_posts_again_on_the_mac_and_stays_quiet_on_desktop() {
         // covers: S349
         assert!(!refusal_holds(MAC.refused_reappears, true));
