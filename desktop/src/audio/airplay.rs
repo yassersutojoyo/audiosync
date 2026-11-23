@@ -12130,6 +12130,124 @@ pub mod tests {
         cell("S186.end", &measured.join("; "));
     }
 
+    /// Stop pressed and Start pressed again at once, within the stop's fade:
+    /// the television plays the new capture at full level.
+    #[test]
+    fn a_stop_and_a_start_at_once_plays_the_new_capture() {
+        let receiver = LoopbackReceiver::start();
+        let (link, input) = SenderLink::start().expect("the sender starts");
+        let mut record = receiver.record();
+        record.txt.retain(|entry| !entry.starts_with(b"cn="));
+        record.txt.push(b"cn=0".to_vec());
+        link.sender
+            .start_discovery_with(Box::new(OneService(Some(BrowseEvent::Resolved(record)))));
+        let mut backend = MockBackend::empty();
+        backend.connect_output("speakers", "Speakers");
+        backend.set_output_enabled("speakers", true).unwrap();
+        backend.list_outputs().unwrap();
+        backend.set_airplay(Box::new(link), Some(FeedSlot::new(input)));
+        assert!(poll_until(&mut backend, |backend, _| !backend
+            .airplay_speakers()
+            .is_empty()));
+        let id = backend.airplay_speakers()[0].id.clone();
+        backend.set_airplay_enabled(&id, true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let first = backend.feed_airplay_live(0.5);
+        assert!(poll_until(&mut backend, |_, events| events
+            .contains(&BackendEvent::AirPlayPlaying { id: id.clone() })));
+        assert!(poll_until(&mut backend, |_, _| receiver
+            .left_channel()
+            .iter()
+            .filter(|&&s| s > 15_000)
+            .count()
+            > 44_100));
+
+        backend.stop();
+        backend.poll();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        first.join().expect("the first feed's thread");
+        assert!(
+            backend.driver().capture_feeds_airplay(),
+            "the new capture feeds the TV"
+        );
+        let restarted = receiver.left_channel().len();
+        let second = backend.feed_airplay_live(0.5);
+        let loud_after = |receiver: &LoopbackReceiver| {
+            receiver.left_channel()[restarted..]
+                .iter()
+                .filter(|&&s| s > 15_000)
+                .count()
+        };
+        assert!(
+            poll_until(&mut backend, |_, _| loud_after(&receiver) > 44_100),
+            "the TV got {} loud frames after the restart: {:?}",
+            loud_after(&receiver),
+            receiver.methods()
+        );
+        backend.shut_down();
+        second.join().expect("the second feed's thread");
+    }
+
+    /// A row moved while stopped, then Start, then the speaker switched off
+    /// and on at once: the television plays again at the row's level.
+    #[test]
+    fn a_level_moved_while_stopped_and_a_fast_off_and_on_reach_the_tv() {
+        let receiver = LoopbackReceiver::start();
+        let (link, input) = SenderLink::start().expect("the sender starts");
+        let mut record = receiver.record();
+        record.txt.retain(|entry| !entry.starts_with(b"cn="));
+        record.txt.push(b"cn=0".to_vec());
+        link.sender
+            .start_discovery_with(Box::new(OneService(Some(BrowseEvent::Resolved(record)))));
+        let mut backend = MockBackend::empty();
+        backend.connect_output("speakers", "Speakers");
+        backend.set_output_enabled("speakers", true).unwrap();
+        backend.list_outputs().unwrap();
+        backend.set_airplay(Box::new(link), Some(FeedSlot::new(input)));
+        assert!(poll_until(&mut backend, |backend, _| !backend
+            .airplay_speakers()
+            .is_empty()));
+        let id = backend.airplay_speakers()[0].id.clone();
+        backend.set_airplay_enabled(&id, true).unwrap();
+        backend.set_airplay_volume(&id, 80.0);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let first = backend.feed_airplay_live(0.5);
+        assert!(poll_until(&mut backend, |_, events| events
+            .contains(&BackendEvent::AirPlayPlaying { id: id.clone() })));
+        assert!(poll_until(&mut backend, |_, _| receiver.level().is_some()));
+        let at_80 = receiver.level();
+        backend.stop();
+        first.join().expect("the first feed's thread");
+        backend.poll();
+        backend.set_airplay_volume(&id, 30.0);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let second = backend.feed_airplay_live(0.5);
+        assert!(poll_until(&mut backend, |_, events| events
+            .contains(&BackendEvent::AirPlayPlaying { id: id.clone() })));
+        assert!(
+            poll_until(&mut backend, |_, _| receiver.level() != at_80),
+            "the TV kept the level of 80: {:?}",
+            receiver.level()
+        );
+        let at_30 = receiver.level();
+
+        backend.set_airplay_enabled(&id, false).unwrap();
+        backend.set_airplay_enabled(&id, true).unwrap();
+        let back = receiver.left_channel().len();
+        assert!(
+            poll_until(&mut backend, |_, _| receiver.left_channel()[back..]
+                .iter()
+                .filter(|&&s| s > 15_000)
+                .count()
+                > 44_100),
+            "{:?}",
+            receiver.methods()
+        );
+        assert_eq!(receiver.level(), at_30);
+        backend.shut_down();
+        second.join().expect("the second feed's thread");
+    }
+
     /// A stop request makes the feed's last frames, as the sender cuts them
     /// into packets, fall smoothly to 0 within the fade's F frames (S182),
     /// 960 at 48 kHz and 882 at the sender's 44.1 kHz, and stay at 0.

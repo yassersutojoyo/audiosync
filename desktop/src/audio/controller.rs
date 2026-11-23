@@ -14920,4 +14920,28 @@ mod tests {
             Some(30.0)
         );
     }
+
+    /// A local output switched on at the captured endpoint and off again
+    /// hands the whole system back to that endpoint's loopback.
+    // covers: S480
+    #[cfg(windows)]
+    #[test]
+    fn a_local_output_switched_on_and_off_at_the_endpoint_gives_the_capture_back_to_it() {
+        let mut backend = routed_to_the_speakers();
+        backend.set_output_enabled(SPEAKERS, true).unwrap();
+        backend.poll();
+        backend.check_routing_now();
+        backend.poll();
+        assert_eq!(backend.driver().capture_routes().last(), Some(&None));
+        backend.set_output_enabled(SPEAKERS, false).unwrap();
+        backend.poll();
+        backend.check_routing_now();
+        backend.poll();
+        assert_eq!(
+            backend.driver().capture_routes().last(),
+            Some(&Some(SPEAKERS.to_owned())),
+            "{:?}",
+            backend.driver().capture_routes()
+        );
+    }
 }
