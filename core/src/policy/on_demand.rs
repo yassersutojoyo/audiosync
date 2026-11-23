@@ -31,6 +31,9 @@ pub const PLAYING_HOLD: Seconds = 10.0;
 /// Silence before sound that makes it fresh for a waiting speaker (S482).
 pub const FRESH_SILENCE: Seconds = 2.0;
 
+/// Rounding slack for times the host sums from windows.
+const SLACK: Seconds = 1e-6;
+
 /// The idle time a new release setting starts with, in minutes (S483).
 pub const DEFAULT_RELEASE_MINUTES: u32 = 15;
 
@@ -173,7 +176,7 @@ impl<K: Ord + Clone> OnDemand<K> {
         self.windows = (self.windows << 1) | u64::from(audible);
         if audible {
             if let Some(quiet) = self.quiet_since.take()
-                && (self.stretch.is_none() || now - quiet >= FRESH_SILENCE)
+                && (self.stretch.is_none() || now - quiet >= FRESH_SILENCE - SLACK)
             {
                 self.stretch = Some((now, quiet));
             }
@@ -184,7 +187,11 @@ impl<K: Ord + Clone> OnDemand<K> {
         let lasting = self.lasting();
         if lasting {
             self.playing = true;
-        } else if self.playing && self.last_audible.is_none_or(|at| now - at >= PLAYING_HOLD) {
+        } else if self.playing
+            && self
+                .last_audible
+                .is_none_or(|at| now - at >= PLAYING_HOLD - SLACK)
+        {
             self.playing = false;
         }
         if self.playing && audible {
@@ -196,7 +203,7 @@ impl<K: Ord + Clone> OnDemand<K> {
             let fresh = move |status: &Status| match (*status, stretch) {
                 (Status::Released, _) => true,
                 (Status::Waiting { since }, Some((onset, quiet))) => {
-                    onset - quiet.max(since) >= FRESH_SILENCE
+                    onset - quiet.max(since) >= FRESH_SILENCE - SLACK
                 }
                 _ => false,
             };
@@ -229,7 +236,8 @@ impl<K: Ord + Clone> OnDemand<K> {
         let Some(minutes) = self.release_minutes else {
             return Vec::new();
         };
-        if self.playing || self.released || now - self.idle_from < f64::from(minutes) * 60.0 {
+        if self.playing || self.released || now - self.idle_from < f64::from(minutes) * 60.0 - SLACK
+        {
             return Vec::new();
         }
         self.released = true;

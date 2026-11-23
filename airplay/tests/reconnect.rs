@@ -205,7 +205,11 @@ fn an_unannounced_pair_member_is_retried_at_once_when_announced_again() {
     let _serial = serial();
     let a = NetReceiver::start(Behavior::default());
     let b = NetReceiver::start(Behavior::default());
-    let (sender, writer) = Sender::start(SenderConfig::default()).expect("the sender starts");
+    let (sender, writer) = Sender::start(SenderConfig {
+        // The receiver's close stands for any loss (P142), not a takeover (P249).
+        evidence_window: None,
+        ..SenderConfig::default()
+    }).expect("the sender starts");
     let _host = HostAudio::start(writer);
     let mut events = Events::default();
     let script = Script::default();
@@ -374,7 +378,11 @@ fn a_pair_whose_airplay_records_lapse_first_is_unannounced() {
     let _serial = serial();
     let a = NetReceiver::start(Behavior::default());
     let b = NetReceiver::start(Behavior::default());
-    let (sender, writer) = Sender::start(SenderConfig::default()).expect("the sender starts");
+    let (sender, writer) = Sender::start(SenderConfig {
+        // The receiver's close stands for any loss (P142), not a takeover (P249).
+        evidence_window: None,
+        ..SenderConfig::default()
+    }).expect("the sender starts");
     let _host = HostAudio::start(writer);
     let mut events = Events::default();
     let script = Script::default();
