@@ -26,7 +26,7 @@ struct CalibrateAllSpeaker: Equatable {
     let name: String
     let kind: CalibrateAllKind
     /// The stored delay the core starts from: a local offset, a Cast offset
-    /// or the AirPlay delay as its field shows it; nil when none is stored.
+    /// or the AirPlay delay L; nil when none is stored.
     let offsetMs: Double?
     /// When its sweep is expected after entering its path (S235).
     let latencyMs: Double
@@ -315,7 +315,7 @@ enum CalibrateAllFlow {
         var cast: (id: String, name: String, offsetMs: Double?, waitMs: Double, format: Int32)?
         /// AirPlay speakers that play, in the window's order.
         var airPlay: [(id: String, name: String)]
-        /// L, the AirPlay delay as its field shows it (S178).
+        /// L, the AirPlay delay that plays (S178).
         var airPlayDelayMs: Double
         /// A, the AirPlay setting that L comes from.
         var airPlayAdjustmentMs = 0.0
@@ -637,8 +637,20 @@ enum CalibrateAllFlow {
             rows.append(row(raw, index: index, speaker: speaker, off: asc_calibration_sheet_row_off(sheet, index)))
         }
         var raw = AscCalibrationAirPlay()
-        let airPlay = asc_calibration_sheet_airplay(sheet, &raw) ? airPlay(raw) : nil
+        let airPlay = asc_calibration_sheet_airplay(sheet, &raw) ? shown(airPlay(raw), speakers: speakers) : nil
         return CalibrateAllSheet(rows: rows, airPlay: airPlay, ended: ended)
+    }
+
+    /// The core reads and writes L; the sheet names A, the number the AirPlay
+    /// Delay field shows (S181).
+    static func shown(_ airPlay: CalibrateAllSheet.AirPlay, speakers: [CalibrateAllSpeaker]) -> CalibrateAllSheet.AirPlay {
+        guard let row = speakers.first(where: { $0.kind == .airPlay && $0.offsetMs == airPlay.oldMs }),
+              let senderMs = row.senderMs else { return airPlay }
+        var shown = airPlay
+        shown.oldMs = row.adjustmentMs
+        var applied = AirPlayDelay(adjustmentMs: row.adjustmentMs ?? 0)
+        if applied.enter(airPlay.newMs, senderMs: senderMs) { shown.newMs = applied.adjustmentMs }
+        return shown
     }
 
     /// The values the core's Apply lists, named by speaker (S238).

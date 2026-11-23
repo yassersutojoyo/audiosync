@@ -1096,9 +1096,12 @@ pub struct AppState {
     /// The name of the reference output, which the other outputs' offsets
     /// are relative to; `None` without one (spec S174, S181).
     pub reference_name: Option<String>,
-    /// The AirPlay delay field's value L in milliseconds, while an AirPlay
-    /// sender runs (spec S178, S181).
+    /// The AirPlay latency L in milliseconds that local speakers wait for,
+    /// while an AirPlay sender runs (spec S178).
     pub airplay_delay_ms: Option<f64>,
+    /// The user's extra AirPlay delay A in milliseconds, the only part the
+    /// AirPlay delay field shows and takes (spec S178, S181).
+    pub airplay_extra_ms: f64,
     /// AirPlay discovery runs but has found no speaker for a while: the
     /// speaker list says to check the network and Windows Firewall.
     pub airplay_none_found: bool,
@@ -1520,18 +1523,9 @@ impl AppState {
         })
     }
 
-    /// The AirPlay delay in tenths of a second that the main window's state
-    /// line names while streaming to an AirPlay speaker.
-    pub fn status_airplay_tenths(&self) -> Option<u32> {
-        let airplay_on = self
-            .speakers
-            .iter()
-            .any(|s| s.enabled && matches!(s.kind, SpeakerKind::AirPlay | SpeakerKind::AirPlay2));
-        if !self.running || !airplay_on {
-            return None;
-        }
-        self.airplay_delay_ms
-            .map(|ms| (ms.max(0.0) / 100.0).round() as u32)
+    /// What the AirPlay delay field shows, while an AirPlay sender runs.
+    pub fn airplay_field_ms(&self) -> Option<f64> {
+        self.airplay_delay_ms.map(|_| self.airplay_extra_ms)
     }
 
     /// The speaker lists both windows show: the PC's own outputs in their
@@ -2325,6 +2319,7 @@ impl MockBackend {
             password_prompt: None,
             reference_name: Some("Speakers".into()),
             airplay_delay_ms: Some(1750.0),
+            airplay_extra_ms: 0.0,
             airplay_none_found: false,
             airplay_searching: false,
             when_source_quits: WhenSourceQuits::Stop,
@@ -2882,7 +2877,7 @@ impl Backend for MockBackend {
     fn set_airplay_delay(&mut self, ms: f64) {
         self.airplay_delays.borrow_mut().push(ms);
         if !ms.is_nan() && self.state.airplay_delay_ms.is_some() {
-            self.state.airplay_delay_ms = Some(ms.clamp(0.0, MAX_DELAY_MS).round());
+            self.state.airplay_extra_ms = ms.clamp(MIN_DELAY_MS, MAX_DELAY_MS).round();
         }
     }
 

@@ -309,8 +309,11 @@ final class AppModel: ObservableObject {
     /// The Mac's built-in speakers are listed, so local offsets are relative
     /// to them (S173, S181).
     @Published var hasLocalReference = true
-    /// What the AirPlay delay field shows, L in whole ms (S178, S181).
+    /// L in whole ms, what local speakers wait for the AirPlay speakers (S178).
     @Published var airPlayDelayMs: Double = LocalDelay.senderDefaultLatencyMs
+    /// What the AirPlay delay field shows and takes: the user's extra delay A
+    /// in whole ms, never the part AudioSync sets on its own (S178, S181).
+    @Published var airPlayExtraMs: Double = 0
     /// AudioSync's own AirPlay sender stopped after an internal error
     /// (`NativeSenderStarts`): the AirPlay section says so, with Retry.
     @Published var airplaySenderFailed = false
@@ -465,12 +468,12 @@ final class AppModel: ObservableObject {
     }
     /// The saved delay of the row with this ID (`DelayBadge`).
     func savedDelay(of id: String) -> Double? {
-        DelayBadge.savedMs(of: id, airPlayID: AirPlayDelayRow.id, airPlayMs: airPlayDelayMs, rows: delayRows)
+        DelayBadge.savedMs(of: id, airPlayID: AirPlayDelayRow.id, airPlayMs: airPlayExtraMs, rows: delayRows)
     }
     func savedDelayText(of id: String) -> String? {
         // A Cast offset is a wait, never below 0, so it has no sign.
         if let castMs = cast.first(where: { $0.id == id })?.offsetMs { return text.delayValue(ms: castMs) }
-        return DelayBadge.text(of: id, airPlayID: AirPlayDelayRow.id, airPlayMs: airPlayDelayMs, rows: delayRows, text: text)
+        return DelayBadge.text(of: id, airPlayID: AirPlayDelayRow.id, airPlayMs: airPlayExtraMs, rows: delayRows, text: text)
     }
     private var delayRows: [(id: String, offsetMs: Double?)] {
         (local + cast).map { (id: $0.id, offsetMs: $0.offsetMs) }
@@ -659,14 +662,9 @@ final class AppModel: ObservableObject {
 
     var statusText: String { shownRunning ? text.statusStreaming(speakers: activeSpeakers) : text.statusOff }
 
-    /// The main window's status: the panel's, then the AirPlay delay in use,
-    /// which follows a step the sender takes on its own (S181).
-    var mainStatusText: String {
-        text.mainStatus(statusText, running: shownRunning,
-                        airPlayOn: StreamingPolicy.activeSpeakers(airPlay: airplay.map(\.enabled),
-                                                                  senderFailed: airplaySenderFailed, others: []) > 0,
-                        airPlayDelayMs: airPlayDelayMs)
-    }
+    /// The main window's status, the panel's without the AirPlay delay, which
+    /// moves on its own (S181).
+    var mainStatusText: String { statusText }
 
     /// AirPlay speakers left over from before the sender stopped can't be
     /// switched, so they're hidden while `airPlayProblem` is shown.

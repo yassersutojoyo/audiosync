@@ -10141,6 +10141,19 @@ do {
           "AirPlay delay: the native sender's field shows L + A, follows a new L and an edit stores the difference",
           "shown \(shown), followed \(followed), A \(native.adjustmentMs)")
 
+    // covers: S178, S181 (the field shows only the extra delay A)
+    let upgraded = AirPlayDelay(adjustmentMs: 78)
+    let windowsSource = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+Windows.swift", encoding: .utf8)) ?? ""
+    let delayRowSource = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
+    let extraRange = RemoteDelay.airPlay(78).range
+    check(upgraded.latencyMs(senderMs: 200) == 278 && upgraded.latencyMs(senderMs: 300) == 378
+            && windowsSource.contains("publish(\\.airPlayExtraMs, airPlayDelay.adjustmentMs.rounded())")
+            && delayRowSource.contains("kind: .airPlay, ms: model.airPlayExtraMs")
+            && extraRange.min == -2000 && extraRange.max == 20000,
+          "AirPlay delay: the field shows and takes only the stored extra delay, so an upgrade or a step of the "
+            + "sender's latency changes what is shown, never what plays",
+          "range \(extraRange)")
+
     // covers: S179 (the stored absolute delays become offsets, once)
     func migrate(_ stored: [String: Double], legacy: Double? = nil, enabled: Set<String> = [],
                  listed: [String], reference: String? = "BuiltInSpeakerDevice") -> LocalDelay.Migration? {
@@ -10852,7 +10865,7 @@ do {
           "delay field input: a negative AirPlay delay is marked until Return applies 0", "text: \(air.text)")
 
     check(t.delayOutOfRange(lowest: "−2000", highest: "+20000", applies: "−2000")
-              == "The range is −2000 to +20000 ms. Return applies −2000.",
+              == "−2000 to +20000 ms. Return sets −2000.",
           "delay field input: the out-of-range hint names the range and the value Return applies")
 }
 
@@ -13286,7 +13299,7 @@ do {
           "calibration: a long hold-back at a high microphone rate is refused up front (S232, S234)")
 
     // covers: S232
-    check(t.calibrationMessage(.cancelled) == "Calibration cancelled. The delay wasn't changed."
+    check(t.calibrationMessage(.cancelled) == "Cancelled. Delay unchanged."
             && t.calibrationMessage(.running(.preparing)) == nil && t.calibrationMessage(.idle) == nil,
           "calibration: a cancel says nothing changed")
 
@@ -13709,8 +13722,10 @@ do {
             }
             return out
         }
+        // An AirPlay row read L = 1750 ms as a sender latency of 1700 ms plus an extra delay A of 50 ms.
         func speaker(_ id: String, _ kind: CalibrateAllKind, _ offset: Double?) -> CalibrateAllSpeaker {
-            CalibrateAllSpeaker(id: id, name: id, kind: kind, offsetMs: offset, latencyMs: 100)
+            CalibrateAllSpeaker(id: id, name: id, kind: kind, offsetMs: offset, latencyMs: 100,
+                                adjustmentMs: kind == .airPlay ? 50 : nil, senderMs: kind == .airPlay ? 1700 : nil)
         }
         let speakers = [speaker("mac", .local, nil), speaker("usb", .local, 150), speaker("hdmi", .local, 0),
                         speaker("bt", .local, -200), speaker("native:a", .airPlay, 1750),
@@ -13767,8 +13782,9 @@ do {
             let airPlay = shown?.airPlay
             let airPlayText = airPlay.map(t.calibrateAllAirPlay) ?? ""
             // covers: S237
-            check(airPlay?.state == .spread && airPlay?.newMs == 1965 && airPlay?.certainRows == 2
-                    && airPlayText.contains("AirPlay delay: was 1750 ms. New: 1965 ms")
+            // covers: S181 (the sheet names the extra delay A, as the field does)
+            check(airPlay?.state == .spread && airPlay?.newMs == 265 && airPlay?.certainRows == 2
+                    && airPlayText.contains("AirPlay delay: was 50 ms. New: 265 ms")
                     && airPlayText.contains("differ by 30 ms") && airPlayText.contains("one delay for all AirPlay speakers"),
                   "calibrate all: the AirPlay delay is the median, and a spread over 10 ms is said in plain words (S237)",
                   airPlayText)
@@ -16059,7 +16075,7 @@ do {
     check(clamped && range("builtin") == [0, 0, 0],
           "web remote: the reference has no delay to change and its volume stays in 0 to 100", "\(range("builtin"))")
     let usbRange = range("usb") == [-2000, 150, 20000]
-    let airPlayRange = range("hp") == [0, 1750, 20000]
+    let airPlayRange = range("hp") == [-2000, 1750, 20000]
     let castRange = range("cast") == [0, 300, 20000]
     // covers: S175 (a local output's offset range)
     check(usbRange && airPlayRange && castRange, "web remote: each delay carries the range its field in the window takes",
@@ -17475,19 +17491,6 @@ do {
     let note = UIStrings(locale: Locale(identifier: "en_US")).liveInputAirPlayHint(tenths: 18)
     // covers: S244
     check(note.hasPrefix("AirPlay adds a 1.8 s delay") && !note.contains("\u{2014}"), "live input note: \(note)")
-}
-
-// MARK: The AirPlay delay in the main window's status line (Localization.swift)
-do {
-    let t = UIStrings()
-    let shown = t.mainStatus("Streaming to 2 speakers", running: true, airPlayOn: true, airPlayDelayMs: 1960)
-    // covers: S181 (the status line)
-    check(shown == "Streaming to 2 speakers · AirPlay delay 2.0 s",
-          "main window status: names the AirPlay delay in use, to a tenth of a second", shown)
-    // covers: S181 (the status line)
-    check(t.mainStatus("Streaming", running: true, airPlayOn: false, airPlayDelayMs: 1960) == "Streaming"
-            && t.mainStatus("Off", running: false, airPlayOn: true, airPlayDelayMs: 1960) == "Off",
-          "main window status: no AirPlay delay with no AirPlay speaker on or streaming off")
 }
 
 // MARK: Microphone permission request (MicrophoneRequestGate.swift)

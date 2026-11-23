@@ -281,7 +281,7 @@ final class WebRemote {
                 id: s.id, name: s.name, kind: t.speakerTag(s.tag, airPlay2: s.airPlay2), on: s.enabled,
                 volume: s.volume, isAirPlay: s.isAirPlay,
                 castVolumeFixed: s.cast?.volumeFixed, castVolumeStep: s.cast?.volumeStep ?? 0,
-                offsetMs: s.offsetMs, airPlayDelayMs: model.airPlayDelayMs,
+                offsetMs: s.offsetMs, airPlayDelayMs: model.airPlayExtraMs,
                 needsCode: s.availability == .needsCode || s.availability == .codeEveryTime, paired: s.paired, holdsPassword: s.holdsPassword,
                 memberAsksPassword: s.airPlayTarget?.asksPassword == true, refusedForCode: s.refusedForCode,
                 availability: s.codeWait == nil ? s.availability : .open,

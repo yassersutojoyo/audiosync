@@ -75,7 +75,8 @@ use audiosync_core::policy::airplay_reconnect::{
     NoticeClear, NoticeEnd, notice_clear, ptp_notice_clears, ptp_notice_raised,
 };
 use audiosync_core::policy::delay::{
-    native_airplay_adjustment_ms, native_airplay_latency_ms, sanitize_offset_ms,
+    native_airplay_adjustment_ms, native_airplay_latency_ms, sanitize_airplay_adjustment_ms,
+    sanitize_offset_ms,
 };
 use audiosync_core::policy::presets::{
     self, LeftOff, Preset, RecallAction, RecallMember, RecallOther, RecallStep,
@@ -99,7 +100,7 @@ use crate::audio::backend::{
 use crate::audio::backend::{AirPlayPinPrompt, PairingPhase};
 use crate::audio::cast_address::{self, CastAddress};
 use audiosync_core::calibrate_all::{
-    Applied, Class, EndReason, RowState, Sheet, Take, Target, airplay_moves,
+    AirPlayShared, Applied, Class, EndReason, RowState, Sheet, Take, Target, airplay_moves,
 };
 
 use crate::audio::calibrate_all::{self, AllRun, Finished, Member, Progress, ZoneScope};
@@ -1855,6 +1856,24 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
     }
 
+    /// The core reads and writes L; the sheet names A, the number the
+    /// AirPlay Delay field shows (S181), as the Mac's `CalibrateAllFlow.shown`.
+    fn shown_airplay(shared: AirPlayShared, members: &[Member]) -> AirPlayShared {
+        let Some(member) = members
+            .iter()
+            .find(|member| member.class == Class::AirPlay && member.offset_ms == shared.old_ms)
+        else {
+            return shared;
+        };
+        AirPlayShared {
+            old_ms: Some(member.adjustment_ms),
+            new_ms: shared
+                .new_ms
+                .and_then(|ms| native_airplay_adjustment_ms(ms, member.sender_ms)),
+            ..shared
+        }
+    }
+
     fn sheet_state(&self, kept: &KeptSheet, busy: bool) -> SheetState {
         let sheet = &kept.sheet;
         // A failure ends the sheet too, as the Mac reads it (CalibrateAllFlow.swift:174).
@@ -1872,7 +1891,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     can_measure_again: open && row.state != RowState::Reference,
                 })
                 .collect(),
-            airplay: sheet.airplay().copied(),
+            airplay: sheet
+                .airplay()
+                .map(|shared| Self::shown_airplay(*shared, &kept.members)),
             ended: sheet.ended(),
             failure: kept.failure,
             again_ended: kept.again_ended.clone(),
@@ -5186,6 +5207,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         let mut state = AppState {
             reference_name,
             airplay_delay_ms: self.airplay_delay_ms(),
+            airplay_extra_ms: self.audio.airplay_adjustment(),
             airplay_none_found: self.airplay_none_found(),
             airplay_searching: self.airplay_searching(),
             running: self.running(),
@@ -5622,12 +5644,9 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.stop_if_idle();
     }
 
-    /// Stores the adjustment that makes L what the user entered, against
-    /// the sender's latency of this moment or the last one known (spec
-    /// S178, S181).
+    /// Stores the extra delay A the user entered (spec S178, S181).
     fn set_airplay_delay(&mut self, ms: f64) {
-        let sender = self.audio.airplay_adjustment_base_ms();
-        if let Some(adjustment) = native_airplay_adjustment_ms(ms, sender) {
+        if let Some(adjustment) = sanitize_airplay_adjustment_ms(ms) {
             self.audio.set_airplay_adjustment(adjustment);
         }
     }
@@ -15462,6 +15481,40 @@ mod tests {
         });
     }
 
+    // covers: S181, S237
+    #[test]
+    fn calibrate_alls_airplay_line_shows_the_extra_delay_as_its_field_does() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.audio.set_airplay_adjustment(78.0);
+        keep(
+            &mut adapter,
+            crate::audio::calibrate_all::tests::sheet_of(&[
+                (Class::Local, SPEAKERS, Some(0.0), 2010.0),
+                (Class::Local, HEADPHONES, Some(0.0), 2060.0),
+                (Class::AirPlay, "kitchen", Some(278.0), 2110.0),
+            ]),
+        );
+        read_with_sender(&mut adapter, 200.0);
+        let measured = adapter
+            .calibrate_all
+            .sheet
+            .as_ref()
+            .and_then(|kept| kept.sheet.airplay().copied())
+            .expect("an AirPlay line");
+        let shown = adapter
+            .snapshot()
+            .calibrate_all
+            .sheet
+            .expect("results")
+            .airplay
+            .expect("an AirPlay line");
+        assert_eq!(measured.old_ms, Some(278.0), "the run reads L");
+        assert!(measured.new_ms.is_some(), "a certain AirPlay row");
+        assert_eq!(shown.old_ms, Some(78.0));
+        assert_eq!(shown.new_ms, measured.new_ms.map(|ms| ms - 200.0));
+    }
+
     // The Mac's againEnded(name, .failed(failure)) (AppDelegate+CalibrateAll.swift:260-262).
     #[test]
     fn a_measure_again_that_fails_midway_names_its_speaker_and_why() {
@@ -15650,7 +15703,7 @@ mod tests {
         assert_eq!(adapter.audio.airplay_sender_latency_ms(), None);
         assert!(adapter.snapshot().calibrate_all.sheet.is_some());
 
-        adapter.set_airplay_delay(base + 120.0);
+        adapter.set_airplay_delay(120.0);
         adapter.poll();
         assert!(adapter.snapshot().calibrate_all.sheet.is_some());
         adapter.apply_calibrate_all();
@@ -15687,8 +15740,9 @@ mod tests {
 
         fake.set_latency(std::time::Duration::from_millis(1750));
         adapter.poll();
-        // A becomes 18 150 ms; against the run's L_s it still clamps to 20 000.
-        adapter.set_airplay_delay(19_900.0);
+        // The user enters A = 18 150 ms; against the run's L_s it still clamps
+        // to 20 000.
+        adapter.set_airplay_delay(18_150.0);
         adapter.apply_calibrate_all();
         let state = adapter.snapshot().calibrate_all;
         assert!(state.sheet.is_some_and(|sheet| !sheet.applied));
@@ -15754,7 +15808,10 @@ mod tests {
     #[test]
     fn an_airplay_delay_changed_after_apply_still_drops_undo() {
         let (mut adapter, _sender, written) = applied_before_a_new_sender();
-        let shown = adapter.snapshot().airplay_delay_ms.expect("a sender runs");
+        let shown = adapter
+            .snapshot()
+            .airplay_field_ms()
+            .expect("a sender runs");
         adapter.set_airplay_delay(shown + 40.0);
         adapter.poll();
         assert_ne!(adapter.audio.airplay_adjustment(), written);
@@ -16039,22 +16096,39 @@ mod tests {
 
     // covers: S178, S181
     #[test]
-    fn the_airplay_delay_field_shows_l_plus_a_and_follows_a_new_l() {
-        let (mut with_sender, fake, _, _) = airplay_adapter();
-        let shown = |adapter: &AudioAdapter<MockBackend>| adapter.snapshot().airplay_delay_ms;
-        assert_eq!(shown(&with_sender), Some(1750.0), "L_s + 0");
-        with_sender.set_airplay_delay(2000.0);
-        assert_eq!(shown(&with_sender), Some(2000.0));
-        assert_eq!(with_sender.audio.airplay_adjustment(), 250.0);
-        fake.set_latency(std::time::Duration::from_secs(1));
+    fn the_airplay_delay_field_shows_only_the_extra_delay_and_an_upgrade_keeps_what_plays() {
+        let (mut with_sender, fake, kitchen, _) = airplay_adapter();
+        let field = |adapter: &AudioAdapter<MockBackend>| {
+            let state = adapter.snapshot();
+            let speaker = state
+                .speakers
+                .iter()
+                .find(|speaker| speaker.id == ap(&kitchen))
+                .expect("listed");
+            crate::remote::delay_field(&state, speaker)
+        };
+        // An extra delay of 78 ms stored by an earlier version, which showed
+        // it as 278 against a sender latency of 200 ms.
+        with_sender.audio.set_airplay_adjustment(78.0);
+        fake.set_latency(std::time::Duration::from_millis(200));
         with_sender.poll();
-        assert_eq!(shown(&with_sender), Some(1250.0));
+        assert_eq!(field(&with_sender), Some((78.0, -2000, 20_000)));
+        assert_eq!(with_sender.airplay_delay_ms(), Some(278.0), "what plays");
+        // The automatic part steps from 200 to 300 ms on its own.
+        fake.set_latency(std::time::Duration::from_millis(300));
+        with_sender.poll();
+        assert_eq!(field(&with_sender), Some((78.0, -2000, 20_000)));
+        assert_eq!(with_sender.airplay_delay_ms(), Some(378.0));
+        with_sender.set_airplay_delay(120.0);
+        assert_eq!(with_sender.audio.airplay_adjustment(), 120.0);
+        assert_eq!(field(&with_sender).map(|(ms, _, _)| ms), Some(120.0));
+        assert_eq!(with_sender.airplay_delay_ms(), Some(420.0));
         with_sender.set_airplay_delay(f64::NAN);
-        assert_eq!(shown(&with_sender), Some(1250.0));
-        with_sender.set_airplay_delay(-500.0);
-        assert_eq!(shown(&with_sender), Some(0.0), "clamped");
+        assert_eq!(with_sender.audio.airplay_adjustment(), 120.0);
+        with_sender.set_airplay_delay(-2500.0);
+        assert_eq!(with_sender.audio.airplay_adjustment(), -2000.0, "clamped");
         // Without an AirPlay sender there is no field.
-        assert_eq!(shown(&adapter()), None);
+        assert_eq!(adapter().snapshot().airplay_delay_ms, None);
     }
 
     // covers: S383

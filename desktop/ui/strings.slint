@@ -95,7 +95,7 @@ export global Strings {
     // field's Narrator description then.
     out property <string> delay-draft-hint: @tr("Press Enter to apply");
     // Narrator, as a delay field refuses a character.
-    out property <string> delay-field-takes: @tr("Only digits, with + or − in front");
+    out property <string> delay-field-takes: @tr("Digits only, + or − first");
     // A text field's right-click menu.
     out property <string> edit-undo: @tr("Undo");
     out property <string> edit-redo: @tr("Redo");
@@ -141,12 +141,12 @@ export global Strings {
     out property <string> this-pc-none: @tr("No built-in output");
     out property <string> sync-adjust: @tr("Adjust sync");
     // Beside the sync controls when no output is the reference.
-    out property <string> sync-hint-no-reference: @tr("The speaker with the lowest value plays first, and the others wait by the difference. Heard this speaker first? Raise the value. Heard it late? Lower it.");
+    out property <string> sync-hint-no-reference: @tr("Lowest value plays first. Early? Raise it. Late? Lower it.");
     out property <string> milliseconds-unit: @tr("ms");
-    // The AirPlay delay (L): how long the local speakers wait for the
-    // AirPlay speakers.
+    // The AirPlay delay field: the user's extra delay A on top of what
+    // AudioSync sets on its own.
     out property <string> airplay-delay-title: @tr("AirPlay Delay");
-    out property <string> airplay-delay-hint: @tr("While an AirPlay speaker is on, local speakers wait this long for it. Heard the AirPlay speakers late? Raise it.");
+    out property <string> airplay-delay-hint: @tr("Extra delay for AirPlay speakers. Late? Raise it.");
     out property <string> auto-connect: @tr("Auto-Connect When Available");
     out property <string> source-system: @tr("All System Audio");
     out property <string> source-inputs-header: @tr("Input Devices");
@@ -648,11 +648,6 @@ export global Strings {
         }
         return @tr("Streaming to {n} speaker" | "Streaming to {n} speakers" % speakers);
     }
-    // The main window's state line while an AirPlay speaker streams.
-    // `seconds` has one decimal, such as "1.8".
-    public pure function main-status(status: string, seconds: string) -> string {
-        return @tr("{0} · AirPlay delay {1} s", status, seconds);
-    }
 
     // The tray icon's tooltip, with the facts VoiceOver reads on the Mac's
     // menu bar icon: streaming on or off, the speakers on, the notices.
@@ -1141,7 +1136,7 @@ export global Strings {
     out property <string> help-start-title: @tr("First Steps");
     out property <string> help-start: @tr("The main window holds every control. The AudioSync icon in the notification area opens the AudioSync tray panel, with the Streaming switch, the source, the volume and the speakers. Closing the window keeps AudioSync running there, and streaming goes on. To quit, right-click the AudioSync icon in the notification area and choose Exit AudioSync, or press Ctrl+Q.\n\nUnder Audio Source, pick what to play: All System Audio, one app that plays sound, Several Apps, or an input device, such as a microphone or line in. Several Apps, at the end of the source menu, sends Only the Checked Apps or All Apps Except the Checked Ones. AudioSync keeps your last mix of apps, so you can switch back to it later. If Windows blocks microphone access for desktop apps, a notice says so, with a button that opens those privacy settings.\n\nThe speakers are listed under This PC (the PC's own speakers or line out, and headphones on its jack), then your zones, each with its speakers under it, then Connected Speakers: AirPlay and Google Cast speakers and every other output, such as USB, Bluetooth or HDMI, with a small icon after its name for its kind; point to the icon to read the kind.\n\nSelect a speaker's round button to turn it on; streaming starts with it. Select it again to turn it off. When you turn the Streaming switch off, your speakers stay chosen with an outlined button, and they play again when you turn streaming on or select any speaker.");
     out property <string> help-start-linux: @tr("The main window holds every control. Where your desktop shows tray icons, the AudioSync icon there opens the main window, and its menu turns streaming on or off, turns Launch at Sign-In on or off, and quits AudioSync. Closing the window keeps AudioSync running in the tray, and streaming goes on. On a desktop without tray icons, closing the window quits AudioSync. To quit, choose Exit AudioSync in the AudioSync tray icon's menu, or press Ctrl+Q.\n\nUnder Audio Source, pick what to play: All System Audio, one app that plays sound, Several Apps, or an input device, such as a microphone or line in. Several Apps, at the end of the source menu, sends Only the Checked Apps or All Apps Except the Checked Ones. AudioSync keeps your last mix of apps, so you can switch back to it later. AudioSync captures the source through PipeWire and plays to the outputs PipeWire lists.\n\nThe speakers are listed under This PC (the PC's own speakers or line out, and headphones on its jack), then your zones, each with its speakers under it, then Connected Speakers: AirPlay and Google Cast speakers and every other output, such as USB, Bluetooth or HDMI, with a small icon after its name for its kind; point to the icon to read the kind.\n\nSelect a speaker's round button to turn it on; streaming starts with it. Select it again to turn it off. When you turn the Streaming switch off, your speakers stay chosen with an outlined button, and they play again when you turn streaming on or select any speaker.");
-    out property <string> help-sync: @tr("The PC's own speakers are the reference and have no delay. Every other local speaker shows its delay relative to them. Without a reference, the speaker with the lowest value plays first and the others wait by the difference.\n\nTo change a delay, select the speaker's row or its value. The −100, −10, +10 and +100 buttons apply at once. You can also type a number, with + or − in front if you like, and apply it with Enter or Ctrl+S; the controls stay open. Selecting the row again, or clicking outside every speaker row, applies what you typed and closes the controls. Escape drops what you typed. A number out of range gets a red outline and a line that gives the range.\n\nHeard a speaker before the others? Raise its delay. Heard it late? Lower it, below 0 if needed.\n\nThe AirPlay Delay row in Connected Speakers sets how long the speakers on this PC wait for the AirPlay speakers. If the AirPlay speakers sound late, raise it; if they sound early, lower it. AudioSync keeps the AirPlay speakers in step with each other, so they have no delay of their own.");
+    out property <string> help-sync: @tr("The PC's own speakers are the reference and have no delay. Every other local speaker shows its delay relative to them. Without a reference, the speaker with the lowest value plays first and the others wait by the difference.\n\nTo change a delay, select the speaker's row or its value. The −100, −10, +10 and +100 buttons apply at once. You can also type a number, with + or − in front if you like, and apply it with Enter or Ctrl+S; the controls stay open. Selecting the row again, or clicking outside every speaker row, applies what you typed and closes the controls. Escape drops what you typed. A number out of range gets a red outline and a line that gives the range.\n\nHeard a speaker before the others? Raise its delay. Heard it late? Lower it, below 0 if needed.\n\nWhile an AirPlay speaker is on, the speakers on this PC also wait for it. AudioSync sets that wait on its own; the AirPlay Delay row in Connected Speakers is only the extra delay you add on top. If the AirPlay speakers sound late, raise it; if they sound early, lower it. AudioSync keeps the AirPlay speakers in step with each other, so they have no delay of their own.");
     // The Google Cast section.
     out property <string> help-sync-cast: @tr("Local and AirPlay speakers play in step: once their delays are set, AudioSync keeps them together. It can't sync Google Cast speakers automatically, so each one has an offset you set by ear in its row. If the Cast speaker sounds late, raise it, and the other speakers wait longer; if it sounds early, lower it. AudioSync keeps the offset for that speaker. If a Google Cast speaker doesn't show up, select Add by Address… under the speaker list and enter its IP address or host name. One Google Cast speaker plays at a time. A speaker group made in the Google Home app plays as one speaker, with one volume and one offset, and its note names the speakers in it once the group reports them. Those speakers stay listed on their own. While a Google Cast speaker plays, Resync under its volume restarts the stream, with a short gap, so it lines up at its offset again.");
     // The first of the Tips.
@@ -1517,7 +1512,7 @@ export global Strings {
     out property <string> cast-volume-not-live: @tr("This speaker's volume can be changed while AudioSync plays to it.");
 
     // Beside a Google Cast speaker's delay, in place of the sync hint.
-    out property <string> cast-sync-hint: @tr("AudioSync can't sync Google Cast speakers automatically, so it keeps the others only roughly in step with this one. Set this by ear: heard this speaker late? Raise the value, and the other speakers wait longer. Heard it early? Lower it. AudioSync keeps it for this speaker; check it again when you start it.");
+    out property <string> cast-sync-hint: @tr("Set by ear. Check it each time it starts. Late? Raise it. Early? Lower it.");
 
     public pure function speaker-kind(kind: SpeakerKind) -> string {
         if kind == SpeakerKind.airplay {
@@ -1719,7 +1714,7 @@ export global Strings {
     // number out of the delay's range; also the field's Narrator
     // description then.
     public pure function delay-out-of-range(lowest: string, highest: string, applies: string) -> string {
-        return @tr("The range is {} to {} ms. Enter applies {}.", lowest, highest, applies);
+        return @tr("{} to {} ms. Enter sets {}.", lowest, highest, applies);
     }
 
     // An offset relative to the reference, with its sign: "+150 ms",
@@ -1874,7 +1869,7 @@ export global Strings {
         if reference == "" {
             return root.sync-hint-no-reference;
         }
-        return @tr("Relative to {}. Use a negative value for a speaker that sounds late, such as Bluetooth. Heard this speaker first? Raise the value. Heard it late? Lower it.", reference);
+        return @tr("Compared with {}. Early? Raise it. Late? Lower it.", reference);
     }
 
     // Microphone calibration of a local speaker against the reference (spec
@@ -1884,7 +1879,7 @@ export global Strings {
     out property <string> calibration-preparing: @tr("Fading the music out…");
     out property <string> calibration-listening-chosen: @tr("Listening to this speaker…");
     out property <string> calibration-estimating: @tr("Working out the delay…");
-    out property <string> calibration-cancelled: @tr("Calibration cancelled. The delay wasn't changed.");
+    out property <string> calibration-cancelled: @tr("Cancelled. Delay unchanged.");
     out property <string> calibration-this-speaker: @tr("this speaker");
     out property <string> calibration-a-speaker: @tr("a speaker");
     out property <string> calibration-no-reference: @tr("Calibration measures against the PC's own speakers, and they aren't listed.");
@@ -1914,10 +1909,7 @@ export global Strings {
     }
 
     public pure function calibration-hint(reference: string) -> string {
-        if reference == "" {
-            return @tr("Put the microphone where you listen. AudioSync fades the music out, plays a short, quiet sweep on the PC's own speakers and then on this speaker, sets this speaker's delay from the difference and fades the music back in.");
-        }
-        return @tr("Put the microphone where you listen. AudioSync fades the music out, plays a short, quiet sweep on {} and then on this speaker, sets this speaker's delay from the difference and fades the music back in.", reference);
+        return @tr("Put the mic where you listen. A short sweep plays, then the delay is set.");
     }
 
     public pure function calibration-listening(name: string) -> string {

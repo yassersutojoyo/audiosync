@@ -1370,7 +1370,7 @@ mod tests {
         );
         app.take_remote_commands();
         let state = app.snapshot();
-        assert_eq!(state.airplay_delay_ms, Some(2100.0));
+        assert_eq!(state.airplay_field_ms(), Some(2100.0));
         assert!(!state.speaker(&asks).expect("listed").enabled);
     }
 
