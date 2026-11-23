@@ -19615,6 +19615,14 @@ do {
             && TrackSlide.change(from: one, to: spotifyOne, sliding: true) == .stop
             && TrackSlide.change(from: nil, to: one, sliding: false) == .stop,
           "track slide: a second reading or a quick second skip while a slide runs keeps that slide, its side and start")
+    // Mac debug log 2026-11-20 08:04: Spotify read the new song twice, the second time with another album.
+    let songRead = NowPlayingMonitor.Track(bundleID: "com.spotify.client", appName: "Spotify", title: "Two",
+                                           artist: "A", album: "B", isPlaying: true, artwork: nil, songID: "t2")
+    let songReread = NowPlayingMonitor.Track(bundleID: "com.spotify.client", appName: "Spotify", title: "Two",
+                                             artist: "A", album: "C", isPlaying: true, artwork: nil, songID: "t2")
+    check(TrackSlide.change(from: songRead, to: songReread, sliding: false) == .none
+            && TrackSlide.change(from: songRead, to: songReread, sliding: true) == .none,
+          "track slide: the player's later reading of the song that slid in, with another album, slides nothing")
     let cover = NSImage(size: NSSize(width: 1, height: 1))
     var shown = two
     shown.artwork = cover
