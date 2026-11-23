@@ -1600,6 +1600,8 @@ fn unreadable_fields(text: &str) -> Vec<String> {
         ("equalizer_curves", Value::is_array),
         ("show_virtual_devices", Value::is_boolean),
         ("presets_list_open", Value::is_boolean),
+        ("release_when_quiet", Value::is_boolean),
+        ("release_minutes", Value::is_u64),
         ("appearance", is_appearance),
         ("window", reads::<Option<WindowFrame>>),
         ("guide_window", reads::<Option<WindowPlace>>),

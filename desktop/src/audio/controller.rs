@@ -1083,7 +1083,7 @@ impl<D: Driver> Controller<D> {
             .as_secs_f64()
     }
 
-    /// Feeds the policy the speakers switched on, the AirPlay and Cast
+    /// Feeds the policy the speakers switched on, the AirPlay sender's
     /// takeover reports and the capture's peak in windows of
     /// [`on_demand::WINDOW`] since the last feed, and carries out what it
     /// decides (S481 to S483). The poll is slower than a window, so each
@@ -1096,7 +1096,7 @@ impl<D: Driver> Controller<D> {
             .map(|airplay| airplay.enabled_ids().into_iter().collect())
             .unwrap_or_default();
         let cast_on = self.cast.as_ref().and_then(CastSpeakers::enabled_id);
-        on.extend(cast_on.clone());
+        on.extend(cast_on);
         for id in self.on_demand.switched_on_keys() {
             if !on.contains(&id) {
                 self.on_demand.switched_off(&id);
@@ -1128,11 +1128,6 @@ impl<D: Driver> Controller<D> {
                     None => self.let_go(&id, true),
                 },
             }
-        }
-        if let Some(id) = cast_on
-            && self.cast.as_mut().is_some_and(CastSpeakers::take_taken)
-        {
-            self.on_demand.taken(&id, now);
         }
         let peak = self
             .session

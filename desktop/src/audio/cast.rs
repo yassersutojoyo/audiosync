@@ -670,12 +670,9 @@ pub struct CastSpeakers {
     reach: Reachability,
     /// See [`CastSpeakers::set_file_unread`].
     file_unread: bool,
-    /// The device that is on is let go: taken by another sender or
-    /// released, it stays on but runs no session (C141, C142).
+    /// The device that is on is released: it stays on but runs no
+    /// session (C142).
     let_go: bool,
-    /// Another sender took the device since the last
-    /// [`CastSpeakers::take_taken`] (C141).
-    taken: bool,
 }
 
 impl CastSpeakers {
@@ -703,7 +700,6 @@ impl CastSpeakers {
             streaming: false,
             asleep: false,
             let_go: false,
-            taken: false,
             track: Some(CastTrack::default()),
             sent: None,
             log,
@@ -1386,12 +1382,6 @@ impl CastSpeakers {
         }
     }
 
-    /// Whether another sender took the device that is on since the last
-    /// call (C141).
-    pub fn take_taken(&mut self) -> bool {
-        std::mem::take(&mut self.taken)
-    }
-
     /// The PC is going to sleep, or it woke (S412).
     pub fn set_asleep(&mut self, asleep: bool) {
         self.asleep = asleep;
@@ -2030,14 +2020,6 @@ impl CastSpeakers {
                 self.list.set_in_session(key, false);
                 self.log
                     .log(|| format!("Cast: {} ended: {}", self.name(device), describe_end(&end)));
-                // A speaker another sender took stays on and waits for the
-                // host's yield rule (C141).
-                if matches!(end, SessionEnd::TakenOver) && self.enabled == Some(device) {
-                    self.let_go = true;
-                    self.taken = true;
-                    self.pending.push(BackendEvent::CastChanged);
-                    return;
-                }
                 self.enabled = None;
                 match problem_of(&end) {
                     Some(problem) => self.fail(device, problem),
@@ -2643,43 +2625,31 @@ pub mod tests {
             device: id(KITCHEN),
             end: SessionEnd::TakenOver,
         });
-        cast.poll();
-        assert_eq!(cast.speakers()[1].status, CastStatus::Idle);
+        let events = cast.poll();
+        assert!(events.contains(&BackendEvent::CastFailed {
+            id: KITCHEN.to_owned(),
+            problem: CastProblem::TakenOver,
+        }));
+        let kitchen = &cast.speakers()[1];
+        assert!(!kitchen.enabled);
+        assert_eq!(kitchen.status, CastStatus::Idle);
     }
 
-    // covers: C141 (taken; the outage while Quiet is not done yet), C142
+    // covers: C142
     #[test]
-    fn a_taken_speaker_stays_on_and_waits_and_a_release_stops_the_session() {
+    fn a_released_speaker_stays_on_with_its_session_stopped_until_taken_back() {
         let (fake, mut cast) = listed();
         cast.set_streaming(true);
         cast.set_enabled(KITCHEN, true).unwrap();
-        fake.report(playing(KITCHEN));
-        cast.poll();
-        fake.report(HostEvent::Ended {
-            attempt: AttemptId(1),
-            device: id(KITCHEN),
-            end: SessionEnd::TakenOver,
-        });
-        let events = cast.poll();
-        assert!(
-            !events
-                .iter()
-                .any(|event| matches!(event, BackendEvent::CastFailed { .. })),
-            "a takeover is no failure"
-        );
-        assert!(cast.take_taken());
-        assert!(!cast.take_taken(), "reported once");
-        assert!(cast.speakers()[1].enabled, "still on");
+        cast.set_let_go(true);
+        assert_eq!(fake.state().stops, 1, "stopped as a deselect");
+        assert!(cast.speakers()[1].enabled);
+        assert_eq!(cast.speakers()[1].status, CastStatus::Idle);
         cast.poll();
         assert_eq!(fake.state().started.len(), 1, "not relaunched on its own");
 
         cast.set_let_go(false);
-        assert_eq!(fake.state().started.len(), 2, "back on the host's word");
-
-        cast.set_let_go(true);
-        assert_eq!(fake.state().stops, 1, "released as a deselect");
-        assert!(cast.speakers()[1].enabled);
-        assert_eq!(cast.speakers()[1].status, CastStatus::Idle);
+        assert_eq!(fake.state().started.len(), 2);
     }
 
     // covers: C81
