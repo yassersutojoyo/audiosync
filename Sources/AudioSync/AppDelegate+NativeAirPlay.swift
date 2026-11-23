@@ -492,6 +492,7 @@ extension AppDelegate {
     /// `reconcilePlan` for a reconcile).
     func syncNativeSpeakers(reconcile: Bool = false) {
         guard let native = nativeAirPlay else { return }
+        native.model.keepLetGo(enabled: enabledAirPlay)
         let plan = reconcile ? native.model.reconcilePlan(streaming: engine.isRunning, enabled: enabledAirPlay)
                              : native.model.plan(streaming: engine.isRunning, enabled: enabledAirPlay)
         guard !plan.isEmpty else { return }
