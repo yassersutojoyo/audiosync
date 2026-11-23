@@ -93,6 +93,10 @@ use audiosync_airplay::volume::{MUTED_DB, Volume};
 use audiosync_core::eq::{self, EqSettings};
 use audiosync_core::fade::InputFade;
 use audiosync_core::ffi::airplay::{latest_panic_since, panic_mark};
+use audiosync_core::policy::airplay_pairing::{
+    self as pairing_rules, AfterPinRefusal, Asks, DESKTOP, PairingsMoment, PairingsWrites,
+    PinCheck, PinRefusal, Unjoined,
+};
 use audiosync_core::policy::airplay_reconnect::{
     self as reconnect, ErrorReaction, Retries, SessionState,
 };
@@ -1271,8 +1275,7 @@ pub struct AirPlaySpeakers {
     /// The core's panic count when the sender was handed over, so its stop
     /// logs where a panic since happened (S205).
     panics_before: u64,
-    /// The last write of the pairings' file failed.
-    store_unsaved: bool,
+    store_writes: PairingsWrites,
     /// Whether the pairings' file can be written changed since the last
     /// poll, which reports it ([`BackendEvent::PairingStore`]).
     store_change: Option<bool>,
@@ -1358,7 +1361,7 @@ impl AirPlaySpeakers {
             stopped: false,
             replaced: Vec::new(),
             panics_before: panic_mark(),
-            store_unsaved: false,
+            store_writes: PairingsWrites::default(),
             store_change: None,
             store_kept_aside: None,
             now_playing: None,
@@ -1405,9 +1408,8 @@ impl AirPlaySpeakers {
     /// launch that the write kept aside is reported at the next poll too
     /// (the store tells that once).
     fn store_written(&mut self, saved: bool) {
-        if saved == self.store_unsaved {
-            self.store_unsaved = !saved;
-            self.store_change = Some(saved);
+        if let Some(change) = self.store_writes.written(saved) {
+            self.store_change = Some(change);
         }
         self.note_kept_aside();
     }
@@ -1542,7 +1544,12 @@ impl AirPlaySpeakers {
             self.turn_off(&owner, AirPlayProblem::NeedsPassword, events);
         }
         for id in pairings.into_keys() {
-            self.turn_off(&id, AirPlayProblem::NeedsPin, events);
+            if pairing_rules::off_at_sender_stop(
+                DESKTOP.open_pairing_at_sender_stop,
+                self.asks_every_time(&id),
+            ) {
+                self.turn_off(&id, AirPlayProblem::NeedsPin, events);
+            }
         }
         if changed || !self.stopped {
             self.log.log(|| {
@@ -1583,7 +1590,11 @@ impl AirPlaySpeakers {
             .settings
             .iter()
             .filter(|(id, settings)| {
-                settings.enabled && !waiting.contains(*id) && self.asks_every_time(id)
+                pairing_rules::off_at_stream_end(
+                    settings.enabled,
+                    self.asks_every_time(id),
+                    waiting.contains(*id),
+                )
             })
             .map(|(id, _)| id.clone())
             .collect();
@@ -2425,6 +2436,16 @@ impl AirPlaySpeakers {
         if run.phase != PairingPhase::WaitingForPin {
             return false;
         }
+        if let PinCheck::Refuse { wrong } = pairing_rules::check_pin(pin, DESKTOP.pin_format) {
+            run.wrong_pin |= wrong;
+            self.log.log(|| {
+                format!(
+                    "AirPlay pairing {}: PIN refused: not in the form the Apple TV asks for",
+                    self.label(id)
+                )
+            });
+            return false;
+        }
         let key = run.device.key.clone();
         if let Err(error) = self.link.submit_pin(&key, pin) {
             self.log
@@ -2610,19 +2631,25 @@ impl AirPlaySpeakers {
     pub fn ask_password(&mut self, id: &str) -> Result<(), AirPlayProblem> {
         // A target asks for its member's password by the member's name.
         if let Some(target) = self.targets.get(id) {
-            let member = target
+            let members: Vec<String> = target
                 .members
                 .iter()
                 .map(|member| speaker_id(&member.key))
-                .find(|member| {
+                .collect();
+            let asked = pairing_rules::members_to_ask(
+                DESKTOP.password_members,
+                members.iter().map(|member| {
                     self.listed_availability(member) == Some(AirPlayAvailability::NeedsPassword)
                         && !self.passwords.contains_key(member)
-                });
-            let Some(member) = member else {
+                }),
+            );
+            if asked.is_empty() {
                 return Err(AirPlayProblem::Unsupported);
-            };
-            let pair = self.store.homekit(&member).is_some();
-            self.queue_password_ask(&member, false, pair, Some(id));
+            }
+            for member in asked.into_iter().map(|index| &members[index]) {
+                let pair = self.store.homekit(member).is_some();
+                self.queue_password_ask(member, false, pair, Some(id));
+            }
             self.entry(id).enabled = true;
             return Ok(());
         }
@@ -3623,22 +3650,24 @@ impl AirPlaySpeakers {
         let uninvited: Vec<(String, AirPlayAvailability)> = self
             .settings
             .iter()
-            .filter(|(id, settings)| {
-                settings.enabled
-                    && !self.added.contains_key(*id)
-                    && !waiting.contains(*id)
-                    && !self.password_attempts.contains(*id)
-                    && !self.paired_by_user.contains(*id)
-                    && !self.held_by_target(id)
-            })
+            .filter(|(id, settings)| settings.enabled && !self.added.contains_key(*id))
             .filter_map(|(id, _)| {
                 let availability = self.listed_availability(id)?;
                 let asks = match availability {
-                    AirPlayAvailability::NeedsPin => true,
-                    AirPlayAvailability::NeedsPassword => !self.passwords.contains_key(id),
-                    _ => false,
+                    AirPlayAvailability::NeedsPin => Asks::Pin,
+                    AirPlayAvailability::NeedsPassword => Asks::Password {
+                        typed: self.passwords.contains_key(id),
+                    },
+                    _ => Asks::Nothing,
                 };
-                asks.then(|| (id.clone(), availability))
+                pairing_rules::off_uninvited(Unjoined {
+                    asks,
+                    users_own: self.password_attempts.contains(id)
+                        || self.paired_by_user.contains(id),
+                    prompt_open: waiting.contains(id),
+                    held_by_group: self.held_by_target(id),
+                })
+                .then(|| (id.clone(), availability))
             })
             .collect();
         for (id, availability) in &uninvited {
@@ -3793,7 +3822,12 @@ impl AirPlaySpeakers {
             });
         }
         self.note_kept_aside();
-        if let Some(file) = self.store_kept_aside.take() {
+        if let Some(file) = self.store_kept_aside.take()
+            && pairing_rules::tell_unreadable_pairings(
+                DESKTOP.unreadable_pairings_notice,
+                PairingsMoment::KeptAside,
+            )
+        {
             events.push(BackendEvent::PairingsKeptAside { file });
         }
         if std::mem::take(&mut self.stream_ended) {
@@ -3910,8 +3944,10 @@ impl AirPlaySpeakers {
                 let Some(run) = self.pairings.remove(id) else {
                     return false;
                 };
-                let wrong = self.passwords.remove(id).is_some()
-                    || matches!(error.kind, ErrorKind::WrongPassword);
+                let wrong = pairing_rules::password_marked_wrong(
+                    self.passwords.remove(id).is_some(),
+                    matches!(error.kind, ErrorKind::WrongPassword),
+                );
                 let target = self.holding_target(id).map(|target| target.id);
                 self.queue_password_ask(id, wrong, true, target.as_deref());
                 if run.outlived_stream {
@@ -4574,9 +4610,11 @@ impl AirPlaySpeakers {
                 // Outside the user's attempt its row keeps no code request:
                 // switching it on starts one, which pairs it.
                 let unasked = problem == AirPlayProblem::PairingNotYet
-                    && self.over_airplay2(id)
-                    && !self.password_attempts.contains(id)
-                    && self.refused_unasked(id);
+                    && pairing_rules::refused_unasked(
+                        self.over_airplay2(id),
+                        self.password_attempts.contains(id),
+                        self.refused_unasked(id),
+                    );
                 // A speaker reached over AirPlay 2 that wants a pairing:
                 // switching it on pairs it with a PIN, or with its password
                 // when it asks for one (P61, P154).
@@ -4600,7 +4638,10 @@ impl AirPlaySpeakers {
                 // The password it had, if any, is no good: it asks for one
                 // even if discovery didn't say so.
                 let turned_down = problem == AirPlayProblem::NeedsPassword
-                    && (self.passwords.remove(id).is_some() || reason == UserReason::WrongPassword);
+                    && pairing_rules::password_marked_wrong(
+                        self.passwords.remove(id).is_some(),
+                        reason == UserReason::WrongPassword,
+                    );
                 if problem == AirPlayProblem::NeedsPassword {
                     self.password_seen.insert(id.to_owned());
                 }
@@ -4618,18 +4659,24 @@ impl AirPlaySpeakers {
                         self.label(id)
                     )
                 });
-                if problem == AirPlayProblem::NeedsPin
-                    && self.password_attempts.contains(id)
-                    && !self.paired_in_attempt.contains(id)
-                    && self.added.contains_key(id)
-                {
-                    return self.pair_in_attempt(id, events);
-                }
-                if problem == AirPlayProblem::NeedsPin && self.paired_in_attempt.contains(id) {
-                    problem = AirPlayProblem::StillNeedsCode;
+                if problem == AirPlayProblem::NeedsPin {
+                    match pairing_rules::pin_refused(PinRefusal {
+                        in_attempt: self.password_attempts.contains(id),
+                        paired_in_attempt: self.paired_in_attempt.contains(id),
+                        joined: self.added.contains_key(id),
+                    }) {
+                        AfterPinRefusal::PairAgain => return self.pair_in_attempt(id, events),
+                        AfterPinRefusal::StillNeedsCode => {
+                            problem = AirPlayProblem::StillNeedsCode;
+                        }
+                        AfterPinRefusal::NeedsPin => {}
+                    }
                 }
                 if problem == AirPlayProblem::NeedsPassword
-                    && self.password_attempts.contains(id)
+                    && pairing_rules::password_asked_again(
+                        self.password_attempts.contains(id),
+                        self.added.contains_key(id),
+                    )
                     && let Some(added) = self.added.remove(id)
                 {
                     // The user's switch-on asks for it; the speaker stays on
