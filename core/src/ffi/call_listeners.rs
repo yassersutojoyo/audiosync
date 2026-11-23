@@ -63,9 +63,47 @@ pub unsafe extern "C" fn asc_call_listeners_update(
     count: usize,
     now: f64,
 ) -> bool {
-    // Red stub: no app is ever left out yet.
-    let _ = (rule, whole_system, listening, count, now);
-    false
+    guard(false, || {
+        if rule.is_null() {
+            return false;
+        }
+        // SAFETY: by the caller's contract null or `count` pointers nothing
+        // writes during the call.
+        let Some(pointers) = (unsafe { host_slice(listening, count) }) else {
+            return false;
+        };
+        let mut apps = Vec::with_capacity(pointers.len());
+        for &pointer in pointers {
+            if pointer.is_null() {
+                return false;
+            }
+            // SAFETY: non-null, and by the caller's contract NUL-terminated.
+            let Ok(app) = unsafe { CStr::from_ptr(pointer) }.to_str() else {
+                return false;
+            };
+            apps.push(app.to_owned());
+        }
+        // SAFETY: a live handle that only this call uses, by the caller's contract.
+        let rule = unsafe { &mut *rule };
+        let facts = Facts {
+            whole_system,
+            listening: &apps,
+            on_silent: &[],
+        };
+        let changed = rule
+            .rule
+            .update(facts, now)
+            .iter()
+            .any(|action| !matches!(action, ListenerAction::Stayed(_)));
+        if changed {
+            rule.left_out = rule
+                .rule
+                .left_out()
+                .filter_map(|app| CString::new(app).ok())
+                .collect();
+        }
+        changed
+    })
 }
 
 /// The number of apps left out; 0 for a null rule.

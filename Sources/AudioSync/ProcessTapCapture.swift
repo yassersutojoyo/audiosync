@@ -185,6 +185,10 @@ final class SourceCapture {
     private var pendingOpen: CaptureOpen.Pending<(link: IOLink, rate: Double)>?
     /// A halted start may still be on the background queue (`settleCancelled`).
     private var cancelQueued = false
+    /// Leaves apps listening to a microphone out of a whole-system tap (S485); nil for other sources.
+    private var callWatch: CallListenerWatch?
+    /// Polls `callWatch` while it is set.
+    private var callPoll: DispatchSourceTimer?
 
     init() {}
 
@@ -254,6 +258,9 @@ final class SourceCapture {
         sessionListeners.removeAll()
         runningAppsWatch = nil
         stopWaitRecheck()
+        callPoll?.cancel()
+        callPoll = nil
+        callWatch = nil
         closeCapture()
         if let sink {
             DebugTrace.log("[AudioSync] capture stopped: \(sink.callbacks.load(ordering: .relaxed)) callbacks, "
@@ -278,12 +285,15 @@ final class SourceCapture {
 
     // MARK: - Sources
 
-    /// Every process except AudioSync's own (S10, S11).
+    /// Every process except AudioSync's own (S10, S11) and the apps
+    /// listening to a microphone (S485).
     private func startSystem() throws {
         guard let own = AudioProcesses.processObject(for: getpid()) else { throw CaptureError.ownProcessUnknown }
+        tapped = [own]
         try openTap(CATapDescription(stereoGlobalTapButExcludeProcesses: [own])) {
             "[AudioSync] capture: whole system at \($0) Hz"
         }
+        watchCalls()
     }
 
     /// One or more apps and the processes each is responsible for (S11), in
@@ -339,9 +349,10 @@ final class SourceCapture {
             : CATapDescription(stereoMixdownOfProcesses: processes)
     }
 
-    /// Whether the session's tap is an "all except" tap.
+    /// Whether the session's tap is an "all except" tap, the whole system's included.
     private var tapExcludes: Bool {
         if case .mix(.allExcept, _)? = source { return true }
+        if case .system? = source { return true }
         return false
     }
 
@@ -502,6 +513,35 @@ final class SourceCapture {
         let status = HAL.setTapDescription(of: tap.tap, to: description)
         if status != noErr { DebugTrace.log("[AudioSync] capture: the tap can't be changed in place (status \(status))") }
         return status == noErr
+    }
+
+    private func watchCalls() {
+        callWatch = CallListenerWatch()
+        let mark = sessionMark
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now(), repeating: CallListenerWatch.pollInterval)
+        timer.setEventHandler { [weak self] in
+            guard let self, self.isCurrent(mark) else { return }
+            self.pollCalls()
+        }
+        timer.resume()
+        callPoll = timer
+    }
+
+    /// Feeds the apps listening now to the core's rule and changes the tap
+    /// in place when what it should exclude differs from what it does; a
+    /// tap still being made, or a refused change, is tried again next poll.
+    private func pollCalls() {
+        guard let callWatch, let own = AudioProcesses.processObject(for: getpid()) else { return }
+        let listening = AudioProcesses.listeningApps().map { String($0) }
+        if callWatch.update(wholeSystem: true, listening: listening, now: ProcessInfo.processInfo.systemUptime) {
+            DebugTrace.log("[AudioSync] capture: apps using a microphone left out of the whole system: "
+                           + (callWatch.leftOut.isEmpty ? "none" : callWatch.leftOut.joined(separator: ", ")))
+        }
+        let excluded = CallListenerWatch.excluded(own: own, leftOut: callWatch.leftOut,
+                                                  processesOf: AudioProcesses.objects(forAppPID:))
+        guard excluded != tapped, tap != nil, !tapOpening, updateTap(to: excluded) else { return }
+        tapped = excluded
     }
 
     /// Stops and destroys the IOProc before anything it reads goes away
