@@ -2,3 +2,5 @@
 # so no test covers them yet. One per line: the clause ID, a space, the reason.
 # tests/spec_coverage.rs fails if a clause listed here gains a `// covers:`
 # test, so this list only shrinks. "Partly done" names what already exists.
+C141 Taken and the quiet outage land in the cast sender with this item
+C142 the release reuses the deselect; its test lands with this item
