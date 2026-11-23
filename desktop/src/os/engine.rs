@@ -77,8 +77,9 @@ pub fn restore_records<D: Driver>(
 ) {
     audio.set_default_switch(
         Box::new(audio::wasapi::WasapiDefaults),
-        Box::new(settings::DefaultRecordFile(
-            path.map(std::path::Path::to_path_buf),
+        Box::new(crate::restore_guard::WithSignIn::in_settings(
+            settings::DefaultRecordFile(path.map(std::path::Path::to_path_buf)),
+            path,
         )),
     );
     // S471; after S469's restore, so its record's silent endpoint is read.
@@ -90,8 +91,9 @@ pub fn restore_records<D: Driver>(
             match outputs.probe() {
                 Ok(()) => audio.set_app_output(
                     Box::new(outputs),
-                    Box::new(settings::AppRecordFile(
-                        path.map(std::path::Path::to_path_buf),
+                    Box::new(crate::restore_guard::WithSignIn::in_settings(
+                        settings::AppRecordFile(path.map(std::path::Path::to_path_buf)),
+                        path,
                     )),
                 ),
                 Err(error) => log.log(|| {
