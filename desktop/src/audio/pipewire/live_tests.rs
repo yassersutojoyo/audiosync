@@ -628,8 +628,8 @@ fn the_whole_system_follows_a_new_default_without_a_gap() {
         panic!("the player did not follow the default: {failure}");
     }
     assert_eq!(state, CaptureState::Running);
-    // Between two loud writes: one relink poll (100 ms), one 1024-frame
-    // quantum (21 ms) and this thread's own 2 ms polling with its jitter.
+    // Loud writes land a 1024-frame quantum (21 ms) apart; the rest leaves
+    // room for the session manager's own move, which a 100 ms relink poll overran.
     assert!(
         gap <= Duration::from_millis(130),
         "longest stretch without the tone {gap:?}; switched at {switched:?}, \
