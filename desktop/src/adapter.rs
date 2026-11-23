@@ -8192,12 +8192,10 @@ mod tests {
     #[test]
     fn the_setting_for_a_quitting_app_is_saved_and_restored() {
         let mut adapter = adapter();
-        let default = if cfg!(windows) {
+        assert_eq!(
+            adapter.snapshot().when_source_quits,
             WhenSourceQuits::SwitchToSystem
-        } else {
-            WhenSourceQuits::Stop
-        };
-        assert_eq!(adapter.snapshot().when_source_quits, default);
+        );
         adapter.set_when_source_quits(WhenSourceQuits::SwitchToSystem);
         let saved = adapter.current_settings();
         let mut restored = AudioAdapter::new(
@@ -8214,7 +8212,7 @@ mod tests {
 
     // covers: S142, S227
     #[test]
-    fn a_quit_on_windows_always_switches_and_a_stored_stop_is_ignored() {
+    fn a_quit_always_switches_and_a_stored_stop_is_ignored() {
         let mut adapter = adapter();
         let mut saved = adapter.current_settings();
         saved.when_source_quits = WhenSourceQuits::Stop.stored().to_owned();
@@ -8226,9 +8224,8 @@ mod tests {
         adapter.poll();
         adapter.poll();
         let state = adapter.snapshot();
-        // Linux keeps Stop until its own captures leave no copy.
-        assert_eq!(state.running, cfg!(windows), "{:?}", messages(&adapter));
-        assert_eq!(state.source_id == "system", cfg!(windows));
+        assert!(state.running, "{:?}", messages(&adapter));
+        assert_eq!(state.source_id, "system");
     }
 
     // covers: S465
