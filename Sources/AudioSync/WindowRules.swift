@@ -313,6 +313,11 @@ enum TrackSlide {
         let at: Date
     }
 
+    /// Whether a press `elapsed` seconds into the song restarts it rather than changing songs.
+    static func restarts(_ direction: Direction?, elapsed: TimeInterval?) -> Bool {
+        false
+    }
+
     /// A change this long after a press still counts as the press's: past `cap`, so the slide the cap starts is the press's.
     static let pressWindow: TimeInterval = ArtFetches.timeout + 1
     /// The longest wait from a press for the new song and its cover: the cover fetch's own timeout.

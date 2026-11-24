@@ -754,7 +754,7 @@ mod tests {
             fake.read(Some(with_cover(track("Spotify.exe", "One", "Band", true))));
             assert!(card.sync_at(source(), true, start));
             card.send_at(Transport::Previous, start);
-            slide.press(Some(Direction::Previous), true, false, start);
+            slide.press(Some(Direction::Previous), true, false, None, start);
             fake.read(Some(track("Spotify.exe", "Two", "Band", true)));
             assert!(!card.sync_at(source(), true, at(0.4)));
             assert!(

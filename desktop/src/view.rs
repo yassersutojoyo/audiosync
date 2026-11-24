@@ -2374,10 +2374,10 @@ impl App {
             }
             self.window_slide
                 .borrow_mut()
-                .press(direction, window_shows, still, now);
+                .press(direction, window_shows, still, None, now);
             self.panel_slide
                 .borrow_mut()
-                .press(direction, panel_shows, still, now);
+                .press(direction, panel_shows, still, None, now);
         }
         self.now_playing.borrow_mut().send(command);
     }

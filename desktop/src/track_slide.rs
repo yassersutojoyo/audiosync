@@ -168,14 +168,15 @@ impl TrackSlide {
         }
     }
 
-    /// Next or Previous, or Play/Pause (`None`), was pressed; a card off
-    /// screen waits for nothing, and one that is `still` (the system's
-    /// animations off) only dims.
+    /// Next or Previous, or Play/Pause (`None`), was pressed `elapsed` into
+    /// the song; a card off screen waits for nothing, and one that is
+    /// `still` (the system's animations off) only dims.
     pub fn press(
         &mut self,
         direction: Option<Direction>,
         on_screen: bool,
         still: bool,
+        _elapsed: Option<Duration>,
         now: Instant,
     ) {
         let Some(direction) = direction else {
@@ -485,7 +486,7 @@ mod tests {
     fn a_press_recedes_the_old_cover_and_eases_back_after_4_s_when_no_song_follows() {
         let start = Instant::now();
         let mut slide = TrackSlide::new(Place::Window);
-        slide.press(Some(Direction::Next), true, false, start);
+        slide.press(Some(Direction::Next), true, false, None, start);
         let (look, moving) = slide.look(at(start, 0.75));
         assert!(moving);
         assert!(!look.sliding);
@@ -508,7 +509,7 @@ mod tests {
         let b = track("Spotify.exe", "B", "Band", true);
         let start = Instant::now();
         let mut slide = TrackSlide::new(Place::Window);
-        slide.press(Some(Direction::Next), true, false, start);
+        slide.press(Some(Direction::Next), true, false, None, start);
         assert_eq!(slide.look(at(start, 0.6)).0.old_fade, 0.0);
         let (look, moving) = slide.look(at(start, 1.2));
         assert!(moving && close(look.old_fade, 0.05), "{look:?}");
@@ -527,7 +528,7 @@ mod tests {
         assert!(close(after.old_fade, before.old_fade) && close(after.old_dim, before.old_dim));
 
         let mut still = TrackSlide::new(Place::Window);
-        still.press(Some(Direction::Next), true, true, start);
+        still.press(Some(Direction::Next), true, true, None, start);
         assert_eq!(still.look(at(start, 1.2)).0.old_fade, 0.0, "no breath");
     }
 
@@ -538,7 +539,7 @@ mod tests {
         let b = track("Spotify.exe", "B", "Band", true);
         let start = Instant::now();
         let mut slide = TrackSlide::new(Place::Window);
-        slide.press(Some(Direction::Next), true, false, start);
+        slide.press(Some(Direction::Next), true, false, None, start);
         assert!(slide.change(Some(&a), Some(&b), true, false, at(start, 0.4)));
         let (look, moving) = slide.look(at(start, 0.4));
         assert!(moving && look.sliding);
@@ -559,7 +560,7 @@ mod tests {
         let (_, moving) = slide.look(at(start, 0.4 + 0.63));
         assert!(!moving);
 
-        slide.press(Some(Direction::Previous), true, false, at(start, 2.0));
+        slide.press(Some(Direction::Previous), true, false, None, at(start, 2.0));
         assert!(slide.change(Some(&b), Some(&a), true, false, at(start, 2.1)));
         assert_eq!(slide.look(at(start, 2.1)).0.side, -1.0);
         assert!(close(slide.look(at(start, 2.1)).0.title_offset, -16.0));
@@ -585,8 +586,8 @@ mod tests {
         let b = track("Spotify.exe", "B", "Band", true);
         let start = Instant::now();
         let mut slide = TrackSlide::new(Place::Window);
-        slide.press(Some(Direction::Previous), true, false, start);
-        slide.press(None, true, false, at(start, 0.5));
+        slide.press(Some(Direction::Previous), true, false, None, start);
+        slide.press(None, true, false, None, at(start, 0.5));
         let (look, moving) = slide.look(at(start, 0.5 + 0.16));
         assert_eq!((look, moving), (Look::default(), false));
         assert!(slide.change(Some(&a), Some(&b), true, false, at(start, 2.5)));
@@ -608,7 +609,7 @@ mod tests {
         assert!(slide.change(Some(&a), Some(&c), true, false, at(start, 2.0)));
         assert_eq!(slide.look(at(start, 2.0)).0.side, 1.0);
 
-        slide.press(Some(Direction::Previous), true, false, at(start, 3.0));
+        slide.press(Some(Direction::Previous), true, false, None, at(start, 3.0));
         assert!(slide.change(Some(&c), Some(&b), true, false, at(start, 8.5)));
         assert_eq!(
             slide.look(at(start, 8.5)).0.side,
@@ -627,7 +628,7 @@ mod tests {
         let start = Instant::now();
         let mut slide = TrackSlide::new(Place::Window);
         assert!(slide.change(Some(&a), Some(&b), true, false, start));
-        slide.press(Some(Direction::Previous), true, false, at(start, 1.0));
+        slide.press(Some(Direction::Previous), true, false, None, at(start, 1.0));
         assert!(slide.change(Some(&b), Some(&a), true, false, at(start, 1.5)));
         assert_eq!(slide.look(at(start, 1.5)).0.side, -1.0);
         assert!(slide.change(Some(&a), Some(&b), true, false, at(start, 12.0)));
@@ -649,7 +650,7 @@ mod tests {
         for direction in [Direction::Previous, Direction::Next] {
             let start = Instant::now();
             let mut slide = TrackSlide::new(Place::Window);
-            slide.press(Some(direction), true, false, start);
+            slide.press(Some(direction), true, false, None, start);
             assert!(slide.change(Some(&a), Some(&b), true, false, at(start, 1.0)));
             let before = slide.look(at(start, 1.2)).0;
             assert!(!slide.change(Some(&b), Some(&b_again), true, false, at(start, 1.2)));
@@ -721,7 +722,7 @@ mod tests {
         let b = track("Spotify.exe", "B", "Band", true);
         let start = Instant::now();
         let mut slide = TrackSlide::new(Place::Window);
-        slide.press(Some(Direction::Next), true, true, start);
+        slide.press(Some(Direction::Next), true, true, None, start);
         let (look, moving) = slide.look(at(start, 1.0));
         assert!(moving && look.old_dim > 0.0 && look.title_fade > 0.0);
         assert_eq!(look.old_shrink, 0.0);
@@ -739,12 +740,37 @@ mod tests {
 
     // covers: S463
     #[test]
+    fn previous_past_3_s_restarts_the_song_with_the_card_still_and_before_3_s_waits() {
+        let start = Instant::now();
+        let mut restart = TrackSlide::new(Place::Window);
+        restart.press(
+            Some(Direction::Previous),
+            true,
+            false,
+            Some(Duration::from_secs_f64(3.5)),
+            start,
+        );
+        assert_eq!(restart.look(at(start, 0.75)), (Look::default(), false));
+        for (direction, elapsed) in [
+            (Direction::Previous, Some(Duration::from_secs(2))),
+            (Direction::Previous, None),
+            (Direction::Next, Some(Duration::from_secs(60))),
+        ] {
+            let mut slide = TrackSlide::new(Place::Window);
+            slide.press(Some(direction), true, false, elapsed, start);
+            let (look, moving) = slide.look(at(start, 0.75));
+            assert!(moving && look.old_shrink > 0.0, "{direction:?} {elapsed:?}");
+        }
+    }
+
+    // covers: S463
+    #[test]
     fn a_still_card_swaps_at_once_and_a_press_does_not_wait() {
         let a = track("Spotify.exe", "A", "Band", true);
         let b = track("Spotify.exe", "B", "Band", true);
         let start = Instant::now();
         let mut slide = TrackSlide::new(Place::Window);
-        slide.press(Some(Direction::Next), false, false, start);
+        slide.press(Some(Direction::Next), false, false, None, start);
         assert_eq!(slide.look(at(start, 0.5)), (Look::default(), false));
         assert!(!slide.change(Some(&a), Some(&b), false, false, at(start, 0.6)));
         assert_eq!(slide.look(at(start, 0.6)), (Look::default(), false));
