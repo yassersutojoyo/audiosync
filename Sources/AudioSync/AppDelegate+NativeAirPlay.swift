@@ -42,7 +42,7 @@ extension AppDelegate {
         native.onRemote = { [weak self] command in self?.sendTransport(command) }
         native.onOffsetsMoved = { [weak self] in self?.syncNetworkHoldBacks() }   // the AirPlay-ahead amount (S401)
         native.demandPeak = { [weak self] in self?.engine.takeDemandPeak() }
-        native.onDemand = { [weak self] receiver, letGo in self?.nativeDemand(receiver, letGo: letGo) }
+        native.onDemand = { [weak self] receiver, letGo, taken in self?.nativeDemand(receiver, letGo: letGo, taken: taken) }
         native.onDemandPlaying = { [weak self] playing in self?.castSender?.setQuiet(!playing) }   // C141
         nativeAirPlay = native   // reconciles meanwhile don't start a second one
         sendPlayback()
@@ -70,11 +70,12 @@ extension AppDelegate {
     /// released when nothing plays, or takes it back, which starts it again
     /// from a removal as a switch off and on does (S482, S483). Its row
     /// keeps its switch; one switched off meanwhile is passed over.
-    func nativeDemand(_ receiver: String, letGo: Bool) {
-        if let cast = CastID.device(receiver) { return castDemand(cast, letGo: letGo) }
+    func nativeDemand(_ receiver: String, letGo: Bool, taken: Bool) {
+        if let cast = CastID.device(receiver) { return castDemand(cast, letGo: letGo, taken: taken) }
         guard let native = nativeAirPlay, enabledAirPlay.contains(NativeAirPlayID.app(receiver)) else { return }
         DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(receiver)) " + (letGo ? "let go" : "taken back"))
         native.model.letGo.insert(receiver)
+        if taken { native.model.taken.insert(receiver) } else { native.model.taken.remove(receiver) }
         syncNativeSpeakers()
         if !letGo {
             native.model.letGo.remove(receiver)
@@ -544,7 +545,10 @@ extension AppDelegate {
             || refusedAsCantPlay(id, origin: origin) { return }
         if on { clearNotices([SpeakerKey.make(id: id, airplay: true)]) }   // a new attempt
         // The user's switch brings back a speaker the core let go (S482, S483).
-        if let receiver = NativeAirPlayID.receiver(id) { nativeAirPlay?.model.letGo.remove(receiver) }
+        if let receiver = NativeAirPlayID.receiver(id) {
+            nativeAirPlay?.model.letGo.remove(receiver)
+            nativeAirPlay?.model.taken.remove(receiver)
+        }
         if on { enabledAirPlay.insert(id) } else { enabledAirPlay.remove(id) }
         if !on { endNativeAttempt(id) } else if let ids = origin.attemptsToBegin([id]) { beginNativeAttempts(ids) }
         if on, origin == .remote { everyTimeGuard.turnedOnByPhone([id]) }

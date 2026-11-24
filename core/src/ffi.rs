@@ -1439,6 +1439,10 @@ mod tests {
                 AIRPLAY_EVENT_TAKE_BACK.to_string(),
             ),
             (
+                "ASC_AIRPLAY_EVENT_YIELDED",
+                AIRPLAY_EVENT_YIELDED.to_string(),
+            ),
+            (
                 "ASC_AIRPLAY_PAIRED_FOR_SESSION",
                 AIRPLAY_PAIRED_FOR_SESSION.to_string(),
             ),

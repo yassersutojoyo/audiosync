@@ -312,6 +312,9 @@ pub const AIRPLAY_EVENT_LET_GO: i32 = 16;
 /// The host starts the speaker again from a removal and an add, as a switch
 /// off and on does (S482, S483).
 pub const AIRPLAY_EVENT_TAKE_BACK: i32 = 17;
+/// [`AIRPLAY_EVENT_LET_GO`] for a speaker the policy holds as yielded to
+/// another sender: its row says another device uses it (S482).
+pub const AIRPLAY_EVENT_YIELDED: i32 = 18;
 
 /// A paired event's [`AscAirPlayEvent::error`]: paired for this session
 /// only, with nothing stored or written; the receiver asks for a code every
@@ -687,7 +690,8 @@ enum Pending {
     /// The sender is dead ([`AIRPLAY_EVENT_FAILED`]).
     Failed,
     /// [`AIRPLAY_EVENT_LET_GO`] (true) or [`AIRPLAY_EVENT_TAKE_BACK`]
-    /// (false) for the added ID.
+    /// (false) for the added ID, [`AIRPLAY_EVENT_YIELDED`] for a let-go
+    /// while the policy holds it as yielded.
     Demand(String, bool),
     /// A pairing event for the host: its kind (`AIRPLAY_EVENT_PIN_NEEDED`
     /// to `AIRPLAY_EVENT_PAIRED`, or `AIRPLAY_EVENT_STORED`), the receiver ID, the error and
@@ -2345,7 +2349,13 @@ impl AscAirPlay {
                 (String::new(), String::new())
             }
             Pending::Demand(id, let_go) => {
-                event.kind = if let_go {
+                let yielded = matches!(
+                    self.on_demand.status(&id),
+                    Some(on_demand::Status::Waiting { .. })
+                );
+                event.kind = if let_go && yielded {
+                    AIRPLAY_EVENT_YIELDED
+                } else if let_go {
                     AIRPLAY_EVENT_LET_GO
                 } else {
                     AIRPLAY_EVENT_TAKE_BACK

@@ -6553,6 +6553,7 @@ pub fn row_state(state: SpeakerState) -> RowState {
         SpeakerState::Waiting(ui_model::Waiting::NotOnNetwork) => RowState::NotOnNetwork,
         SpeakerState::Waiting(ui_model::Waiting::ForPassword) => RowState::WaitingForPassword,
         SpeakerState::Waiting(ui_model::Waiting::ForPin) => RowState::WaitingForPin,
+        SpeakerState::Waiting(ui_model::Waiting::Taken) => RowState::Taken,
     }
 }
 

@@ -704,6 +704,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// for their announcement ([`BackendEvent::AirPlayUnannounced`]), by ID:
     /// their rows say so rather than show them playing.
     reconnecting: BTreeMap<String, Waiting>,
+    /// The AirPlay and Cast speakers another sender took, by backend ID
+    /// ([`BackendEvent::SpeakersTaken`]).
+    taken: BTreeSet<String>,
     /// While PTP port 319 or 320 is taken (from
     /// [`BackendEvent::AirPlayPtpPortsTaken`] to
     /// [`BackendEvent::AirPlayPtpFree`]), the speakers refused for PTP
@@ -884,6 +887,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             ahead_noticed: None,
             busy: BTreeSet::new(),
             reconnecting: BTreeMap::new(),
+            taken: BTreeSet::new(),
             ptp_taken: None,
             ptp_off: BTreeSet::new(),
             ptp_played: false,
@@ -3196,8 +3200,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
             own_volume: speaker.volume_known.then_some(speaker.volume),
             device_volume: None,
             system_volume: None,
-            waiting: (speaker.enabled && speaker.status == CastStatus::Reconnecting)
-                .then_some(Waiting::Reconnecting),
+            waiting: if speaker.enabled && self.taken.contains(&speaker.id) {
+                Some(Waiting::Taken)
+            } else {
+                (speaker.enabled && speaker.status == CastStatus::Reconnecting)
+                    .then_some(Waiting::Reconnecting)
+            },
             cast: Some(CastRow {
                 state: match speaker.status {
                     CastStatus::Idle => CastState::Idle,
@@ -4717,6 +4725,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
             BackendEvent::CastMemoryChanged => {
                 self.save_cast_memory();
             }
+            BackendEvent::SpeakersTaken { ids } => {
+                let new: Vec<String> = ids.difference(&self.taken).cloned().collect();
+                for id in new {
+                    self.end_reconnect_notice(&id, NoticeEnd::LeftSender);
+                }
+                self.taken = ids;
+            }
             BackendEvent::AirPlayWaitOver { id } => {
                 self.reconnecting.remove(&id);
                 self.end_reconnect_notice(&id, NoticeEnd::WaitOver);
@@ -5095,6 +5110,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 } else {
                     Waiting::ForPassword
                 })
+                .or_else(|| self.taken.contains(&speaker.id).then_some(Waiting::Taken))
                 .or_else(|| self.reconnecting.get(&speaker.id).copied())
                 .filter(|_| speaker.enabled),
             cast: None,

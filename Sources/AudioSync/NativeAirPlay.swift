@@ -57,8 +57,9 @@ final class NativeAirPlay {
     /// (main queue, S481).
     var demandPeak: (() -> Float?)?
     /// Gets each receiver the core lets go (true) or takes back (false) while
-    /// it stays switched on (main queue, S482, S483).
-    var onDemand: ((String, Bool) -> Void)?
+    /// it stays switched on, and whether it was let go as yielded to another
+    /// sender (main queue, S482, S483).
+    var onDemand: ((String, Bool, Bool) -> Void)?
     /// Gets whether the lasting-sound policy is Playing, each poll (main
     /// queue, S481).
     var onDemandPlaying: ((Bool) -> Void)?
@@ -735,13 +736,15 @@ final class NativeAirPlay {
         }
         var events: [NativeSpeakerEvent] = []
         var remotes: [NowPlayingMonitor.Command] = []
-        var demands: [(String, Bool)] = []
+        var demands: [(String, Bool, Bool)] = []
         var rawEvent = AscAirPlayEvent()
         while asc_airplay_next_event(handle, &rawEvent) {
             if rawEvent.kind == ASC_AIRPLAY_EVENT_REMOTE {
                 if let command = Self.remote(rawEvent.remote) { remotes.append(command) }
-            } else if rawEvent.kind == ASC_AIRPLAY_EVENT_LET_GO || rawEvent.kind == ASC_AIRPLAY_EVENT_TAKE_BACK {
-                demands.append((Self.text(rawEvent.id), rawEvent.kind == ASC_AIRPLAY_EVENT_LET_GO))
+            } else if rawEvent.kind == ASC_AIRPLAY_EVENT_LET_GO || rawEvent.kind == ASC_AIRPLAY_EVENT_TAKE_BACK
+                        || rawEvent.kind == ASC_AIRPLAY_EVENT_YIELDED {
+                demands.append((Self.text(rawEvent.id), rawEvent.kind != ASC_AIRPLAY_EVENT_TAKE_BACK,
+                                rawEvent.kind == ASC_AIRPLAY_EVENT_YIELDED))
             } else if let event = Self.event(rawEvent) {
                 events.append(event)
             }
@@ -765,7 +768,7 @@ final class NativeAirPlay {
             guard let self else { return }
             self.apply(changes, events, sounding: sounding)
             self.handOver(remotes)
-            if self.active { for (id, letGo) in demands { self.onDemand?(id, letGo) } }
+            if self.active { for (id, letGo, taken) in demands { self.onDemand?(id, letGo, taken) } }
         }
     }
 

@@ -63,7 +63,7 @@ use audiosync_core::policy::Seconds;
 use audiosync_core::policy::airplay_reconnect::{SENDER_RETRY_SECONDS, SenderRestart, SenderStart};
 use audiosync_core::policy::call_listeners::{CallListeners, Facts, ListenerAction};
 use audiosync_core::policy::delay::{BRIEF_LOSS_HOLD, native_airplay_latency_ms};
-use audiosync_core::policy::on_demand::{self, Action, OnDemand};
+use audiosync_core::policy::on_demand::{self, Action, OnDemand, Status};
 use audiosync_core::policy::source::AudioSource;
 use audiosync_core::policy::source_quit::{
     SourceQuitAction, SourceQuitWatch, Streaming, WhenSourceQuits,
@@ -1097,6 +1097,8 @@ pub struct Controller<D: Driver> {
     on_demand_origin: Instant,
     /// When the policy last took the capture's peak.
     on_demand_fed: Option<Instant>,
+    /// The speakers last reported in [`BackendEvent::SpeakersTaken`].
+    on_demand_taken: BTreeSet<String>,
 }
 
 impl<D: Driver> Controller<D> {
@@ -1177,6 +1179,17 @@ impl<D: Driver> Controller<D> {
             cast.set_quiet(!self.on_demand.playing());
         }
         self.apply_on_demand(actions);
+        let taken: BTreeSet<String> = self
+            .on_demand
+            .switched_on_keys()
+            .into_iter()
+            .filter(|id| matches!(self.on_demand.status(id), Some(Status::Waiting { .. })))
+            .collect();
+        if taken != self.on_demand_taken {
+            self.on_demand_taken = taken.clone();
+            self.pending
+                .push(BackendEvent::SpeakersTaken { ids: taken });
+        }
     }
 
     fn apply_on_demand(&mut self, actions: Vec<Action<String>>) {
@@ -1289,6 +1302,7 @@ impl<D: Driver> Controller<D> {
             on_demand: OnDemand::new(0.0),
             on_demand_origin: Instant::now(),
             on_demand_fed: None,
+            on_demand_taken: BTreeSet::new(),
         }
     }
 
@@ -7057,6 +7071,9 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
         ),
         BackendEvent::AirPlayWaitOver { id } => {
             format!("AirPlay speaker ({id}) no longer waits: the sender started it")
+        }
+        BackendEvent::SpeakersTaken { ids } => {
+            format!("speakers another device uses now: {ids:?}")
         }
         BackendEvent::AirPlayFailed { id, problem } => {
             format!("AirPlay speaker ({id}) can't play ({problem:?}); it is turned off")

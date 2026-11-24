@@ -494,7 +494,12 @@ struct CastModel {
     }
     /// The device that is on is let go, released when nothing plays or
     /// waiting for sound: it stays on and runs no session (S482, S483, C142).
-    var letGo = false
+    var letGo = false {
+        didSet { if !letGo { taken = false } }
+    }
+    /// The let-go device waits for sound: its row says another device uses
+    /// it (S482).
+    var taken = false
     /// The device saved as on at the last quit: it turns on once listed,
     /// unless the user switched a Cast speaker on first (C112).
     var savedOn: String?
@@ -1026,6 +1031,7 @@ struct CastModel {
             members = nil
             if end == .quiet, enabled == id {
                 letGo = true
+                taken = true
                 return .waiting(id)
             }
             if enabled == id { enabled = nil }

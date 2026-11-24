@@ -287,7 +287,7 @@ final class WebRemote {
                 availability: s.codeWait == nil ? s.availability : .open,
                 note: t.rowNote(cast: s.cast, waitingForAirPlay2: s.waitingForAirPlay2,
                                 waitingForPtp: s.waitingForPtp, reconnecting: s.reconnecting,
-                                codeWait: s.codeWait, name: s.name, unannounced: s.unannounced,
+                                taken: s.taken, codeWait: s.codeWait, name: s.name, unannounced: s.unannounced,
                                 target: s.airPlayTarget),
                 key: s.key, waiting: s.enabled && (s.waitingForAirPlay2 || s.waitingForPtp),
                 streaming: model.running), text: t)

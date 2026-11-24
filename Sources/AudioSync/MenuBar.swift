@@ -37,6 +37,8 @@ final class AppModel: ObservableObject {
         var waitingForPtp = false
         /// An AirPlay speaker the sender keeps trying to reach (S222).
         var reconnecting = false
+        /// An AirPlay or Cast speaker another sender took (S482).
+        var taken = false
         /// An AirPlay speaker switched on whose PIN or password prompt is
         /// queued or open (S223).
         var codeWait: NativeCodeWait? = nil
@@ -1968,7 +1970,7 @@ struct MenuBarView: View {
         let t = model.text
         let hint = t.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
                              waitingForPtp: speaker.waitingForPtp, reconnecting: speaker.reconnecting,
-                             codeWait: speaker.codeWait, name: speaker.name,
+                             taken: speaker.taken, codeWait: speaker.codeWait, name: speaker.name,
                              unannounced: speaker.unannounced, target: speaker.airPlayTarget) ?? note
         let castWaits = speaker.cast?.status == .connecting || speaker.cast?.status == .reconnecting
         let connecting = model.state(of: speaker) != .off && (castWaits || speaker.cast == nil && speaker.reconnecting)

@@ -712,6 +712,12 @@ pub enum BackendEvent {
         /// The speaker's ID.
         id: String,
     },
+    /// The AirPlay and Cast speakers the policy holds as yielded to another
+    /// sender changed: these are all of them now (S482).
+    SpeakersTaken {
+        /// The speakers' IDs.
+        ids: BTreeSet<String>,
+    },
     /// An AirPlay speaker can't play from AudioSync, so it was turned off.
     AirPlayFailed {
         /// The speaker's ID.

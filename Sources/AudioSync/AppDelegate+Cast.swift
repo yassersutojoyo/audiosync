@@ -186,8 +186,9 @@ extension AppDelegate {
     /// plays or yielded, or takes it back, which starts it again as a switch
     /// off and on does (S482, S483, C142). One switched off meanwhile is
     /// passed over.
-    func castDemand(_ id: String, letGo: Bool) {
+    func castDemand(_ id: String, letGo: Bool, taken: Bool) {
         guard castModel.enabled == id else { return }
+        castModel.taken = taken
         DebugTrace.log("[AudioSync] Cast: \(castLabel(id)) " + (letGo ? "let go" : "taken back"))
         castModel.letGo = true
         syncCast()
@@ -429,6 +430,7 @@ extension AppDelegate {
                                                   manual: device.manual,
                                                   removable: castModel.manualAddresses[id] != nil,
                                                   volumeStep: volume?.step ?? 0),
+                                    taken: castModel.enabled == id && castModel.taken,
                                     product: device.product)
         }
     }
