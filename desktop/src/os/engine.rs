@@ -249,7 +249,15 @@ fn start_airplay<D: Driver>(audio: &mut Controller<D>, log: &DebugLog) {
 /// start, and the feed for its input; `None` when it couldn't start.
 fn start_sender(log: &DebugLog) -> Option<audio::airplay::StartedSender> {
     use audio::airplay::{FeedSlot, SenderLink, StartedSender};
-    let (link, input) = match SenderLink::start() {
+    let (bad_network, line) = audio::airplay::bad_network_for(
+        crate::test_instance::current().is_some(),
+        log.enabled(),
+        || std::env::var(audiosync_airplay::bad_network::BAD_NETWORK_ENV).ok(),
+    );
+    if let Some(line) = line {
+        log.log(|| line);
+    }
+    let (link, input) = match SenderLink::start_with(bad_network) {
         Ok(started) => started,
         Err(error) => {
             log.log(|| format!("AirPlay: the sender couldn't start: {error}"));

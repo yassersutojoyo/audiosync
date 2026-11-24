@@ -60,6 +60,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use audiosync_airplay::audio::PACKET_FRAMES;
+use audiosync_airplay::bad_network::{self, BAD_NETWORK_ENV};
 use audiosync_airplay::discovery::{DeviceKey, ProtocolPath};
 use audiosync_airplay::input::InputWriter;
 use audiosync_airplay::sender::{
@@ -426,8 +427,12 @@ fn main() -> ExitCode {
         );
         mode
     });
+    // A test tool, so every run honours the bad-network switch (P253).
+    let (bad_network, line) = bad_network::switch(std::env::var(BAD_NETWORK_ENV).ok().as_deref());
+    eprintln!("{line}");
     let config = SenderConfig {
         airplay2_device_id: random_airplay2_device_id(),
+        bad_network,
         ..auto.map_or(
             SenderConfig {
                 airplay2: true,

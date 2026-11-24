@@ -307,6 +307,8 @@ pub struct SpeakerCounters {
     late_packets: AtomicU64,
     silent_frames: AtomicU64,
     foreign_datagrams: AtomicU64,
+    bad_network_dropped: AtomicU64,
+    bad_network_delayed: AtomicU64,
     connects: ConnectStarts,
     stream: Arc<StreamCounters>,
 }
@@ -423,6 +425,25 @@ impl SpeakerCounters {
     /// speaker (P112).
     pub fn silent_frames(&self) -> u64 {
         self.silent_frames.load(Ordering::Relaxed)
+    }
+
+    /// Audio and resend datagrams the bad-network switch dropped (P253).
+    pub fn bad_network_dropped(&self) -> u64 {
+        self.bad_network_dropped.load(Ordering::Relaxed)
+    }
+
+    /// Audio and resend datagrams the bad-network switch delayed (P253).
+    pub fn bad_network_delayed(&self) -> u64 {
+        self.bad_network_delayed.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn note_bad_network(&self, dropped: bool) {
+        let counter = if dropped {
+            &self.bad_network_dropped
+        } else {
+            &self.bad_network_delayed
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Datagrams dropped on the session's control and timing sockets

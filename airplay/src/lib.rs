@@ -50,6 +50,7 @@
 pub mod alac;
 pub mod ap2;
 pub mod audio;
+pub mod bad_network;
 pub mod clock;
 pub mod connects;
 pub mod dacp;

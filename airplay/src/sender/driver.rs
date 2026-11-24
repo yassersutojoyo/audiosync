@@ -27,6 +27,7 @@ use std::time::{Duration, Instant};
 
 use crate::ap2::PinPairing;
 use crate::audio::SAMPLE_RATE;
+use crate::bad_network::{BadNetwork, Fate, Shaper};
 use crate::connects::{ConnectQueue, StartKind};
 use crate::discovery::{
     Browser, Device, DeviceKey, Directory, DirectoryEvent, Endpoint, Features, ProtocolPath,
@@ -531,6 +532,9 @@ pub(crate) struct Driver {
     queued_pairings: BTreeMap<DeviceKey, (Box<Device>, Option<Secret>)>,
     /// Inputs handled since the last flush, against [`INPUTS_PER_TURN`].
     turn_inputs: usize,
+    /// The bad-network switch of a test launch, keyed by speaker and
+    /// destination so each path keeps its order (P253).
+    bad_network: Option<Shaper<(stream::SpeakerId, std::net::SocketAddr), Transmit>>,
 }
 
 impl Driver {
@@ -602,7 +606,18 @@ impl Driver {
             connects: ConnectQueue::new(),
             queued_pairings: BTreeMap::new(),
             turn_inputs: 0,
+            bad_network: None,
         }
+    }
+
+    pub(crate) fn with_bad_network(mut self, config: Option<BadNetwork>) -> Driver {
+        self.bad_network = config.map(|config| {
+            let mut seed = [0u8; 8];
+            // Without the OS source the draws only repeat between runs.
+            let _ = OsEntropy.fill(&mut seed);
+            Shaper::new(config, u64::from_le_bytes(seed))
+        });
+        self
     }
 
     pub(crate) fn with_ptp_ports(
@@ -930,6 +945,9 @@ impl Driver {
         if let Some(at) = self.dacp.poll_timeout() {
             next = next.min(at);
         }
+        if let Some(at) = self.bad_network.as_ref().and_then(Shaper::next_due) {
+            next = next.min(at);
+        }
         next
     }
 
@@ -1076,6 +1094,14 @@ impl Driver {
             while let Some(transmit) = self.stream.poll_transmit() {
                 progressed = true;
                 self.transmit(transmit, now);
+            }
+            while let Some(transmit) = self
+                .bad_network
+                .as_mut()
+                .and_then(|shaper| shaper.pop_due(now))
+            {
+                progressed = true;
+                self.send_transmit(transmit, now);
             }
             if self.send_ptp() {
                 progressed = true;
@@ -1845,7 +1871,29 @@ impl Driver {
         }
     }
 
+    /// Hands an audio or resend datagram to the bad-network switch when it
+    /// is on (P253), any other straight to its socket.
     fn transmit(&mut self, transmit: Transmit, now: Instant) {
+        let shaped = matches!(
+            transmit.kind,
+            stream::PacketKind::Audio | stream::PacketKind::Resend
+        );
+        let Some(shaper) = self.bad_network.as_mut().filter(|_| shaped) else {
+            return self.send_transmit(transmit, now);
+        };
+        let speaker = transmit.speaker;
+        let fate = shaper.offer((speaker, transmit.to), transmit, now);
+        let dropped = match fate {
+            Fate::Send(transmit) => return self.send_transmit(transmit, now),
+            Fate::Dropped => true,
+            Fate::Delayed => false,
+        };
+        if let Some(counters) = self.stream.speaker_counters(speaker) {
+            counters.note_bad_network(dropped);
+        }
+    }
+
+    fn send_transmit(&mut self, transmit: Transmit, now: Instant) {
         let Some(key) = self.stream_ids.get(&transmit.speaker).cloned() else {
             return;
         };

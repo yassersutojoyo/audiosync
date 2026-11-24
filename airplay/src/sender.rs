@@ -70,6 +70,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::ap2::Timing;
+use crate::bad_network::BadNetwork;
 use crate::clock::SenderClock;
 use crate::dacp::{DacpAdvertiser, RemoteCommand};
 use crate::discovery::mdns::{DiscoveryError, MdnsBrowser};
@@ -155,6 +156,9 @@ pub struct SenderConfig {
     /// [`Sender::set_latency`], so a speaker joining a stream that sent no
     /// audio yet waits for it before it sends any (P201).
     pub host_answers_latency: bool,
+    /// The bad-network switch of a test launch (P253); `None`, the default,
+    /// leaves every datagram untouched.
+    pub bad_network: Option<BadNetwork>,
 }
 
 /// The most AirPlay 2 sessions a sender runs at once, each member of a
@@ -283,6 +287,7 @@ impl Default for SenderConfig {
             airplay2_sessions: AIRPLAY2_SESSIONS,
             on_driver_thread: None,
             host_answers_latency: false,
+            bad_network: None,
         }
     }
 }
@@ -752,7 +757,8 @@ impl Sender {
         .with_dacp_timeouts(config.dacp_idle, config.dacp_strike_window)
         .with_feedback_interval(config.feedback_interval)
         .with_airplay2_sessions(config.airplay2_sessions)
-        .with_sounding(sounding.clone());
+        .with_sounding(sounding.clone())
+        .with_bad_network(config.bad_network);
         let dacp_counters = driver.dacp_counters();
         let setup = config.on_driver_thread;
         let handle = thread::Builder::new()

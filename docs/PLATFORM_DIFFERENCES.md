@@ -54,3 +54,10 @@ The app's text uses the system font on the Mac and Segoe UI Variable on Windows.
 
 - **Mac and Windows:** Install Update replaces the app. On Windows, an install for everyone on the PC asks for an administrator once per update, as Windows requires for files in Program Files.
 - **Linux:** the AppImage updates itself. The `.deb` and `.rpm` belong to your package manager, so you update them by installing the new package.
+
+## The bad-network test switch
+
+`AUDIOSYNC_BAD_NETWORK` makes AirPlay audio lose and delay some of its own packets, to reproduce a bad Wi-Fi day in a test run ([`DEVELOPMENT.md`](DEVELOPMENT.md)). It does the same thing everywhere; only the launches that read it differ.
+
+- **Windows and Linux:** only a named test copy (`AUDIOSYNC_INSTANCE`) with its debug log on.
+- **Mac:** there's no test copy, so any launch with the debug log on (`AUDIOSYNC_DEBUG=1`).

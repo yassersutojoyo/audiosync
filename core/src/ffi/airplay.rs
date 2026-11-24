@@ -73,6 +73,7 @@ use std::sync::{Arc, Mutex, Once, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use audiosync_airplay::audio::SAMPLE_RATE;
+use audiosync_airplay::bad_network::{self, BAD_NETWORK_ENV, BadNetwork};
 use audiosync_airplay::dacp::{DacpAdvertiser, RemoteCommand};
 use audiosync_airplay::discovery::mdns::{MdnsAdvertiser, MdnsBrowser};
 use audiosync_airplay::discovery::{
@@ -2699,6 +2700,19 @@ fn sender_config(switch: Option<&str>, auto: Option<&str>) -> SenderConfig {
     .with_airplay2_switch(airplay2_auto(auto), airplay2_switch(switch))
 }
 
+/// The bad-network switch (P253) and its debug log line: the Mac has no
+/// test copy, so only a debug launch reads `value`.
+fn bad_network_for(
+    debug: bool,
+    value: impl FnOnce() -> Option<String>,
+) -> (Option<BadNetwork>, Option<String>) {
+    if !debug {
+        return (None, None);
+    }
+    let (config, line) = bad_network::switch(value().as_deref());
+    (config, Some(line))
+}
+
 /// The driver thread's setup (P226): user-interactive QoS on macOS (S323).
 /// A refusal leaves the thread at its default class; the class ends with the
 /// thread, so there is nothing to hold.
@@ -2718,10 +2732,15 @@ pub(crate) fn create_with(open_browser: OpenBrowser) -> *mut AscAirPlay {
     let panics_before = PANICS.load(Ordering::SeqCst);
     let created = panic::catch_unwind(|| {
         injected_panic();
-        let config = sender_config(
-            std::env::var(AIRPLAY2_SWITCH_ENV).ok().as_deref(),
-            std::env::var(AIRPLAY2_AUTO_ENV).ok().as_deref(),
-        );
+        let (bad_network, bad_network_line) =
+            bad_network_for(debug_trace_on(), || std::env::var(BAD_NETWORK_ENV).ok());
+        let config = SenderConfig {
+            bad_network,
+            ..sender_config(
+                std::env::var(AIRPLAY2_SWITCH_ENV).ok().as_deref(),
+                std::env::var(AIRPLAY2_AUTO_ENV).ok().as_deref(),
+            )
+        };
         #[cfg(test)]
         let config = SenderConfig {
             evidence_window: config
@@ -2739,7 +2758,16 @@ pub(crate) fn create_with(open_browser: OpenBrowser) -> *mut AscAirPlay {
                 receivers_queued: 0,
                 receivers_taken: 0,
                 receiver_strings: Default::default(),
-                events: VecDeque::new(),
+                // A trace without a speaker: the host logs it as the sender's.
+                events: bad_network_line
+                    .map(|line| {
+                        (
+                            0,
+                            Pending::Speaker(String::new(), SpeakerEvent::Trace(line)),
+                        )
+                    })
+                    .into_iter()
+                    .collect(),
                 event_strings: Default::default(),
                 listed: HashMap::new(),
                 targets: HashMap::new(),
@@ -5089,6 +5117,25 @@ mod tests {
         let config = sender_config(Some("1"), Some("0"));
         assert!(config.airplay2);
         assert!(!config.airplay2_preferred, "the flag is off");
+    }
+
+    #[test]
+    fn only_a_debug_launch_reads_the_bad_network_switch() {
+        let unread = || -> Option<String> { panic!("a normal launch reads nothing") };
+        assert_eq!(bad_network_for(false, unread), (None, None));
+        let (config, line) = bad_network_for(true, || Some("loss=3,delay=85,spread=65".into()));
+        assert_eq!(config.map(|c| c.loss_percent), Some(3.0));
+        assert_eq!(
+            line.as_deref(),
+            Some("bad network: loss 3%, delay 85 ms, spread 65 ms")
+        );
+        assert_eq!(
+            bad_network_for(true, || None),
+            (None, Some("bad network: off".to_owned()))
+        );
+        let (config, line) = bad_network_for(true, || Some("loss=60".into()));
+        assert_eq!(config, None);
+        assert!(line.is_some_and(|line| line.starts_with("bad network: off, ")));
     }
 
     // covers: S323

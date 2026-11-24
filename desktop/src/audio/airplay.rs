@@ -65,6 +65,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use audiosync_airplay::bad_network::{self, BadNetwork};
 use audiosync_airplay::dacp::RemoteCommand;
 use audiosync_airplay::discovery::mdns::DiscoveryError;
 use audiosync_airplay::discovery::{Device, DeviceKey, ProtocolPath, ServiceKind};
@@ -312,6 +313,20 @@ pub fn airplay2_config(switch_env: Option<&str>, auto: bool) -> SenderConfig {
     .with_airplay2_switch(auto, airplay2_on(switch_env))
 }
 
+/// The bad-network switch (spec P253) and its debug log line: only a named
+/// test copy with its debug log on reads `value`.
+pub fn bad_network_for(
+    test_copy: bool,
+    debug: bool,
+    value: impl FnOnce() -> Option<String>,
+) -> (Option<BadNetwork>, Option<String>) {
+    if !(test_copy && debug) {
+        return (None, None);
+    }
+    let (config, line) = bad_network::switch(value().as_deref());
+    (config, Some(line))
+}
+
 /// The real sender.
 pub struct SenderLink {
     sender: Sender,
@@ -321,12 +336,16 @@ pub struct SenderLink {
 
 impl SenderLink {
     /// Starts the sender, whose stream and threads run from now on, and
-    /// gives its audio input for the capture.
-    pub fn start() -> io::Result<(SenderLink, InputWriter)> {
-        let config = airplay2_config(
-            std::env::var(AIRPLAY2_SWITCH_ENV).ok().as_deref(),
-            airplay2_auto_on(),
-        );
+    /// gives its audio input for the capture. `bad_network` is the switch
+    /// of a test launch (spec P253).
+    pub fn start_with(bad_network: Option<BadNetwork>) -> io::Result<(SenderLink, InputWriter)> {
+        let config = SenderConfig {
+            bad_network,
+            ..airplay2_config(
+                std::env::var(AIRPLAY2_SWITCH_ENV).ok().as_deref(),
+                airplay2_auto_on(),
+            )
+        };
         let airplay2 = config.airplay2;
         let airplay2_preferred = config.airplay2_preferred;
         let (sender, input) = Sender::start(config)?;
@@ -8693,6 +8712,28 @@ pub mod tests {
         assert!(airplay2_on(Some("1")));
     }
 
+    #[test]
+    fn only_a_test_copy_with_its_debug_log_reads_the_bad_network_switch() {
+        let unread = || -> Option<String> { panic!("a normal launch reads nothing") };
+        assert_eq!(bad_network_for(false, true, unread), (None, None));
+        assert_eq!(bad_network_for(true, false, unread), (None, None));
+        assert_eq!(bad_network_for(false, false, unread), (None, None));
+        let (config, line) =
+            bad_network_for(true, true, || Some("loss=3,delay=85,spread=65".into()));
+        assert_eq!(config.map(|c| c.delay_ms), Some(85));
+        assert_eq!(
+            line.as_deref(),
+            Some("bad network: loss 3%, delay 85 ms, spread 65 ms")
+        );
+        assert_eq!(
+            bad_network_for(true, true, || None),
+            (None, Some("bad network: off".to_owned()))
+        );
+        let (config, line) = bad_network_for(true, true, || Some("loss=3,loss=3".into()));
+        assert_eq!(config, None);
+        assert!(line.is_some_and(|line| line.starts_with("bad network: off, ")));
+    }
+
     // covers: S323
     #[test]
     fn the_app_raises_the_airplay_driver_thread_on_windows() {
@@ -12030,7 +12071,7 @@ pub mod tests {
     #[test]
     fn a_loopback_receiver_is_listed_and_plays_through_the_real_sender() {
         let receiver = LoopbackReceiver::start();
-        let (link, input) = SenderLink::start().expect("the sender starts");
+        let (link, input) = SenderLink::start_with(None).expect("the sender starts");
         link.sender
             .start_discovery_with(Box::new(OneService(Some(BrowseEvent::Resolved(
                 receiver.record(),
@@ -12123,7 +12164,7 @@ pub mod tests {
     /// gives how the audio the receiver got ends and whether a TEARDOWN came.
     fn tail_at(quit: bool) -> (Tail, bool) {
         let receiver = LoopbackReceiver::start();
-        let (link, input) = SenderLink::start().expect("the sender starts");
+        let (link, input) = SenderLink::start_with(None).expect("the sender starts");
         let mut record = receiver.record();
         // PCM only, so the receiver's packets read as they are.
         record.txt.retain(|entry| !entry.starts_with(b"cn="));
@@ -12205,7 +12246,7 @@ pub mod tests {
     #[test]
     fn a_stop_and_a_start_at_once_plays_the_new_capture() {
         let receiver = LoopbackReceiver::start();
-        let (link, input) = SenderLink::start().expect("the sender starts");
+        let (link, input) = SenderLink::start_with(None).expect("the sender starts");
         let mut record = receiver.record();
         record.txt.retain(|entry| !entry.starts_with(b"cn="));
         record.txt.push(b"cn=0".to_vec());
@@ -12263,7 +12304,7 @@ pub mod tests {
     #[test]
     fn a_level_moved_while_stopped_and_a_fast_off_and_on_reach_the_tv() {
         let receiver = LoopbackReceiver::start();
-        let (link, input) = SenderLink::start().expect("the sender starts");
+        let (link, input) = SenderLink::start_with(None).expect("the sender starts");
         let mut record = receiver.record();
         record.txt.retain(|entry| !entry.starts_with(b"cn="));
         record.txt.push(b"cn=0".to_vec());
@@ -12438,7 +12479,7 @@ pub mod tests {
         zone: f64,
     ) -> (LoopbackReceiver, InputWriter, AirPlaySpeakers, String) {
         let receiver = LoopbackReceiver::start();
-        let (link, input) = SenderLink::start().expect("the sender starts");
+        let (link, input) = SenderLink::start_with(None).expect("the sender starts");
         link.sender
             .start_discovery_with(Box::new(OneService(Some(BrowseEvent::Resolved(
                 receiver.record(),
