@@ -446,6 +446,38 @@ fn a_receiver_starved_while_another_ones_step_down_is_on_its_way_still_steps_up(
     assert_eq!(rig.stream.latency_frames(), CEILING);
 }
 
+#[test]
+fn a_late_request_while_a_step_down_is_on_its_way_never_passes_the_ceiling() {
+    let mut rig = rig_at(LOW, true);
+    rig.stream.set_step_down_times(
+        Duration::from_secs(30),
+        Duration::from_secs(120),
+        Duration::from_secs(20),
+    );
+    let a = rig.add(speaker(1, Codec::Pcm));
+    let b = rig.add(speaker(2, Codec::Pcm));
+    starve(&mut rig, a, &[1.0, 16.0, 31.0]);
+    run_to(&mut rig, 32.0);
+    assert_eq!(rig.stream.latency_frames(), CEILING, "a starved");
+    rig.writer.take_move();
+    while rig.writer.take_move().is_none() {
+        assert!(rig.t() < 90.0, "a's try starts");
+        let next = rig.t() + 0.01;
+        run_to(&mut rig, next);
+    }
+    gap(&mut rig, b);
+    let end = rig.t() + 6.0;
+    while rig.t() < end {
+        assert!(
+            rig.stream.latency_frames() <= CEILING,
+            "Lf {}",
+            rig.stream.latency_frames()
+        );
+        let next = rig.t() + 0.01;
+        run_to(&mut rig, next);
+    }
+}
+
 /// The receiver asks for the packet whose send-to-play midpoint comes
 /// next, just before that midpoint.
 fn ask_before_midpoint(rig: &mut Rig, id: SpeakerId) {
