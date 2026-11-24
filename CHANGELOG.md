@@ -21,7 +21,12 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows and Linux, AirPlay pairing and passwords work as on the Mac: the PIN prompt takes 4 digits, speakers that play together and each need a password are all asked at once, and one Cancel closes their prompts. An AirPlay speaker's volume slider no longer moves while you hold it.
 - On the Mac, Windows and Linux, an AirPlay speaker that doesn't report its latency starts with 0.2 s of extra room, and a speaker that needed more room earlier starts its next stream at that level.
 - The AirPlay Delay field now shows only the extra delay you set, so a TV that read 278 ms now reads 78 ms; the part AudioSync sets on its own is no longer shown, the main window's status line no longer names it, and the hints under the delay fields are shorter. What you hear stays the same.
-- When an AirPlay speaker keeps asking for lost audio on a bad network, AudioSync now gives it 0.3 s more room in one step instead of 0.1 s, which ended the cut-outs in our bad-network tests. After a bad stretch that speaker stays about a third of a second later until AudioSync quits. On a good network nothing changes. The help now says AirPlay adds at most 0.4 s.
+- When an AirPlay speaker keeps asking for lost audio on a bad network, AudioSync now gives it 0.3 s more room in one step instead of 0.1 s, which ended the cut-outs in our bad-network tests. After a bad stretch that speaker stays about a third of a second later for a while. On a good network nothing changes. The help now says AirPlay adds at most 0.4 s.
+- On the Mac, Windows and Linux, an AirPlay speaker that got that extra room tries to come back down to where it started once it has gone 10 minutes without asking for much lost audio. It steps down only at a quiet moment: a pause, a new stream, or a silent stretch in the music. If it starts asking again within the next 10 minutes, it goes straight back to the larger room, even when the step down hadn't been heard yet, and waits twice as long before the next try, up to an hour.
+- On the Mac, Windows and Linux, an AirPlay speaker whose few requests for lost audio come in with too little time left to answer them also gets the 0.3 s step, so a speaker that asks rarely no longer stays at its start level. It stops at the same 0.4 s.
+- On the Mac, Windows and Linux, a speaker another phone or computer took over says In use by another device on its row and shows as not playing, and its notice reads "<name> is in use by another device."
+- On the Mac, Windows and Linux, an empty Connected Speakers list says "No speakers found yet." and, in the main window, the one fix most likely to help on the line below, such as checking that the computer and the speakers are on the same network. The menu bar panel and the tray flyout show the first line only, and the empty list no longer says that virtual devices are hidden.
+- On the Mac, Windows and Linux, long notices, hints and prompts are shorter: one line says what's wrong and the next says how to fix it, in the same words on all three.
 
 ### Fixed
 
@@ -36,6 +41,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, an AirPlay speaker lost in the middle of pairing turns off with its PIN notice, and an Apple TV that refuses AudioSync shows its notice once, as on Windows and Linux.
 - On the Mac, Windows and Linux, a Google Cast device or group whose only fault is an expired Google intermediate certificate, which some older Chromecasts ran into in March 2025, plays again with a one-time notice instead of being refused.
 - On the Mac, Previous on Spotify slides the new cover in from the left the whole way, even when Spotify reports the same song again with another album.
+- On the Mac, Windows and Linux, Previous more than 3 seconds into a song restarts it with the Now Playing card standing still, instead of sliding as if the song changed.
+- On the Mac, the Calibrate All Speakers row no longer lights up for a moment when you press the power switch to turn streaming on.
 
 ## [0.9.3] - 2026-11-20
 
