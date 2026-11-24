@@ -23,7 +23,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: silent-output-windows-${{ github.ref }}
+  group: silent-output-windows.yml-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
