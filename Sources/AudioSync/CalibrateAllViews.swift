@@ -9,12 +9,8 @@ struct CalibrateAllButton: View {
 
     var body: some View {
         let t = model.text
-        let blocker: CalibrateAllBlocker? = model.calibration.holdsOutputs ? .busy
-            // Switching off: the reason the engine will give, shown with the switch rather than after the stop.
-            : model.pendingPower == false ? .notPlaying(.streaming)
-            // Switching on: the streaming reason goes with the switch too; any other reason stays.
-            : model.pendingPower == true && model.calibrateAll.blocker == .notPlaying(.streaming) ? nil
-            : model.calibrateAll.blocker
+        let blocker = CalibrateAllFlow.switchBlocker(model.calibrateAll.blocker, pendingPower: model.pendingPower,
+                                                     holdsOutputs: model.calibration.holdsOutputs)
         let off = CalibrateAllFlow.rowBlocker(blocker)
         VStack(alignment: .leading, spacing: 6) {
             Button { model.actions.calibrateAll() } label: {

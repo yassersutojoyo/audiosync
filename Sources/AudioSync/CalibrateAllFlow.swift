@@ -470,6 +470,18 @@ enum CalibrateAllFlow {
         blocker == .onlyLeftOut ? nil : blocker
     }
 
+    /// The blocker the row shows for the engine's `blocker` while the power
+    /// switch's press waits for its turn (`pendingPower`).
+    static func switchBlocker(_ blocker: CalibrateAllBlocker?, pendingPower: Bool?,
+                              holdsOutputs: Bool) -> CalibrateAllBlocker? {
+        holdsOutputs ? .busy
+            // Switching off: the reason the engine will give, shown with the switch rather than after the stop.
+            : pendingPower == false ? .notPlaying(.streaming)
+            // Switching on: the streaming reason goes with the switch too; any other reason stays.
+            : pendingPower == true && blocker == .notPlaying(.streaming) ? nil
+            : blocker
+    }
+
     /// Whether a zone's Calibrate Zone… can be chosen: some member is here
     /// and no calibration holds the outputs, since a start then does nothing.
     static func offersZoneRun(_ status: CalibrateAllStatus, singleHoldsOutputs: Bool, present: Int) -> Bool {

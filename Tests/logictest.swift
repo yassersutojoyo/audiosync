@@ -14041,6 +14041,15 @@ do {
           "calibrate all row: only a blocker that keeps the sheet shut dims the row and shows a reason", "\(rows)")
 }
 
+// MARK: Switching streaming on never lights the Calibrate All row before the started engine says it can run
+do {
+    let switchingOn = CalibrateAllFlow.switchBlocker(.notPlaying(.streaming), pendingPower: true, holdsOutputs: false)
+    let switchingOff = CalibrateAllFlow.switchBlocker(nil, pendingPower: false, holdsOutputs: false)
+    check(CalibrateAllFlow.rowBlocker(switchingOn) != nil && switchingOff == .notPlaying(.streaming),
+          "calibrate all row: an on press keeps the row off until the engine has started, so it never lights and goes off again",
+          "\(String(describing: switchingOn))")
+}
+
 // MARK: While a calibrate button is off, its reason is the only line under it
 do {
     let t = UIStrings()
@@ -19309,9 +19318,8 @@ do {
     let syncCalibrate = syncPart("CalibrateAllViews.swift", "struct CalibrateAllButton")
     check(syncHeader.contains(".id(model.mainStatusText)") && syncHeader.contains(".transition(.opacity)")
             && syncPanel.contains(".id(model.statusText)") && syncPanel.contains(".transition(.opacity)")
-            && syncCalibrate.contains("model.pendingPower == false ? .notPlaying(.streaming)")
+            && syncCalibrate.contains("CalibrateAllFlow.switchBlocker(model.calibrateAll.blocker, pendingPower: model.pendingPower,")
             && syncCalibrate.contains(".animation(PowerMotion.animation(reduceMotion: reduceMotion), value: off)")
-            && syncCalibrate.contains("model.pendingPower == true && model.calibrateAll.blocker == .notPlaying(.streaming) ? nil")
             && syncSwitch.contains("if model.powerPresses.turn(target, running: model.running) { model.actions.setPower(target) }")
             && syncHeader.contains(".help(model.shownRunning ? t.turnOff : t.turnOn)")
             && syncPanel.contains(".help(model.shownRunning ? t.turnOff : t.turnOn)"),
