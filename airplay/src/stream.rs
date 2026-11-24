@@ -117,6 +117,10 @@ const RATE_SPAN: f64 = 10.0;
 /// And fall in at least this many distinct seconds, so a burst and one
 /// stray request after it are no rate (P200).
 const RATE_SECONDS: usize = 5;
+/// Tight requests within the rate's minute that make a receiver starved,
+/// in at least this many distinct seconds (P260).
+const STARVED_REQUESTS: u32 = 3;
+const STARVED_SECONDS: usize = 2;
 /// The input ring by default: 2 s (at least 1 s, P111).
 pub const DEFAULT_INPUT_FRAMES: usize = 2 * audio::SAMPLE_RATE as usize;
 /// Times within this many seconds of being due count as due, so a wake-up
@@ -677,6 +681,8 @@ struct RateSecond {
     /// When its first request came, in seconds.
     first: f64,
     requests: u32,
+    /// Its requests that came past their packet's midpoint (P260).
+    tight: u32,
 }
 
 #[derive(Debug)]
@@ -2213,6 +2219,7 @@ impl Stream {
                 second,
                 first: t,
                 requests: 1,
+                tight: 0,
             }),
         }
         // More than 20 within the minute, spread over 5 seconds and 10 s
@@ -2222,6 +2229,7 @@ impl Stream {
             && recent.len() >= RATE_SECONDS
             && recent.front().is_some_and(|old| t - old.first >= RATE_SPAN);
         let ip = speaker.destinations.control.ip();
+        let mut tight = None;
         // Faster than the line, counted from the try and afresh after each
         // FLUSH: 6 requests within 10 s in 3 distinct seconds (P258).
         let fast = self
@@ -2251,6 +2259,9 @@ impl Stream {
                 .map(|j| context.heard((j * PACKET_FRAMES) as i64, speaker.delay));
             if in_history && let Some(play) = play {
                 gap |= t >= play;
+                let j = entry.number - context.packet_base;
+                let sent = context.cut_due(j) + speaker.delay;
+                tight.get_or_insert(t < play && t >= (sent + play) / 2.0);
             }
             let bytes = match &speaker.sealed {
                 // The sealed packet exactly as first sent, never sealed
@@ -2309,6 +2320,17 @@ impl Stream {
             speaker.history[slot].resends += 1;
             counters.packets_resent.fetch_add(1, Ordering::Relaxed);
         }
+        // A starved receiver: 3 tight requests in the minute, in at least
+        // 2 distinct seconds (P260).
+        if tight == Some(true)
+            && let Some(last) = speaker.recent_requests.back_mut()
+        {
+            last.tight += 1;
+        }
+        let tight_seconds = speaker.recent_requests.iter().filter(|s| s.tight > 0);
+        let steady = steady
+            || (tight_seconds.clone().map(|s| s.tight).sum::<u32>() >= STARVED_REQUESTS
+                && tight_seconds.count() >= STARVED_SECONDS);
         if self.watched_request(t, ip, gap, fast, steady) {
             return;
         }
