@@ -19000,7 +19000,9 @@ do {
             && emptyListNote(.noneFound, false, .none, true) == emptyListNote(.quiet, false, .none, true)
             && emptyListNote(.noneFound, true, .none, true)
                 == noneYet + "\n" + "Allow AudioSync in System Settings → Privacy & Security → Local Network."
-            && emptyListNote(.noneFound, true, .denied, true) == noneYet
+            && emptyListNote(.noneFound, true, .denied, true) == emptyListNote(.noneFound, true, .none, true)
+            && emptyListNote(.quiet, false, .possible, true) == emptyListNote(.quiet, false, .none, true)
+            && source("MainWindow.swift").contains("emptyNote(empty, hint: model.text.emptyListHint(empty, hint: hint), under: [])")
             && [CastListState.quiet, .noneFound].allSatisfy { cast in [true, false].allSatisfy { emptyListNote(cast, $0, .none, false) == noneYet } }
             && emptyListNote(.searching, false, .none, true) == t.networkSpeakersNote(airPlayNone: true, cast: .searching)
             && t.networkEmpty(airPlayNone: true, cast: .quiet, airPlaySearching: true, fix: true) == t.lookingForSpeakers

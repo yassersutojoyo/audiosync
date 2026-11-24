@@ -12803,6 +12803,12 @@ pub(crate) mod tests {
             "Every speaker here is hidden. Unhide them in Settings, in the gear menu."
         ));
         assert!(has(&app.flyout, "Every connected speaker is hidden."));
+        let open = app.strings().get_open_network_settings();
+        assert!(
+            !has(&app.main, &open),
+            "no network fix while every speaker is hidden"
+        );
+        assert!(!has(&app.flyout, &open), "nor in the flyout");
 
         let app = shown(&|backend| {
             backend.set_airplay_none_found(false);
