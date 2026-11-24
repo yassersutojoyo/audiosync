@@ -664,6 +664,7 @@ fn track(playing: bool, with_cover: bool) -> CardTrack {
             shuffle: Some(false),
             repeat: Some(Repeat::Off),
         },
+        timeline: None,
     }
 }
 

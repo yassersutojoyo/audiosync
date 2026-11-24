@@ -1748,7 +1748,7 @@ final class TrackSlideState: ObservableObject {
             return
         }
         pressed = press
-        guard onScreen, outgoing == nil, waitStart == nil else { return }
+        guard onScreen, !press.restarts, outgoing == nil, waitStart == nil else { return }
         settleStart = nil
         waitStart = press.at
         // A later change still matches the press within `pressWindow`; the cover stops waiting sooner.

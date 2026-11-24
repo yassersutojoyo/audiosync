@@ -43,6 +43,9 @@ const DIM_TO: f64 = 0.6;
 const TEXT_AWAY: f64 = 10.0;
 const TEXT_FROM: f64 = 16.0;
 const ARTIST_DELAY: f64 = 0.06;
+/// Previous this far into a song restarts it, so the card doesn't wait for
+/// another song (TrackSlide.restartAfter, WindowRules.swift).
+const RESTART_AFTER: Duration = Duration::from_secs(3);
 
 /// A cubic Bezier's control points x1, y1, x2, y2.
 type Curve = (f64, f64, f64, f64);
@@ -176,7 +179,7 @@ impl TrackSlide {
         direction: Option<Direction>,
         on_screen: bool,
         still: bool,
-        _elapsed: Option<Duration>,
+        elapsed: Option<Duration>,
         now: Instant,
     ) {
         let Some(direction) = direction else {
@@ -187,7 +190,9 @@ impl TrackSlide {
             return;
         };
         self.pressed = Some((direction, now));
-        if !on_screen || self.slide.is_some() || self.waiting(now) {
+        let restarts =
+            direction == Direction::Previous && elapsed.is_some_and(|at| at > RESTART_AFTER);
+        if !on_screen || restarts || self.slide.is_some() || self.waiting(now) {
             return;
         }
         self.still = still;

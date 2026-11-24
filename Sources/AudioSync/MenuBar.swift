@@ -331,7 +331,11 @@ final class AppModel: ObservableObject {
     @Published var nowPlaying: NowPlayingMonitor.Track?
     /// The latest Next, Previous or Play/Pause press, from a button or a media key (`TrackSlide`).
     @Published var trackPress: TrackSlide.Press?
-    func pressTrack(_ direction: TrackSlide.Direction?) { trackPress = TrackSlide.Press(direction: direction, at: .now) }
+    func pressTrack(_ direction: TrackSlide.Direction?) {
+        let elapsed = nowPlaying?.position?.elapsed(at: ProcessInfo.processInfo.systemUptime)
+        trackPress = TrackSlide.Press(direction: direction, at: .now,
+                                      restarts: TrackSlide.restarts(direction, elapsed: elapsed))
+    }
     @Published var equalizerOn = false
     /// The curve the equalizer picker shows, or "Custom".
     @Published var equalizerCurve = ""

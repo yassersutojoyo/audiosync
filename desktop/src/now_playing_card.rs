@@ -19,6 +19,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
+use crate::audio::now_playing::Timeline;
 use crate::track_slide::PRESS_WINDOW;
 use crate::ui_model::AppState;
 use crate::window_rules::Rgb;
@@ -270,7 +271,7 @@ impl ArtworkCache {
 }
 
 /// What the card shows of a session.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct CardTrack {
     /// The app's user model ID, as the session reports it.
     pub app_id: String,
@@ -281,9 +282,36 @@ pub struct CardTrack {
     /// The cover's read or decode failed, so none is on its way.
     pub cover_failed: bool,
     pub modes: PlayModes,
+    /// Where the song stands; `None` when the player reports no position.
+    pub timeline: Option<Timeline>,
 }
 
+/// Leaves `timeline` out: it moves on all the time, as on the Mac.
+impl PartialEq for CardTrack {
+    fn eq(&self, other: &CardTrack) -> bool {
+        self.app_id == other.app_id
+            && self.title == other.title
+            && self.artist == other.artist
+            && self.playing == other.playing
+            && self.artwork == other.artwork
+            && self.cover_failed == other.cover_failed
+            && self.modes == other.modes
+    }
+}
+
+impl Eq for CardTrack {}
+
 impl CardTrack {
+    /// How far into the song the player is at `now`.
+    pub fn elapsed_at(&self, now: Instant) -> Option<Duration> {
+        let timeline = self.timeline?;
+        Some(if self.playing {
+            timeline.elapsed + now.saturating_duration_since(timeline.at)
+        } else {
+            timeline.elapsed
+        })
+    }
+
     /// The line under the title: the artist, or the app when the session
     /// names no artist, as on the Mac.
     pub fn subtitle(&self) -> String {
@@ -437,6 +465,9 @@ impl NowPlayingCard {
             }
         }
         if next == self.track {
+            if let (Some(shown), Some(song)) = (self.track.as_mut(), next) {
+                shown.timeline = song.timeline;
+            }
             return false;
         }
         self.track = next;
@@ -543,6 +574,7 @@ pub mod fake {
             artwork: None,
             cover_failed: false,
             modes: PlayModes::default(),
+            timeline: None,
         }
     }
 }
