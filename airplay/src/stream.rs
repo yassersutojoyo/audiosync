@@ -1594,7 +1594,12 @@ impl Stream {
     /// (`rate`) wants the step to the ceiling while Lf is below it (P254).
     fn note_gap(&mut self, t: f64, rate: bool) {
         let ceiling = (self.host_latency + RATE_STEP_FRAMES).min(MAX_LATENCY_FRAMES);
-        if rate && self.latency_frames < ceiling {
+        // A step down already on its way counts; a step up on its way still
+        // takes the receiver among those that asked.
+        let to = self
+            .step_due
+            .map_or(self.latency_frames, |(_, frames)| frames);
+        if rate && self.latency_frames.min(to) < ceiling {
             self.stepped_up = true;
             self.step_wait_told = false;
             self.step_wanted = Some(ceiling);
