@@ -12748,6 +12748,83 @@ pub(crate) mod tests {
         assert!(has(&app.flyout, &looking), "no PC outputs: {looking}");
     }
 
+    /// Connected Speakers with no row: the main window says what is missing
+    /// and the one likely fix on a second line, the flyout the first line
+    /// alone; hidden virtual outputs add no line.
+    #[test]
+    fn the_empty_connected_list_says_what_is_missing_then_one_fix() {
+        use i_slint_backend_testing::ElementHandle;
+        let shown = |prepare: &dyn Fn(&mut MockBackend)| {
+            let mut backend = MockBackend::new();
+            backend.retain_speakers(|s| s.kind.is_this_pc());
+            backend.set_airplay_none_found(true);
+            prepare(&mut backend);
+            let app = app_over(backend);
+            app.main.show().unwrap();
+            app.flyout.show().expect("the flyout shows headless");
+            draw_frames();
+            app
+        };
+        fn has(window: &impl slint::ComponentHandle, text: &str) -> bool {
+            ElementHandle::find_by_accessible_label(window, text)
+                .next()
+                .is_some()
+        }
+        let missing = "No speakers found yet.";
+        let same_network = format!(
+            "{missing}\nCheck that this PC and your speakers are on the same network."
+        );
+
+        for cast in [ui_model::CastList::Quiet, ui_model::CastList::NoneFound] {
+            let app = shown(&|backend| backend.set_cast_list(cast));
+            assert!(has(&app.main, &same_network), "main: {cast:?}");
+            assert!(has(&app.flyout, missing), "flyout: {cast:?}");
+        }
+
+        let app = shown(&|backend| {
+            let mut cable = MockBackend::new()
+                .snapshot()
+                .speaker("local:desk")
+                .unwrap()
+                .clone();
+            cable.id = "local:cable".into();
+            cable.kind = ui_model::SpeakerKind::Virtual;
+            cable.enabled = false;
+            backend.add_speaker(cable);
+        });
+        assert!(has(&app.main, &same_network), "hidden virtual outputs");
+
+        let app = shown(&|_| {});
+        app.strings().set_public_network(true);
+        draw_frames();
+        let private = format!("{missing}\nSet this network to Private in Windows Settings.");
+        assert!(has(&app.main, &private), "Public network");
+        assert!(has(&app.flyout, missing), "flyout on a Public network");
+
+        let app = shown(&|backend| {
+            let desk = MockBackend::new()
+                .snapshot()
+                .speaker("local:desk")
+                .unwrap()
+                .clone();
+            backend.add_speaker(desk);
+        });
+        app.main.invoke_speaker_hide_requested("local:desk".into());
+        draw_frames();
+        assert!(has(
+            &app.main,
+            "Every speaker here is hidden. Unhide them in Settings, in the gear menu."
+        ));
+        assert!(has(&app.flyout, "Every connected speaker is hidden."));
+
+        let app = shown(&|backend| {
+            backend.set_airplay_none_found(false);
+            backend.set_airplay_searching(true);
+        });
+        assert!(has(&app.main, "Looking for speakers…"));
+        assert!(has(&app.flyout, "Looking for speakers…"));
+    }
+
     /// Streaming with no speaker listed at all: neither window asks to turn
     /// one on, which there is none to turn on.
     #[test]

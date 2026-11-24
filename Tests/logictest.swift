@@ -19010,6 +19010,13 @@ do {
             && t.panelConnectedEmpty(virtualHidden: false, networkEmpty: networkEmpty) == networkEmpty,
           "Connected Speakers: empty only because virtual outputs are hidden, it says so and how to show them",
           t.connectedEmpty(allHidden: false, virtualHidden: true, networkEmpty: networkEmpty))
+    check(t.noSpeakers == "No speakers found yet."
+            && t.panelAllHidden == "Every speaker is hidden."
+            && t.panelConnectedHidden == "Every connected speaker is hidden."
+            && t.allSpeakersHidden == "Every speaker here is hidden. Unhide them in Settings, in the gear menu."
+            && t.connectedEmpty(allHidden: false, virtualHidden: true, networkEmpty: networkEmpty) == networkEmpty,
+          "Connected Speakers: an empty list says what is missing in one short line, with no line on hidden virtual devices",
+          t.connectedEmpty(allHidden: false, virtualHidden: true, networkEmpty: networkEmpty))
     let showSection = section(settings, from: "func show() {", to: "private func makeWindow()")
     check(!settings.contains("fittingSize")
             && settings.contains("height: host.sizeThatFits(in: PanelTopLayout.measuring).height")
