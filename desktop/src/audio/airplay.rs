@@ -4802,12 +4802,15 @@ impl AirPlaySpeakers {
 fn describe_speaker_counters(counters: &SpeakerCounters) -> String {
     format!(
         "; {} packets sent, {} late, {} resend requests, {} resent, {} not held, \
+         {} second copies sent, {} second copies skipped, \
          {} timing replies, {} datagrams from other addresses dropped, {} silent frames",
         counters.packets_sent(),
         counters.late_packets(),
         counters.resend_requests(),
         counters.packets_resent(),
         counters.not_held(),
+        counters.second_copies_sent(),
+        counters.second_copies_skipped(),
         counters.timing_replies(),
         counters.foreign_datagrams(),
         counters.silent_frames(),
@@ -4853,7 +4856,7 @@ pub mod tests {
         assert_eq!(
             describe_speaker_counters(&SpeakerCounters::default()),
             "; 0 packets sent, 0 late, 0 resend requests, 0 resent, 0 not held, \
-             0 timing replies, 0 datagrams from other addresses dropped, 0 silent frames"
+             0 second copies sent, 0 second copies skipped, 0 timing replies, 0 datagrams from other addresses dropped, 0 silent frames"
         );
     }
 

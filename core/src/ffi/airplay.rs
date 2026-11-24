@@ -3679,6 +3679,10 @@ pub struct AscAirPlayCounters {
     /// How many sessions' counters were summed: 1 for a speaker, the member
     /// count for a target.
     pub sessions: u32,
+    /// Second copies of resends sent (P252).
+    pub second_copies_sent: u64,
+    /// Second copies of resends skipped: too late, or the list was full.
+    pub second_copies_skipped: u64,
 }
 
 /// The stream's counters (P144), as [`asc_airplay_stream_counters`] copies
@@ -3707,6 +3711,8 @@ impl AscAirPlayCounters {
         self.input_frames_dropped = counters.input_frames_dropped();
         self.foreign_datagrams += counters.foreign_datagrams();
         self.sessions += 1;
+        self.second_copies_sent += counters.second_copies_sent();
+        self.second_copies_skipped += counters.second_copies_skipped();
     }
 }
 
@@ -5946,7 +5952,7 @@ mod tests {
     #[test]
     fn counters_cross_the_boundary_with_the_c_layout() {
         use std::mem::{align_of, offset_of, size_of};
-        assert_eq!(size_of::<AscAirPlayCounters>(), 80);
+        assert_eq!(size_of::<AscAirPlayCounters>(), 96);
         assert_eq!(align_of::<AscAirPlayCounters>(), 8);
         let offsets = [
             offset_of!(AscAirPlayCounters, packets_sent),
@@ -5959,8 +5965,10 @@ mod tests {
             offset_of!(AscAirPlayCounters, input_frames_dropped),
             offset_of!(AscAirPlayCounters, foreign_datagrams),
             offset_of!(AscAirPlayCounters, sessions),
+            offset_of!(AscAirPlayCounters, second_copies_sent),
+            offset_of!(AscAirPlayCounters, second_copies_skipped),
         ];
-        assert_eq!(offsets, [0, 8, 16, 24, 32, 40, 48, 56, 64, 72]);
+        assert_eq!(offsets, [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88]);
         assert_eq!(size_of::<AscAirPlayStreamCounters>(), 32);
         assert_eq!(align_of::<AscAirPlayStreamCounters>(), 8);
         let offsets = [
@@ -6040,7 +6048,7 @@ mod tests {
         }
     }
 
-    fn session_fields(counters: &SpeakerCounters) -> [u64; 9] {
+    fn session_fields(counters: &SpeakerCounters) -> [u64; 11] {
         [
             counters.packets_sent(),
             counters.resend_requests(),
@@ -6051,10 +6059,12 @@ mod tests {
             counters.silent_frames(),
             counters.input_frames_dropped(),
             counters.foreign_datagrams(),
+            counters.second_copies_sent(),
+            counters.second_copies_skipped(),
         ]
     }
 
-    fn copied_fields(counters: &AscAirPlayCounters) -> [u64; 9] {
+    fn copied_fields(counters: &AscAirPlayCounters) -> [u64; 11] {
         [
             counters.packets_sent,
             counters.resend_requests,
@@ -6065,6 +6075,8 @@ mod tests {
             counters.silent_frames,
             counters.input_frames_dropped,
             counters.foreign_datagrams,
+            counters.second_copies_sent,
+            counters.second_copies_skipped,
         ]
     }
 

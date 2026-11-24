@@ -2034,6 +2034,8 @@ typedef struct AscAirPlayCounters {
     uint64_t input_frames_dropped; /* the stream's count: every session plays the one input */
     uint64_t foreign_datagrams;    /* dropped on the control and timing sockets: from another address */
     uint32_t sessions;             /* sessions summed: 1 for a speaker, the member count for a target */
+    uint64_t second_copies_sent;   /* second copies of resends sent (P252) */
+    uint64_t second_copies_skipped; /* second copies skipped: too late, or the list was full */
 } AscAirPlayCounters;
 
 /* The stream's counters, as asc_airplay_stream_counters copies them. */

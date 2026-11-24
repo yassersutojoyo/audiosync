@@ -3752,7 +3752,8 @@ do {
 
     let stream = NativeStreamCounters(rateHz: 44_101.26, packetsEncoded: 1_200, silentFrames: 352, inputFramesDropped: 0)
     let desk = NativeSpeakerCounters(packetsSent: 1_190, latePackets: 2, resendRequests: 3, packetsResent: 5,
-                                     notHeld: 6, timingReplies: 4, foreignDatagrams: 1)
+                                     notHeld: 6, secondCopiesSent: 7, secondCopiesSkipped: 8, timingReplies: 4,
+                                     foreignDatagrams: 1)
     let pair = NativeSpeakerCounters(packetsSent: 2_380, sessions: 2)
     let status = NativeAirPlayStatus.logLine(latencyMs: 1750.9, stream: stream, speakers: [
         .init(id: "02005E005321", name: "Desk", state: .playing, counters: desk),
@@ -3762,8 +3763,8 @@ do {
     // covers: S222
     check(status == """
         [AudioSync] native AirPlay: L = 1750 ms, input rate 44101.3 Hz, 1200 packets encoded, 352 silent frames, 0 input frames dropped
-          AirPlay speaker Desk (02005E005321): playing; 1190 packets sent, 2 late, 3 resend requests, 5 resent, 6 not held, 4 timing replies, 1 datagrams from other addresses dropped
-          AirPlay speaker pair:1: connecting, 2 members summed; 2380 packets sent, 0 late, 0 resend requests, 0 resent, 0 not held, 0 timing replies, 0 datagrams from other addresses dropped
+          AirPlay speaker Desk (02005E005321): playing; 1190 packets sent, 2 late, 3 resend requests, 5 resent, 6 not held, 7 second copies sent, 8 second copies skipped, 4 timing replies, 1 datagrams from other addresses dropped
+          AirPlay speaker pair:1: connecting, 2 members summed; 2380 packets sent, 0 late, 0 resend requests, 0 resent, 0 not held, 0 second copies sent, 0 second copies skipped, 0 timing replies, 0 datagrams from other addresses dropped
           AirPlay speaker Gone (02005E005322): added
         """, "native airplay: the status line has the Windows log's fields, a target's summed members, and a speaker the sender dropped",
           status)
