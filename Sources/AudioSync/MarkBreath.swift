@@ -31,14 +31,3 @@ final class MarkBreath: ObservableObject {
     static func scale(depth: Double) -> Double { 1 + 0.04 * depth }
     static func opacity(depth: Double) -> Double { 1 - 0.2 * depth }
 }
-
-/// When the mark's current breathing began; reset when it stops.
-final class BreathStart: ObservableObject {
-    var date: Date?
-
-    func since(_ now: Date) -> Date {
-        if let date { return date }
-        date = now
-        return now
-    }
-}

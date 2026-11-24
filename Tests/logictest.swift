@@ -19214,12 +19214,6 @@ do {
     check(MarkBreath.scale(depth: 0) == 1 && abs(MarkBreath.scale(depth: 1) - 1.04) < 1e-9
             && MarkBreath.opacity(depth: 0) == 1 && abs(MarkBreath.opacity(depth: 1) - 0.8) < 1e-9,
           "breathing mark: at most 4 percent larger and 20 percent fainter")
-    let breathStart = BreathStart()
-    let firstBreath = Date(timeIntervalSinceReferenceDate: 100)
-    check(breathStart.since(firstBreath) == firstBreath
-            && breathStart.since(firstBreath.addingTimeInterval(5)) == firstBreath,
-          "breathing mark: a breathing spell keeps the time it began")
-
     func motionRead(_ path: String) -> String { (try? String(contentsOfFile: path, encoding: .utf8)) ?? "" }
     func motionPart(_ source: String, _ start: String) -> String {
         source.components(separatedBy: start).dropFirst().first?.components(separatedBy: "\n}\n").first ?? ""
@@ -19228,8 +19222,7 @@ do {
     let motionBar = motionRead("Sources/AudioSync/MenuBar.swift")
     let markView = motionPart(motionWindow, "struct BreathingMark: View")
     check(markView.contains("reduceMotion: reduceMotion, onScreen: breath[keyPath: onScreen]")
-            && markView.contains("paused: !breathes")
-            && markView.contains(".animation(reduceMotion ? nil :"),
+            && markView.contains("LayerBreath(breathes: breathes, settles: !reduceMotion)"),
           "breathing mark source: Reduce Motion and a hidden window pause it, and it comes to rest without motion")
     check(motionWindow.contains("BreathingMark(model: model, onScreen: \\.mainOnScreen)")
             && motionBar.contains("BreathingMark(model: model, onScreen: \\.panelOnScreen)"),
@@ -19258,6 +19251,25 @@ do {
     check(offBadge.contains("value: state)") && offBadge.contains("value: connecting)")
             && !offBadge.contains("!filled ? nil"),
           "speaker badge source: the fill shrinks back and the connecting arc fades out as a speaker stops")
+}
+
+// MARK: An open window at rest asks SwiftUI for no frames (MainWindow.swift BreathingMark, AmbientArt.swift)
+// Each SwiftUI frame of the logo's breath or the strands' sway committed a transaction that laid out
+// the whole main window, about 23% CPU with the window open and nothing changing (Mac sample 2026-11-24).
+do {
+    func idleWindowPart(_ path: String, _ start: String) -> String {
+        let source = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+        return source.components(separatedBy: start).dropFirst().first?.components(separatedBy: "\n}\n").first ?? ""
+    }
+    let idleWindowMark = idleWindowPart("Sources/AudioSync/MainWindow.swift", "struct BreathingMark: View")
+    let idleWindowArt = idleWindowPart("Sources/AudioSync/AmbientArt.swift", "struct AmbientArt: View")
+    check(!idleWindowMark.isEmpty && !idleWindowMark.contains("TimelineView")
+            && !idleWindowArt.isEmpty && !idleWindowArt.contains("TimelineView")
+            && !idleWindowArt.contains("@ObservedObject var tide"),
+          "open window at rest: the breathing logo and the Now Playing strands move without SwiftUI frames")
+    let idleWindowTitle = idleWindowPart("Sources/AudioSync/MainWindow.swift", "struct ScrollingTitle: View")
+    check(idleWindowTitle.contains("TimelineView(.animation(minimumInterval: 1.0 / 30, paused: overflow == 0))"),
+          "open window: a long title scrolls at most 30 frames a second, and asks for none while it fits")
 }
 
 // MARK: The streaming switch and the views that follow it move together (MenuBar.swift, MainWindow.swift)

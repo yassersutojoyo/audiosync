@@ -793,7 +793,8 @@ struct ScrollingTitle: View {
             .frame(maxWidth: overflow > 0 ? .infinity : nil, alignment: .leading)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { line.width = $0 }
             .overlay(alignment: .leading) {
-                TimelineView(.animation(paused: overflow == 0)) { context in
+                // At the display's rate each frame laid out the whole window; 30 a second scrolls as smoothly.
+                TimelineView(.animation(minimumInterval: 1.0 / 30, paused: overflow == 0)) { context in
                     let offset = Marquee.offset(elapsed: context.date.timeIntervalSince(line.start), overflow: overflow)
                     Text(text)
                         .fixedSize()
@@ -1861,27 +1862,115 @@ struct BreathingMark: View {
     @ObservedObject var model: AppModel
     let onScreen: KeyPath<MarkBreath, Bool>
     @ObservedObject private var breath = MarkBreath.shared
-    @StateObject private var start = BreathStart()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let breathes = MarkBreath.breathes(networkSpeakers: model.airplay.count + model.cast.count,
                                            localNetworkRefused: model.localNetworkHint.accessRefused,
                                            reduceMotion: reduceMotion, onScreen: breath[keyPath: onScreen])
-        // 30 frames a second is plenty for a 4.5 s breath; paused, it asks for no frames.
-        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !breathes)) { context in
-            let depth = breathes
-                ? MarkBreath.depth(sinceStart: context.date.timeIntervalSince(start.since(context.date))) : 0
+        // The breath runs in Core Animation: each SwiftUI frame of it laid out the whole window.
+        LayerBreath(breathes: breathes, settles: !reduceMotion) {
             BrandMark()
                 .fill(model.shownRunning ? Brand.logo : Color.secondary)
-                .scaleEffect(MarkBreath.scale(depth: depth))
-                .opacity(MarkBreath.opacity(depth: depth))
+                .animation(PowerMotion.animation(reduceMotion: reduceMotion), value: model.shownRunning)
         }
-        .animation(reduceMotion ? nil : .easeOut(duration: MarkBreath.settle), value: breathes)
-        .animation(PowerMotion.animation(reduceMotion: reduceMotion), value: model.shownRunning)
-        .onChange(of: breathes) { _, now in
-            if !now { start.date = nil }
-        }
+    }
+}
+
+private struct LayerBreath<Content: View>: NSViewRepresentable {
+    let breathes: Bool
+    let settles: Bool
+    let content: Content
+
+    init(breathes: Bool, settles: Bool, @ViewBuilder content: () -> Content) {
+        self.breathes = breathes
+        self.settles = settles
+        self.content = content()
+    }
+
+    func makeNSView(context: Context) -> BreathView<Content> { BreathView(rootView: content) }
+
+    func updateNSView(_ view: BreathView<Content>, context: Context) {
+        view.host.rootView = content
+        view.breathe(breathes, settles: settles)
+    }
+}
+
+/// `content` scaled and faded by `MarkBreath` in an animation the render
+/// server repeats, so a breath costs the app nothing per frame.
+final class BreathView<Content: View>: NSView {
+    let host: NSHostingView<Content>
+    private var breathing = false
+    private var breathSize: CGSize?
+
+    init(rootView: Content) {
+        host = NSHostingView(rootView: rootView)
+        super.init(frame: .zero)
+        wantsLayer = true
+        host.sizingOptions = []
+        host.wantsLayer = true
+        host.autoresizingMask = [.width, .height]
+        addSubview(host)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func isAccessibilityElement() -> Bool { false }
+    override func accessibilityChildren() -> [Any]? { [] }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        // The scale is about the centre, so a new size needs new keyframes; the headers' marks keep one size.
+        if breathing, breathSize != bounds.size { startBreath() }
+    }
+
+    func breathe(_ now: Bool, settles: Bool) {
+        guard now != breathing else { return }
+        breathing = now
+        if now { startBreath() } else { settle(animated: settles) }
+    }
+
+    private func centred(scale: Double) -> CATransform3D {
+        let mid = (x: bounds.midX, y: bounds.midY)
+        let moved = CATransform3DMakeTranslation(mid.x, mid.y, 0)
+        return CATransform3DTranslate(CATransform3DScale(moved, CGFloat(scale), CGFloat(scale), 1), -mid.x, -mid.y, 0)
+    }
+
+    private func startBreath() {
+        guard let layer = host.layer, !bounds.isEmpty else { return }
+        breathSize = bounds.size
+        let depths = (0...45).map { MarkBreath.depth(sinceStart: MarkBreath.period * Double($0) / 45) }
+        let scale = CAKeyframeAnimation(keyPath: "transform")
+        scale.values = depths.map { NSValue(caTransform3D: centred(scale: MarkBreath.scale(depth: $0))) }
+        let fade = CAKeyframeAnimation(keyPath: "opacity")
+        fade.values = depths.map { MarkBreath.opacity(depth: $0) }
+        let breath = CAAnimationGroup()
+        breath.animations = [scale, fade]
+        breath.duration = MarkBreath.period
+        breath.repeatCount = .infinity
+        layer.removeAnimation(forKey: "settle")
+        layer.add(breath, forKey: "breath")
+    }
+
+    /// Back to rest from wherever the breath is, over `MarkBreath.settle` unless Reduce Motion is on.
+    private func settle(animated: Bool) {
+        breathSize = nil
+        guard let layer = host.layer else { return }
+        let shown = layer.presentation()
+        layer.removeAnimation(forKey: "breath")
+        guard animated, let shown else { return }
+        let scale = CABasicAnimation(keyPath: "transform")
+        scale.fromValue = NSValue(caTransform3D: shown.transform)
+        scale.toValue = NSValue(caTransform3D: CATransform3DIdentity)
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = shown.opacity
+        fade.toValue = 1
+        let rest = CAAnimationGroup()
+        rest.animations = [scale, fade]
+        rest.duration = MarkBreath.settle
+        rest.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        layer.add(rest, forKey: "settle")
     }
 }
 

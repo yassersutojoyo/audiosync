@@ -92,7 +92,7 @@ final class SoundTide: ObservableObject {
 /// `density` scales how far the strands spread: 1 for the main window's hero,
 /// less for a smaller one.
 struct AmbientArt: View {
-    @ObservedObject var tide: SoundTide
+    let tide: SoundTide
     let colors: [Color]
     var height: CGFloat = 22
     var density: CGFloat = 1
@@ -101,57 +101,162 @@ struct AmbientArt: View {
 
     var body: some View {
         let still = reduceMotion
-        let interval = AmbientBreath.frameInterval(onScreen: tide.onScreen, reduceMotion: still, live: tide.live)
         let lineOpacity = still ? 1 : AmbientBreath.opacity
         let tones = colors.compactMap { NSColor($0).usingColorSpace(.sRGB) }
             .map { BrandRGB(red: Double($0.redComponent), green: Double($0.greenComponent), blue: Double($0.blueComponent)) }
         let pick = AmbientBreath.line(cover: tones, dark: colorScheme == .dark, opacity: lineOpacity)
-        let lineColor = Color(.sRGB, red: pick.red, green: pick.green, blue: pick.blue)
-        let liveColors = (0..<3).map { index -> Color in
+        let liveColors = (0..<3).map { index -> BrandRGB in
             let cover = tones.isEmpty ? BrandRGB(red: 0.5, green: 0.5, blue: 0.5) : tones[index % tones.count]
-            let tone = AmbientBreath.tone(cover, dark: colorScheme == .dark)
-            return Color(.sRGB, red: tone.red, green: tone.green, blue: tone.blue)
+            return AmbientBreath.tone(cover, dark: colorScheme == .dark)
         }
-        TimelineView(.animation(minimumInterval: interval, paused: interval == nil)) { context in
-            Canvas { canvas, size in
-                let time = tide.clock.tick(context.date.timeIntervalSinceReferenceDate)
-                let live = still ? 0 : tide.live
-                let breath = still ? 0 : AmbientBreath.spread(at: time)
-                let layers = still ? (breath: 1.0, sound: 0.0) : AmbientBreath.layers(live: live)
-                let scale = size.height / 22
-                let style = StrokeStyle(lineWidth: CGFloat(AmbientBreath.stroke(live: live)), lineCap: .round)
-                let fade = CGFloat(AmbientBreath.edgeFade)
-                func faded(_ color: Color, _ opacity: Double) -> GraphicsContext.Shading {
-                    .linearGradient(Gradient(stops: [.init(color: color.opacity(0), location: 0),
-                                                     .init(color: color.opacity(opacity), location: fade),
-                                                     .init(color: color.opacity(opacity), location: 1 - fade),
-                                                     .init(color: color.opacity(0), location: 1)]),
-                                    startPoint: .zero, endPoint: CGPoint(x: size.width, y: 0))
-                }
-                for index in AmbientBreath.waves.indices where !still || index == 1 {
-                    let band = still ? 0 : min(1, tide.bands[index])
-                    let spread = AmbientBreath.motion(env: band, live: live, breath: breath)
-                    var path = Path()
-                    for step in 0...60 {
-                        let x = size.width * CGFloat(step) / 60
-                        let taper = CGFloat(AmbientBreath.taper(x: Double(step) / 60))
-                        let lift = CGFloat(AmbientBreath.lift(strand: index, x: Double(step) / 60, time: time,
-                                                              spread: spread * Double(density),
-                                                              idle: still ? 0 : AmbientBreath.idle(live: live, band: band), slot: Double(size.height)))
-                        let y = min(21, max(1, 11 + taper * lift)) * scale
-                        if step == 0 { path.move(to: CGPoint(x: x, y: y)) } else { path.addLine(to: CGPoint(x: x, y: y)) }
-                    }
-                    if layers.breath > 0 {
-                        canvas.stroke(path, with: faded(lineColor, layers.breath), style: style)
-                    }
-                    if layers.sound > 0 {
-                        canvas.stroke(path, with: faded(liveColors[index], layers.sound), style: style)
-                    }
-                }
+        // The view draws its own frames: each SwiftUI frame laid out the whole window.
+        AmbientStrands(tide: tide, look: StrandLook(line: pick, live: liveColors, still: still, density: density))
+            .allowsHitTesting(false)
+            .frame(height: height)
+            .accessibilityHidden(true)
+    }
+}
+
+struct StrandLook {
+    let line: BrandRGB
+    let live: [BrandRGB]
+    let still: Bool
+    let density: CGFloat
+}
+
+private struct AmbientStrands: NSViewRepresentable {
+    let tide: SoundTide
+    let look: StrandLook
+
+    func makeNSView(context: Context) -> StrandsView { StrandsView(tide: tide, look: look) }
+
+    func updateNSView(_ view: StrandsView, context: Context) { view.look = look }
+}
+
+/// The strands drawn on the view's own display link, `AmbientBreath.frameInterval` apart.
+final class StrandsView: NSView {
+    private let tide: SoundTide
+    var look: StrandLook {
+        didSet {
+            schedule()
+            needsDisplay = true
+        }
+    }
+    private var link: CADisplayLink?
+    private var interval: TimeInterval?
+    private var watch: AnyCancellable?
+
+    init(tide: SoundTide, look: StrandLook) {
+        self.tide = tide
+        self.look = look
+        super.init(frame: .zero)
+        wantsLayer = true
+        layerContentsRedrawPolicy = .onSetNeedsDisplay
+        // objectWillChange fires before the new value is stored, so it is read on the next turn.
+        watch = tide.objectWillChange.sink { [weak self] _ in
+            DispatchQueue.main.async { self?.schedule() }
+        }
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func isAccessibilityElement() -> Bool { false }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        needsDisplay = true
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // The link holds the view; dropping it here ends that cycle.
+        link?.invalidate()
+        link = nil
+        interval = nil
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didChangeOcclusionStateNotification, object: nil)
+        if let window {
+            NotificationCenter.default.addObserver(self, selector: #selector(occlusionChanged(_:)),
+                                                   name: NSWindow.didChangeOcclusionStateNotification, object: window)
+        }
+        schedule()
+    }
+
+    @objc private func occlusionChanged(_ note: Notification) { schedule() }
+
+    private func schedule() {
+        // `tide.onScreen` holds while either surface shows, and a closed window is kept, so its own window counts too.
+        let shown = window?.occlusionState.contains(.visible) ?? false
+        let next = shown
+            ? AmbientBreath.frameInterval(onScreen: tide.onScreen, reduceMotion: look.still, live: tide.live) : nil
+        guard next != interval else { return }
+        interval = next
+        guard let next else {
+            link?.isPaused = true
+            return
+        }
+        let running = link ?? displayLink(target: self, selector: #selector(step(_:)))
+        if link == nil {
+            running.add(to: .main, forMode: .common)
+            link = running
+        }
+        let rate = Float((1 / next).rounded())
+        running.preferredFrameRateRange = CAFrameRateRange(minimum: rate, maximum: rate, preferred: rate)
+        running.isPaused = false
+    }
+
+    @objc private func step(_ link: CADisplayLink) { needsDisplay = true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let canvas = NSGraphicsContext.current?.cgContext else { return }
+        let size = bounds.size
+        let still = look.still
+        let time = tide.clock.tick(Date().timeIntervalSinceReferenceDate)
+        let live = still ? 0 : tide.live
+        let breath = still ? 0 : AmbientBreath.spread(at: time)
+        let layers = still ? (breath: 1.0, sound: 0.0) : AmbientBreath.layers(live: live)
+        let scale = size.height / 22
+        let width = CGFloat(AmbientBreath.stroke(live: live))
+        for index in AmbientBreath.waves.indices where !still || index == 1 {
+            let band = still ? 0 : min(1, tide.bands[index])
+            let spread = AmbientBreath.motion(env: band, live: live, breath: breath)
+            let path = CGMutablePath()
+            for step in 0...60 {
+                let x = size.width * CGFloat(step) / 60
+                let taper = CGFloat(AmbientBreath.taper(x: Double(step) / 60))
+                let lift = CGFloat(AmbientBreath.lift(strand: index, x: Double(step) / 60, time: time,
+                                                      spread: spread * Double(look.density),
+                                                      idle: still ? 0 : AmbientBreath.idle(live: live, band: band), slot: Double(size.height)))
+                let y = min(21, max(1, 11 + taper * lift)) * scale
+                if step == 0 { path.move(to: CGPoint(x: x, y: y)) } else { path.addLine(to: CGPoint(x: x, y: y)) }
+            }
+            if layers.breath > 0 {
+                stroke(path, look.line, layers.breath, width: width, in: canvas)
+            }
+            if layers.sound > 0 {
+                stroke(path, look.live[index], layers.sound, width: width, in: canvas)
             }
         }
-        .frame(height: height)
-        .accessibilityHidden(true)
+    }
+
+    /// `path` stroked in `color` at `opacity`, fading out over the outer `AmbientBreath.edgeFade` of each side.
+    private func stroke(_ path: CGPath, _ color: BrandRGB, _ opacity: Double, width: CGFloat, in canvas: CGContext) {
+        let clear = CGColor(srgbRed: CGFloat(color.red), green: CGFloat(color.green), blue: CGFloat(color.blue), alpha: 0)
+        let solid = CGColor(srgbRed: CGFloat(color.red), green: CGFloat(color.green), blue: CGFloat(color.blue),
+                            alpha: CGFloat(opacity))
+        let fade = CGFloat(AmbientBreath.edgeFade)
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let gradient = CGGradient(colorsSpace: space, colors: [clear, solid, solid, clear] as CFArray,
+                                        locations: [0, fade, 1 - fade, 1]) else { return }
+        canvas.saveGState()
+        canvas.addPath(path)
+        canvas.setLineWidth(width)
+        canvas.setLineCap(.round)
+        canvas.replacePathWithStrokedPath()
+        canvas.clip()
+        canvas.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: bounds.width, y: 0), options: [])
+        canvas.restoreGState()
     }
 }
 
