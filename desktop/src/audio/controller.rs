@@ -5401,12 +5401,6 @@ impl<D: Driver> AudioBackend for Controller<D> {
         let from = self.switch_origin();
         self.switch_from = None;
         self.end_session();
-        // A new stream takes back the speakers yielded to another sender, as
-        // the Mac's new policy does (S482).
-        for id in self.on_demand_taken.clone() {
-            self.on_demand.switched_on(id.clone());
-            self.let_go(&id, false);
-        }
         self.sync_app_output(true);
         self.sync_default_output(moves_default(Some(source)));
         self.log
@@ -9116,11 +9110,11 @@ mod tests {
         assert_eq!(taken_reports(backend.poll()), [BTreeSet::new()]);
     }
 
-    // The mockup's rule, as on the Mac: a taken speaker stays with the other
-    // device until a new stream starts or its switch flips.
+    // As on the Mac, starting a stream alone does not take a speaker back from
+    // the other device: fresh lasting sound or its switch does (S482).
     // covers: S482
     #[test]
-    fn a_new_stream_takes_a_speaker_waiting_for_sound_back() {
+    fn a_new_stream_without_sound_leaves_a_taken_speaker_with_the_other_device() {
         use crate::audio::cast::tests::{FakeCast, KITCHEN, id};
         use audiosync_cast::error::LaunchError;
         use audiosync_cast::host::{AttemptId, HostEvent};
@@ -9144,14 +9138,9 @@ mod tests {
         assert!(!backend.on_demand_taken.is_empty());
         backend.stop();
         backend.start(&SourceId::WholeSystem).unwrap();
-        let events = backend.poll();
-        assert!(
-            events
-                .iter()
-                .any(|e| matches!(e, BackendEvent::SpeakersTaken { ids } if ids.is_empty())),
-            "{events:?}"
-        );
-        assert_eq!(
+        backend.poll();
+        assert!(!backend.on_demand_taken.is_empty());
+        assert_ne!(
             backend.on_demand.status(&KITCHEN.to_owned()),
             Some(Status::Active)
         );
