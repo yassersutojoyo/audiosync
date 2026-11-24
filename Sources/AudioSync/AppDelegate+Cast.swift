@@ -176,7 +176,31 @@ extension AppDelegate {
             // Its speakers left the list, so what was said about them no longer holds.
             clearNotices(Notice.castSubjects(in: appModel.notices))
             if let name { postNotice(text.castSenderStopped(speaker: name), subject: Notice.castSender) }
+        case .waiting(let id):
+            DebugTrace.log("[AudioSync] Cast: \(castLabel(id)) stays on, waiting for sound")
+            nativeAirPlay?.demandTaken(CastID.app(id))
         }
+    }
+
+    /// The core lets the Cast speaker that is on go, released when nothing
+    /// plays or yielded, or takes it back, which starts it again as a switch
+    /// off and on does (S482, S483, C142). One switched off meanwhile is
+    /// passed over.
+    func castDemand(_ id: String, letGo: Bool) {
+        guard castModel.enabled == id else { return }
+        DebugTrace.log("[AudioSync] Cast: \(castLabel(id)) " + (letGo ? "let go" : "taken back"))
+        castModel.letGo = true
+        syncCast()
+        if !letGo { castModel.letGo = false }
+        castFollow()
+    }
+
+    /// The AirPlay sender, and the lasting-sound policy in it, went: the
+    /// Cast session relaunches after an outage again, and a let-go speaker
+    /// comes back, as nothing would take it back.
+    func castPolicyGone() {
+        castSender?.setQuiet(false)
+        if castModel.policyGone() { castFollow() }
     }
 
     /// Makes the sender's one session match the model: it runs while the
@@ -195,6 +219,7 @@ extension AppDelegate {
             castModel.stopSent()
         case .start(let id):
             castModel.startSent(id)
+            nativeAirPlay?.demandSwitchedOn(CastID.app(id))
             sender.startSession(castModel.senderID(of: id)) { [weak self, weak sender] attempt, refused in
                 guard let self, let sender, self.castSender === sender else { return }
                 DebugTrace.log("[AudioSync] Cast: \(self.castLabel(id)) "

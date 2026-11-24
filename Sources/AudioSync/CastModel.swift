@@ -164,13 +164,16 @@ enum CastEnd: Equatable {
     case takenOver
     /// Stopped before it started.
     case deselected
+    /// Its channel died while nothing played and its app was gone: not
+    /// relaunched, it waits for sound (C141).
+    case quiet
     /// `detail` is the core's text for the debug log.
     case failed(CastError?, detail: String = "")
 
     /// What the user is told; nil for a stop the user or AudioSync asked for.
     var problem: CastProblem? {
         switch self {
-        case .stopped, .deselected: return nil
+        case .stopped, .deselected, .quiet: return nil
         case .takenOver: return .takenOver
         case .failed(.connect, _): return .notResponding
         case .failed(.launch, _), .failed(.media, _): return .refused
@@ -284,6 +287,7 @@ enum CastEvent: Equatable {
             case ASC_CAST_END_STOPPED: end = .stopped
             case ASC_CAST_END_TAKEN_OVER: end = .takenOver
             case ASC_CAST_END_DESELECTED: end = .deselected
+            case ASC_CAST_END_QUIET: end = .quiet
             default: end = .failed(error, detail: detail)
             }
             underruns.forget(a)
@@ -433,6 +437,8 @@ enum CastOutcome: Equatable {
     case memoryChanged
     /// The sender stopped working; `wasOn`: the speaker that was on, now off.
     case senderFailed(wasOn: String?)
+    /// The device stays on and let go, waiting for sound (C141).
+    case waiting(String)
 }
 
 struct CastModel {
@@ -483,7 +489,12 @@ struct CastModel {
     var discovery = Discovery.off
     private(set) var devices: [String: CastDevice] = [:]
     /// The one device the user turned on.
-    private(set) var enabled: String?
+    private(set) var enabled: String? {
+        didSet { if enabled != oldValue { letGo = false } }
+    }
+    /// The device that is on is let go, released when nothing plays or
+    /// waiting for sound: it stays on and runs no session (S482, S483, C142).
+    var letGo = false
     /// The device saved as on at the last quit: it turns on once listed,
     /// unless the user switched a Cast speaker on first (C112).
     var savedOn: String?
@@ -860,7 +871,21 @@ struct CastModel {
         leftOn = nil
         savedOn = nil
         takenOver.remove(id)
+        letGo = false
         return nil
+    }
+
+    /// What a new AirPlay sender's lasting-sound policy is told of the
+    /// device that is on: its app ID, and whether it waits, let go.
+    func policyJoin() -> (appID: String, waiting: Bool)? {
+        enabled.map { (CastID.app($0), letGo) }
+    }
+
+    /// No policy runs to take a let-go device back: it comes back now.
+    /// Returns whether it was let go.
+    mutating func policyGone() -> Bool {
+        defer { letGo = false }
+        return letGo
     }
 
     /// The user turns `id` off. Returns whether it was on.
@@ -875,8 +900,8 @@ struct CastModel {
     /// discovery says meanwhile; a new one starts once the device is listed
     /// and online. Nothing new while a start waits for its number.
     func plan(streaming: Bool) -> CastPlan {
-        if let attempt, enabled != attempt.device || !streaming { return .stop }
-        guard attempt == nil, starting == nil, streaming, let id = enabled,
+        if let attempt, enabled != attempt.device || !streaming || letGo { return .stop }
+        guard attempt == nil, starting == nil, streaming, !letGo, let id = enabled,
               let device = devices[id], !device.offline else { return .none }
         return .start(id)
     }
@@ -999,6 +1024,10 @@ struct CastModel {
             held = nil
             unanswered = []
             members = nil
+            if end == .quiet, enabled == id {
+                letGo = true
+                return .waiting(id)
+            }
             if enabled == id { enabled = nil }
             if end == .takenOver { takenOver.insert(id) }
             return .turnedOff(id, problem: end.problem)

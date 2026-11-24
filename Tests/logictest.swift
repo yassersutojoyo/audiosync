@@ -14433,6 +14433,47 @@ do {
             && refused.enabled == nil && refused.status(of: den) == .idle,
           "cast: attempt 0 means refused, and the speaker goes off")
 
+    var quietCast = CastModel()
+    quietCast.apply(.appeared(CastDevice(id: den, name: "Den"), offsetMs: nil))
+    _ = quietCast.turnOn(den)
+    quietCast.startSent(den)
+    _ = quietCast.started(den, attempt: 8, refusal: ASC_CAST_REFUSED_NONE)
+    var quietEnd = AscCastEvent()
+    quietEnd.kind = ASC_CAST_EVENT_ENDED
+    quietEnd.attempt = 8
+    quietEnd.reason = ASC_CAST_END_QUIET
+    // covers: C141
+    check(CastEvent(quietEnd) == .ended(attempt: 8, .quiet)
+            && quietCast.apply(.ended(attempt: 8, .quiet)) == .waiting(den)
+            && quietCast.enabled == den && quietCast.letGo && quietCast.plan(streaming: true) == .none,
+          "cast: an outage while nothing plays keeps the speaker on and let go, waiting for sound, with no notice")
+    quietCast.letGo = false
+    // covers: S482
+    check(quietCast.plan(streaming: true) == .start(den), "cast: a waiting speaker taken back starts again")
+    quietCast.startSent(den)
+    _ = quietCast.started(den, attempt: 9, refusal: ASC_CAST_REFUSED_NONE)
+    quietCast.letGo = true
+    let releasedPlan = quietCast.plan(streaming: true)
+    quietCast.stopSent()
+    // covers: C142
+    check(releasedPlan == .stop && quietCast.plan(streaming: true) == .none && quietCast.enabled == den,
+          "cast: a released speaker's session stops as a deselect does and it stays on")
+    quietCast.turnOff(den)
+    _ = quietCast.turnOn(den)
+    // covers: S482, S483
+    check(!quietCast.letGo && quietCast.plan(streaming: true) == .start(den),
+          "cast: the user's switch brings a let-go speaker back")
+    var restartedPolicy = quietCast
+    restartedPolicy.letGo = true
+    let rejoin = restartedPolicy.policyJoin()
+    let tookBack = restartedPolicy.policyGone()
+    // covers: S482, S483
+    check(rejoin?.appID == CastID.app(den) && rejoin?.waiting == true && tookBack && !restartedPolicy.letGo
+            && restartedPolicy.plan(streaming: true) == .start(den) && !restartedPolicy.policyGone()
+            && quietCast.policyJoin()?.waiting == false && CastModel().policyJoin() == nil,
+          "cast: a new AirPlay sender's policy learns the Cast speaker that is on, waiting when let go, "
+            + "and a let-go one comes back while no policy runs")
+
     // covers: C80 (the third failure turns a speaker off; a group with no address yet doesn't count)
     var tvOff = CastModel()
     tvOff.apply(.appeared(CastDevice(id: den, name: "Den"), offsetMs: nil))

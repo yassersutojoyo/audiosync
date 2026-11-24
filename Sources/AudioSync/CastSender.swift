@@ -184,6 +184,15 @@ final class CastSender {
         }
     }
 
+    /// Whether the lasting-sound policy is Quiet: an outage then ends the
+    /// session instead of relaunching the app (C141).
+    func setQuiet(_ quiet: Bool) {
+        queue.async { [weak self] in
+            guard let handle = self?.handle else { return }
+            asc_cast_set_quiet(handle, quiet)
+        }
+    }
+
     func resync() {
         queue.async { [weak self] in
             guard let handle = self?.handle else { return }

@@ -59,6 +59,9 @@ final class NativeAirPlay {
     /// Gets each receiver the core lets go (true) or takes back (false) while
     /// it stays switched on (main queue, S482, S483).
     var onDemand: ((String, Bool) -> Void)?
+    /// Gets whether the lasting-sound policy is Playing, each poll (main
+    /// queue, S481).
+    var onDemandPlaying: ((Bool) -> Void)?
     /// Whether the user paused the speakers on purpose (main queue, P213).
     private var explicitPause = ExplicitPause()
     /// While paused, checks whether the capture carries sound again (main queue).
@@ -745,8 +748,10 @@ final class NativeAirPlay {
         }
         // The peak is taken on the main queue, which owns the engine; its
         // let-go and take-back events come with the next poll.
+        let demandPlaying = asc_airplay_demand_playing(handle)
         DispatchQueue.main.async { [weak self] in
             guard let self, self.active else { return }
+            self.onDemandPlaying?(demandPlaying)
             let peak = self.demandPeak?() ?? 0
             self.queue.async { [weak self] in
                 if let handle = self?.handle { asc_airplay_feed_demand(handle, peak) }
@@ -770,6 +775,23 @@ final class NativeAirPlay {
         let minutes = UInt32(clamping: max(0, minutes))
         queue.async { [weak self] in
             if let handle = self?.handle { asc_airplay_set_release_minutes(handle, minutes) }
+        }
+    }
+
+    /// A speaker the app runs itself, under `id`, started from the user's
+    /// switch or a take-back: the policy holds it with the receivers, and
+    /// `onDemand` gets its let-go and take-back (S482, S483).
+    func demandSwitchedOn(_ id: String) {
+        queue.async { [weak self] in
+            if let handle = self?.handle { asc_airplay_demand_switched_on(handle, id) }
+        }
+    }
+
+    /// The app's own speaker `id` ended on an outage while Quiet: it waits
+    /// for fresh lasting sound or the user's switch (C141, S482).
+    func demandTaken(_ id: String) {
+        queue.async { [weak self] in
+            if let handle = self?.handle { asc_airplay_demand_taken(handle, id) }
         }
     }
 

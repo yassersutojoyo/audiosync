@@ -43,6 +43,7 @@ extension AppDelegate {
         native.onOffsetsMoved = { [weak self] in self?.syncNetworkHoldBacks() }   // the AirPlay-ahead amount (S401)
         native.demandPeak = { [weak self] in self?.engine.takeDemandPeak() }
         native.onDemand = { [weak self] receiver, letGo in self?.nativeDemand(receiver, letGo: letGo) }
+        native.onDemandPlaying = { [weak self] playing in self?.castSender?.setQuiet(!playing) }   // C141
         nativeAirPlay = native   // reconciles meanwhile don't start a second one
         sendPlayback()
         native.setZones(nativeZoneVolumes())
@@ -70,6 +71,7 @@ extension AppDelegate {
     /// from a removal as a switch off and on does (S482, S483). Its row
     /// keeps its switch; one switched off meanwhile is passed over.
     func nativeDemand(_ receiver: String, letGo: Bool) {
+        if let cast = CastID.device(receiver) { return castDemand(cast, letGo: letGo) }
         guard let native = nativeAirPlay, enabledAirPlay.contains(NativeAirPlayID.app(receiver)) else { return }
         DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(receiver)) " + (letGo ? "let go" : "taken back"))
         native.model.letGo.insert(receiver)
@@ -107,12 +109,17 @@ extension AppDelegate {
                            shortName: text.pairingsIgnoredNoticeName)
             }
             resendTrackInfo()   // a new sender knows nothing of what plays
+            if let join = castModel.policyJoin() {
+                native.demandSwitchedOn(join.appID)
+                if join.waiting { native.demandTaken(join.appID) }
+            }
             // Its discovery raised the Local Network prompt, if any: the
             // probe may ask now, and an empty list counts from here.
             airplayEmptySince = native.model.rows(enabled: enabledAirPlay).isEmpty ? Date() : nil
             updateLocalNetworkProbe(senderRunning: true)
         } else {
             nativeAirPlay = nil
+            castPolicyGone()
             if news {
                 notify(text.nativeAirPlayStopped, origin: .automatic, subject: Notice.airplaySender,
                        shortName: text.airPlayStoppedNoticeName)
@@ -402,6 +409,7 @@ extension AppDelegate {
         guard let native = nativeAirPlay else { return }
         DebugTrace.log("[AudioSync] native AirPlay: the sender stopped after an internal error; Retry starts a new one")
         nativeAirPlay = nil
+        castPolicyGone()
         nativeStarts.senderFailed()
         nativeRunMarks = native.model.runMarks
         // Nothing starts or retries a speaker once its sender is gone.

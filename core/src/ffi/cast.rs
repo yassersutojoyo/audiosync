@@ -48,7 +48,7 @@ use audiosync_cast::discovery::{
     Announcements, BrowseEvent, DEVICE_PORT, DeviceId, DeviceKey, DeviceKind, DeviceList,
     ListEvent, ProductKind,
 };
-use audiosync_cast::error::ConnectError;
+use audiosync_cast::error::{ConnectError, LaunchError};
 use audiosync_cast::group::{GroupMember, GroupRecords};
 use audiosync_cast::host::{
     AttemptId, CastHost, CastTarget, CommandError, DeviceMemory, HostEvent, StartRefused,
@@ -176,6 +176,9 @@ pub const CAST_END_TAKEN_OVER: i32 = 2;
 pub const CAST_END_DESELECTED: i32 = 3;
 /// A failure the session could not recover from.
 pub const CAST_END_FAILED: i32 = 4;
+/// Its channel died while the host was Quiet and its app was gone: not
+/// relaunched, the device stays on and waits for sound (C141).
+pub const CAST_END_QUIET: i32 = 5;
 
 /// Why something failed ([`AscCastEvent::error`]): it didn't.
 pub const CAST_ERROR_NONE: i32 = 0;
@@ -1223,6 +1226,9 @@ fn ended_event(end: SessionEnd) -> Pending {
         SessionEnd::Stopped => pending.reason = CAST_END_STOPPED,
         SessionEnd::TakenOver => pending.reason = CAST_END_TAKEN_OVER,
         SessionEnd::Deselected => pending.reason = CAST_END_DESELECTED,
+        SessionEnd::Failed(SessionError::Launch(LaunchError::Quiet)) => {
+            pending.reason = CAST_END_QUIET;
+        }
         SessionEnd::Failed(error) => {
             pending.reason = CAST_END_FAILED;
             pending.error = session_code(&error);
@@ -1784,6 +1790,19 @@ pub unsafe extern "C" fn asc_cast_set_volume(cast: *mut AscCast, level: f64) -> 
 pub unsafe extern "C" fn asc_cast_set_muted(cast: *mut AscCast, muted: bool) -> bool {
     // SAFETY: as the caller's.
     unsafe { with_session(cast, |host| host.set_muted(muted)) }
+}
+
+/// Whether the lasting-sound policy is Quiet (S481): a session whose
+/// channel dies then and finds its app gone ends with [`CAST_END_QUIET`]
+/// instead of a relaunch (C141). Null does nothing.
+///
+/// # Safety
+///
+/// `cast` is null or a live handle, called under the threading contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_cast_set_quiet(cast: *mut AscCast, quiet: bool) {
+    // SAFETY: as the caller's.
+    unsafe { live(cast, (), |cast| cast.host.set_quiet(quiet)) }
 }
 
 /// Moves the device's volume one of its own steps up or down (C69). False,
@@ -3060,6 +3079,15 @@ mod tests {
     fn a_device_that_fails_authentication_ends_with_its_own_code() {
         let refused = SessionError::Connect(ConnectError::Refused("refused".into()));
         assert_eq!(session_code(&refused), CAST_ERROR_REFUSED);
+    }
+
+    // The Mac host keeps the speaker on and waiting on this end, as Windows
+    // and Linux do, so it needs its own reason apart from a failure.
+    // CAST_SPEC: C141
+    #[test]
+    fn an_outage_while_quiet_ends_with_its_own_reason() {
+        let quiet = SessionEnd::Failed(SessionError::Launch(LaunchError::Quiet));
+        assert_eq!(ended_event(quiet).reason, CAST_END_QUIET);
     }
 
     #[test]

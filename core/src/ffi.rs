@@ -1775,6 +1775,7 @@ mod tests {
             ("ASC_CAST_END_TAKEN_OVER", CAST_END_TAKEN_OVER.to_string()),
             ("ASC_CAST_END_DESELECTED", CAST_END_DESELECTED.to_string()),
             ("ASC_CAST_END_FAILED", CAST_END_FAILED.to_string()),
+            ("ASC_CAST_END_QUIET", CAST_END_QUIET.to_string()),
             ("ASC_CAST_ERROR_NONE", CAST_ERROR_NONE.to_string()),
             ("ASC_CAST_ERROR_CONNECT", CAST_ERROR_CONNECT.to_string()),
             ("ASC_CAST_ERROR_LAUNCH", CAST_ERROR_LAUNCH.to_string()),

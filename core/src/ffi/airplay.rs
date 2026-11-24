@@ -3590,6 +3590,70 @@ pub unsafe extern "C" fn asc_airplay_set_release_minutes(airplay: *mut AscAirPla
     }
 }
 
+/// A speaker the host runs itself, the Cast speaker that is on, started
+/// from the user's switch or a take-back: the policy holds it under `id`,
+/// its let-go and take-back come as events with that `id` (S482, S483).
+/// NULL or a null `id` does nothing.
+///
+/// # Safety
+///
+/// `airplay` is null or a live handle, called under the threading
+/// contract; `id` is null or a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_airplay_demand_switched_on(
+    airplay: *mut AscAirPlay,
+    id: *const c_char,
+) {
+    // SAFETY: by the caller's contract null or a NUL-terminated string.
+    let Some(id) = (unsafe { host_text(id) }) else {
+        return;
+    };
+    // SAFETY: by the caller's contract null or a live handle that no other
+    // call uses now.
+    unsafe { live(airplay, (), |airplay| airplay.demand_switched_on(id)) }
+}
+
+/// The host's own speaker `id` ended on an outage while Quiet (C141): it
+/// waits for fresh lasting sound or the user's switch (S482). NULL or a
+/// null `id` does nothing.
+///
+/// # Safety
+///
+/// `airplay` is null or a live handle, called under the threading
+/// contract; `id` is null or a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_airplay_demand_taken(airplay: *mut AscAirPlay, id: *const c_char) {
+    // SAFETY: by the caller's contract null or a NUL-terminated string.
+    let Some(id) = (unsafe { host_text(id) }) else {
+        return;
+    };
+    // SAFETY: by the caller's contract null or a live handle that no other
+    // call uses now.
+    unsafe {
+        live(airplay, (), |airplay| {
+            let now = airplay.demand_now(Instant::now());
+            airplay.on_demand.taken(&id.to_owned(), now);
+        })
+    }
+}
+
+/// Whether the lasting-sound policy is Playing (S481); false for NULL.
+///
+/// # Safety
+///
+/// `airplay` is null or a live handle, called under the threading
+/// contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_airplay_demand_playing(airplay: *const AscAirPlay) -> bool {
+    // SAFETY: by the caller's contract null or a live handle that no other
+    // call uses now; the call only reads it.
+    unsafe {
+        live(airplay.cast_mut(), false, |airplay| {
+            airplay.on_demand.playing()
+        })
+    }
+}
+
 /// The stream's Lf in frames from every speaker's reported latency R_s
 /// (P200, P202): `reported_us` holds `count` values in microseconds, a
 /// negative one counting as 0. A null array, a count of 0 or a count no
@@ -11806,6 +11870,46 @@ mod tests {
         );
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // The Mac's Cast speaker runs under the same policy as its AirPlay
+    // speakers, as one policy holds both on Windows and Linux.
+    // covers: S483
+    #[test]
+    fn a_host_run_speaker_is_released_and_waits_after_a_quiet_outage() {
+        let id = "cast:0123456789abcdef0123456789abcdef";
+        let mut handle = create_with(quiet);
+        let c_id = c_string(id);
+        let mut at = inside(handle).created_at;
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe {
+            asc_airplay_demand_switched_on(handle, c_id.as_ptr());
+            asc_airplay_set_release_minutes(handle, 1);
+        }
+        feed_for(handle, &mut at, 61.0, 0.0);
+        assert_eq!(demand_events(handle), [(id.to_owned(), true)]);
+        // SAFETY: as above.
+        unsafe {
+            asc_airplay_demand_switched_on(handle, c_id.as_ptr());
+            asc_airplay_demand_taken(handle, c_id.as_ptr());
+        }
+        assert!(matches!(
+            inside(handle).on_demand.status(&id.to_owned()),
+            Some(on_demand::Status::Waiting { .. })
+        ));
+        // SAFETY: as above.
+        assert!(!unsafe { asc_airplay_demand_playing(handle) });
+        feed_for(handle, &mut at, 6.0, 0.1);
+        // SAFETY: as above.
+        assert!(unsafe { asc_airplay_demand_playing(handle) });
+        assert_eq!(demand_events(handle), [(id.to_owned(), false)]);
+        // SAFETY: as above.
+        unsafe {
+            asc_airplay_demand_switched_on(ptr::null_mut(), c_id.as_ptr());
+            asc_airplay_demand_taken(handle, ptr::null());
+            assert!(!asc_airplay_demand_playing(ptr::null()));
+            asc_airplay_destroy(&mut handle);
+        }
     }
 
     // A poll shorter than a window keeps its peak for the window it ends in.

@@ -278,6 +278,7 @@ extern "C" {
 #define ASC_CAST_END_TAKEN_OVER 2  /* someone else stopped or replaced the app or the stream */
 #define ASC_CAST_END_DESELECTED 3  /* stopped before it started */
 #define ASC_CAST_END_FAILED 4      /* a failure the session could not recover from: .error */
+#define ASC_CAST_END_QUIET 5       /* its channel died while Quiet and its app was gone: not relaunched; keep it on, waiting for sound */
 
 /* Why something Cast failed (AscCastEvent.error). */
 #define ASC_CAST_ERROR_NONE 0
@@ -2003,6 +2004,24 @@ void asc_airplay_feed_demand(AscAirPlay *airplay, float peak);
 void asc_airplay_set_release_minutes(AscAirPlay *airplay, uint32_t minutes);
 
 /*
+ * A speaker the host runs itself (the Cast speaker that is on), started from
+ * the user's switch or a take-back: the policy holds it under `id`, and its
+ * let-go and take-back come as LET_GO and TAKE_BACK events with that `id`
+ * (S482, S483). NULL or a NULL `id` does nothing.
+ */
+void asc_airplay_demand_switched_on(AscAirPlay *airplay, const char *id);
+
+/*
+ * The host's own speaker `id` ended on an outage while Quiet
+ * (ASC_CAST_END_QUIET): it waits for fresh lasting sound or the user's switch
+ * (S482). NULL or a NULL `id` does nothing.
+ */
+void asc_airplay_demand_taken(AscAirPlay *airplay, const char *id);
+
+/* Whether the lasting-sound policy is Playing (S481); false for NULL. */
+bool asc_airplay_demand_playing(const AscAirPlay *airplay);
+
+/*
  * The stream's Lf in frames from every speaker's reported latency, count
  * values in microseconds (a negative one counts as 0):
  * clamp(R_max + 4410, 4410, 88200). NULL or a count of 0 gives 4410.
@@ -2562,6 +2581,13 @@ bool asc_cast_set_artwork(AscCast *cast, const uint8_t *bytes, size_t len);
  * handle or when no session runs or starts.
  */
 bool asc_cast_resync(AscCast *cast);
+
+/*
+ * Whether the lasting-sound policy is Quiet: a session whose channel dies
+ * then and finds its app gone ends with ASC_CAST_END_QUIET instead of a
+ * relaunch. NULL does nothing.
+ */
+void asc_cast_set_quiet(AscCast *cast, bool quiet);
 
 /*
  * Stores the user's measured offset for device `id` in ms, rounded to whole
