@@ -1975,6 +1975,29 @@ impl Driver {
                     self.emit_speaker(&key, SpeakerEvent::Trace(line.clone()));
                 }
             }
+            StreamEvent::MarginTry { receiver, .. }
+            | StreamEvent::MarginTryFailed { receiver, .. }
+            | StreamEvent::MarginTryHeld { receiver, .. } => {
+                let Some(line) = event.margin_line() else {
+                    return;
+                };
+                // A receiver that left the stream is named in the line; every
+                // speaker logs it then.
+                let at: Vec<DeviceKey> = self
+                    .stream
+                    .speakers_at(receiver)
+                    .into_iter()
+                    .filter_map(|id| self.stream_ids.get(&id).cloned())
+                    .collect();
+                let keys = if at.is_empty() {
+                    self.stream_ids.values().cloned().collect()
+                } else {
+                    at
+                };
+                for key in keys {
+                    self.emit_speaker(&key, SpeakerEvent::Trace(line.clone()));
+                }
+            }
             StreamEvent::ResendRate { speaker, requests } => {
                 let Some(key) = self.stream_ids.get(&speaker).cloned() else {
                     return;

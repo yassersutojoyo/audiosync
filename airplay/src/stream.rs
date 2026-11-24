@@ -74,6 +74,13 @@ const STEP_FRAMES: u32 = 4_410;
 const RATE_STEP_FRAMES: u32 = 13_230;
 /// After a step up, this many seconds without a gap step back down (P200).
 const CLEAN_WINDOW: f64 = 60.0;
+/// A floor's first wait under the line before a try, in seconds (P256,
+/// G24).
+const FIRST_WAIT: f64 = 600.0;
+/// Each failed try doubles the wait up to this (P256, G24).
+const WAIT_CEILING: f64 = 3_600.0;
+/// After a try, this long the fast way back up applies (P258, G24).
+const WATCH: f64 = 600.0;
 /// With no input since the last hole's restart, a hole up to this many
 /// seconds is caught up with late silence; a longer one restarts (P143).
 const IDLE_HOLE_CEILING: f64 = 1.0;
@@ -279,6 +286,73 @@ pub enum StreamEvent {
         origin: i64,
         restarted: bool,
     },
+    /// A receiver gave up its floor through a try, from Lf `from` to `to`
+    /// frames, after `wait` under the line (P258).
+    MarginTry {
+        receiver: IpAddr,
+        from: u32,
+        to: u32,
+        wait: Duration,
+    },
+    /// A try failed after `after`: the receiver's floor is back at `back_to`
+    /// frames, and its next wait is `next_wait` (P258).
+    MarginTryFailed {
+        receiver: IpAddr,
+        back_to: u32,
+        after: Duration,
+        requests: u32,
+        late: u32,
+        next_wait: Duration,
+    },
+    /// A try's watch ended without a failure (P258).
+    MarginTryHeld { receiver: IpAddr, wait: Duration },
+}
+
+impl StreamEvent {
+    /// The debug log line of a try, a failed try or a held one (P258).
+    pub fn margin_line(&self) -> Option<String> {
+        let ms = |frames: u32| (f64::from(frames) * 1000.0 / NOMINAL_RATE).round();
+        match self {
+            StreamEvent::MarginTry {
+                receiver,
+                from,
+                to,
+                wait,
+            } => Some(format!(
+                "margin try: {receiver} {} ms to {} ms after {} under the line",
+                ms(*from),
+                ms(*to),
+                spoken(*wait)
+            )),
+            StreamEvent::MarginTryFailed {
+                receiver,
+                back_to,
+                after,
+                requests,
+                late,
+                next_wait,
+            } => Some(format!(
+                "margin try failed: {receiver} back to {} ms after {} s, {requests} requests, {late} late; next wait {}",
+                ms(*back_to),
+                after.as_secs(),
+                spoken(*next_wait)
+            )),
+            StreamEvent::MarginTryHeld { receiver, wait } => Some(format!(
+                "margin try held: {receiver} wait back to {}",
+                spoken(*wait)
+            )),
+            _ => None,
+        }
+    }
+}
+
+/// A wait as the log says it: whole minutes, or seconds for a test's
+/// shortened one.
+fn spoken(wait: Duration) -> String {
+    match wait.as_secs() {
+        s if s % 60 == 0 => format!("{} min", s / 60),
+        s => format!("{s} s"),
+    }
 }
 
 /// A speaker's latencies (P110, P113, P115, P199).
@@ -995,6 +1069,11 @@ pub struct Stream {
     /// joins again (P200).
     /// With each, the Lf before that step, where its step down returns.
     rate_levels: Vec<(IpAddr, u32, u32)>,
+    /// The first wait before a try, its ceiling and the watch after it, in
+    /// seconds (P256, P258).
+    first_wait: f64,
+    wait_ceiling: f64,
+    watch: f64,
     /// Every receiver whose gap or resend rate asked for the step on its way.
     askers: Vec<IpAddr>,
     /// The first packet cut at full gain again after a forced step's
@@ -1062,6 +1141,9 @@ impl Stream {
                 .clamp(MIN_LATENCY_FRAMES, MAX_LATENCY_FRAMES),
             step_due: None,
             rate_levels: Vec::new(),
+            first_wait: FIRST_WAIT,
+            wait_ceiling: WAIT_CEILING,
+            watch: WATCH,
             askers: Vec::new(),
             silence_until: 0,
             input: reader,
@@ -1107,6 +1189,29 @@ impl Stream {
     /// Lf in frames (P98).
     pub fn latency_frames(&self) -> u32 {
         self.latency_frames
+    }
+
+    /// The speakers whose receiver is at `ip`.
+    pub fn speakers_at(&self, ip: IpAddr) -> Vec<SpeakerId> {
+        self.speakers
+            .iter()
+            .filter(|speaker| speaker.destinations.control.ip() == ip)
+            .map(|speaker| speaker.id)
+            .collect()
+    }
+
+    /// Shortens the first wait, its ceiling and the watch of P256 and
+    /// P258, for tests and the rig's scaled run (P259).
+    #[doc(hidden)]
+    pub fn set_step_down_times(
+        &mut self,
+        first_wait: Duration,
+        ceiling: Duration,
+        watch: Duration,
+    ) {
+        self.first_wait = first_wait.as_secs_f64();
+        self.wait_ceiling = ceiling.as_secs_f64();
+        self.watch = watch.as_secs_f64();
     }
 
     /// An Lf held until the stream next has no speaker or restarts (P201).
