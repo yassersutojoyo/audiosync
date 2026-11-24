@@ -1418,6 +1418,27 @@ mod tests {
         assert_eq!(text.note(&state, speaker), "Added by address");
     }
 
+    // covers: S482
+    #[test]
+    fn the_phone_row_note_of_a_taken_cast_speaker_says_another_device_uses_it() {
+        use crate::remote::RowText;
+        use crate::ui_model::Waiting;
+        let app = over_loopback(MockBackend::new());
+        app.update(|b| {
+            b.add_cast_address("192.0.2.21").expect("added");
+        });
+        let mut state = app.snapshot();
+        state.running = true;
+        let mut speaker = state.speaker("cc:192.0.2.21").expect("listed").clone();
+        speaker.enabled = true;
+        speaker.waiting = Some(Waiting::Taken);
+        let cast = speaker.cast.as_mut().expect("a Cast speaker");
+        cast.state = crate::ui_model::CastState::Playing;
+        cast.muted = true;
+        let text = super::StringsText(app.strings());
+        assert_eq!(text.note(&state, &speaker), "In use by another device");
+    }
+
     // covers: S343
     #[test]
     fn the_phone_row_note_of_a_stereo_pair_names_its_members_or_the_missing_one() {
