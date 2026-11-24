@@ -127,6 +127,12 @@ mod probe {
                 (Some(chrome), Some(edge)) => route2(chrome, edge),
                 _ => Err("`route2` needs Chrome's and Edge's paths".into()),
             },
+            Some("route3") => match (args.get(1), args.get(2)) {
+                (Some(edge), Some(dir)) => {
+                    route3(edge, dir, args.get(3).map_or("0", String::as_str))
+                }
+                _ => Err("`route3` needs Edge's path and a profile folder".into()),
+            },
             Some("route") => match args.get(1) {
                 Some(path) => route(path),
                 None => Err("`route` needs the browser's path".into()),
@@ -1383,6 +1389,7 @@ navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
     struct Route<'a> {
         enumerator: IMMDeviceEnumerator,
         chrome_path: &'a str,
+        dir: std::path::PathBuf,
         cable: String,
         recorded: String,
         heard: Heard,
@@ -1432,8 +1439,8 @@ navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
                 .chain(sessions_of(&self.enumerator, eCapture)?.iter())
                 .map(|session| session.pid)
                 .collect();
-            let dir = std::env::temp_dir().join("call-mic-chrome");
-            std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            let dir = &self.dir;
+            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
             let page = dir.join("call.html");
             std::fs::write(&page, page_text).map_err(|e| format!("{}: {e}", page.display()))?;
             let mut command = Command::new(path);
@@ -1652,6 +1659,7 @@ navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
             let route = Route {
                 enumerator: enumerator.clone(),
                 chrome_path,
+                dir: std::env::temp_dir().join("call-mic-chrome"),
                 cable: cable.clone(),
                 recorded,
                 heard,
@@ -1831,6 +1839,7 @@ if (ask.get('mic') === '1') {
         let route = Route {
             enumerator: enumerator.clone(),
             chrome_path,
+            dir: std::env::temp_dir().join("call-mic-chrome"),
             cable: cable.clone(),
             recorded,
             heard: Heard::default(),
@@ -1865,6 +1874,231 @@ if (ask.get('mic') === '1') {
                 }
             );
         }
+        Ok(())
+    }
+
+    // MARK: Browser call routes, v3: a desktop browser on the PC
+
+    /// A tone at `gain` from load; with `ring=1` it stops at 8 s, a second
+    /// tone plays 9-12 s and a third from 18 s (10 s after the first stop).
+    const PAGE3: &str = r#"<!doctype html><title>route3</title><script>
+const ask = new URLSearchParams(location.search);
+const gain = Number(ask.get('gain') || '0');
+let context = null;
+function play() {
+  context = new AudioContext();
+  const tone = context.createOscillator();
+  const level = context.createGain();
+  level.gain.value = gain;
+  tone.connect(level).connect(context.destination);
+  tone.start();
+}
+function stop() { if (context) { context.close(); context = null; } }
+play();
+if (ask.get('ring') === '1') {
+  setTimeout(stop, 8000);
+  setTimeout(play, 9000);
+  setTimeout(stop, 12000);
+  setTimeout(play, 18000);
+}
+</script>"#;
+    const P_RUNS: usize = 3;
+    const ALL_ROLES: [ERole; 3] = [eConsole, eMultimedia, eCommunications];
+
+    fn ms_since(at: Option<Instant>, since: Instant) -> String {
+        at.map_or("never".to_owned(), |at| {
+            format!("{} ms", at.duration_since(since).as_millis())
+        })
+    }
+
+    fn named(place: &str) -> &str {
+        match place {
+            "cable" => "A",
+            "recorded" => "B",
+            other => other,
+        }
+    }
+
+    impl Route<'_> {
+        /// P1: the tone plays on A, every render default moves to B.
+        fn p1(&self, gain: &str, run: usize) -> Fallible<bool> {
+            let query = format!("?gain={gain}");
+            let Some(browser) = self.browser(
+                self.chrome_path,
+                PAGE3,
+                &query,
+                &format!("p1-{run}"),
+                [true, false],
+            )?
+            else {
+                println!("P1 run {run}: untested, the browser never played");
+                return Ok(false);
+            };
+            thread::sleep(Duration::from_secs(1));
+            let start = self.where_is(browser.player)?;
+            let moved = Instant::now();
+            self.defaults.set(&self.recorded, &ALL_ROLES)?;
+            let arrived = poll(|| self.on(&self.recorded, browser.player))?;
+            let ends = self.where_is(browser.player)?;
+            println!(
+                "P1 run {run}: pid {} started on {}; on B after {}; at the end on {}",
+                browser.player,
+                named(start),
+                ms_since(arrived, moved),
+                named(ends)
+            );
+            Ok(arrived.is_some())
+        }
+
+        /// P2: the tone plays on B (every default on B), then the pin to A.
+        fn p2(&self, gain: &str, run: usize) -> Fallible<bool> {
+            self.defaults.set(&self.recorded, &ALL_ROLES)?;
+            let query = format!("?gain={gain}");
+            let Some(browser) = self.browser(
+                self.chrome_path,
+                PAGE3,
+                &query,
+                &format!("p2-{run}"),
+                [true, false],
+            )?
+            else {
+                println!("P2 run {run}: untested, the browser never played");
+                return Ok(false);
+            };
+            thread::sleep(Duration::from_secs(1));
+            let start = self.where_is(browser.player)?;
+            let pinned = Instant::now();
+            self.pin(browser.player, &render_interface(&self.cable))?;
+            let arrived = poll(|| self.on(&self.cable, browser.player))?;
+            let ends = self.where_is(browser.player)?;
+            self.pin(browser.player, "")?;
+            println!(
+                "P2 run {run}: pid {} started on {}; on A after {}; at the end on {}",
+                browser.player,
+                named(start),
+                ms_since(arrived, pinned),
+                named(ends)
+            );
+            Ok(arrived.is_some())
+        }
+
+        /// P3, the ring order: the tone plays on A, the pin to B 1 s after
+        /// it shows, the page's later tones; logs every change of place.
+        fn p3(&self, gain: &str, run: usize) -> Fallible<bool> {
+            let query = format!("?gain={gain}&ring=1");
+            let Some(browser) = self.browser(
+                self.chrome_path,
+                PAGE3,
+                &query,
+                &format!("p3-{run}"),
+                [true, false],
+            )?
+            else {
+                println!("P3 run {run}: untested, the browser never played");
+                return Ok(false);
+            };
+            let seen = Instant::now();
+            let mut places = vec![(0, self.where_is(browser.player)?)];
+            let mut pinned = None;
+            while seen.elapsed() < Duration::from_secs(25) {
+                if pinned.is_none() && seen.elapsed() >= Duration::from_secs(1) {
+                    self.pin(browser.player, &render_interface(&self.recorded))?;
+                    pinned = Some(seen.elapsed().as_millis());
+                }
+                let place = self.where_is(browser.player)?;
+                if places.last().is_some_and(|(_, last)| *last != place) {
+                    places.push((seen.elapsed().as_millis(), place));
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            self.pin(browser.player, "")?;
+            let log: Vec<String> = places
+                .iter()
+                .map(|(at, place)| format!("{}@{at}", named(place)))
+                .collect();
+            println!(
+                "P3 run {run}: pid {}; pinned at {} ms; places {}",
+                browser.player,
+                pinned.unwrap_or_default(),
+                log.join(" ")
+            );
+            Ok(true)
+        }
+    }
+
+    /// P1 to P3, [`P_RUNS`] times each, on Edge at `edge_path` with new
+    /// profiles under `dir`. A is the console default, B the Steam
+    /// Streaming Speakers; every default and per-app output is read back
+    /// after each run.
+    fn route3(edge_path: &str, dir: &str, gain: &str) -> Fallible<()> {
+        let enumerator = enumerator()?;
+        let before = Snapshot::take(&enumerator)?;
+        before.print("before");
+        // SAFETY: reads the console default.
+        let console = unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eConsole) }
+            .map_err(|e| failed("GetDefaultAudioEndpoint", &e))?;
+        let Some((a, a_name)) = usable(&console) else {
+            println!("RESULT P untested: the console default is a device the probe never uses");
+            return Ok(());
+        };
+        let Some((b, b_name)) = active_devices(&enumerator, eRender)?
+            .iter()
+            .filter_map(usable)
+            .find(|(id, name)| *id != a && name.contains("Steam Streaming Speakers"))
+        else {
+            println!("RESULT P untested: no Steam Streaming Speakers");
+            return Ok(());
+        };
+        println!("P: A {a_name:?}, B {b_name:?}, gain {gain}");
+        let route = Route {
+            enumerator: enumerator.clone(),
+            chrome_path: edge_path,
+            dir: std::path::PathBuf::from(dir),
+            cable: a,
+            recorded: b,
+            heard: Heard::default(),
+            music: 0,
+            defaults: Defaults::new()?,
+            policy: Policy::new()?,
+        };
+        let restore = || {
+            for (role, id) in ALL_ROLES.iter().zip(&before.defaults) {
+                if !id.is_empty() {
+                    let _ = route.defaults.set(id, &[*role]);
+                }
+            }
+        };
+        let mut equal_runs = 0;
+        for case in 1..=3 {
+            let mut held = 0;
+            for run in 1..=P_RUNS {
+                let outcome = match case {
+                    1 => route.p1(gain, run),
+                    2 => route.p2(gain, run),
+                    _ => route.p3(gain, run),
+                };
+                restore();
+                thread::sleep(Duration::from_secs(1));
+                let after = Snapshot::take(&enumerator)?;
+                let equal = before.defaults == after.defaults
+                    && before.per_app.iter().all(|(pid, outputs)| {
+                        after.per_app.get(pid).is_none_or(|later| later == outputs)
+                    });
+                equal_runs += usize::from(equal);
+                println!("P{case} run {run}: read-back equal {}", yes_no(equal));
+                match outcome {
+                    Ok(true) => held += 1,
+                    Ok(false) => {}
+                    Err(error) => println!("P{case} run {run}: error {error}"),
+                }
+                if !equal {
+                    println!("RESULT P stopped: the read-back differs");
+                    return Ok(());
+                }
+            }
+            println!("RESULT P{case}: {held}/{P_RUNS}");
+        }
+        println!("RESULT P read-back equal {equal_runs}/{}", 3 * P_RUNS);
         Ok(())
     }
 
