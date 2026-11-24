@@ -11,3 +11,7 @@ P243 the row follows a kind change in the host's UI update; desktop/src tests it
 P244 zone members keep their last glyph in the host; desktop/src tests it
 P245 the accessible name is the host's; desktop/src and the Mac logic test test it
 P246 the found and kind-change log lines are the host's; desktop/src tests it
+
+# A later stage implements them (sender crate and hosts, from the clause).
+P252 every resend answered twice; the sender crate implements it next
+P253 the bad-network test switch; the sender crate and the hosts implement it next
