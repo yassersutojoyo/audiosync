@@ -1096,6 +1096,9 @@ pub struct Stream {
     /// A step on its way: when the end of its packet sounds, and the new Lf
     /// (P200).
     step_due: Option<(f64, u32)>,
+    /// A fade-out step came while `step_due` was on its way: it starts as
+    /// soon as that step applies (P258).
+    fade_after_step: bool,
     /// The Lf a step up took the stream to, by the address of the receiver
     /// whose gap or resend rate asked for it, for the stream's life: no step
     /// down while that receiver is in the stream but through a try, and its
@@ -1174,6 +1177,7 @@ impl Stream {
                 .latency_frames
                 .clamp(MIN_LATENCY_FRAMES, MAX_LATENCY_FRAMES),
             step_due: None,
+            fade_after_step: false,
             rate_levels: Vec::new(),
             served_at: start,
             first_wait: FIRST_WAIT,
@@ -1433,7 +1437,11 @@ impl Stream {
         if let Some((at, frames)) = self.step_due
             && at <= t
         {
+            let fade = self.fade_after_step;
             self.apply_step(frames, at, true);
+            if fade {
+                self.fade_step(t);
+            }
         }
         self.serve(t);
         if self.step_wanted.is_none()
@@ -1567,6 +1575,7 @@ impl Stream {
     /// fades out and the 4 after it are silent (P200).
     fn fade_step(&mut self, t: f64) {
         let fade = self.next_cut;
+        self.fade_after_step = self.step_due.is_some();
         if let Some(frames) = self.step_wanted
             && self.start_step(t, frames, fade)
         {
@@ -1639,6 +1648,7 @@ impl Stream {
     /// delay (P200).
     fn apply_step(&mut self, frames: u32, at: f64, sync: bool) {
         self.step_due = None;
+        self.fade_after_step = false;
         let old = self.latency_frames;
         self.latency_frames = frames;
         if frames > old {
@@ -2473,7 +2483,11 @@ impl Stream {
             next_wait: Duration::from_secs_f64(floor.wait),
         });
         self.step_floor = self.step_floor.max(watch.left);
-        if watch.left > self.latency_frames {
+        // A try's own step down may still be on its way.
+        let to = self
+            .step_due
+            .map_or(self.latency_frames, |(_, frames)| frames);
+        if watch.left > to {
             self.stepped_up = true;
             self.step_wait_told = false;
             self.step_wanted = Some(watch.left);
