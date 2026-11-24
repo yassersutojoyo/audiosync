@@ -19,7 +19,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use crate::audio::now_playing::Timeline;
+use crate::audio::now_playing::{RawTimeline, Timeline, same_place};
 use crate::track_slide::PRESS_WINDOW;
 use crate::ui_model::AppState;
 use crate::window_rules::Rgb;
@@ -402,6 +402,8 @@ pub struct NowPlayingCard {
     skipped_at: Option<Instant>,
     /// Since when no session counts while the card still shows.
     gap_since: Option<Instant>,
+    /// The song before's timeline, while the reading still has it.
+    stale: Option<RawTimeline>,
 }
 
 impl NowPlayingCard {
@@ -462,6 +464,18 @@ impl NowPlayingCard {
             if self.gap_since.is_some() || now.duration_since(since) < ART_HOLD {
                 self.held = Some((song.clone(), since));
                 return false;
+            }
+        }
+        if let Some(song) = next.as_mut() {
+            if let Some(shown) = self.track.as_ref().filter(|shown| !same_song(shown, song)) {
+                self.stale = shown.timeline.map(|timeline| timeline.raw).or(self.stale);
+            }
+            if let Some(raw) = song.timeline.map(|timeline| timeline.raw) {
+                if self.stale.is_some_and(|stale| same_place(stale, raw)) {
+                    song.timeline = None;
+                } else {
+                    self.stale = None;
+                }
             }
         }
         if next == self.track {

@@ -189,6 +189,7 @@ impl TrackSlide {
             }
             return;
         };
+        // Kept for a restart too: a player that goes back anyway still slides from the left.
         self.pressed = Some((direction, now));
         let restarts =
             direction == Direction::Previous && elapsed.is_some_and(|at| at > RESTART_AFTER);

@@ -1747,6 +1747,7 @@ final class TrackSlideState: ObservableObject {
             if waitStart != nil { settle() }
             return
         }
+        // Kept for a restart too: a player that goes back anyway still slides from the left.
         pressed = press
         guard onScreen, !press.restarts, outgoing == nil, waitStart == nil else { return }
         settleStart = nil
