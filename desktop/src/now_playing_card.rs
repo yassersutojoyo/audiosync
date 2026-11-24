@@ -770,6 +770,40 @@ mod tests {
         assert!(!card.sync_at(source(), true, held + Duration::from_millis(3900)));
     }
 
+    /// A player may report the previous song's position for a moment after
+    /// Next; Previous then still goes back to that song, so the card slides.
+    // covers: S463
+    #[test]
+    fn previous_right_after_next_slides_while_the_old_position_lingers() {
+        use crate::audio::now_playing::{RawTimeline, Timeline};
+        use crate::track_slide::{Direction, Place, TrackSlide};
+        let fake = FakeControls::default();
+        let mut card = card(&fake);
+        let mut slide = TrackSlide::new(Place::Window);
+        let source = || Some(CardSource::AnyApp);
+        let start = Instant::now();
+        let at = |s: f64| start + Duration::from_secs_f64(s);
+        let second = 10_000_000;
+        let raw = RawTimeline {
+            start: 0,
+            end: 300 * second,
+            position: 220 * second,
+            updated: 0,
+        };
+        let timed = |title: &str| CardTrack {
+            timeline: Timeline::read(raw, 0, start),
+            ..track("Spotify.exe", title, "Band", true)
+        };
+        fake.read(Some(timed("One")));
+        assert!(card.sync_at(source(), true, start));
+        card.send_at(Transport::Next, start);
+        fake.read(Some(timed("Two")));
+        assert!(card.sync_at(source(), true, at(0.5)));
+        let elapsed = card.track().and_then(|track| track.elapsed_at(at(1.5)));
+        slide.press(Some(Direction::Previous), true, false, elapsed, at(1.5));
+        assert!(slide.look(at(2.0)).1, "the card waits for the song before");
+    }
+
     /// The Mac's rule: a pressed card waits for the new cover up to the
     /// cover fetch's timeout, and the slide keeps the press's side.
     // covers: S459, S463
