@@ -19976,6 +19976,8 @@ do {
     check(AppSettings.releaseMinutes(typed: "15") == 15 && AppSettings.releaseMinutes(typed: " 240 ") == 240
             && AppSettings.releaseMinutes(typed: "0") == nil && AppSettings.releaseMinutes(typed: "241") == nil
             && AppSettings.releaseMinutes(typed: "1.5") == nil && AppSettings.releaseMinutes(typed: "") == nil
+            && AppSettings.releaseMinutes(typed: "+15") == nil && AppSettings.releaseMinutes(typed: "15.0") == nil
+            && AppSettings.releaseMinutes(typed: "1e1") == nil
             && AppSettings.load { releaseLong[$0] }.releaseAfterMinutes == 240,
           "settings: Auto-disconnect takes a whole number of minutes from 1 to 240, and a stored longer idle time reads as 240")
     check(NowPlayingMonitor.polls(shown: false, sending: false, casting: false, remote: false, resumeArmed: true)

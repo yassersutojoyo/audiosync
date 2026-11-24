@@ -25869,9 +25869,14 @@ pub(crate) mod tests {
             );
             press(app.settings().window(), "\n");
         };
+        let typed = || field().and_then(|field| field.accessible_value());
         enter("300");
         assert!(range_shown());
         assert_eq!(app.snapshot().release_minutes, 15);
+        assert_eq!(typed().as_deref(), Some("15"), "the stored number back");
+        enter("15.0");
+        assert!(range_shown(), "whole digits only");
+        assert_eq!(typed().as_deref(), Some("15"));
         enter("30");
         assert!(!range_shown());
         assert_eq!(app.snapshot().release_minutes, 30);
