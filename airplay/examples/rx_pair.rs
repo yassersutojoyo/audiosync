@@ -594,6 +594,11 @@ fn main() -> ExitCode {
                         outcome.wire.trace(&line);
                         if args.verbose {
                             eprintln!("{address}: {line}");
+                        } else if args.every.is_some()
+                            && (line.starts_with("step_waits") || line.starts_with("resend_rate"))
+                        {
+                            let t = clock.seconds(Instant::now());
+                            eprintln!("t_s={t:.1} {address}: {line}");
                         }
                     }
                     _ => {}

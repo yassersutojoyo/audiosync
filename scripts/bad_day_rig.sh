@@ -18,7 +18,8 @@
 # --latency-frames). Sources, the cargo target and results stay under
 # airplay/target/scratch-badday. Phase lengths in seconds: BAD_DAY_CLEAN_S,
 # BAD_DAY_BAD_S, BAD_DAY_AFTER_S (60, 240, 120); Lf: BAD_DAY_LF (15435
-# frames, what the apps pick for shairport-sync).
+# frames, what the apps pick for shairport-sync); BAD_DAY_PROFILES picks
+# profiles by name.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -32,7 +33,7 @@ lf=${BAD_DAY_LF:-15435}
 base_delay="delay 85ms 65ms distribution pareto"
 spike_delay="delay 300ms"
 spike_every=20
-profiles=(jitter-loss1 jitter-loss3 jitter-burst)
+read -r -a profiles <<<"${BAD_DAY_PROFILES:-jitter-loss1 jitter-loss3 jitter-burst}"
 declare -A profile_loss=(
     [jitter-loss1]="loss random 1%"
     [jitter-loss3]="loss random 3%"
@@ -141,10 +142,13 @@ for pair in "$@"; do
     git -c safe.directory='*' --git-dir="$git_dir" archive "$ref" airplay | tar -x -C "$src" --strip-components=1
     rm -rf "$src/examples/rx_pair" "$src/examples/rx_pair.rs"
     cp -r "$root/airplay/examples/rx_pair" "$root/airplay/examples/rx_pair.rs" "$src/examples/"
+    # git archive stamps files with the commit time, and every build shares one target, so
+    # cargo took an older ref as fresh and the copy below was the previous build's binary.
+    find "$src" -exec touch {} +
     chown -R "$owner" "$src"
     runuser -l "$owner" -c "cd '$src' && CARGO_TARGET_DIR='$work/target' cargo build --release --locked --quiet --example rx_pair"
     cp "$work/target/release/examples/rx_pair" "$work/bin/rx_pair-$label"
-    echo "built $label from $(git -c safe.directory='*' --git-dir="$git_dir" rev-parse --short "$ref^{commit}")"
+    echo "built $label from $(git -c safe.directory='*' --git-dir="$git_dir" rev-parse --short "$ref^{commit}"), md5 $(md5sum <"$work/bin/rx_pair-$label" | cut -c1-12)"
 done
 
 pids=()
