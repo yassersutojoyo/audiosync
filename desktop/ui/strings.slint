@@ -216,12 +216,12 @@ export global Strings {
             return @tr("Asking {} to show a code…", speaker);
         }
         if wrong-pin {
-            return @tr("That code didn't work. Enter the code {} shows now.", speaker);
+            return @tr("That code didn't work. Enter the code {} shows now. Cancel turns the speaker off.", speaker);
         }
         if every-time {
-            return @tr("Enter the 4-digit code shown on {}.", speaker);
+            return @tr("Enter the 4-digit code shown on {}. Cancel turns the speaker off.", speaker);
         }
-        return @tr("Enter the 4-digit code shown on {}. You need it only once.", speaker);
+        return @tr("Enter the 4-digit code shown on {}. You need it only once. Cancel turns the speaker off.", speaker);
     }
 
     // The password prompt of an AirPlay speaker protected by a password; the
@@ -238,9 +238,9 @@ export global Strings {
 
     public pure function password-message(speaker: string, wrong: bool) -> string {
         if wrong {
-            return @tr("{} didn't accept that password. Enter the one set in the Home app or the speaker's settings.", speaker);
+            return @tr("{} didn't accept that password. Enter the one set in the Home app or the speaker's settings. Cancel turns the speaker off.", speaker);
         }
-        return @tr("{} needs a password. Enter the one set in the Home app or the speaker's settings.", speaker);
+        return @tr("{} needs a password. Enter the one set in the Home app or the speaker's settings. Cancel turns the speaker off.", speaker);
     }
 
     // Speaker presets (spec S259 to S269)
@@ -803,7 +803,7 @@ export global Strings {
     // the setting "Allow applications to take exclusive control of this
     // device", in the device's properties under Sound settings.
     public pure function notice-speaker-busy(speaker: string) -> string {
-        return @tr("{} is in use by another app. Close that app, or turn off exclusive control in Sound settings.", speaker);
+        return @tr("{} is in use by another app. Close that app, or turn off exclusive control in More sound settings > Playback > Properties > Advanced.", speaker);
     }
 
     // A speaker that ran away again soon after its reopen plays on (S347).
@@ -945,7 +945,7 @@ export global Strings {
             if Platform.os == OperatingSystemType.linux {
                 return @tr("{} couldn't reach the stream on this PC, so it's off. Allow AudioSync in your firewall, then turn it on again.", speaker);
             }
-            return @tr("{} couldn't reach the stream on this PC, so it's off. Allow AudioSync in Windows Firewall, then turn it on again.", speaker);
+            return @tr("{} couldn't reach the stream on this PC, so it's off. Allow AudioSync in Windows Firewall, on Public networks too, then turn it on again.", speaker);
         }
         if problem == CastProblem.search-stopped {
             return @tr("AudioSync stopped looking for Google Cast speakers, so {} is off. To try again, exit AudioSync and open it again.", speaker);
@@ -1909,7 +1909,7 @@ export global Strings {
     out property <string> calibration-microphone-changed: @tr("The microphone changed during the calibration. Keep one microphone as the default input, and try again.");
     out property <string> calibration-microphone-skipped: @tr("The microphone dropped audio during the measurement, so its timing can't be trusted. Try again.");
     out property <string> calibration-hands-free: Platform.os == OperatingSystemType.linux ? @tr("The default input is a Bluetooth headset's call microphone. Choose another input in Sound settings, then try again.") : @tr("The default input is a Bluetooth headset's call microphone. Choose another input in Sound settings, then try again.");
-    out property <string> calibration-microphone-in-use: Platform.os == OperatingSystemType.linux ? @tr("Another app has the microphone to itself. Close that app, and try again.") : @tr("Another app has the microphone to itself. Close that app, or turn off exclusive control in Sound settings.");
+    out property <string> calibration-microphone-in-use: Platform.os == OperatingSystemType.linux ? @tr("Another app has the microphone to itself. Close that app, and try again.") : @tr("Another app has the microphone to itself. Close that app, or turn off exclusive control in More sound settings > Recording > Properties > Advanced.");
     out property <string> calibration-unfinished: @tr("AudioSync couldn't finish working out the delay. Try again.");
     out property <string> calibration-too-short: @tr("The recording was too short. Try again.");
     out property <string> calibration-too-long: Platform.os == OperatingSystemType.linux ? @tr("The delays are too long to measure in one recording at the microphone's sample rate. Lower the largest delay, and try again.") : @tr("The delays are too long to measure in one recording. Lower the largest delay, or set the microphone to 48 kHz.");

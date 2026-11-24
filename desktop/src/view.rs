@@ -15532,7 +15532,7 @@ pub(crate) mod tests {
         let app = app_over(backend);
         app.main.invoke_speaker_toggled("airplay:living".into());
         draw_frames();
-        let text = "Enter the 4-digit code shown on Living Room.";
+        let text = "Enter the 4-digit code shown on Living Room. Cancel turns the speaker off.";
         assert!(
             ElementHandle::find_by_accessible_label(&app.pin_dialog(), text)
                 .next()

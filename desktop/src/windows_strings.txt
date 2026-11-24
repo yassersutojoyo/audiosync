@@ -7,7 +7,7 @@ Windows didn't let AudioSync stop starting at sign-in. Turn it off in Settings >
 Windows has no working sound output, so nothing reaches your speakers. Connect or turn on one in Sound settings.
 AudioSync couldn't open port {} on this PC, so the web remote can't start. Enter another port and select Use Port.
 AudioSync couldn't reach Windows audio, so it can't start. Restart your PC, then open AudioSync again.\n\nDetails: {}
-{} couldn't reach the stream on this PC, so it's off. Allow AudioSync in Windows Firewall, then turn it on again.
+{} couldn't reach the stream on this PC, so it's off. Allow AudioSync in Windows Firewall, on Public networks too, then turn it on again.
 You may hear {0} twice: it also plays from {1}. Mute {1}, or select Show How.
 You may hear {0} twice: it also plays from {1}. Select Show How to fix it.
 You may hear {0} twice: it also plays from {1} and {2}. Select Show How to fix it.
@@ -43,7 +43,7 @@ Windows is blocking microphone access for desktop apps. Turn on “Let desktop a
 AudioSync couldn't record from the microphone. Check the input in Settings > System > Sound.
 The microphone runs at a sample rate calibration can't use. Set its format to 48 kHz in Settings > System > Sound, and try again.
 The default input is a Bluetooth headset's call microphone. Choose another input in Sound settings, then try again.
-Another app has the microphone to itself. Close that app, or turn off exclusive control in Sound settings.
+Another app has the microphone to itself. Close that app, or turn off exclusive control in More sound settings > Recording > Properties > Advanced.
 The delays are too long to measure in one recording. Lower the largest delay, or set the microphone to 48 kHz.
 When something needs your attention, such as a speaker that was disconnected or an app that quit, a notice appears at the top of the main window, and the newest one in the AudioSync tray panel. Use its close button to dismiss it, or Dismiss All when there is more than one. Many notices also clear themselves once the cause is gone.
 Windows has its own volume for each output, and it limits AudioSync's slider.

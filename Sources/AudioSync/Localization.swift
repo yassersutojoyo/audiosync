@@ -925,25 +925,25 @@ struct UIStrings {
     func pairTitle(name: String) -> String { "Pair with \(name)" }
 
     func pairPasswordMessage(name: String) -> String {
-        "\(name) needs a password. Enter the one set in the Home app or the speaker's settings."
+        "\(name) needs a password. Enter the one set in the Home app or the speaker's settings. Cancel turns the speaker off."
     }
 
     /// The password prompt again, after the receiver turned the last one down.
     func pairWrongPasswordMessage(name: String) -> String {
-        "\(name) didn't accept that password. Enter the one set in the Home app or the speaker's settings."
+        "\(name) didn't accept that password. Enter the one set in the Home app or the speaker's settings. Cancel turns the speaker off."
     }
 
     /// AudioSync's own AirPlay sender pairs a receiver with the PIN it shows:
     /// an Apple TV, or a receiver reached over AirPlay 2. A receiver that asks
     /// for a code every time keeps no pairing, so its prompt doesn't promise one.
     func nativePairPINMessage(name: String, everyTime: Bool = false) -> String {
-        "Enter the 4-digit code shown on \(name)." + (everyTime ? "" : " You need it only once.")
+        "Enter the 4-digit code shown on \(name)." + (everyTime ? "" : " You need it only once.") + " Cancel turns the speaker off."
     }
 
     /// The native PIN prompt again, after a PIN that didn't work (the
     /// receiver shows a code again, a new one or the same).
     func nativePairWrongPINMessage(name: String) -> String {
-        "That code didn't work. Enter the code \(name) shows now."
+        "That code didn't work. Enter the code \(name) shows now. Cancel turns the speaker off."
     }
 
     /// In an AirPlay speaker's menu while AudioSync keeps its PIN pairing.
@@ -988,7 +988,7 @@ struct UIStrings {
     func waitingForAudio(_ app: String?, permissionInDoubt: Bool = false) -> String {
         let waiting = app.map { "Waiting for audio from \($0)." } ?? "Waiting for audio."
         if permissionInDoubt {
-            return waiting + " No sound once it plays? Allow AudioSync in Privacy & Security → Screen & System Audio Recording."
+            return waiting + " No sound once it plays? In Privacy & Security → Screen & System Audio Recording, turn on “System Audio Recording Only”."
         }
         if let app { return "Waiting for audio from \(app). Start playback there and it streams right away." }
         return "Waiting for audio. Play something and it streams right away."
@@ -996,7 +996,7 @@ struct UIStrings {
     /// Streaming runs but no audio arrives; `source` names the app, nil for
     /// the whole system or an input device.
     func captureNotWorking(_ source: String?) -> String {
-        "AudioSync gets no audio from \(source ?? "the selected source"). Click Open Settings to allow it, then turn streaming off and on."
+        "AudioSync gets no audio from \(source ?? "the selected source"). Click Open Settings and turn on “System Audio Recording Only”, then turn streaming off and on."
     }
     /// A session that heard sound gets only silence while its source plays
     /// (S451); `input` for an input device, whose permission reads as off.
@@ -1005,7 +1005,7 @@ struct UIStrings {
             return "AudioSync lost microphone access, so every speaker is silent. Click Open Settings to allow it, then turn streaming off and on."
         }
         return "\(source ?? "The source") is playing, but AudioSync gets only silence. "
-            + "Turn its volume up, or click Open Settings to allow it, then turn streaming off and on."
+            + "Turn its volume up, or click Open Settings and turn on “System Audio Recording Only”, then turn streaming off and on."
     }
 
     let unknownDevice = "Unknown device"

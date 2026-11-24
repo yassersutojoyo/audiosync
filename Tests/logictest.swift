@@ -1700,7 +1700,7 @@ do {
             && text.nativeAirPlayRefused(name: "Den") == text.castProblem(.refused, name: "Den")
             && text.nativeAirPlayBusy(name: "Den") != unreachableOff && text.nativeAirPlayRefused(name: "Den") != unreachableOff,
           "native off: a busy speaker names the other device and a refusing one says it declined, neither sends the user to the network")
-    check(text.nativeAirPlayPairingsNotSaved.hasSuffix(" If the disk is full, free up some space."),
+    check(text.nativeAirPlayPairingsNotSaved.hasSuffix(" Free up disk space if it's full."),
           "native pairings: the not-saved notice says what to do next, as on Windows")
 }
 
@@ -2233,8 +2233,8 @@ do {
           "capture notice: the waiting text names the app when one was found, and reads generic otherwise")
     // covers: S350
     check(UIStrings().waitingForAudio(nil, permissionInDoubt: true)
-            == "Waiting for audio. No sound once it plays? Allow AudioSync in "
-                + "Privacy & Security → Screen & System Audio Recording."
+            == "Waiting for audio. No sound once it plays? In Privacy & Security → "
+                + "Screen & System Audio Recording, turn on “System Audio Recording Only”."
           && UIStrings().waitingForAudio("Spotify", permissionInDoubt: true)
             .hasPrefix("Waiting for audio from Spotify. No sound once it plays? ")
           && !UIStrings().waitingForAudio(nil).contains("System Settings"),
@@ -4365,12 +4365,12 @@ do {
     check(pathsGone.reachedOverAirPlay2("H8"),
           "native airplay: a receiver reached over AirPlay 2 still names AirPlay 2 as its kind while it is off the network")
     // covers: S346
-    check(kinds.nativePairPINMessage(name: "Loft") == "Enter the 4-digit code shown on Loft. You need it only once."
+    check(kinds.nativePairPINMessage(name: "Loft") == "Enter the 4-digit code shown on Loft. You need it only once. Cancel turns the speaker off."
             && !kinds.nativePairWrongPINMessage(name: "Loft").contains("TV"),
           "native airplay: the PIN prompt reads as on Windows, for an Apple TV and an AirPlay 2 receiver alike")
     // covers: S346
     check(kinds.nativePairPINMessage(name: "Loft", everyTime: true)
-            == "Enter the 4-digit code shown on Loft.",
+            == "Enter the 4-digit code shown on Loft. Cancel turns the speaker off.",
           "native airplay: the PIN prompt of a receiver that asks every time promises no lasting pairing")
     paths.apply(.appeared(NativeReceiver(id: "K1", name: "Attic", model: "", availability: .needsPin, reason: nil,
                                          hints: ["airplay", "airplay2", "pairing", "over-airplay2"], overAirPlay2: true)))
@@ -13062,9 +13062,9 @@ do {
     let handsFreeText = t.calibrationMessage(.failed(.handsFreeMicrophone)) ?? ""
     let handsFreeAll = t.calibrateAllLine(.ended(.failed(.handsFreeMicrophone)))
     // covers: S232
-    check(handsFreeText.contains("hands-free") && handsFreeText.contains("Choose another input")
+    check(handsFreeText.contains("call microphone") && handsFreeText.contains("Choose another input")
             && handsFreeText != t.calibrationMessage(.failed(.noMicrophone))
-            && handsFreeAll.contains("hands-free") && handsFreeAll.hasSuffix(" No delay was changed.")
+            && handsFreeAll.contains("call microphone") && handsFreeAll.hasSuffix(" No delay was changed.")
             && !handsFreeText.contains("\u{2014}"),
           "calibration: a hands-free microphone has its own reason, for one speaker and for Calibrate All",
           "\(handsFreeText) | \(handsFreeAll)")
@@ -13802,7 +13802,7 @@ do {
             // covers: S181 (the sheet names the extra delay A, as the field does)
             check(airPlay?.state == .spread && airPlay?.newMs == 265 && airPlay?.certainRows == 2
                     && airPlayText.contains("AirPlay delay: was 50 ms. New: 265 ms")
-                    && airPlayText.contains("differ by 30 ms") && airPlayText.contains("one delay for all AirPlay speakers"),
+                    && airPlayText.contains("differ by 30 ms") && airPlayText.contains("They share one delay"),
                   "calibrate all: the AirPlay delay is the median, and a spread over 10 ms is said in plain words (S237)",
                   airPlayText)
 
