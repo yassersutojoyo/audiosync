@@ -13,5 +13,4 @@ P245 the accessible name is the host's; desktop/src and the Mac logic test test 
 P246 the found and kind-change log lines are the host's; desktop/src tests it
 
 # A later stage implements them (sender crate and hosts, from the clause).
-P252 every resend answered twice; the sender crate implements it next
 P253 the bad-network test switch; the sender crate and the hosts implement it next

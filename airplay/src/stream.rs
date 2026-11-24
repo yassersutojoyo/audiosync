@@ -57,6 +57,10 @@ pub const DELAY_MERGE: Duration = Duration::from_millis(250);
 pub const MAX_RESEND_REQUEST: u16 = 128;
 /// A packet is resent at most this many times (P88).
 pub const MAX_RESENDS: u8 = 3;
+/// A resend's second copy leaves this long after the first (P252, G22).
+pub const SECOND_COPY_SPACING: Duration = Duration::from_millis(20);
+/// Second copies a session holds waiting at most (P252).
+pub const MAX_SECOND_COPIES: usize = 128;
 /// A packet sent later than this after its time counts as late (P84, P144).
 pub const LATE_SEND: Duration = Duration::from_millis(5);
 /// A packet already cut leaves this long before its time, so a wake-up
@@ -297,6 +301,8 @@ pub struct SpeakerCounters {
     resend_requests: AtomicU64,
     packets_resent: AtomicU64,
     not_held: AtomicU64,
+    second_copies_sent: AtomicU64,
+    second_copies_skipped: AtomicU64,
     timing_replies: AtomicU64,
     late_packets: AtomicU64,
     silent_frames: AtomicU64,
@@ -390,6 +396,17 @@ impl SpeakerCounters {
     /// three times.
     pub fn not_held(&self) -> u64 {
         self.not_held.load(Ordering::Relaxed)
+    }
+
+    /// Second copies of resends sent (P252).
+    pub fn second_copies_sent(&self) -> u64 {
+        self.second_copies_sent.load(Ordering::Relaxed)
+    }
+
+    /// Second copies of resends skipped: too late, or the list was full
+    /// (P252).
+    pub fn second_copies_skipped(&self) -> u64 {
+        self.second_copies_skipped.load(Ordering::Relaxed)
     }
 
     /// Timing requests answered.
@@ -536,6 +553,16 @@ impl OwnEncoding {
     }
 }
 
+/// A resend's second copy waiting for its time (P252).
+#[derive(Debug)]
+struct SecondCopy {
+    seq: u16,
+    /// When it goes, and when its packet plays on the speaker, in seconds.
+    due: f64,
+    play: f64,
+    bytes: Vec<u8>,
+}
+
 /// One second of a speaker's resend requests (P200).
 #[derive(Clone, Copy, Debug)]
 struct RateSecond {
@@ -600,6 +627,8 @@ struct Speaker {
     sealed: Option<SealedStore>,
     /// Under PTP timing: time-announce packets in place of sync (P166).
     clock_identity: Option<[u8; 8]>,
+    /// Resend second copies waiting, oldest first (P252).
+    second_copies: VecDeque<SecondCopy>,
 }
 
 /// An AirPlay 2 speaker's sealer and its last 1024 sealed packets, kept as
@@ -773,6 +802,7 @@ fn flush(
     let rtptime = speaker.next_rtptime();
     let packet = context.first_due(speaker.delay, now);
     speaker.start_at(packet, rtptime);
+    speaker.second_copies.clear();
     events.push_back(StreamEvent::Flush {
         speaker: speaker.id,
         seq: speaker.next_seq,
@@ -1194,6 +1224,9 @@ impl Stream {
         if let Some((at, _)) = self.step_due {
             next = next.min(at);
         }
+        for copy in self.speakers.iter().filter_map(|s| s.second_copies.front()) {
+            next = next.min(copy.due);
+        }
         for speaker in self.speakers.iter().filter(|s| self.sending(s)) {
             if let Some((_, at)) = speaker.pending_delay
                 && !speaker.delay_due
@@ -1279,6 +1312,29 @@ impl Stream {
                 speaker.step_sync = None;
                 if !paused && !speaker.awaiting_flush && !speaker.first_pending {
                     send_sync(speaker, &context, false, &mut self.transmits);
+                }
+            }
+            while let Some(copy) = speaker
+                .second_copies
+                .pop_front_if(|copy| copy.due <= t + DUE_TOLERANCE)
+            {
+                if copy.play > t {
+                    self.transmits.push_back(Transmit {
+                        speaker: speaker.id,
+                        kind: PacketKind::Resend,
+                        from: LocalSocket::Control,
+                        to: speaker.destinations.control,
+                        bytes: copy.bytes,
+                    });
+                    speaker
+                        .counters
+                        .second_copies_sent
+                        .fetch_add(1, Ordering::Relaxed);
+                } else {
+                    speaker
+                        .counters
+                        .second_copies_skipped
+                        .fetch_add(1, Ordering::Relaxed);
                 }
             }
             if paused || speaker.awaiting_flush || speaker.awaiting_latency {
@@ -1405,6 +1461,7 @@ impl Stream {
         }
         for speaker in &mut self.speakers {
             speaker.step_sync = sync.then_some((old, at + speaker.delay));
+            speaker.second_copies.clear();
         }
         self.events.push_back(StreamEvent::Timeline {
             latency: self.latency(),
@@ -1505,6 +1562,7 @@ impl Stream {
                 .as_ref()
                 .map(|ap2| SealedStore::new(&ap2.key, codec)),
             clock_identity: config.airplay2.as_ref().and_then(|ap2| ap2.clock_identity),
+            second_copies: VecDeque::with_capacity(MAX_SECOND_COPIES),
         };
         if self.speakers.is_empty() {
             // Nothing was encoded while the stream had no speaker (P251).
@@ -1719,6 +1777,7 @@ impl Stream {
                 let rtptime = speaker.next_rtptime();
                 let packet = speaker.next_packet;
                 speaker.start_at(packet, rtptime);
+                speaker.second_copies.clear();
                 self.events.push_back(StreamEvent::Flush {
                     speaker: speaker.id,
                     seq: speaker.next_seq,
@@ -1769,6 +1828,7 @@ impl Stream {
         let paused = self.paused;
         for speaker in &mut self.speakers {
             speaker.delay_due = false;
+            speaker.second_copies.clear();
             if let Some((delay, _)) = speaker.pending_delay.take() {
                 speaker.delay = delay;
             }
@@ -1810,6 +1870,7 @@ impl Stream {
             for sent in speaker.history.iter_mut() {
                 sent.valid = false;
             }
+            speaker.second_copies.clear();
             self.events.push_back(StreamEvent::Flush {
                 speaker: speaker.id,
                 seq: speaker.next_seq,
@@ -1940,8 +2001,12 @@ impl Stream {
             let held = in_history && entry.resends < MAX_RESENDS;
             // Asked for once its play time here passed, it was played
             // without (P200); a packet of an earlier timeline never counts.
-            if in_history && let Some(j) = entry.number.checked_sub(context.packet_base) {
-                gap |= t >= context.heard((j * PACKET_FRAMES) as i64, speaker.delay);
+            let play = entry
+                .number
+                .checked_sub(context.packet_base)
+                .map(|j| context.heard((j * PACKET_FRAMES) as i64, speaker.delay));
+            if in_history && let Some(play) = play {
+                gap |= t >= play;
             }
             let bytes = match &speaker.sealed {
                 // The sealed packet exactly as first sent, never sealed
@@ -1974,6 +2039,22 @@ impl Stream {
                 counters.not_held.fetch_add(1, Ordering::Relaxed);
                 continue;
             };
+            // A packet of an earlier timeline has no play time left (P143).
+            let play = play.unwrap_or(f64::NEG_INFINITY);
+            let copies = &mut speaker.second_copies;
+            copies.retain(|copy| copy.seq != seq);
+            if copies.len() < MAX_SECOND_COPIES {
+                copies.push_back(SecondCopy {
+                    seq,
+                    due: t + seconds(SECOND_COPY_SPACING),
+                    play,
+                    bytes: bytes.clone(),
+                });
+            } else {
+                counters
+                    .second_copies_skipped
+                    .fetch_add(1, Ordering::Relaxed);
+            }
             self.transmits.push_back(Transmit {
                 speaker: speaker.id,
                 kind: PacketKind::Resend,
