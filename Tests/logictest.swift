@@ -20614,5 +20614,41 @@ do {
           "\(String(describing: callTapMoved)) \(callTapSteps) \(callTapLog.count)")
 }
 
+// MARK: A speaker another device took says so on its row (S482)
+do {
+    let takenText = UIStrings()
+    let takenGroupRow = CastRow(status: .idle, muted: false, volumeFixed: false, group: .notReported)
+    // covers: S482
+    check(takenText.rowNote(cast: nil, waitingForAirPlay2: false, reconnecting: true, taken: true,
+                            unannounced: false, target: nil) == "In use by another device"
+            && takenText.rowNote(cast: takenGroupRow, waitingForAirPlay2: false, taken: true,
+                                 unannounced: false, target: nil) == takenText.inUseByAnotherDevice,
+          "taken: the row says In use by another device, over its reconnecting or Cast group note")
+
+    var takenAirPlay = NativeAirPlayModel()
+    takenAirPlay.letGo.insert("T1")
+    takenAirPlay.taken.insert("T1")
+    takenAirPlay.keepLetGo(enabled: ["native:T1"])
+    let takenKept = takenAirPlay.taken
+    takenAirPlay.keepLetGo(enabled: [])
+    // covers: S482
+    check(takenKept == ["T1"] && takenAirPlay.taken.isEmpty,
+          "taken: an AirPlay row stays taken while on and clears when its switch goes off", "\(takenKept)")
+
+    let takenDen = "fedcba9876543210fedcba9876543210"
+    var takenCast = CastModel()
+    takenCast.apply(.appeared(CastDevice(id: takenDen, name: "Den"), offsetMs: nil))
+    _ = takenCast.turnOn(takenDen)
+    takenCast.startSent(takenDen)
+    _ = takenCast.started(takenDen, attempt: 8, refusal: ASC_CAST_REFUSED_NONE)
+    _ = takenCast.apply(.ended(attempt: 8, .quiet))
+    let takenWaits = takenCast.taken
+    takenCast.turnOff(takenDen)
+    _ = takenCast.turnOn(takenDen)
+    // covers: S482
+    check(takenWaits && !takenCast.taken,
+          "taken: a Cast speaker waiting for sound is taken until the user's switch brings it back")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)

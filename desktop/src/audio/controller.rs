@@ -9055,6 +9055,43 @@ mod tests {
         assert_eq!(cast.state().started.len(), 1, "not relaunched");
     }
 
+    // covers: S482
+    #[test]
+    fn a_speaker_waiting_for_sound_is_reported_taken_until_its_switch_goes_off() {
+        use crate::audio::cast::tests::{FakeCast, KITCHEN, id};
+        use audiosync_cast::error::LaunchError;
+        use audiosync_cast::host::{AttemptId, HostEvent};
+        use audiosync_cast::session::{SessionEnd, SessionError};
+        let taken_reports = |events: Vec<BackendEvent>| -> Vec<BTreeSet<String>> {
+            events
+                .into_iter()
+                .filter_map(|event| match event {
+                    BackendEvent::SpeakersTaken { ids } => Some(ids),
+                    _ => None,
+                })
+                .collect()
+        };
+        let mut backend = backend();
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        backend.poll();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert!(taken_reports(backend.poll()).is_empty());
+        cast.report(HostEvent::Ended {
+            attempt: AttemptId(cast.state().next),
+            device: id(KITCHEN),
+            end: SessionEnd::Failed(SessionError::Launch(LaunchError::Quiet)),
+        });
+        let mut reports = taken_reports(backend.poll());
+        reports.extend(taken_reports(backend.poll()));
+        assert_eq!(reports, [BTreeSet::from([KITCHEN.to_owned()])]);
+        assert!(taken_reports(backend.poll()).is_empty(), "told once");
+        backend.set_cast_enabled(KITCHEN, false).unwrap();
+        assert_eq!(taken_reports(backend.poll()), [BTreeSet::new()]);
+    }
+
     // covers: S186, S189
     #[test]
     fn with_only_a_cast_speaker_a_source_change_keeps_the_old_capture_until_its_tap_faded() {

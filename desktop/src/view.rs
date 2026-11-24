@@ -16158,6 +16158,44 @@ pub(crate) mod tests {
         assert!(speaker_item(&state, &speaker, true, false, None).plays);
     }
 
+    // covers: S482
+    #[test]
+    fn a_taken_row_says_another_device_uses_it_also_for_a_cast_group() {
+        let app = app_over(MockBackend::new());
+        let mut backend = MockBackend::new();
+        backend.set_running(true);
+        let state = backend.snapshot();
+        let mut speaker = state.speaker("airplay:kitchen").unwrap().clone();
+        speaker.waiting = Some(ui_model::Waiting::Taken);
+        let strings = app.strings();
+        let text = "In use by another device".to_owned();
+        let row = speaker_item(&state, &speaker, true, false, None);
+        assert_eq!(row.state, RowState::Taken);
+        assert!(!row.plays);
+        assert_eq!(strings.invoke_speaker_note(row).to_string(), text);
+        assert_eq!(
+            strings
+                .invoke_value(RowState::Taken, "Kitchen".into())
+                .to_string(),
+            text
+        );
+        speaker.kind = ui_model::SpeakerKind::Cast;
+        speaker.cast = Some(ui_model::CastRow {
+            state: ui_model::CastState::Idle,
+            muted: false,
+            volume_fixed: false,
+            volume_step: 0.01,
+            group: Some(ui_model::CastGroup {
+                members: ui_model::CastMembers::NotReported,
+            }),
+            added_by_address: false,
+            offline: false,
+            taken_over: false,
+        });
+        let row = speaker_item(&state, &speaker, true, false, None);
+        assert_eq!(strings.invoke_speaker_note(row).to_string(), text);
+    }
+
     #[test]
     fn a_cast_row_names_its_kind_and_says_where_it_is() {
         let app = app_over(MockBackend::new());

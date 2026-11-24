@@ -11884,6 +11884,41 @@ mod tests {
         unsafe { asc_airplay_destroy(&mut handle) };
     }
 
+    // The Mac row says "In use by another device" from the kind of the
+    // let-go event: yielded for a takeover, a plain let-go for a release.
+    // covers: S482
+    #[test]
+    fn a_speaker_let_go_for_a_takeover_is_told_yielded_and_a_released_one_is_not() {
+        let id = "02005E005343";
+        let mut handle = listing(vec![loopback_record(id, "Den", closed_port())]);
+        let c_id = c_string(id);
+        let kinds = |handle: *mut AscAirPlay| -> Vec<i32> {
+            std::iter::from_fn(|| take_event(handle))
+                .map(|e| e.kind)
+                .filter(|kind| *kind >= AIRPLAY_EVENT_LET_GO)
+                .collect()
+        };
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe {
+            assert!(asc_airplay_add_speaker(handle, c_id.as_ptr(), 40.0));
+            asc_airplay_set_release_minutes(handle, 1);
+        }
+        let mut at = inside(handle).created_at;
+        feed_for(handle, &mut at, 61.0, 0.0);
+        assert_eq!(kinds(handle), [AIRPLAY_EVENT_LET_GO]);
+        // SAFETY: as above.
+        unsafe { asc_airplay_set_release_minutes(handle, 0) };
+        assert_eq!(kinds(handle), [AIRPLAY_EVENT_TAKE_BACK]);
+        let key = inside(handle).listed[id].device.key.clone();
+        inside(handle).take_in(SenderEvent::Speaker {
+            key,
+            event: SpeakerEvent::Takeover(TakeoverReport::Taken { group: None }),
+        });
+        assert_eq!(kinds(handle), [AIRPLAY_EVENT_YIELDED]);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
     // covers: S483
     #[test]
     fn speakers_are_released_after_the_idle_time_and_a_stream_stop_keeps_them() {

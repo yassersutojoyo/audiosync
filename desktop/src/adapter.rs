@@ -12580,6 +12580,28 @@ mod tests {
         assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
     }
 
+    // covers: S482
+    #[test]
+    fn a_taken_airplay_speaker_row_says_so_instead_of_reconnecting_until_the_core_takes_it_back() {
+        let taken = SpeakerState::Waiting(ui_model::Waiting::Taken);
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        fake.lose(&kitchen, ErrorKind::Unreachable);
+        adapter.poll();
+        let kitchen_id = id_of(&kitchen);
+        adapter.handle(BackendEvent::SpeakersTaken {
+            ids: BTreeSet::from([kitchen_id]),
+        });
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), taken);
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        adapter.handle(BackendEvent::SpeakersTaken {
+            ids: BTreeSet::new(),
+        });
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
+    }
+
     // Mac sitting 29 Oct: a receiver killed mid-stream sat plain on, with no
     // notice, for over a minute.
     // covers: S222
