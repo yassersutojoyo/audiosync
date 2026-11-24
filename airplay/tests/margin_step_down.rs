@@ -195,7 +195,7 @@ fn a_try_after_the_wait_falls_in_a_quiet_run_that_holds_the_whole_drop() {
     assert_eq!(tries(&rig), [(ip(1), W)]);
 
     // The 0.3 s skipped, the 0.1 s spare before it and the 5 packets after
-    // the step's packet were all cut quiet: 57 packets.
+    // the step's packet were all cut quiet: 58 packets.
     let moved = rig.writer.take_move().expect("the try is announced");
     assert_eq!(moved.frames, -i64::from(CEILING - LOW));
     let end = moved.position + 352;
