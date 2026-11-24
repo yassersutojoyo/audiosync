@@ -2227,7 +2227,7 @@ private struct ZoneMemberCompactRow: View {
         HStack(spacing: 12) {
             Button { model.setEnabled(speaker, state.clickTurnsOn) } label: {
                 // As wide as a full row's switch, so the names line up.
-                SpeakerBadge(symbol: speaker.symbol, state: state, size: ZoneLook.compactBadge)
+                SpeakerBadge(symbol: speaker.symbol, state: .look(state, taken: speaker.taken), size: ZoneLook.compactBadge)
                     .frame(width: ZoneLook.badgeColumn)
             }
             .buttonStyle(.plain)
@@ -2462,7 +2462,7 @@ struct SpeakerRow: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .badgePin, spacing: 12) {
                 Button { toggle(state.clickTurnsOn) } label: {
-                    SpeakerBadge(symbol: speaker.symbol, state: state, size: 32)
+                    SpeakerBadge(symbol: speaker.symbol, state: .look(state, taken: speaker.taken), size: 32)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(t.speakerLabel(name: speaker.name, tag: tag,

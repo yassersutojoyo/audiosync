@@ -20624,6 +20624,10 @@ do {
             && takenText.rowNote(cast: takenGroupRow, waitingForAirPlay2: false, taken: true,
                                  unannounced: false, target: nil) == takenText.inUseByAnotherDevice,
           "taken: the row says In use by another device, over its reconnecting or Cast group note")
+    // covers: S482
+    check(SpeakerState.look(.playing, taken: true) == .willPlay && SpeakerState.look(.playing, taken: false) == .playing
+            && SpeakerState.look(.off, taken: true) == .off,
+          "taken: the badge shows a taken speaker on but not playing")
 
     var takenAirPlay = NativeAirPlayModel()
     takenAirPlay.letGo.insert("T1")

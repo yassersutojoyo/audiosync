@@ -1976,7 +1976,7 @@ struct MenuBarView: View {
         let connecting = model.state(of: speaker) != .off && (castWaits || speaker.cast == nil && speaker.reconnecting)
         return CompactRow(name: speaker.name, symbol: speaker.symbol, state: model.state(of: speaker),
                           text: t, height: rowHeight, hint: hint,
-                          shownNote: t.panelRowNote(hint), connecting: connecting,
+                          shownNote: t.panelRowNote(hint), connecting: connecting, taken: speaker.taken,
                           renamedFrom: speaker.renamedFrom,
                           value: t.rowValue(model.state(of: speaker), offline: speaker.unannounced),
                           kind: speaker.tag, airPlay2: speaker.airPlay2, product: speaker.product,
@@ -2010,6 +2010,8 @@ private struct CompactRow: View {
     var shownNote: String? = nil
     /// Draws the amber connecting arc and colours the note amber.
     var connecting = false
+    /// Another device took it: the badge shows it on, not playing (S482).
+    var taken = false
     /// A renamed speaker's system name, read by VoiceOver after its name.
     var renamedFrom: String? = nil
     /// VoiceOver's label and value in place of the speaker's: a zone's, read
@@ -2035,7 +2037,8 @@ private struct CompactRow: View {
     var body: some View {
         Button(action: toggle) {
             HStack(spacing: PanelLayout.iconGap) {
-                SpeakerBadge(symbol: symbol, state: state, size: PanelLayout.iconBox, ring: true, connecting: connecting)
+                SpeakerBadge(symbol: symbol, state: .look(state, taken: taken), size: PanelLayout.iconBox, ring: true,
+                             connecting: connecting)
                 // The name goes before the availability note when both don't fit.
                 ScrollingTitle(text: name)
                     .font(.body)

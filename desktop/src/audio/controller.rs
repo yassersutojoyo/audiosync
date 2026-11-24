@@ -5403,7 +5403,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.end_session();
         // A new stream takes back the speakers yielded to another sender, as
         // the Mac's new policy does (S482).
-        for id in std::mem::take(&mut self.on_demand_taken) {
+        for id in self.on_demand_taken.clone() {
             self.on_demand.switched_on(id.clone());
             self.let_go(&id, false);
         }

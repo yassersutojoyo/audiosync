@@ -6749,6 +6749,7 @@ pub fn speaker_item(
         // On while streaming, as the Mac's row state (MenuBar.swift:505-507):
         // a speaker that reconnects or waits still shows as playing.
         plays: SpeakerState::new(speaker.enabled, state.running) == SpeakerState::Playing
+            && speaker.waiting != Some(ui_model::Waiting::Taken)
             && speaker
                 .cast
                 .as_ref()
@@ -16172,6 +16173,7 @@ pub(crate) mod tests {
         let text = "In use by another device".to_owned();
         let row = speaker_item(&state, &speaker, true, false, None);
         assert_eq!(row.state, RowState::Taken);
+        assert!(!row.plays, "another device plays it, not us");
         assert_eq!(strings.invoke_speaker_note(row).to_string(), text);
         assert_eq!(
             strings
