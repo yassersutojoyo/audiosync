@@ -20,6 +20,9 @@ const CEILING: u32 = 17_640;
 const W: f64 = 30.0;
 const CAP: f64 = 120.0;
 const WATCH: f64 = 20.0;
+/// A try comes this long after its wait at most: the wait restarts at a
+/// minute report over 20, and a quiet run comes every 4 s.
+const SLACK: f64 = 65.0;
 /// The host's programme: 4 s periods whose last 0.5 s stays under -60 dBFS.
 const PERIOD: u64 = 176_400;
 const PAUSE: u64 = 22_050;
@@ -218,7 +221,8 @@ fn a_crossing_of_the_line_starts_the_wait_again() {
         None,
         "the wait counts afresh from {again}"
     );
-    assert!(until_lf_leaves(&mut rig, CEILING, again + W + 5.0).is_some());
+    // The minute that held the step up reports over 20 and crosses too.
+    assert!(until_lf_leaves(&mut rig, CEILING, again + W + SLACK).is_some());
 }
 
 // covers: P257
@@ -312,7 +316,7 @@ fn a_failed_try_returns_at_once_to_the_level_it_left_and_doubles_the_wait() {
 
     // Try 2, a doubled wait later, fails on 6 requests in 3 seconds; 5 do
     // not.
-    let at = until_lf_leaves(&mut rig, CEILING, back + 2.0 * W + 5.0).expect("try 2");
+    let at = until_lf_leaves(&mut rig, CEILING, back + 2.0 * W + SLACK).expect("try 2");
     assert!(at - back >= 2.0 * W - 0.5, "try 2 after {} s", at - back);
     for (k, offset) in [1.0, 1.2, 2.0, 2.2, 3.0].into_iter().enumerate() {
         run_to(&mut rig, at + offset);
@@ -326,7 +330,7 @@ fn a_failed_try_returns_at_once_to_the_level_it_left_and_doubles_the_wait() {
     // Tries 3 and 4 wait 120 s, the ceiling; both fail.
     let mut back = back;
     for _ in 0..2 {
-        let at = until_lf_leaves(&mut rig, CEILING, back + CAP + 5.0).expect("a try");
+        let at = until_lf_leaves(&mut rig, CEILING, back + CAP + SLACK).expect("a try");
         assert!(at - back >= CAP - 0.5, "a try after {} s", at - back);
         run_to(&mut rig, at + 2.0);
         gap(&mut rig, id);
@@ -347,13 +351,13 @@ fn a_failed_try_returns_at_once_to_the_level_it_left_and_doubles_the_wait() {
     );
 
     // Try 5 holds: the wait is back to W for the next step up.
-    let at = until_lf_leaves(&mut rig, CEILING, back + CAP + 5.0).expect("try 5");
+    let at = until_lf_leaves(&mut rig, CEILING, back + CAP + SLACK).expect("try 5");
     run_to(&mut rig, at + WATCH + 1.0);
     assert_eq!(rig.stream.latency_frames(), LOW);
     assert_eq!(held(&rig), [(ip(1), W)]);
     let from = rig.t() + 1.0;
     let crossed = step_up(&mut rig, &[id], from);
-    until_lf_leaves(&mut rig, CEILING, crossed + W + 5.0).expect("try 6");
+    until_lf_leaves(&mut rig, CEILING, crossed + W + SLACK).expect("try 6");
     assert_eq!(tries(&rig).last(), Some(&(ip(1), W)));
 }
 

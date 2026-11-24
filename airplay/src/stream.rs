@@ -74,6 +74,14 @@ const STEP_FRAMES: u32 = 4_410;
 const RATE_STEP_FRAMES: u32 = 13_230;
 /// After a step up, this many seconds without a gap step back down (P200).
 const CLEAN_WINDOW: f64 = 60.0;
+/// During a watch, this many requests within [`FAST_SPAN`] seconds, in
+/// [`FAST_SECONDS`] distinct seconds, fail the try (P258, G24).
+const FAST_REQUESTS: u32 = 6;
+const FAST_SPAN: i64 = 10;
+const FAST_SECONDS: usize = 3;
+/// Quiet packets a try waits for before its own when it drops more than
+/// 0.1 s: 0.3 s and P200's spare of about 0.1 s (P257).
+const TRY_QUIET_PACKETS: u64 = 52;
 /// A floor's first wait under the line before a try, in seconds (P256,
 /// G24).
 const FIRST_WAIT: f64 = 600.0;
@@ -1035,6 +1043,31 @@ impl Context<'_> {
     }
 }
 
+/// The Lf a receiver's late request or resend rate stepped the stream to,
+/// by its address, and its wait before a try (P200, P255, P256).
+#[derive(Debug)]
+struct Floor {
+    ip: IpAddr,
+    /// 0 once a try gave it up.
+    frames: u32,
+    /// The Lf before the step, where a step down after it left returns.
+    before: u32,
+    /// W in force and the time served under the line, in seconds.
+    wait: f64,
+    served: f64,
+    watch: Option<Watch>,
+}
+
+/// The watch after a try (P258).
+#[derive(Debug)]
+struct Watch {
+    since: f64,
+    /// The level the try left, where a failure returns.
+    left: u32,
+    requests: u32,
+    late: u32,
+}
+
 /// One stream to many speakers.
 #[derive(Debug)]
 pub struct Stream {
@@ -1065,10 +1098,11 @@ pub struct Stream {
     step_due: Option<(f64, u32)>,
     /// The Lf a step up took the stream to, by the address of the receiver
     /// whose gap or resend rate asked for it, for the stream's life: no step
-    /// down while that receiver is in the stream, and its floor when it
-    /// joins again (P200).
-    /// With each, the Lf before that step, where its step down returns.
-    rate_levels: Vec<(IpAddr, u32, u32)>,
+    /// down while that receiver is in the stream but through a try, and its
+    /// floor when it joins again (P200, P255).
+    rate_levels: Vec<Floor>,
+    /// When the time under the line was last counted (P256).
+    served_at: f64,
     /// The first wait before a try, its ceiling and the watch after it, in
     /// seconds (P256, P258).
     first_wait: f64,
@@ -1141,6 +1175,7 @@ impl Stream {
                 .clamp(MIN_LATENCY_FRAMES, MAX_LATENCY_FRAMES),
             step_due: None,
             rate_levels: Vec::new(),
+            served_at: start,
             first_wait: FIRST_WAIT,
             wait_ceiling: WAIT_CEILING,
             watch: WATCH,
@@ -1400,6 +1435,7 @@ impl Stream {
         {
             self.apply_step(frames, at, true);
         }
+        self.serve(t);
         if self.step_wanted.is_none()
             && self
                 .clean_since
@@ -1421,10 +1457,25 @@ impl Stream {
                 break;
             }
             self.cut();
-            if let Some(frames) = self.step_wanted
-                && self.quiet_packets >= QUIET_PACKETS + STEP_PACKETS
+            if let Some(frames) = self.step_wanted {
+                if self.quiet_packets >= QUIET_PACKETS + STEP_PACKETS {
+                    self.start_step(t, frames, self.next_cut - STEP_PACKETS);
+                }
+            } else if self.step_due.is_none()
+                && let Some(to) = self.try_target(None)
             {
-                self.start_step(t, frames, self.next_cut - STEP_PACKETS);
+                // A try drops its whole amount inside the quiet run (P257 d).
+                let before = if self.latency_frames.saturating_sub(to) > STEP_FRAMES {
+                    TRY_QUIET_PACKETS
+                } else {
+                    QUIET_PACKETS
+                };
+                if self.quiet_packets >= before + STEP_PACKETS
+                    && (to >= self.latency_frames
+                        || self.start_step(t, to, self.next_cut - STEP_PACKETS))
+                {
+                    self.commit_tries(t, None, to);
+                }
             }
         }
         let context = context!(self);
@@ -1436,6 +1487,12 @@ impl Stream {
                     speaker: speaker.id,
                     requests: speaker.rate_requests,
                 });
+                if speaker.rate_requests as usize > RATE_GAP_REQUESTS {
+                    let ip = speaker.destinations.control.ip();
+                    for floor in self.rate_levels.iter_mut().filter(|floor| floor.ip == ip) {
+                        floor.served = 0.0;
+                    }
+                }
                 speaker.rate_since = t;
                 speaker.rate_requests = 0;
             }
@@ -1586,8 +1643,21 @@ impl Stream {
         self.latency_frames = frames;
         if frames > old {
             for ip in std::mem::take(&mut self.askers) {
-                self.rate_levels.retain(|(at, ..)| *at != ip);
-                self.rate_levels.push((ip, frames, old));
+                match self.rate_levels.iter_mut().find(|floor| floor.ip == ip) {
+                    Some(floor) => {
+                        floor.frames = frames;
+                        floor.before = old;
+                        floor.served = 0.0;
+                    }
+                    None => self.rate_levels.push(Floor {
+                        ip,
+                        frames,
+                        before: old,
+                        wait: self.first_wait,
+                        served: 0.0,
+                        watch: None,
+                    }),
+                }
             }
             self.step_floor = frames;
             self.before_step = old;
@@ -1596,7 +1666,7 @@ impl Stream {
                 self.pending_latency = None;
             }
         } else {
-            self.step_floor = 0;
+            self.step_floor = self.floor_in_stream();
         }
         for speaker in &mut self.speakers {
             speaker.step_sync = sync.then_some((old, at + speaker.delay));
@@ -1639,7 +1709,16 @@ impl Stream {
         // joins at that level again while nothing sounds; next to a sounding
         // speaker its rate steps again instead (P200, P201).
         let ip = config.destinations.control.ip();
-        if let Some(&(_, frames, before)) = self.rate_levels.iter().find(|(at, ..)| *at == ip)
+        // A due try falls here, before the stream's first sound (P257 a).
+        if !self.sounding(t)
+            && let Some(to) = self.try_target(Some(ip))
+        {
+            self.commit_tries(t, Some(ip), to);
+            if self.speakers.is_empty() {
+                self.set_latency(self.host_latency, now);
+            }
+        } else if let Some(&Floor { frames, before, .. }) =
+            self.rate_levels.iter().find(|floor| floor.ip == ip)
             && frames > self.step_floor
             && !self.sounding(t)
         {
@@ -1956,6 +2035,7 @@ impl Stream {
         if let Some(frames) = self.pending_latency.take() {
             self.latency_frames = frames;
         }
+        self.try_in_silence(t);
         self.origin = self.input.rebase() as i64;
         self.packet_base += self.next_cut + 1;
         self.next_cut = 0;
@@ -2038,6 +2118,8 @@ impl Stream {
             self.latency_frames = frames;
             latency_changed = true;
         }
+        let t = self.clock.seconds(now);
+        latency_changed |= self.try_in_silence(t);
         let first_frame = (self.input.written() as i64 - self.origin).max(0) as u64;
         let packet = first_frame.div_ceil(PACKET_FRAMES).max(self.next_cut);
         let context = context!(self);
@@ -2130,6 +2212,19 @@ impl Stream {
             && recent.len() >= RATE_SECONDS
             && recent.front().is_some_and(|old| t - old.first >= RATE_SPAN);
         let ip = speaker.destinations.control.ip();
+        // Faster than the line, counted from the try and afresh after each
+        // FLUSH: 6 requests within 10 s in 3 distinct seconds (P258).
+        let fast = self
+            .rate_levels
+            .iter()
+            .find_map(|floor| floor.watch.as_ref().filter(|_| floor.ip == ip))
+            .is_some_and(|watch| {
+                let window = recent
+                    .iter()
+                    .filter(|s| s.first >= watch.since && second - s.second < FAST_SPAN);
+                window.clone().map(|s| s.requests).sum::<u32>() >= FAST_REQUESTS
+                    && window.count() >= FAST_SECONDS
+            });
         for offset in 0..request.count.min(MAX_RESEND_REQUEST) {
             let seq = request.first.wrapping_add(offset);
             let slot = usize::from(seq) % HISTORY_PACKETS;
@@ -2204,6 +2299,14 @@ impl Stream {
             speaker.history[slot].resends += 1;
             counters.packets_resent.fetch_add(1, Ordering::Relaxed);
         }
+        if self.watched_request(t, ip, gap, fast, steady) {
+            return;
+        }
+        if gap || steady {
+            for floor in self.rate_levels.iter_mut().filter(|floor| floor.ip == ip) {
+                floor.served = 0.0;
+            }
+        }
         // After a step down the rate may step up again.
         if steady && self.step_floor == 0 && self.step_due.is_none() && self.clean_since.is_none() {
             self.stepped_up = false;
@@ -2224,8 +2327,162 @@ impl Stream {
     fn held(&self) -> bool {
         self.speakers.iter().any(|speaker| {
             let ip = speaker.destinations.control.ip();
-            self.rate_levels.iter().any(|(at, ..)| *at == ip)
+            self.rate_levels
+                .iter()
+                .any(|floor| floor.ip == ip && floor.frames > 0)
         })
+    }
+
+    /// The largest floor of a receiver in the stream, 0 for none.
+    fn floor_in_stream(&self) -> u32 {
+        self.rate_levels
+            .iter()
+            .filter(|floor| self.in_stream(floor.ip))
+            .map(|floor| floor.frames)
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn in_stream(&self, ip: IpAddr) -> bool {
+        self.speakers
+            .iter()
+            .any(|speaker| speaker.destinations.control.ip() == ip)
+    }
+
+    /// Counts the time a floor's receiver sounds in the stream toward its
+    /// wait (P256), and ends each watch that passed without a failure
+    /// (P258).
+    fn serve(&mut self, t: f64) {
+        let dt = (t - self.served_at).max(0.0);
+        self.served_at = t;
+        for floor in &mut self.rate_levels {
+            let sounds = self.speakers.iter().any(|speaker| {
+                speaker.destinations.control.ip() == floor.ip
+                    && speaker.started
+                    && t >= speaker.first_sound
+            });
+            if sounds && !self.paused && floor.watch.is_none() {
+                floor.served += dt;
+            }
+            if floor
+                .watch
+                .as_ref()
+                .is_some_and(|watch| t - watch.since >= self.watch)
+            {
+                floor.watch = None;
+                floor.wait = self.first_wait;
+                self.events.push_back(StreamEvent::MarginTryHeld {
+                    receiver: floor.ip,
+                    wait: Duration::from_secs_f64(floor.wait),
+                });
+            }
+        }
+    }
+
+    /// A floor above the start level whose wait was served (P256).
+    fn due(&self, floor: &Floor) -> bool {
+        floor.frames > self.host_latency && floor.watch.is_none() && floor.served >= floor.wait
+    }
+
+    /// When a try is due for a receiver in the stream or `joining`, the Lf
+    /// it goes to: the start level or a larger floor of another (P258).
+    fn try_target(&self, joining: Option<IpAddr>) -> Option<u32> {
+        let here = |ip: IpAddr| joining == Some(ip) || self.in_stream(ip);
+        let mut due = false;
+        let mut to = self.host_latency;
+        for floor in self.rate_levels.iter().filter(|floor| here(floor.ip)) {
+            if self.due(floor) {
+                due = true;
+            } else {
+                to = to.max(floor.frames);
+            }
+        }
+        due.then_some(to)
+    }
+
+    /// Every due receiver tries together, to Lf `to` (P258).
+    fn commit_tries(&mut self, t: f64, joining: Option<IpAddr>, to: u32) {
+        for k in 0..self.rate_levels.len() {
+            let floor = &self.rate_levels[k];
+            if !(self.due(floor) && (joining == Some(floor.ip) || self.in_stream(floor.ip))) {
+                continue;
+            }
+            let floor = &mut self.rate_levels[k];
+            self.events.push_back(StreamEvent::MarginTry {
+                receiver: floor.ip,
+                from: floor.frames,
+                to,
+                wait: Duration::from_secs_f64(floor.wait),
+            });
+            floor.watch = Some(Watch {
+                since: t,
+                left: floor.frames,
+                requests: 0,
+                late: 0,
+            });
+            floor.frames = 0;
+            floor.served = 0.0;
+        }
+        self.step_floor = self.floor_in_stream();
+        // Back under its floor, the receiver steps up again as P200 says.
+        self.stepped_up = false;
+    }
+
+    /// A try at a point that already silences every speaker, a resume or a
+    /// restart (P257 b, c): Lf goes straight to the try's level.
+    fn try_in_silence(&mut self, t: f64) -> bool {
+        match self.try_target(None) {
+            Some(to) => {
+                self.commit_tries(t, None, to);
+                let lower = to < self.latency_frames;
+                self.latency_frames = self.latency_frames.min(to);
+                lower
+            }
+            None => false,
+        }
+    }
+
+    /// A request from `ip` while it is watched after a try: a late one,
+    /// `fast` or `steady` fail the try, and its floor goes back at once to
+    /// the level the try left, by P254's fade-out (P258). True when it
+    /// failed.
+    fn watched_request(&mut self, t: f64, ip: IpAddr, gap: bool, fast: bool, steady: bool) -> bool {
+        let Some(floor) = self
+            .rate_levels
+            .iter_mut()
+            .find(|floor| floor.ip == ip && floor.watch.is_some())
+        else {
+            return false;
+        };
+        let watch = floor.watch.as_mut().expect("watched");
+        watch.requests += 1;
+        watch.late += u32::from(gap);
+        if !(gap || fast || steady) {
+            return false;
+        }
+        let watch = floor.watch.take().expect("watched");
+        floor.frames = watch.left;
+        floor.wait = (floor.wait * 2.0).min(self.wait_ceiling);
+        floor.served = 0.0;
+        self.events.push_back(StreamEvent::MarginTryFailed {
+            receiver: ip,
+            back_to: watch.left,
+            after: Duration::from_secs_f64((t - watch.since).max(0.0)),
+            requests: watch.requests,
+            late: watch.late,
+            next_wait: Duration::from_secs_f64(floor.wait),
+        });
+        self.step_floor = self.step_floor.max(watch.left);
+        if watch.left > self.latency_frames {
+            self.stepped_up = true;
+            self.step_wait_told = false;
+            self.step_wanted = Some(watch.left);
+            if !self.askers.contains(&ip) {
+                self.askers.push(ip);
+            }
+            self.fade_step(t);
+        }
+        true
     }
 
     /// Answers a timing request from `source` that reached a speaker's
