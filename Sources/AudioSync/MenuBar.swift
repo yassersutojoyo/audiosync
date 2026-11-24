@@ -375,8 +375,6 @@ final class AppModel: ObservableObject {
     @Published var hidesDockIcon = false
     /// The switch is on, but macOS hasn't given AudioSync Accessibility access.
     @Published var volumeKeysNeedAccess = false
-    /// Show Virtual Devices is off and left at least one output out (S434).
-    @Published var virtualOutputsHidden = false
     @Published var resumesAfterSleep = false
     @Published var appearance = AppAppearance.system
     /// Rows whose sync controls are expanded. Lives here rather than in view
@@ -685,9 +683,11 @@ final class AppModel: ObservableObject {
                                  hint: shownLocalNetworkHint, localNetworkRefused: localNetworkHint.accessRefused,
                                  airPlaySearching: airplaySearching)
     }
-    /// Connected Speakers with no speaker at all.
-    var networkEmptyText: String {
-        networkNote ?? text.airPlayNoneFound(hint: shownLocalNetworkHint, localNetworkRefused: localNetworkHint.accessRefused)
+    /// Connected Speakers with no speaker at all; `fix`: the main window's second line.
+    func networkEmptyText(fix: Bool) -> String {
+        text.networkEmpty(airPlayNone: shownAirPlay.isEmpty && airPlayProblem == nil, cast: castList,
+                          hint: shownLocalNetworkHint, localNetworkRefused: localNetworkHint.accessRefused,
+                          airPlaySearching: airplaySearching, fix: fix)
     }
     private var shownLocalNetworkHint: LocalNetworkHint { localNetworkHint.shown(airPlayProblem: airPlayProblem != nil) }
 
@@ -1859,9 +1859,9 @@ struct MenuBarView: View {
                  ? (model.hidden.inThisMac || model.hidden.inConnected ? t.panelAllHidden
                     : t.panelNoSpeakers(airPlayFoundNone: model.airplayFoundNone,
                                         airPlayStarting: !model.airplaySenderUp && model.airPlayProblem == nil,
-                                        networkEmpty: model.networkEmptyText))
+                                        networkEmpty: model.networkEmptyText(fix: false)))
                  : model.hidden.inConnected ? t.panelConnectedHidden
-                 : t.panelConnectedEmpty(virtualHidden: model.virtualOutputsHidden, networkEmpty: model.networkEmptyText))
+                 : model.networkEmptyText(fix: false))
                 .font(.subheadline)
                 .foregroundStyle(Brand.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)

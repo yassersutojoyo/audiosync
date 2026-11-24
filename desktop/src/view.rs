@@ -285,15 +285,6 @@ fn is_draft(typed: Option<&str>, applied: &str) -> bool {
     typed.is_some_and(|text| text != applied)
 }
 
-/// Whether Connected Speakers lists nothing only because its outputs are
-/// virtual ones that Settings > Show Virtual Devices hides: its note says so.
-fn only_virtual_outputs_hidden(
-    connected: &[&ui_model::Speaker],
-    listed: impl Fn(&ui_model::Speaker) -> bool,
-) -> bool {
-    !connected.is_empty() && connected.iter().all(|s| !listed(s))
-}
-
 struct Models {
     sources: Rc<VecModel<SharedString>>,
     source_looks: Rc<VecModel<SourceLook>>,
@@ -2960,7 +2951,6 @@ impl App {
         };
         let (this_pc, connected) = state.layout();
         let lists = |s: &ui_model::Speaker| ui.listed_virtual.lists(s, ui.show_virtual);
-        let connected_virtual_hidden = only_virtual_outputs_hidden(&connected, lists);
         let listed = |s: &&ui_model::Speaker| lists(s);
         // A speaker in a zone shows under it, and keeps a compact row in its
         // own section after the full rows.
@@ -3061,8 +3051,6 @@ impl App {
         // pending change handlers, and the focus ones borrow `ui` mutably (UI
         // Automation focuses and toggles in one turn).
         drop(ui);
-        self.main
-            .set_connected_virtual_hidden(connected_virtual_hidden);
         // Read before the flyout takes the new state, for `flyout_shown`.
         let none_found_shown = self.flyout.get_airplay_none_found();
         self.main.set_airplay_none_found(state.airplay_none_found);
@@ -12729,7 +12717,7 @@ pub(crate) mod tests {
         }
 
         let app = shown(false, ui_model::CastList::Quiet);
-        let none_found = app.strings().get_airplay_none_found();
+        let none_found = app.strings().get_no_speakers();
         assert!(has(&app.flyout, &none_found), "{none_found}");
 
         let app = shown(true, ui_model::CastList::NoneFound);
@@ -12771,9 +12759,8 @@ pub(crate) mod tests {
                 .is_some()
         }
         let missing = "No speakers found yet.";
-        let same_network = format!(
-            "{missing}\nCheck that this PC and your speakers are on the same network."
-        );
+        let same_network =
+            format!("{missing}\nCheck that this PC and your speakers are on the same network.");
 
         for cast in [ui_model::CastList::Quiet, ui_model::CastList::NoneFound] {
             let app = shown(&|backend| backend.set_cast_list(cast));
@@ -16817,27 +16804,6 @@ pub(crate) mod tests {
         listed.note(&state, false);
         assert!(listed.lists(&zoned, false), "a zone member keeps its row");
         assert!(listed.lists(&auto, false), "auto-connect keeps its row");
-    }
-
-    #[test]
-    fn connected_speakers_say_when_only_virtual_outputs_are_hidden() {
-        let state = MockBackend::new().snapshot();
-        let mut cable = state.speaker("local:desk").unwrap().clone();
-        cable.kind = ui_model::SpeakerKind::Virtual;
-        cable.enabled = false;
-        let hiding = |s: &ui_model::Speaker| s.is_listed(false);
-        let showing = |s: &ui_model::Speaker| s.is_listed(true);
-        assert!(only_virtual_outputs_hidden(&[&cable], hiding));
-        assert!(
-            !only_virtual_outputs_hidden(&[&cable], showing),
-            "shown, it is listed"
-        );
-        assert!(!only_virtual_outputs_hidden(&[], hiding), "nothing at all");
-        let desk = state.speaker("local:desk").unwrap();
-        assert!(
-            !only_virtual_outputs_hidden(&[&cable, desk], hiding),
-            "another speaker is listed"
-        );
     }
 
     /// Every opening of the flyout plays its rise, not only the first: the

@@ -963,12 +963,6 @@ do {
           "devices: a chosen virtual device stays listed, in order")
     check(uids(AudioDevices.listed(all, showVirtual: true, keep: [])) == uids(all),
           "devices: Show Virtual Devices lists everything")
-    let macAirPlay = [dev("builtin", kAudioDeviceTransportTypeBuiltIn), dev("airplay", kAudioDeviceTransportTypeAirPlay)]
-    // covers: S434
-    check(!AudioDevices.hidesVirtual(macAirPlay, listed: AudioDevices.listed(macAirPlay, showVirtual: false, keep: []))
-            && AudioDevices.hidesVirtual(all, listed: AudioDevices.listed(all, showVirtual: false, keep: []))
-            && !AudioDevices.hidesVirtual(all, listed: all),
-          "devices: only a hidden virtual or aggregate device counts as hidden for the note, never macOS's AirPlay output")
     check(!AudioDevices.isVirtual(transport: kAudioDeviceTransportTypeBluetooth)
           && !AudioDevices.isVirtual(transport: kAudioDeviceTransportTypeHDMI)
           && !AudioDevices.isVirtual(transport: 0), "devices: hardware and unknown transports are never hidden")
@@ -18986,7 +18980,7 @@ do {
             && settings.contains("if AppUpdater.isRunning {")
             && t.unhideLabel("Bedroom") == "Unhide Bedroom",
           "Settings: Set Up Permissions…, hidden speakers each with an Unhide VoiceOver names, an empty line, Updates only when updates run")
-    check(t.allSpeakersHidden.contains("Settings… in the gear menu and click Unhide")
+    check(t.allSpeakersHidden.contains("Unhide them in Settings, in the gear menu")
             && !t.helpText.contains("gear menu, or in the AudioSync menu")
             && !t.helpText.contains("Show Virtual Devices in the gear menu")
             && !t.helpText.contains("Hidden Speakers in the gear menu"),
@@ -18998,25 +18992,26 @@ do {
             && !settings.contains("switchToSystemWhenSourceQuits")
             && !t.helpText.contains("Source App Quits"),
           "source quit: the Mac keeps no choice, reads no stored stop and shows no switch, so a quit always switches to the whole system (S227)")
-    let networkEmpty = t.noSpeakers
-    // covers: S434
-    check(t.connectedEmpty(allHidden: false, virtualHidden: true, networkEmpty: networkEmpty)
-            == t.virtualDevicesHidden + "\n" + networkEmpty
-            && t.virtualDevicesHidden.contains("Settings… in the gear menu and turn on Show Virtual Devices")
-            && t.connectedEmpty(allHidden: false, virtualHidden: false, networkEmpty: networkEmpty) == networkEmpty
-            && t.connectedEmpty(allHidden: true, virtualHidden: true, networkEmpty: networkEmpty) == t.allSpeakersHidden
-            && t.panelConnectedEmpty(virtualHidden: true, networkEmpty: networkEmpty)
-                == t.panelVirtualDevicesHidden + "\n" + networkEmpty
-            && t.panelConnectedEmpty(virtualHidden: false, networkEmpty: networkEmpty) == networkEmpty,
-          "Connected Speakers: empty only because virtual outputs are hidden, it says so and how to show them",
-          t.connectedEmpty(allHidden: false, virtualHidden: true, networkEmpty: networkEmpty))
-    check(t.noSpeakers == "No speakers found yet."
+    let noneYet = "No speakers found yet."
+    let emptyListNote = { (cast: CastListState, refused: Bool, hint: LocalNetworkHint, fix: Bool) in
+        t.networkEmpty(airPlayNone: true, cast: cast, hint: hint, localNetworkRefused: refused, fix: fix)
+    }
+    check(emptyListNote(.quiet, false, .none, true) == noneYet + "\n" + "Check that this Mac and your speakers are on the same network."
+            && emptyListNote(.noneFound, false, .none, true) == emptyListNote(.quiet, false, .none, true)
+            && emptyListNote(.noneFound, true, .none, true)
+                == noneYet + "\n" + "Allow AudioSync in System Settings → Privacy & Security → Local Network."
+            && emptyListNote(.noneFound, true, .denied, true) == noneYet
+            && [CastListState.quiet, .noneFound].allSatisfy { cast in [true, false].allSatisfy { emptyListNote(cast, $0, .none, false) == noneYet } }
+            && emptyListNote(.searching, false, .none, true) == t.networkSpeakersNote(airPlayNone: true, cast: .searching)
+            && t.networkEmpty(airPlayNone: true, cast: .quiet, airPlaySearching: true, fix: true) == t.lookingForSpeakers
+            && t.noSpeakers == noneYet
             && t.panelAllHidden == "Every speaker is hidden."
             && t.panelConnectedHidden == "Every connected speaker is hidden."
-            && t.allSpeakersHidden == "Every speaker here is hidden. Unhide them in Settings, in the gear menu."
-            && t.connectedEmpty(allHidden: false, virtualHidden: true, networkEmpty: networkEmpty) == networkEmpty,
-          "Connected Speakers: an empty list says what is missing in one short line, with no line on hidden virtual devices",
-          t.connectedEmpty(allHidden: false, virtualHidden: true, networkEmpty: networkEmpty))
+            && t.connectedEmpty(allHidden: true, networkEmpty: noneYet)
+                == "Every speaker here is hidden. Unhide them in Settings, in the gear menu."
+            && t.connectedEmpty(allHidden: false, networkEmpty: noneYet) == noneYet,
+          "Connected Speakers: an empty list says what is missing, then in the main window alone the one likely fix",
+          emptyListNote(.quiet, true, .none, true))
     let showSection = section(settings, from: "func show() {", to: "private func makeWindow()")
     check(!settings.contains("fittingSize")
             && settings.contains("height: host.sizeThatFits(in: PanelTopLayout.measuring).height")

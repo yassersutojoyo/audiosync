@@ -1091,21 +1091,9 @@ fn no_text_promises_airplay() {
         );
     }
     assert!(strings.contains("connected-none: @tr(\"No connected speakers\")"));
-    // Localization.swift virtualDevicesHidden and connectedEmpty: the switch
-    // lives in Settings, and the network note follows on its own line.
-    assert!(strings.contains(
-        "connected-none-virtual-hidden: @tr(\"Virtual devices are hidden. To list them, choose Settings… in the gear menu and turn on Show Virtual Devices.\");"
-    ));
     assert!(
-        include_str!("../ui/main.slint").contains(
-            "root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden + \"\\n\" + self.none-found : self.none-found"
-        ),
-        "the network note follows the hidden virtual devices' note on its own line"
-    );
-    assert!(
-        include_str!("../ui/main.slint")
-            .contains("root.connected.length > 0 || root.connected-zoned.length > 0 ? \"\" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.airplay-searching ? (root.cast-list == CastList.none-found || root.cast-list == CastList.failed ? Strings.looking-for-airplay-speakers : Strings.looking-for-speakers) : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden + \"\\n\" + Strings.connected-none : Strings.connected-none;"),
-        "the empty Connected Speakers list says it looks while AirPlay searches, then uses the plain note"
+        include_str!("../ui/main.slint").contains("list-note: !self.listed && root.connected-all-hidden ? Strings.all-speakers-hidden : !self.listed && root.airplay-none-found && (self.both-none || root.cast-list == CastList.quiet) ? Strings.no-speakers + \"\\n\" + Strings.no-speakers-fix : root.airplay-none-found ? self.none-found : self.listed ? \"\" : root.airplay-searching ? (root.cast-list == CastList.none-found || root.cast-list == CastList.failed ? Strings.looking-for-airplay-speakers : Strings.looking-for-speakers) : Strings.connected-none;"),
+        "the empty Connected Speakers list says it looks while AirPlay searches, then what is missing and one fix"
     );
     assert!(
         include_str!("../ui/main.slint").contains(
@@ -1114,7 +1102,7 @@ fn no_text_promises_airplay() {
         "while the list says it looks, no Google Cast note follows it"
     );
     assert!(
-        include_str!("../ui/main.slint").contains("note: root.airplay-none-found ? ("),
+        include_str!("../ui/main.slint").contains(": root.airplay-none-found ? self.none-found :"),
         "the note that no AirPlay speaker was found shows only when the backend says so"
     );
 }
