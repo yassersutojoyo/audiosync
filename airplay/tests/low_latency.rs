@@ -844,7 +844,7 @@ fn a_steady_run_of_in_time_resend_requests_steps_up_and_keeps_it() {
         lose_one(&mut rig, id);
         second += 2.0;
     }
-    assert_eq!(rig.stream.latency_frames(), 8_820, "{:?}", timelines(&rig));
+    assert_eq!(rig.stream.latency_frames(), 17_640, "{:?}", timelines(&rig));
 
     rig.stream.pause(rig.now);
     rig.run_for(Duration::from_secs(5));
@@ -861,7 +861,7 @@ fn a_steady_run_of_in_time_resend_requests_steps_up_and_keeps_it() {
     }
     assert_eq!(
         rig.stream.latency_frames(),
-        8_820,
+        17_640,
         "kept across a pause and a restart while the requests go on"
     );
 }
@@ -901,7 +901,7 @@ fn a_steady_run_of_228_resend_requests_a_minute_steps_up_within_11_seconds() {
         second += 60.0 / 228.0;
     }
     run_to(&mut rig, 12.5);
-    assert_eq!(rig.stream.latency_frames(), 8_820, "{:?}", timelines(&rig));
+    assert_eq!(rig.stream.latency_frames(), 17_640, "{:?}", timelines(&rig));
 }
 
 // covers: P200
@@ -931,7 +931,7 @@ fn a_rate_step_comes_back_with_its_receiver_and_comes_again_after_a_step_down() 
         lose_one(&mut rig, id);
         second += 2.0;
     }
-    assert_eq!(rig.stream.latency_frames(), 8_820, "stepped up");
+    assert_eq!(rig.stream.latency_frames(), 17_640, "stepped up");
 
     rig.stream.remove_speaker(id);
     rig.drain();
@@ -940,7 +940,7 @@ fn a_rate_step_comes_back_with_its_receiver_and_comes_again_after_a_step_down() 
     run_to(&mut rig, 55.0);
     assert_eq!(
         rig.stream.latency_frames(),
-        8_820,
+        17_640,
         "the same receiver joins again at its level"
     );
 
@@ -962,7 +962,7 @@ fn a_rate_step_comes_back_with_its_receiver_and_comes_again_after_a_step_down() 
         lose_one(&mut rig, again);
         second += 2.0;
     }
-    assert_eq!(rig.stream.latency_frames(), 8_820, "stepped up again");
+    assert_eq!(rig.stream.latency_frames(), 17_640, "stepped up again");
 }
 
 // covers: P200
@@ -976,7 +976,7 @@ fn a_new_stream_starts_at_the_level_its_receivers_rate_reached() {
         lose_one(&mut rig, id);
         second += 2.0;
     }
-    assert_eq!(rig.stream.latency_frames(), 8_820, "stepped up");
+    assert_eq!(rig.stream.latency_frames(), 17_640, "stepped up");
     rig.stream.remove_speaker(id);
     rig.drain();
     // The host's value over no speaker, as at Streaming off.
@@ -988,17 +988,17 @@ fn a_new_stream_starts_at_the_level_its_receivers_rate_reached() {
     // Streaming switched off and on: the host sets its own value only after
     // the receiver joined, as both hosts do.
     let again = rig.add(speaker(1, Codec::Pcm));
-    assert_eq!(rig.stream.latency_frames(), 8_820, "starts at the level");
+    assert_eq!(rig.stream.latency_frames(), 17_640, "starts at the level");
     rig.stream.set_latency(LOW, rig.now);
     rig.drain();
     run_to(&mut rig, 60.0);
     assert!(
-        timelines(&rig)[before..].iter().all(|&(ms, _)| ms == 200),
+        timelines(&rig)[before..].iter().all(|&(ms, _)| ms == 400),
         "{:?}",
         &timelines(&rig)[before..]
     );
     for (_, sync) in rig.syncs(again) {
-        assert_eq!(sync.next_rtp.wrapping_sub(sync.rtp_heard), 8_820);
+        assert_eq!(sync.next_rtp.wrapping_sub(sync.rtp_heard), 17_640);
     }
 }
 
@@ -1014,7 +1014,7 @@ fn a_receiver_that_rejoins_next_to_a_sounding_speaker_can_still_step_on_its_rate
         lose_one(&mut rig, one);
         second += 2.0;
     }
-    assert_eq!(rig.stream.latency_frames(), 8_820, "stepped up");
+    assert_eq!(rig.stream.latency_frames(), 17_640, "stepped up");
     rig.stream.remove_speaker(one);
     rig.drain();
     run_to(&mut rig, 130.0);
@@ -1033,7 +1033,7 @@ fn a_receiver_that_rejoins_next_to_a_sounding_speaker_can_still_step_on_its_rate
     }
     assert_eq!(
         rig.stream.latency_frames(),
-        8_820,
+        17_640,
         "its rate steps up again"
     );
 }

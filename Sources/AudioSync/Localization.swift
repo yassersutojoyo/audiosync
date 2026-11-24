@@ -2183,9 +2183,10 @@ struct UIStrings {
         Notes
         - AirPlay speakers are kept in step with each other by AudioSync's AirPlay
           sender, so they need no delay.
-        - AirPlay adds at most 0.2 s on top of what the speaker needs. The first
-          0.1 s is there from the start, and the rest comes and goes only when
-          packets are lost.
+        - AirPlay adds at most 0.4 s on top of what the speaker needs. The first
+          0.1 s is there from the start, and the rest comes only when packets are
+          lost. Once it comes, it stays for that speaker, and the speaker starts
+          there again when it rejoins, until AudioSync quits.
         - AudioSync saves the source, each speaker's switch, delay, volume and
           name, the speakers you hid, your zones and the equalizer, and restores
           them the next time it starts.

@@ -7,6 +7,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 ### Changed
 
 - The AirPlay Delay field now shows only the extra delay you set, so a TV that read 278 ms now reads 78 ms; the part AudioSync sets on its own is no longer shown, the main window's status line no longer names it, and the hints under the delay fields are shorter. What you hear stays the same.
+- When an AirPlay speaker keeps asking for lost audio on a bad network, AudioSync now gives it 0.3 s more room in one step instead of 0.1 s, which ended the cut-outs in our bad-network tests. After a bad stretch that speaker stays about a third of a second later until AudioSync quits. On a good network nothing changes. The help now says AirPlay adds at most 0.4 s.
 
 ### Fixed
 

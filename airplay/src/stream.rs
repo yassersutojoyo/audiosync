@@ -66,8 +66,12 @@ pub const LATE_SEND: Duration = Duration::from_millis(5);
 /// A packet already cut leaves this long before its time, so a wake-up
 /// that much late still sends it on time (P84).
 pub const SEND_LEAD: Duration = Duration::from_millis(4);
-/// A step moves AudioSync's own margin between 4410 and 8820 frames (P200).
+/// A late request moves AudioSync's own margin by this much (P200); a
+/// resend rate goes straight to the ceiling below (P254).
 const STEP_FRAMES: u32 = 4_410;
+/// A resend rate raises AudioSync's own margin to this on top of the
+/// host's R_max + 4410, 0.4 s in all: the ceiling of every step (P254).
+const RATE_STEP_FRAMES: u32 = 13_230;
 /// After a step up, this many seconds without a gap step back down (P200).
 const CLEAN_WINDOW: f64 = 60.0;
 /// With no input since the last hole's restart, a hole up to this many
@@ -989,7 +993,8 @@ pub struct Stream {
     /// whose gap or resend rate asked for it, for the stream's life: no step
     /// down while that receiver is in the stream, and its floor when it
     /// joins again (P200).
-    rate_levels: Vec<(IpAddr, u32)>,
+    /// With each, the Lf before that step, where its step down returns.
+    rate_levels: Vec<(IpAddr, u32, u32)>,
     /// Every receiver whose gap or resend rate asked for the step on its way.
     askers: Vec<IpAddr>,
     /// The first packet cut at full gain again after a forced step's
@@ -1052,7 +1057,9 @@ impl Stream {
             step_wait_told: false,
             step_floor: 0,
             before_step: 0,
-            host_latency: 0,
+            host_latency: config
+                .latency_frames
+                .clamp(MIN_LATENCY_FRAMES, MAX_LATENCY_FRAMES),
             step_due: None,
             rate_levels: Vec::new(),
             askers: Vec::new(),
@@ -1390,7 +1397,7 @@ impl Stream {
     #[doc(hidden)]
     pub fn step_up(&mut self, now: Instant) {
         let t = self.clock.seconds(now);
-        self.note_gap(t);
+        self.note_gap(t, false);
         self.fade_step(t);
     }
 
@@ -1406,9 +1413,15 @@ impl Stream {
     }
 
     /// A speaker played without a packet (P200): the session's one step up
-    /// is wanted, or after it the clean window starts again.
-    fn note_gap(&mut self, t: f64) {
-        if self.clean_since.is_some() {
+    /// is wanted, or after it the clean window starts again. A resend rate
+    /// (`rate`) wants the step to the ceiling while Lf is below it (P254).
+    fn note_gap(&mut self, t: f64, rate: bool) {
+        let ceiling = (self.host_latency + RATE_STEP_FRAMES).min(MAX_LATENCY_FRAMES);
+        if rate && self.latency_frames < ceiling {
+            self.stepped_up = true;
+            self.step_wait_told = false;
+            self.step_wanted = Some(ceiling);
+        } else if self.clean_since.is_some() {
             self.clean_since = Some(t);
             self.step_wanted = None;
         } else if !self.stepped_up {
@@ -1468,8 +1481,8 @@ impl Stream {
         self.latency_frames = frames;
         if frames > old {
             for ip in std::mem::take(&mut self.askers) {
-                self.rate_levels.retain(|(at, _)| *at != ip);
-                self.rate_levels.push((ip, frames));
+                self.rate_levels.retain(|(at, ..)| *at != ip);
+                self.rate_levels.push((ip, frames, old));
             }
             self.step_floor = frames;
             self.before_step = old;
@@ -1521,13 +1534,13 @@ impl Stream {
         // joins at that level again while nothing sounds; next to a sounding
         // speaker its rate steps again instead (P200, P201).
         let ip = config.destinations.control.ip();
-        if let Some(&(_, frames)) = self.rate_levels.iter().find(|(at, _)| *at == ip)
+        if let Some(&(_, frames, before)) = self.rate_levels.iter().find(|(at, ..)| *at == ip)
             && frames > self.step_floor
             && !self.sounding(t)
         {
             self.step_floor = frames;
             self.stepped_up = true;
-            self.before_step = frames.saturating_sub(STEP_FRAMES);
+            self.before_step = before;
             self.clean_since = Some(t);
             // A new stream starts there, before its first sound.
             if self.speakers.is_empty() {
@@ -2091,7 +2104,7 @@ impl Stream {
             self.stepped_up = false;
         }
         if gap || steady {
-            self.note_gap(t);
+            self.note_gap(t, steady);
             if self.step_wanted.is_some() && !self.askers.contains(&ip) {
                 self.askers.push(ip);
             }
@@ -2106,7 +2119,7 @@ impl Stream {
     fn held(&self) -> bool {
         self.speakers.iter().any(|speaker| {
             let ip = speaker.destinations.control.ip();
-            self.rate_levels.iter().any(|(at, _)| *at == ip)
+            self.rate_levels.iter().any(|(at, ..)| *at == ip)
         })
     }
 

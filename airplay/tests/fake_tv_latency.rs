@@ -271,10 +271,10 @@ fn fake_tv_a_burst_of_resend_requests_leaves_lf_at_a_tenth_of_a_second() {
     );
 }
 
-/// The Lf P200 gives a receiver that reported nothing, and one rate step
+/// The Lf P200 gives a receiver that reported nothing, and the rate step
 /// above it.
 const UNREPORTED_LF: u32 = 8_820;
-const STEPPED_LF: u32 = 13_230;
+const STEPPED_LF: u32 = 22_050;
 /// The time before a break's arrival that a runner stall past M (about
 /// 100 ms) falls in.
 const BREAK_WINDOW: Duration = Duration::from_millis(200);
@@ -429,7 +429,7 @@ fn sender_control_port(server: &Ap2Server) -> u16 {
 }
 
 // A Samsung television after a pause and after Streaming off and on: a
-// television that reports no latency, stepped to 0.3 s by its resend rate,
+// television that reports no latency, stepped to 0.5 s by its resend rate,
 // stays there, and the audio it gets runs on whole.
 // covers: P200, P213
 #[test]
@@ -520,7 +520,7 @@ fn fake_tv_a_rate_step_holds_and_the_audio_runs_whole_across_a_pause_and_off_and
     let timelines = host.timelines(resumed, removed);
     host.sender.shutdown();
 
-    assert!(timelines.iter().all(|&ms| ms == 300), "{timelines:?}");
+    assert!(timelines.iter().all(|&ms| ms == 500), "{timelines:?}");
     for (what, from, to) in [("resumed", resumed, removed), ("on again", added, end)] {
         let lf = stated(&between(&controls, from, to));
         assert!(
