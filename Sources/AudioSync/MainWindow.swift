@@ -2233,7 +2233,7 @@ private struct ZoneMemberCompactRow: View {
             .buttonStyle(.plain)
             .accessibilityLabel(t.inZoneLabel(speaker.name, zone: zone.name))
             .layarKey(t.inZoneLabel(speaker.name, zone: zone.name))
-            .accessibilityValue(t.rowValue(state, offline: speaker.unannounced))
+            .accessibilityValue(t.rowValue(state, offline: speaker.unannounced, taken: speaker.taken))
             .accessibilityHint(t.rowHint(state, note: note))
             .accessibilityAction(named: t.renameSpeaker) { model.startRename(speaker, in: .inZones) }
             .help(t.help(state))
@@ -2469,7 +2469,7 @@ struct SpeakerRow: View {
                                                    renamedFrom: speaker.renamedFrom))
                 .layarKey(t.speakerLabel(name: speaker.name, tag: tag,
                                                    renamedFrom: speaker.renamedFrom))
-                .accessibilityValue(t.rowValue(state, offline: speaker.unannounced))
+                .accessibilityValue(t.rowValue(state, offline: speaker.unannounced, taken: speaker.taken))
                 .accessibilityHint(t.rowHint(state, note: note ?? t.availability(speaker.availability)))
                 .accessibilityAction(named: t.renameSpeaker) { model.startRename(speaker) }
                 .help(t.help(state))

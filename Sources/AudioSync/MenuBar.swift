@@ -1978,7 +1978,7 @@ struct MenuBarView: View {
                           text: t, height: rowHeight, hint: hint,
                           shownNote: t.panelRowNote(hint), connecting: connecting, taken: speaker.taken,
                           renamedFrom: speaker.renamedFrom,
-                          value: t.rowValue(model.state(of: speaker), offline: speaker.unannounced),
+                          value: t.rowValue(model.state(of: speaker), offline: speaker.unannounced, taken: speaker.taken),
                           kind: speaker.tag, airPlay2: speaker.airPlay2, product: speaker.product,
                           // The row's note says what its prompt waits for instead.
                           availability: speaker.codeWait == nil ? speaker.availability : .open,

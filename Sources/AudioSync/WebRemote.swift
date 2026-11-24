@@ -289,7 +289,7 @@ final class WebRemote {
                                 waitingForPtp: s.waitingForPtp, reconnecting: s.reconnecting,
                                 taken: s.taken, codeWait: s.codeWait, name: s.name, unannounced: s.unannounced,
                                 target: s.airPlayTarget),
-                key: s.key, waiting: s.enabled && (s.waitingForAirPlay2 || s.waitingForPtp),
+                key: s.key, waiting: s.enabled && (s.waitingForAirPlay2 || s.waitingForPtp), taken: s.taken,
                 streaming: model.running), text: t)
         }
     }

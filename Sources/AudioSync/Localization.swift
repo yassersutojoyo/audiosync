@@ -199,9 +199,11 @@ struct UIStrings {
     }
 
     /// A speaker row's accessibility value: its state, then that it is off
-    /// the network.
+    /// the network or that another device took it.
     func rowValue(_ state: SpeakerState, offline: Bool, taken: Bool = false) -> String {
-        offline ? value(state) + ", " + notOnNetwork : value(state)
+        let read = offline ? value(state) + ", " + notOnNetwork : value(state)
+        guard taken, case .playing = state else { return read }
+        return read + ", " + inUseByAnotherDevice
     }
 
     /// What clicking a speaker (or group) does, as its tooltip.

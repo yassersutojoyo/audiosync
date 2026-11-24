@@ -114,7 +114,7 @@ extension RemoteRow {
                   available: !codeBlocked,
                   notice: codeBlocked ? text.remoteTurnOnInApp : text.availability(f.availability) ?? f.note,
                   volumeAdjustable: f.castVolumeFixed != true,
-                  key: f.key, waiting: f.waiting, asksForCode: codeBlocked,
+                  key: f.key, waiting: f.waiting || !turnsOn && f.taken, asksForCode: codeBlocked,
                   volumeStep: f.castVolumeFixed == nil ? 1 : max(1, (100 * castStep).rounded()))
     }
 

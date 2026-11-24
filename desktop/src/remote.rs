@@ -352,7 +352,7 @@ fn zones(state: &AppState, listed_now: &[&Speaker]) -> Vec<RemoteZone> {
                         on(speaker)
                             && matches!(
                                 speaker.waiting,
-                                Some(Waiting::ForAirPlay2Slot | Waiting::ForPtp)
+                                Some(Waiting::ForAirPlay2Slot | Waiting::ForPtp | Waiting::Taken)
                             )
                     }),
                 },
@@ -1579,7 +1579,10 @@ pub(crate) mod tests {
         let snapshot = snapshot(&state, not_virtual, None, "Desk PC", &Text);
         let downstairs = &snapshot.zones[0];
         assert_eq!((downstairs.counts.on, downstairs.counts.waiting), (2, 1));
-        assert!(snapshot.speaker("kitchen").unwrap().on, "its switch shows on");
+        assert!(
+            snapshot.speaker("kitchen").unwrap().on,
+            "its switch shows on"
+        );
     }
 
     // covers: S256
