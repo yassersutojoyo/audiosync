@@ -69,6 +69,37 @@ enum MasterMute {
     }
 }
 
+/// What moved the master volume, named in the debug log with the same words
+/// as on Windows and Linux.
+enum MasterSource: String {
+    case key, mute, slider, remote, preset, restore
+}
+
+/// A master move for the debug log, one line per drag or held key: from
+/// where it began to where it rests, with what moved it last.
+struct MasterVolumeTrail {
+    private var from: Double?
+    private var to = 0.0
+    private var source = MasterSource.slider
+
+    static func line(from: Double, to: Double, by source: MasterSource) -> String {
+        "master volume \(String(format: "%.0f", from.rounded())) -> \(String(format: "%.0f", to.rounded())) (\(source.rawValue))"
+    }
+
+    mutating func moved(from old: Double, to new: Double, by source: MasterSource) {
+        if from == nil { from = old }
+        to = new
+        self.source = source
+    }
+
+    /// The line for the move since the last one, once; nil when nothing moved.
+    mutating func settled() -> String? {
+        guard let start = from else { return nil }
+        from = nil
+        return Self.line(from: start, to: to, by: source)
+    }
+}
+
 /// The keyboard's volume keys moving the master (S429).
 enum VolumeKeys {
     enum Key { case up, down, mute }

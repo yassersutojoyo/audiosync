@@ -147,7 +147,7 @@ final class AppModel: ObservableObject {
         var selectInputPair: (Int) -> Void = { _ in }
         var toggleMixApp: (String) -> Void = { _ in }
         var setMixMode: (AppMixMode) -> Void = { _ in }
-        var setMaster: (Double) -> Void = { _ in }
+        var setMaster: (Double, MasterSource) -> Void = { _, _ in }
         var setAirPlayEnabled: (String, Bool, StartOrigin) -> Void = { _, _, _ in }
         var setAirPlayVolume: (String, Double) -> Void = { _, _ in }
         var setAirPlayVolumeDragging: (String, Bool) -> Void = { _, _ in }
@@ -286,12 +286,12 @@ final class AppModel: ObservableObject {
     /// A volume key moved the master (S429), with the unmute level the speaker button uses.
     func volumeKey(_ key: VolumeKeys.Key) {
         masterBeforeMute = MasterMute.remembered(level: master, previous: masterBeforeMute)
-        actions.setMaster(VolumeKeys.master(after: key, level: master, remembered: masterBeforeMute))
+        actions.setMaster(VolumeKeys.master(after: key, level: master, remembered: masterBeforeMute), .key)
     }
     func toggleMasterMute() {
         // The level the app started at never passed through didSet.
         masterBeforeMute = MasterMute.remembered(level: master, previous: masterBeforeMute)
-        actions.setMaster(MasterMute.toggled(level: master, remembered: masterBeforeMute))
+        actions.setMaster(MasterMute.toggled(level: master, remembered: masterBeforeMute), .mute)
     }
     @Published var airplay: [Speaker] = []
     @Published var local: [Speaker] = []
@@ -3024,7 +3024,7 @@ struct MasterSlider: View {
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0).onChanged { drag in
                 if !click.clicked { click.clicked = true }
-                model.actions.setMaster(MasterTrack.level(at: drag.location.x, width: width))
+                model.actions.setMaster(MasterTrack.level(at: drag.location.x, width: width), .slider)
             }
             // The mouse-down drops the focus asked for in onChanged; a still click has no later event to ask again.
             .onEnded { _ in SliderClick.takeWindowFocus(); click.clicked = true; focused = true })
@@ -3033,7 +3033,7 @@ struct MasterSlider: View {
         .background(ScrollWatch { event in
             let up = event.isDirectionInvertedFromDevice ? -event.scrollingDeltaY : event.scrollingDeltaY
             model.actions.setMaster(MasterTrack.level(afterScroll: Double(up), precise: event.hasPreciseScrollingDeltas,
-                                                      from: model.master))
+                                                      from: model.master), .slider)
         })
         // As the equalizer bands: NSSlider's rule, the ring only under keyboard navigation, a clicked slider keeps the arrows.
         .focusable(interactions: click.clicked ? .edit : .activate)
@@ -3043,11 +3043,11 @@ struct MasterSlider: View {
         .onChange(of: focused) { _, now in if !now { click.clicked = false } }
         .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow, .pageUp, .pageDown, .home, .end]) { press in
             guard let key = MasterSlider.key(press.key) else { return .ignored }
-            model.actions.setMaster(MasterTrack.level(after: key, from: model.master))
+            model.actions.setMaster(MasterTrack.level(after: key, from: model.master), .slider)
             return .handled
         }
         .accessibilityRepresentation {
-            Slider(value: Binding(get: { model.master }, set: { model.actions.setMaster($0) }), in: 0...100)
+            Slider(value: Binding(get: { model.master }, set: { model.actions.setMaster($0, .slider) }), in: 0...100)
         }
         .accessibilityLabel(text.masterVolume)
         .layarKey(text.masterVolume)

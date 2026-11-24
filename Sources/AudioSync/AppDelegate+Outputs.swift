@@ -100,9 +100,11 @@ extension AppDelegate {
 
     /// The master is a gain on what AudioSync plays: a local speaker's gain and the
     /// AirPlay and Cast streams' samples, never a speaker's own or device volume (S413, S415).
-    func setMasterVolume(_ position: Double) {
+    func setMasterVolume(_ position: Double, by source: MasterSource) {
         guard let v = VolumeCurve.accepted(position) else { return }
+        let before = masterVolume
         masterVolume = MasterMute.snapped(v)
+        masterTrail.moved(from: before, to: masterVolume, by: source)
         LocalOutputSync.reapplyGains(on: engine, gain: { effectiveGain($0) })
         nativeAirPlay?.setMaster(masterVolume)
         castSender?.setMaster(masterVolume)
@@ -115,7 +117,7 @@ extension AppDelegate {
     }
 
     @objc private func logMasterGains() {
-        DebugTrace.log("[AudioSync] master volume set to \(String(format: "%.2f", masterVolume))")
+        if let line = masterTrail.settled() { DebugTrace.log("[AudioSync] \(line)") }
         logLocalGains()
     }
 

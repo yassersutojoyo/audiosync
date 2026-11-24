@@ -6959,10 +6959,10 @@ fn describe_equalizer(settings: &EqSettings) -> String {
 /// Why playback stopped on its own, as the log says it.
 fn describe_stop(reason: &StopReason) -> String {
     match reason {
-        StopReason::SourceQuit => "the captured app quit".to_owned(),
-        StopReason::CaptureFailed(error) => format!("the capture failed: {error}"),
+        StopReason::SourceQuit => "the source app quit".to_owned(),
+        StopReason::CaptureFailed(error) => format!("the capture was lost ({error})"),
         StopReason::SystemSwitchFailed(error) => {
-            format!("the captured app quit and the whole system's capture failed: {error}")
+            format!("the source app quit and the whole system didn't start ({error})")
         }
     }
 }
@@ -7014,7 +7014,7 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
                 label(names, id)
             )
         }
-        BackendEvent::Stopped { reason } => format!("stopped: {}", describe_stop(reason)),
+        BackendEvent::Stopped { reason } => format!("session stops: {}", describe_stop(reason)),
         BackendEvent::SwitchedToSystem => {
             "the captured app quit: the whole system is the source now".to_owned()
         }

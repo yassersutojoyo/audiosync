@@ -45,8 +45,9 @@ use crate::now_playing_card::{
 use crate::track_slide::{self, Direction, Place, TrackSlide};
 use crate::ui_model::{
     self, AirPlayWait, AllPhase, AllProgress, AppState, Backend, LeftOutRow, MAX_PRESETS,
-    MainWindowShows, NoticeMessage, PinPrompt, PresetError, PresetLeftOff, SheetRow, SheetState,
-    SourceKind, SourceName, SpeakerState, SwitchName, ViewSettings, WindowFrame, WindowPlace,
+    MainWindowShows, MasterSource, NoticeMessage, PinPrompt, PowerControl, PresetError,
+    PresetLeftOff, SheetRow, SheetState, SourceKind, SourceName, SpeakerState, SwitchName,
+    ViewSettings, WindowFrame, WindowPlace,
 };
 use crate::volume_keys::{self, VolumeKey};
 use crate::window_rules::{Rgb, ambient_breath};
@@ -1741,8 +1742,8 @@ impl App {
 
     /// Switches streaming on or off; a start on the backend's own thread
     /// shows once it is back.
-    pub fn set_running(&self, on: bool, weak: &Weak<App>) {
-        if self.backend.set_running(on) {
+    pub fn set_running(&self, on: bool, by: PowerControl, weak: &Weak<App>) {
+        if self.backend.set_running(on, by) {
             let weak = weak.clone();
             self.start_timer
                 .start(TimerMode::Repeated, START_CHECK_INTERVAL, move || {
@@ -2319,14 +2320,14 @@ impl App {
     fn toggle_master_mute(&self) {
         let muted = volume_waves(self.snapshot().master_volume) == 0;
         let target = if muted { self.unmute_to.get() } else { 0.0 };
-        self.update(|b| b.set_master_volume(target));
+        self.update(|b| b.set_master_volume_by(target, MasterSource::Mute));
     }
 
     /// A move of a master volume slider; under 0.5 is 0, so the muted
     /// speaker never shows while a trace still plays.
     fn move_master_volume(&self, volume: f32) {
         let volume = if volume < 0.5 { 0.0 } else { volume.into() };
-        self.update(|b| b.set_master_volume(volume));
+        self.update(|b| b.set_master_volume_by(volume, MasterSource::Slider));
     }
 
     fn send_transport(&self, button: i32) {
@@ -3798,7 +3799,9 @@ impl App {
         let weak = Rc::downgrade(self);
 
         let w = weak.clone();
-        main.on_power_toggled(move |on| with_app(&w, |app| app.set_running(on, &w)));
+        main.on_power_toggled(move |on| {
+            with_app(&w, |app| app.set_running(on, PowerControl::Switch, &w));
+        });
         let w = weak.clone();
         main.on_source_selected(move |index| with_app(&w, |app| app.select_source(index)));
         let w = weak.clone();
@@ -4241,7 +4244,9 @@ impl App {
         let weak = Rc::downgrade(self);
 
         let w = weak.clone();
-        flyout.on_power_toggled(move |on| with_app(&w, |app| app.set_running(on, &w)));
+        flyout.on_power_toggled(move |on| {
+            with_app(&w, |app| app.set_running(on, PowerControl::Switch, &w));
+        });
         let w = weak.clone();
         flyout.on_source_selected(move |index| with_app(&w, |app| app.select_source(index)));
         let w = weak.clone();
@@ -4967,7 +4972,7 @@ impl App {
     fn volume_key(&self, key: VolumeKey) {
         let master = self.snapshot().master_volume;
         let level = volume_keys::master_after(key, master, self.unmute_to.get());
-        self.update(|b| b.set_master_volume(level));
+        self.update(|b| b.set_master_volume_by(level, MasterSource::Key));
         #[cfg(all(windows, not(test)))]
         crate::volume_keys::show_level(
             level,

@@ -17731,6 +17731,23 @@ do {
           "session stop: a stop with no session running and no interruption writes no line")
 }
 
+// MARK: Every master volume change names its source in the debug log (MasterVolumeTrail in Volume.swift)
+do {
+    var masterTrail = MasterVolumeTrail()
+    check(masterTrail.settled() == nil, "master log: nothing moved, nothing to log")
+    masterTrail.moved(from: 47, to: 48, by: .slider)
+    masterTrail.moved(from: 48, to: 50, by: .slider)
+    let masterSettled = masterTrail.settled()
+    check(masterSettled == "master volume 47 -> 50 (slider)",
+          "master log: a drag logs once, from where it began to where it rests", masterSettled ?? "nil")
+    check(masterTrail.settled() == nil, "master log: a settled drag is logged once")
+    check(MasterVolumeTrail.line(from: 50, to: 53, by: .key) == "master volume 50 -> 53 (key)",
+          "master log: a volume key is named")
+    let masterSources = [MasterSource.key, .mute, .slider, .remote, .preset, .restore].map(\.rawValue)
+    check(masterSources == ["key", "mute", "slider", "remote", "preset", "restore"],
+          "master log: the sources use the same words as Windows and Linux", masterSources.joined(separator: " "))
+}
+
 // MARK: First-run permission explanations (PermissionFlow.swift)
 // covers: S363 (all but the check that the test defaults suite opens)
 do {

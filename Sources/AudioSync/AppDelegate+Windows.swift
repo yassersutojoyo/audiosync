@@ -394,7 +394,7 @@ extension AppDelegate {
         a.selectInputPair = { [weak self] index in self?.setInputPair(index) }
         a.toggleMixApp = { [weak self] id in self?.toggleMixApp(id) }
         a.setMixMode = { [weak self] mode in self?.setMixMode(mode) }
-        a.setMaster = { [weak self] position in self?.setMasterVolume(position) }
+        a.setMaster = { [weak self] position, source in self?.setMasterVolume(position, by: source) }
         a.setAirPlayEnabled = { [weak self] id, on, origin in self?.setNativeAirPlayEnabled(id, on, origin: origin) }
         a.setAirPlayVolume = { [weak self] id, volume in self?.setNativeAirPlayVolume(id, volume) }
         a.setAirPlayVolumeDragging = { [weak self] id, dragging in self?.setNativeAirPlayVolumeDragging(id, dragging) }

@@ -63,6 +63,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use audiosync_airplay::discovery::shown_text;
 use audiosync_core::channels::InputPair;
@@ -121,10 +122,10 @@ use crate::speaker_names::SpeakerNames;
 use crate::ui_model::{
     self, AbsentMember, AllPhase, AllProgress, AppState, Availability, Backend, CalibrateAllState,
     CalibrationState, CastAddressCheck, CastAddressError, CastGroup, CastList, CastMembers,
-    CastRow, CastState, HiddenSpeaker, InTarget, LeftOutRow, MixApp, Notice, NoticeMessage,
-    PasswordPrompt, PinPhase, PinPrompt, PresetError, PresetLeftOff, SheetRow, SheetState,
-    SilentOutput, Source, SourceKind, SourceName, Speaker, SpeakerKind, SwitchName, ViewSettings,
-    Waiting, ZoneError, ZoneSheet,
+    CastRow, CastState, HiddenSpeaker, InTarget, LeftOutRow, MasterSource, MixApp, Notice,
+    NoticeMessage, PasswordPrompt, PinPhase, PinPrompt, PowerControl, PresetError, PresetLeftOff,
+    SheetRow, SheetState, SilentOutput, Source, SourceKind, SourceName, Speaker, SpeakerKind,
+    SwitchName, ViewSettings, Waiting, ZoneError, ZoneSheet,
 };
 
 /// The source list is read again every this many polls, about every three
@@ -136,6 +137,28 @@ const SOURCE_POLLS: u32 = 6;
 /// every thirty seconds: a Windows sign-out ends the app without the quit
 /// save, so a change made just before must not wait for the next one.
 const SAVE_RETRY_POLLS: u32 = 60;
+
+/// How long the master rests before its move is logged, so a drag or a
+/// held volume key writes one line.
+const MASTER_LOG_SETTLE: Duration = Duration::from_millis(500);
+
+/// A master move not logged yet: where it began, where it is, what moved it
+/// last and when.
+struct MasterMove {
+    from: f64,
+    to: f64,
+    by: MasterSource,
+    at: Instant,
+}
+
+fn master_volume_line(from: f64, to: f64, by: MasterSource) -> String {
+    format!(
+        "master volume {:.0} -> {:.0} ({})",
+        from.round(),
+        to.round(),
+        by.word()
+    )
+}
 
 /// The results of the last Calibrate All, kept until closed or out of date.
 struct KeptSheet {
@@ -631,6 +654,7 @@ pub struct AudioAdapter<A: AudioBackend> {
     clock: fn() -> String,
     /// The debug log; it writes nothing unless `AUDIOSYNC_DEBUG=1`.
     log: DebugLog,
+    master_move: Option<MasterMove>,
     /// Where the settings are kept.
     settings_file: SettingsFile,
     /// The settings as last read or written: the file holds them.
@@ -841,6 +865,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             polls: 0,
             clock,
             log,
+            master_move: None,
             settings_file,
             saved: Settings::default(),
             delays_to_migrate: matches!(
@@ -919,6 +944,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
     fn restore(&mut self, saved: Settings) {
         let saved = saved.with_zones_migrated().with_presets_migrated();
         self.audio.set_master_volume(saved.master_volume);
+        // Nothing came before the saved level, so it is both ends.
+        let restored = self.audio.master_volume();
+        self.log
+            .log(|| master_volume_line(restored, restored, MasterSource::Restore));
         self.audio.set_local_volumes(saved.local_volumes.clone());
         // A hidden speaker is never switched on, not even by the saved on-state.
         self.hidden = saved.hidden_speakers.clone();
@@ -2926,7 +2955,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .log(|| format!("the user recalled preset \"{}\"", preset.name));
         // Before any member goes on, so a speaker that starts plays at the
         // preset's master, its zone level and its own volume.
-        self.audio.set_master_volume(preset.master);
+        self.set_master_volume_by(preset.master, MasterSource::Preset);
         for (zone, volume) in presets::recall_zone_volumes(&preset, &self.zones) {
             self.zones.set_volume(zone, volume);
         }
@@ -4108,7 +4137,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         if reaction.stop_session && self.is_idle() {
             self.log.log(|| {
                 format!(
-                    "streaming stops: {} couldn't start and no other speaker is on",
+                    "session stops: no speaker is on ({} couldn't start)",
                     self.output_name(endpoint_id)
                 )
             });
@@ -4157,7 +4186,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         if reaction.stop_session && self.is_idle() {
             self.log.log(|| {
                 format!(
-                    "streaming stops: {} can't play and no other speaker is on",
+                    "session stops: no speaker is on ({} can't play)",
                     self.airplay_name(id)
                 )
             });
@@ -4275,7 +4304,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     fn stop_if_idle(&mut self) {
         if self.is_idle() {
             self.log
-                .log(|| "streaming stops: no speaker is on anymore".to_owned());
+                .log(|| "session stops: no speaker is on".to_owned());
             self.audio.stop();
             self.clear_switch_notices();
         }
@@ -4285,6 +4314,18 @@ impl<A: AudioBackend> AudioAdapter<A> {
     fn stop_streaming(&mut self) {
         self.audio.stop();
         self.clear_switch_notices();
+    }
+
+    /// Logs the master's move once it has rested for [`MASTER_LOG_SETTLE`].
+    fn settle_master_log(&mut self, now: Instant) {
+        let Some(pending) = self
+            .master_move
+            .take_if(|pending| now.duration_since(pending.at) >= MASTER_LOG_SETTLE)
+        else {
+            return;
+        };
+        self.log
+            .log(|| master_volume_line(pending.from, pending.to, pending.by));
     }
 
     /// Both switch notices describe a stream that a stop has ended.
@@ -5316,9 +5357,18 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn set_running(&mut self, on: bool) {
-        self.log.log(|| {
-            let state = if on { "on" } else { "off" };
-            format!("the user switched streaming {state}")
+        self.set_running_by(on, PowerControl::Switch);
+    }
+
+    fn set_running_by(&mut self, on: bool, by: PowerControl) {
+        self.log.log(|| match (on, by) {
+            (true, _) => "the user switched streaming on".to_owned(),
+            (false, PowerControl::Switch) => {
+                "session stops: the power switch turned streaming off".to_owned()
+            }
+            (false, PowerControl::TrayMenu) => {
+                "session stops: the tray menu turned streaming off".to_owned()
+            }
         });
         if !on {
             if self.running() {
@@ -5472,6 +5522,22 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
 
     fn set_master_volume(&mut self, position: f64) {
         self.audio.set_master_volume(position);
+    }
+
+    fn set_master_volume_by(&mut self, position: f64, by: MasterSource) {
+        let from = self.audio.master_volume();
+        self.audio.set_master_volume(position);
+        let to = self.audio.master_volume();
+        let from = self
+            .master_move
+            .as_ref()
+            .map_or(from, |pending| pending.from);
+        self.master_move = Some(MasterMove {
+            from,
+            to,
+            by,
+            at: Instant::now(),
+        });
     }
 
     fn set_speaker_enabled(&mut self, id: &str, on: bool) {
@@ -6161,6 +6227,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     /// Also writes the settings file when anything changed since the last
     /// poll, so a slider drag is saved about twice a second at most.
     fn poll(&mut self) -> bool {
+        self.settle_master_log(Instant::now());
         self.note_speakers();
         let mut changed = self.take_events();
         changed |= self.check_sound_output();
@@ -6459,6 +6526,9 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn shut_down(&mut self) {
+        if self.running() {
+            self.log.log(|| "session stops: AudioSync quits".to_owned());
+        }
         self.audio.shut_down();
         // The levels the outputs' fade-outs put back (S472).
         let _ = self.persist();
@@ -9506,9 +9576,65 @@ mod tests {
                 "the user switched Speakers off",
                 "output \"Speakers\" (speakers) switched off",
                 "output \"Speakers\" (speakers) stopped: switched off",
-                "streaming stops: no speaker is on anymore",
+                "session stops: no speaker is on",
                 "stopping",
                 "session ended:",
+            ],
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_master_volume_change_is_logged_from_where_it_began_with_its_source() {
+        let dir = test_dir("adapter-master-source");
+        let log = DebugLog::new(Some(dir.join(FILE_NAME)));
+        let mut adapter =
+            AudioAdapter::new(MockBackend::empty(), || "09.41".to_owned(), log.clone());
+        adapter.restore(Settings {
+            master_volume: 47.0,
+            ..Settings::default()
+        });
+        adapter.set_master_volume_by(48.0, MasterSource::Slider);
+        adapter.set_master_volume_by(50.0, MasterSource::Slider);
+        adapter.settle_master_log(Instant::now());
+        adapter.settle_master_log(Instant::now() + MASTER_LOG_SETTLE);
+        adapter.set_master_volume_by(53.0, MasterSource::Key);
+        adapter.settle_master_log(Instant::now() + MASTER_LOG_SETTLE);
+        assert!(log.flush(TEST_FLUSH));
+        let messages = read_messages(&dir.join(FILE_NAME));
+        assert_in_order(
+            &messages,
+            &[
+                "-> 47 (restore)",
+                "master volume 47 -> 50 (slider)",
+                "master volume 50 -> 53 (key)",
+            ],
+        );
+        let drags = messages.iter().filter(|m| m.contains("(slider)")).count();
+        assert_eq!(drags, 1, "a drag logs once, when it settles");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_streaming_stop_names_what_switched_it_off() {
+        let dir = test_dir("adapter-stop-source");
+        let log = DebugLog::new(Some(dir.join(FILE_NAME)));
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), log.clone());
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_running_by(false, PowerControl::TrayMenu);
+        adapter.set_running(true);
+        adapter.set_running_by(false, PowerControl::Switch);
+        adapter.set_running(true);
+        adapter.shut_down();
+        assert!(log.flush(TEST_FLUSH));
+        assert_in_order(
+            &read_messages(&dir.join(FILE_NAME)),
+            &[
+                "session stops: the tray menu turned streaming off",
+                "session stops: the power switch turned streaming off",
+                "session stops: AudioSync quits",
             ],
         );
         let _ = std::fs::remove_dir_all(dir);

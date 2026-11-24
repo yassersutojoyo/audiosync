@@ -5,7 +5,7 @@
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
-use crate::ui_model::{AppState, Backend};
+use crate::ui_model::{AppState, Backend, PowerControl};
 
 enum Held {
     #[cfg_attr(
@@ -23,7 +23,7 @@ pub struct Engine {
     /// What the windows show while the backend is away.
     shown: RefCell<Option<AppState>>,
     /// The latest switch position asked for while the backend was away.
-    asked: Cell<Option<bool>>,
+    asked: Cell<Option<(bool, PowerControl)>>,
 }
 
 fn present(held: &Held) -> &(dyn Backend + 'static) {
@@ -112,9 +112,9 @@ impl Engine {
     /// thread; returns true then, and [`Engine::is_here`] tells when it is
     /// back. A switch while it is away waits for its return, and only the
     /// last one counts.
-    pub fn set_running(&self, on: bool) -> bool {
+    pub fn set_running(&self, on: bool, by: PowerControl) -> bool {
         if !self.come_back(false) {
-            self.asked.set(Some(on));
+            self.asked.set(Some((on, by)));
             if let Some(shown) = self.shown.borrow_mut().as_mut() {
                 shown.running = on;
             }
@@ -122,7 +122,7 @@ impl Engine {
         }
         let movable = matches!(*self.held.borrow(), Held::Movable(_));
         if !(on && movable) {
-            self.borrow_mut().set_running(on);
+            self.borrow_mut().set_running_by(on, by);
             return false;
         }
         let (back, returned) = mpsc::channel();
@@ -165,8 +165,8 @@ impl Engine {
         self.shown.take();
         // Held, not away, during the stop: its COM calls can pump messages
         // whose handlers ask for the backend and must find it busy.
-        if self.asked.take() == Some(false) {
-            present_mut(&mut self.held.borrow_mut()).set_running(false);
+        if let Some((false, by)) = self.asked.take() {
+            present_mut(&mut self.held.borrow_mut()).set_running_by(false, by);
         }
         true
     }
@@ -214,8 +214,8 @@ mod tests {
         );
         let engine = Rc::new(Engine::movable(Box::new(adapter)));
         STOPPING.with(|stopping| *stopping.borrow_mut() = Some(Rc::clone(&engine)));
-        assert!(engine.set_running(true));
-        assert!(!engine.set_running(false));
+        assert!(engine.set_running(true, PowerControl::Switch));
+        assert!(!engine.set_running(false, PowerControl::Switch));
         assert!(!engine.borrow().snapshot().running);
         STOPPING.with(|stopping| stopping.borrow_mut().take());
         assert_eq!(BUSY_WHILE_STOPPING.get(), Some(true));

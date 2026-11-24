@@ -75,7 +75,7 @@ extension AppDelegate {
             return
         }
 
-        setMasterVolume(preset.master)
+        setMasterVolume(preset.master, by: .preset)
         var zoned = zones
         for stored in preset.zones {
             if let index = zoned.firstIndex(where: { $0.id == stored.id }) { zoned[index].volume = stored.volume }

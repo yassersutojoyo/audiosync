@@ -149,6 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             store.save(master: masterVolume)
         }
     }
+    var masterTrail = MasterVolumeTrail()
     /// Slider positions (0…100) of local speakers, by device UID.
     var localVolume: [String: Double] {
         didSet { if localVolume != oldValue { store.save(levels: localVolume, forKey: Keys.localVolumes) } }
@@ -456,6 +457,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         store.retiredChoiceNotes(environment: ProcessInfo.processInfo.environment)
             .forEach { DebugTrace.log($0) }
         AudioSyncCore.logVersion()   // which Rust core this build carries
+        // Nothing came before the saved level, so it is both ends.
+        DebugTrace.log("[AudioSync] " + MasterVolumeTrail.line(from: masterVolume, to: masterVolume, by: .restore))
 
         handleEngineEvents()
         setUpMenuBar()

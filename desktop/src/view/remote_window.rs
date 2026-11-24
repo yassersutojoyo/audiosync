@@ -30,7 +30,7 @@ use super::{
 use crate::Strings;
 use crate::network_profile::{ProfileSource, PublicNetworkWarning, Watch};
 use crate::remote::{self, Action, RemoteSettings, RowText};
-use crate::ui_model::{AppState, Notice, NoticeMessage, Speaker};
+use crate::ui_model::{AppState, MasterSource, Notice, NoticeMessage, Speaker};
 
 thread_local! {
     /// The app a command wakes on the event loop's thread.
@@ -553,7 +553,9 @@ impl App {
                             }
                             Action::Delay { id, ms } => backend.set_speaker_delay(&id, ms),
                             Action::AirPlayDelay { ms } => backend.set_airplay_delay(ms),
-                            Action::Master { volume } => backend.set_master_volume(volume),
+                            Action::Master { volume } => {
+                                backend.set_master_volume_by(volume, MasterSource::Remote);
+                            }
                             Action::ToggleZone { id, keep_off } => {
                                 backend.toggle_zone_from_phone(&id, &keep_off);
                             }

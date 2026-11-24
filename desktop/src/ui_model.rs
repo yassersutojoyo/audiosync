@@ -1696,6 +1696,41 @@ pub enum PresetError {
     Full,
 }
 
+/// What moved the master volume, named in the debug log with the Mac's words.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MasterSource {
+    /// The keyboard's volume keys (Windows only: Linux takes no keys).
+    Key,
+    /// The speaker button beside the master slider.
+    Mute,
+    Slider,
+    Remote,
+    Preset,
+    /// The saved level, at launch.
+    Restore,
+}
+
+impl MasterSource {
+    pub fn word(self) -> &'static str {
+        match self {
+            MasterSource::Key => "key",
+            MasterSource::Mute => "mute",
+            MasterSource::Slider => "slider",
+            MasterSource::Remote => "remote",
+            MasterSource::Preset => "preset",
+            MasterSource::Restore => "restore",
+        }
+    }
+}
+
+/// The control that switched streaming on or off, for the debug log.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PowerControl {
+    /// The power switch in the main window or the tray panel.
+    Switch,
+    TrayMenu,
+}
+
 /// The audio side, as the UI sees it. Every method is called on the UI
 /// thread, and the next snapshot shows what it did. Most calls return at
 /// once, but on Windows a call that starts or stops streams waits for them:
@@ -1707,6 +1742,10 @@ pub enum PresetError {
 pub trait Backend {
     fn snapshot(&self) -> AppState;
     fn set_running(&mut self, on: bool);
+    /// [`Backend::set_running`], naming the control for the debug log.
+    fn set_running_by(&mut self, on: bool, _by: PowerControl) {
+        self.set_running(on);
+    }
     fn select_source(&mut self, id: &str);
     /// Plays channel pair `pair` (1 for channels 3-4) of the chosen input
     /// device, and keeps it for that device.
@@ -1719,6 +1758,10 @@ pub trait Backend {
     /// Switches the several-apps list to "all except" (true) or "only" (false).
     fn set_mix_all_except(&mut self, on: bool);
     fn set_master_volume(&mut self, volume: f64);
+    /// [`Backend::set_master_volume`], naming the source for the debug log.
+    fn set_master_volume_by(&mut self, volume: f64, _by: MasterSource) {
+        self.set_master_volume(volume);
+    }
     fn set_speaker_enabled(&mut self, id: &str, on: bool);
     /// A switch from the web remote: a speaker it turns on never pairs or
     /// asks for a password (spec S257).

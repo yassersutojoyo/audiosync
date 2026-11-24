@@ -29,7 +29,7 @@ use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, 
 use crate::placement::{self, Bounds};
 #[cfg(any(windows, target_os = "linux"))]
 use crate::platform;
-use crate::ui_model::AppState;
+use crate::ui_model::{AppState, PowerControl};
 use crate::view::{self, App};
 
 /// Icon resource ordinals, as build.rs embeds them.
@@ -453,7 +453,7 @@ fn on_menu_event(id: MenuId) {
         app.show_main();
     } else if id == MenuIds::TOGGLE {
         let running = app.snapshot().running;
-        app.set_running(!running, &Rc::downgrade(&app));
+        app.set_running(!running, PowerControl::TrayMenu, &Rc::downgrade(&app));
     } else if id == MenuIds::LOGIN {
         app.set_launch_at_login(!app.launch_at_login());
     } else if id == MenuIds::EXIT {

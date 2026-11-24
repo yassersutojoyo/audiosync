@@ -350,7 +350,7 @@ final class WebRemote {
         case .setLocalOffset(let id, let ms): model.actions.setLocalOffset(id, ms)
         case .setCastOffset(let id, let ms): model.actions.setCastOffset(id, ms)
         case .setAirPlayDelay(let ms): model.actions.setAirPlayDelay(ms)
-        case .setMaster(let position): model.actions.setMaster(position)
+        case .setMaster(let position): model.actions.setMaster(position, .remote)
         case .setZoneVolume(let id, let position): host.setZoneVolume(id, position)
         case .toggleZone(let id, let keepOff): host.toggleZone(id, keepOff, .remote)
         case .recallPreset(let id, let keepOff): host.recallPreset(id, keepOff, .remote)
