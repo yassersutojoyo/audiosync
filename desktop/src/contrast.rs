@@ -1020,7 +1020,7 @@ fn no_text_promises_airplay() {
                 || line.contains("@tr(\"AirPlay\")")
                 || line.contains("@tr(\"AirPlay 2\")")
                 || line.contains("couldn't save your AirPlay pairings,")
-                || line.contains("couldn't read your AirPlay pairings when it started,")
+                || line.contains("couldn't read your AirPlay pairings, so")
                 || line.contains("not supported yet")
                 || line.contains("doesn't support yet")
                 || line.contains("return @tr(\"{} needs AirPlay 2, which this launch of AudioSync")
@@ -1032,10 +1032,10 @@ fn no_text_promises_airplay() {
                 || line.contains("notice-retry-label: @tr(\"Retry, AirPlay\")")
                 || line.contains("return @tr(\"AirPlay stopped\");")
                 || line.contains(
-                    "notice-airplay-ptp-ports-taken: @tr(\"Another app is using port 319 or 320,"
+                    "notice-airplay-ptp-ports-taken: @tr(\"Another app holds port 319 or 320,"
                 )
                 || line.contains(
-                    "return @tr(\"AirPlay speakers can wait at most 20 s for a Google Cast speaker,"
+                    "return @tr(\"AirPlay speakers play about {} s ahead of {}:"
                 )
                 || line.contains("return @tr(\"AirPlay adds a {} s delay to every speaker.")
                 || line.contains(
@@ -1045,7 +1045,7 @@ fn no_text_promises_airplay() {
                 || line.contains("return @tr(\"AirPlay delay: was {}. New: {} ms")
                 || line.contains("return @tr(\"The AirPlay speakers differ by {} ms.")
                 || line.contains("return @tr(\"No AirPlay speaker was measured clearly,")
-                || line.contains("@tr(\"AirPlay speakers share one delay, so a new AirPlay delay")
+                || line.contains("@tr(\"AirPlay speakers share one delay, so this also moves")
                 || line.contains(
                     "airplay-none-found: root.public-network ? \
                      @tr(\"No AirPlay speakers found yet.",
@@ -1435,12 +1435,12 @@ fn windows_help_on_hearing_twice_asks_for_no_change() {
 fn stuck_notices_say_what_to_do_next() {
     let strings = include_str!("../ui/strings.slint");
     for text in [
-        "AudioSync couldn't save your settings, so changes you make now won't be kept after AudioSync quits. If the disk is full, free up some space.",
-        "AudioSync couldn't save your AirPlay pairings, so pairings you add or forget now won't be kept after AudioSync quits. If the disk is full, free up some space.",
-        "The download is broken, so nothing was installed. The running version stays. You can download the new version from the release page.",
-        "There isn't enough disk space for the update, so nothing was installed. The running version stays. Free up some space, then try again.",
-        "{} needs PTP timing, which isn't available, so it's off. If another app is using port 319 or 320, close it, then turn the speaker on again.",
-        "Streaming, the speakers or their delays changed during the measurement. Leave them as they are while it measures, and try again.",
+        "AudioSync couldn't save your settings, so changes are lost when it quits. Free up disk space if it's full.",
+        "AudioSync couldn't save your AirPlay pairings, so changes are lost when it quits. Free up disk space if it's full.",
+        "The download is broken, so nothing was installed. Get the new version from the release page.",
+        "There isn't enough disk space, so nothing was installed. Free up space, then try again.",
+        "{} can't get PTP timing, so it's off. Close any app on port 319 or 320, then turn it on again.",
+        "The speakers or delays changed while measuring. Leave them alone and try again.",
         "The two speakers were too far apart to measure. Make sure the microphone can hear both speakers, and try again.",
         "Restarts the stream, with a short gap, so this speaker plays at its offset again",
     ] {

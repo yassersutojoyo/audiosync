@@ -2,18 +2,18 @@ No AirPlay speakers found yet. Make sure this PC is on the same network as your 
 No AirPlay or Google Cast speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it (or set the network to Private).
 No Google Cast speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it (or set the network to Private).
 Windows system sounds, such as notification chimes, aren't included.
-Windows didn't let AudioSync add itself to the startup apps, so Launch at Sign-In stays off. To start AudioSync at sign-in anyway, put a shortcut to it in your Startup folder (press Windows+R and enter shell:startup), then add a space and --background at the end of the shortcut's Target so AudioSync starts in the tray.
-Windows didn't let AudioSync remove itself from the startup apps. To stop it launching at sign-in, turn AudioSync off in Settings > Apps > Startup.
-Windows has no working sound output, so apps have nowhere to play and AudioSync has nothing to send to your speakers. Connect or turn on an output in Sound settings.
+Windows didn't let AudioSync start at sign-in. Put a shortcut to it in shell:startup (Windows+R), with a space and --background at the end of its Target.
+Windows didn't let AudioSync stop starting at sign-in. Turn it off in Settings > Apps > Startup.
+Windows has no working sound output, so nothing reaches your speakers. Connect or turn on one in Sound settings.
 AudioSync couldn't open port {} on this PC, so the web remote can't start. Enter another port and select Use Port.
 AudioSync couldn't reach Windows audio, so it can't start. Restart your PC, then open AudioSync again.\n\nDetails: {}
-{} couldn't reach the stream on this PC, so it's off. Allow AudioSync in Windows Firewall on Private networks, or on Public networks if this network is set to Public, then turn it on again.
-You may hear {0} twice: it also plays straight from {1}. Send it to an output you don't listen to (Volume mixer), or mute {1}.
-You may hear {0} twice: it also plays straight from {1}, where AudioSync plays too. Send it to an output you don't listen to (Volume mixer).
-You may hear {0} twice: it also plays straight from {1}, and from {2}, where AudioSync plays too. Send it to an output you don't listen to (Volume mixer). Muting {1} alone isn't enough.
-You may hear your PC's sound twice: it also plays straight from {0}. Make an output you don't listen to the Windows default (Sound settings), or mute {0}.
-You may hear your PC's sound twice: it also plays straight from {0}, where AudioSync plays too. Make an output you don't listen to the Windows default (Sound settings).
-You may hear your PC's sound twice: it also plays straight from {0}, and from {1}, where AudioSync plays too. Make an output you don't listen to the Windows default (Sound settings). Muting {0} alone isn't enough.
+{} couldn't reach the stream on this PC, so it's off. Allow AudioSync in Windows Firewall, then turn it on again.
+You may hear {0} twice: it also plays from {1}. Mute {1}, or select Show How.
+You may hear {0} twice: it also plays from {1}. Select Show How to fix it.
+You may hear {0} twice: it also plays from {1} and {2}. Select Show How to fix it.
+You may hear your PC's sound twice: it also plays from {0}. Mute {0}, or select Show How.
+You may hear your PC's sound twice: it also plays from {0}. Select Show How to fix it.
+You may hear your PC's sound twice: it also plays from {0} and {1}. Select Show How to fix it.
 Couldn't open Settings. Open it from the Start menu: Settings > System > Sound.
 Windows keeps playing {0} straight from {1}, next to AudioSync's synced copies. To hear it only once:
 Windows keeps playing your PC's sound straight from {0}, next to AudioSync's synced copies. To hear it only once:
@@ -42,8 +42,8 @@ Muted in Windows, volume {}%
 Windows is blocking microphone access for desktop apps. Turn on “Let desktop apps access your microphone” and “Microphone access” in Settings > Privacy & security > Microphone, and try again.
 AudioSync couldn't record from the microphone. Check the input in Settings > System > Sound.
 The microphone runs at a sample rate calibration can't use. Set its format to 48 kHz in Settings > System > Sound, and try again.
-The default input is a Bluetooth headset's hands-free microphone, and recording from it would switch the headset to call mode. Choose another input in Settings > System > Sound, and try again.
-Another app has the microphone to itself. Close that app, or under Settings > System > Sound > More sound settings > Recording, open the microphone's Properties and turn off “Allow applications to take exclusive control of this device” on the Advanced tab, and try again.
-The delays are too long to measure in one recording at the microphone's sample rate. Lower the largest delay, or set the microphone's format to 48 kHz in Settings > System > Sound, and try again.
+The default input is a Bluetooth headset's call microphone. Choose another input in Sound settings, then try again.
+Another app has the microphone to itself. Close that app, or turn off exclusive control in Sound settings.
+The delays are too long to measure in one recording. Lower the largest delay, or set the microphone to 48 kHz.
 When something needs your attention, such as a speaker that was disconnected or an app that quit, a notice appears at the top of the main window, and the newest one in the AudioSync tray panel. Use its close button to dismiss it, or Dismiss All when there is more than one. Many notices also clear themselves once the cause is gone.
 Windows has its own volume for each output, and it limits AudioSync's slider.

@@ -2233,10 +2233,10 @@ do {
           "capture notice: the waiting text names the app when one was found, and reads generic otherwise")
     // covers: S350
     check(UIStrings().waitingForAudio(nil, permissionInDoubt: true)
-            == "Waiting for audio. Play something and it streams right away. If it doesn't, turn on AudioSync in "
-                + "System Settings → Privacy & Security → Screen & System Audio Recording, under “System Audio Recording Only”."
+            == "Waiting for audio. No sound once it plays? Allow AudioSync in "
+                + "Privacy & Security → Screen & System Audio Recording."
           && UIStrings().waitingForAudio("Spotify", permissionInDoubt: true)
-            .hasPrefix("Waiting for audio from Spotify. Start playback there and it streams right away. If it doesn't, ")
+            .hasPrefix("Waiting for audio from Spotify. No sound once it plays? ")
           && !UIStrings().waitingForAudio(nil).contains("System Settings"),
           "capture notice: until a tap in this app run has heard sound, the waiting text names the recording permission")
     // covers: S350
@@ -4305,12 +4305,12 @@ do {
                 == .turnOff("native:A9", .receiverUnverified)
             && UIStrings().nativeAirPlayReceiverUnverified(name: "Den TV")
                 == "Den TV didn't answer as the speaker you paired, so it's off. "
-                    + "If it's yours, use Forget Pairing and turn it on to pair again with its code.",
+                    + "If it's yours, use Forget Pairing and pair it again.",
           "P56 native airplay: a receiver that fails its signature check goes off with its own notice, as on Windows")
     // covers: S346
     check(UIStrings().nativeAirPlayTimingUnavailable(name: "Loft")
-            == "Loft needs PTP timing, which isn't available, so it's off. "
-                + "If another app is using port 319 or 320, close it, then turn the speaker on again.",
+            == "Loft can't get PTP timing, so it's off. "
+                + "Close any app on port 319 or 320, then turn it on again.",
           "native airplay: the PTP text reads as on Windows")
     var titled = NoticeList()
     titled.post("body", subject: "s", title: "Loft waiting")
@@ -4365,13 +4365,12 @@ do {
     check(pathsGone.reachedOverAirPlay2("H8"),
           "native airplay: a receiver reached over AirPlay 2 still names AirPlay 2 as its kind while it is off the network")
     // covers: S346
-    check(kinds.nativePairPINMessage(name: "Loft").hasPrefix("Loft shows a 4-digit code on its screen. Enter it to pair; "
-                                                              + "after that, it connects without a code.")
+    check(kinds.nativePairPINMessage(name: "Loft") == "Enter the 4-digit code shown on Loft. You need it only once."
             && !kinds.nativePairWrongPINMessage(name: "Loft").contains("TV"),
           "native airplay: the PIN prompt reads as on Windows, for an Apple TV and an AirPlay 2 receiver alike")
     // covers: S346
     check(kinds.nativePairPINMessage(name: "Loft", everyTime: true)
-            == "Loft shows a 4-digit code on its screen. Enter it to pair. Cancel turns the speaker off; turn it on again to retry.",
+            == "Enter the 4-digit code shown on Loft.",
           "native airplay: the PIN prompt of a receiver that asks every time promises no lasting pairing")
     paths.apply(.appeared(NativeReceiver(id: "K1", name: "Attic", model: "", availability: .needsPin, reason: nil,
                                          hints: ["airplay", "airplay2", "pairing", "over-airplay2"], overAirPlay2: true)))
@@ -4433,9 +4432,8 @@ do {
         let stoppedNotice = Notice(subject: Notice.airplaySender, text: UIStrings().nativeAirPlayStopped, date: t0)
         // covers: S222
         check(stoppedNotice.retriesAirPlay && !Notice(subject: Notice.start, text: "", date: t0).retriesAirPlay
-                && stoppedNotice.text == "AirPlay stopped or couldn't start. Click Retry to try again. "
-                    + "If it couldn't start, AudioSync tries again on its own every 10 seconds. "
-                    + "If it keeps happening, restart AudioSync.",
+                && stoppedNotice.text == "AirPlay stopped or couldn't start. AudioSync retries every 10 seconds. "
+                    + "Click Retry to try now.",
               "EC7 native airplay: the notice that it stopped or couldn't start offers Retry, in Windows' words",
               stoppedNotice.text)
 
@@ -6000,9 +5998,9 @@ do {
     let texts = [t.nativeAirPlayPlaysThroughSpeakers(name: "Den TV"), t.nativeAirPlayAppleTVPlays(name: "Den"),
                  t.nativeAirPlayPlaysInGroup(name: "Right", group: "Living Room")]
     // covers: P177 (the Apple TV and its group), S247 (the held member)
-    check(texts == ["Den TV plays through its home theater speakers, and AudioSync already plays to them, so it's off. "
-                        + "Turn the group off to play to the Apple TV itself.",
-                    "AudioSync already plays to Den's Apple TV, so the group is off. Turn the Apple TV off to play to the group.",
+    check(texts == ["Den TV plays through its home theater, which AudioSync already uses, so it's off. "
+                        + "Turn the group off to use the Apple TV.",
+                    "AudioSync already plays to Den's Apple TV, so the group is off. Turn the Apple TV off to use the group.",
                     "Right plays as part of Living Room, so it stays off by itself."]
             && !texts.joined().contains("\u{2014}"),
           "P177 native airplay: the Apple TV, its group and a held member each say why they are off")
@@ -9100,8 +9098,7 @@ do {
         (presetText.presets, "Presets"),
         (presetText.savePreset, "Save as Preset…"),
         (presetText.savePresetTitle, "Save Preset"),
-        (presetText.savePresetMessage, "The speakers that are on, their volumes, the zone volumes, the master volume "
-            + "and the curve are saved. Delays and the preamp are not."),
+        (presetText.savePresetMessage, "Saves which speakers are on, every volume and the curve. Delays and the preamp stay out."),
         (presetText.savePresetNeedsSpeakers, "Turn on the speakers you want in the preset first, then save it."),
         (presetText.presetFieldLabel, "Preset name"),
         (presetText.presetPlaceholder, "Evening, Party…"),
@@ -9110,8 +9107,7 @@ do {
         (presetText.updatePreset, "Update to Current Settings"),
         (presetText.deletePreset, "Delete"),
         (presetText.noPresets, "No Presets"),
-        (presetText.presetsEmpty, "No presets yet. Turn on the speakers you want, set the volumes and the curve, "
-            + "then save them as a preset."),
+        (presetText.presetsEmpty, "No presets yet. Set up your speakers, then choose Save as Preset."),
         (presetText.choosePreset, "Choose a Preset"),
         (presetText.presetSaved("Evening"), "Evening saved"),
         (presetText.presetUpdated("Evening"), "Evening updated"),
@@ -12088,8 +12084,8 @@ do {
           "S36 start failure: a refused capture rate comes back with the failure, any other failure without one",
           "\(tooFast.failures)")
     check(rateText.contains("USB DAC") && rateText.contains("352.8 kHz") && rateText.contains("192 kHz")
-            && rateText.contains("Audio MIDI Setup") && !rateText.contains("exclusively")
-            && rateText384.contains("384 kHz") && generic.contains("exclusively")
+            && rateText.contains("Audio MIDI Setup") && !rateText.contains("Close any app")
+            && rateText384.contains("384 kHz") && generic.contains("Close any app using it")
             && generic.hasPrefix("USB DAC couldn't start, so it's off.")
             && strings.outputCouldNotStart(names: ["USB DAC", "Den"]).contains("so they're off"),
           "S36 start failure: the text names the capture rate, the 192 kHz limit and Audio MIDI Setup", rateText)
@@ -14234,12 +14230,12 @@ do {
                  CalibrateZoneAirPlayMoves(zones: ["Kitchen"], noZone: false), moves,
                  CalibrateZoneAirPlayMoves(zones: ["Kitchen", "Garden"], noZone: true)]
         .map(zoneText.calibrateZoneAirPlayMoves)
-    let share = "AirPlay speakers share one delay, so a new AirPlay delay applies to "
+    let share = "AirPlay speakers share one delay, so this also moves "
     // covers: S255
-    check(lines == [nil, share + "the AirPlay speakers in no zone too.",
-                    share + "the AirPlay speakers in “Kitchen” too.",
-                    share + "the AirPlay speakers in “Kitchen” and “Garden” too.",
-                    share + "the AirPlay speakers in “Kitchen” and “Garden”, and those in no zone too."]
+    check(lines == [nil, share + "the AirPlay speakers in no zone.",
+                    share + "the AirPlay speakers in “Kitchen”.",
+                    share + "the AirPlay speakers in “Kitchen” and “Garden”.",
+                    share + "the AirPlay speakers in “Kitchen” and “Garden”, and those in no zone."]
             && zoneText.calibrateZoneItem == "Calibrate Zone…"
             && zoneText.calibrateZoneBring("Upstairs").hasPrefix("Bring the Mac into “Upstairs”"),
           "calibrate zone: the sheet says where to bring the Mac and which other zones the AirPlay delay moves (S255)",
@@ -14805,8 +14801,8 @@ do {
     check(t.castProblem(.takenOver, name: "Den") == "Den stopped AudioSync's stream, so it's off. Turn it on again to stream to it.",
           "cast: a stream the TV's own controls or another app stopped reads as stopped, naming no other app")
     check(t.castResyncHelp == "Restarts the stream, with a short gap, so this speaker plays at its offset again"
-            && t.calibrationFailure(.interrupted) == "Streaming, the speakers or their delays changed during the measurement. "
-                + "Leave them as they are while it measures, and try again."
+            && t.calibrationFailure(.interrupted) == "The speakers or delays changed while measuring. "
+                + "Leave them alone and try again."
             && t.calibrationFailure(.implausible) == "The two speakers were too far apart to measure. "
                 + "Make sure the microphone can hear both speakers, and try again.",
           "Resync says offset, and an interrupted or implausible measurement says what to do next, as on Windows")
@@ -15726,8 +15722,8 @@ do {
             && ahead.update(device: nil, aheadMs: 60) == AirPlayAheadNotice.Step(clear: kitchen, post: nil),
           "cast+airplay: a small lead reads as 0.1 s, and the notice clears when the Cast speaker goes off")
     let text = t.airPlayAheadOfCast(tenths: 15, speaker: "Kitchen")
-    check(text == "AirPlay speakers can wait at most 20 s for a Google Cast speaker, so they play about 1.5 s ahead of "
-            + "Kitchen. Lower its offset to keep them together." && !text.contains("\u{2014}")
+    check(text == "AirPlay speakers play about 1.5 s ahead of Kitchen: they wait 20 s at most. "
+            + "Lower its offset to keep them together." && !text.contains("\u{2014}")
             && t.airPlayAheadOfCast(tenths: 20, speaker: "Den").contains("about 2.0 s ahead of Den"),
           "cast+airplay: the notice says how far ahead, with no em dash")
     var castOnes = NoticeList()
