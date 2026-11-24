@@ -9774,6 +9774,105 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_scrolling_speaker_name_draws_at_most_30_new_frames_a_second() {
+        let mut backend = MockBackend::new();
+        let mut long = backend.snapshot().speaker("local:desk").unwrap().clone();
+        long.id = "local:long".into();
+        long.name = "A speaker whose name is far too long for the row the speaker list gives it, even in a wide window".into();
+        backend.add_speaker(long);
+        hold_clock();
+        let app = app_over(backend);
+        app.main.global::<Motion>().set_on(true);
+        app.main.show().expect("the main window shows");
+        app.poll();
+        draw_frames();
+        // Past the 2 s rest, then one second of scrolling in 4 ms steps, as
+        // a fast display would ask; the winit loop draws again while an
+        // animation runs.
+        advance_clock(Duration::from_millis(2100));
+        draw_frames();
+        let windows: Vec<_> = HEADLESS_WINDOWS
+            .with(|windows| windows.borrow().iter().filter_map(Weak::upgrade).collect());
+        let mut drawn = 0;
+        for _ in 0..250 {
+            advance_clock(Duration::from_millis(4));
+            slint::platform::update_timers_and_animations();
+            for window in &windows {
+                if window.has_active_animations() {
+                    window.request_redraw();
+                }
+                if window.draw_if_needed(|renderer| {
+                    let mut pixels = vec![Rgb565Pixel::default(); 1000 * 720];
+                    renderer.render(&mut pixels, 1000);
+                }) {
+                    drawn += 1;
+                }
+            }
+        }
+        assert!(
+            drawn <= 2 * 31,
+            "a scrolling name redraws the window at most 30 times a second, each at most twice: {drawn}"
+        );
+    }
+
+    /// A name stopped mid-scroll, by a window wide enough for it or by
+    /// Windows' animation effects going off, leaves no frame timer running.
+    #[test]
+    fn a_name_stopped_mid_scroll_draws_no_more_frames() {
+        // As an event loop does: sleep until the next timer is due, wake, run it.
+        fn wakes_in_a_second() -> u32 {
+            let mut wakes = 0;
+            let mut slept = Duration::ZERO;
+            while slept < Duration::from_secs(1) {
+                let next = slint::platform::duration_until_next_timer_update()
+                    .unwrap_or(Duration::from_secs(1))
+                    .max(Duration::from_millis(1));
+                advance_clock(next);
+                slept += next;
+                slint::platform::update_timers_and_animations();
+                wakes += 1;
+            }
+            wakes
+        }
+        for widen in [false, true] {
+            let mut backend = MockBackend::new();
+            let mut long = backend.snapshot().speaker("local:desk").unwrap().clone();
+            long.id = "local:long".into();
+            // Too long for the row of the narrowest window, short enough for a wide one.
+            long.name = "Speaker Kitchen Bedroom Living Garage Office Studio".into();
+            backend.add_speaker(long);
+            hold_clock();
+            let app = app_over(backend);
+            app.main.global::<Motion>().set_on(true);
+            // The flyout's rows must not scroll: their timers would wake the app too.
+            app.flyout.global::<Motion>().set_on(false);
+            app.main.show().expect("the main window shows");
+            app.poll();
+            draw_frames_at(696, 720);
+            advance_clock(Duration::from_millis(2100));
+            draw_frames_at(696, 720);
+            let scrolling = wakes_in_a_second();
+            assert!(
+                scrolling >= 25,
+                "the long name scrolls first: {scrolling} wakes in 1 s"
+            );
+            if widen {
+                draw_frames_at(1400, 720);
+            } else {
+                app.main.global::<Motion>().set_on(false);
+                draw_frames();
+            }
+            let how = if widen { "widened" } else { "motion off" };
+            let stopped = wakes_in_a_second();
+            // A frame timer left running wakes the app 30 times a second.
+            assert!(
+                stopped <= 5,
+                "{how} mid-scroll, no frame timer keeps waking the app: {stopped} wakes in 1 s"
+            );
+        }
+    }
+
+    #[test]
     fn the_now_playing_art_breathes_while_nothing_is_streamed() {
         use crate::window_rules::ambient_breath::OPACITY;
         let backend = MockBackend::new();

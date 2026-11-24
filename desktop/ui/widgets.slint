@@ -178,12 +178,13 @@ export component MarqueeText inherits Rectangle {
     in property <bool> live: true;
     property <duration> started;
     property <length> excess: Motion.on && label.preferred-width > self.width ? label.preferred-width - self.width : 0px;
-    // Only a moving line reads the frame clock: a resting one draws nothing
-    // until the timer starts it again.
+    // The line moves 30 frames a second (frame) and rests with none:
+    // reading animation-tick() in a binding would redraw the window at the
+    // display's rate.
     property <bool> moving;
-    property <duration> rested-at;
+    property <duration> drawn-at;
     property <duration> wait: 2s;
-    property <length> offset: self.excess > 0 ? Marquee.offset(self.moving ? animation-tick() - self.started : self.rested-at, self.excess) : 0px;
+    property <length> offset: self.excess > 0 ? Marquee.offset(self.drawn-at, self.excess) : 0px;
     // Slint has no alpha mask: each fade is strips of the text, fainter
     // toward the edge. As on the Mac, only an edge that cuts a letter fades:
     // the start over up to 8 px with its first quarter clear (a cut
@@ -197,7 +198,7 @@ export component MarqueeText inherits Rectangle {
     changed text => {
         self.started = animation-tick();
         self.moving = false;
-        self.rested-at = 0ms;
+        self.drawn-at = 0ms;
         self.wait = 2s;
     }
 
@@ -209,8 +210,16 @@ export component MarqueeText inherits Rectangle {
         triggered => {
             let elapsed = animation-tick() - root.started;
             root.moving = !Marquee.resting(elapsed, root.excess);
-            root.rested-at = elapsed;
+            root.drawn-at = elapsed;
             root.wait = Marquee.next-change(elapsed, root.excess);
+        }
+    }
+
+    frame := Timer {
+        interval: 1000ms / 30;
+        running: root.live && root.moving && root.excess > 0;
+        triggered => {
+            root.drawn-at = animation-tick() - root.started;
         }
     }
 
