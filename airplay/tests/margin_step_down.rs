@@ -363,6 +363,30 @@ fn a_failed_try_returns_at_once_to_the_level_it_left_and_doubles_the_wait() {
 
 // covers: P258
 #[test]
+fn a_try_that_fails_before_its_step_down_applies_still_returns_at_once() {
+    let mut rig = rig(true);
+    let id = rig.add(speaker(1, Codec::Pcm));
+    let crossed = step_up(&mut rig, &[id], 1.0);
+    while tries(&rig).is_empty() {
+        assert!(rig.t() < crossed + W + SLACK, "a try");
+        let next = rig.t() + 0.01;
+        run_to(&mut rig, next);
+    }
+    assert_eq!(rig.stream.latency_frames(), CEILING, "the step is pending");
+    gap(&mut rig, id);
+    let failed_at = rig.t();
+    let down = until_lf_leaves(&mut rig, CEILING, failed_at + 2.0).expect("the step down");
+    let back = until_lf_leaves(&mut rig, LOW, down + 3.0).expect("back up");
+    assert!(
+        back - down < 1.0,
+        "back up {} s after the step down",
+        back - down
+    );
+    assert_eq!(rig.stream.latency_frames(), CEILING);
+}
+
+// covers: P258
+#[test]
 fn of_two_receivers_tried_together_only_the_failing_one_goes_back_up() {
     let mut rig = rig(true);
     let one = rig.add(speaker(1, Codec::Pcm));
