@@ -1571,6 +1571,17 @@ pub(crate) mod tests {
         );
     }
 
+    // covers: S482
+    #[test]
+    fn a_zone_counts_a_member_another_device_took_as_on_and_waiting_not_playing() {
+        let mut state = zoned();
+        state.speakers[2].waiting = Some(Waiting::Taken);
+        let snapshot = snapshot(&state, not_virtual, None, "Desk PC", &Text);
+        let downstairs = &snapshot.zones[0];
+        assert_eq!((downstairs.counts.on, downstairs.counts.waiting), (2, 1));
+        assert!(snapshot.speaker("kitchen").unwrap().on, "its switch shows on");
+    }
+
     // covers: S256
     #[test]
     fn a_zone_counts_on_as_its_switches_show_and_its_absent_members_in_all() {

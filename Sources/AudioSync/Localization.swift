@@ -200,7 +200,7 @@ struct UIStrings {
 
     /// A speaker row's accessibility value: its state, then that it is off
     /// the network.
-    func rowValue(_ state: SpeakerState, offline: Bool) -> String {
+    func rowValue(_ state: SpeakerState, offline: Bool, taken: Bool = false) -> String {
         offline ? value(state) + ", " + notOnNetwork : value(state)
     }
 

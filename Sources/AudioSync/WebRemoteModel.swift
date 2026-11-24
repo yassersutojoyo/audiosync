@@ -94,6 +94,8 @@ extension RemoteRow {
         var note: String?
         var key = ""
         var waiting = false
+        /// Another device took it: on, but not playing here (S482).
+        var taken = false
         var streaming = true
     }
 

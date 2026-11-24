@@ -5947,6 +5947,12 @@ do {
           "P215 native airplay: VoiceOver reads an unannounced row's value as on, then off the network, "
             + "and its hint doesn't say it again",
           t.rowValue(SpeakerState(enabled: true, streaming: true), offline: true))
+    // covers: S482
+    check(t.rowValue(SpeakerState(enabled: true, streaming: true), offline: false, taken: true)
+            == t.on + ", " + t.inUseByAnotherDevice
+            && t.rowValue(SpeakerState(enabled: false, streaming: true), offline: false, taken: true) == t.off,
+          "S482: VoiceOver reads a row another device took as on, then in use by another device",
+          t.rowValue(SpeakerState(enabled: true, streaming: true), offline: false, taken: true))
 
     var missing = listedPair()
     missing.apply(.gone(id: right, name: "Right"))
@@ -16425,6 +16431,12 @@ do {
             && zoneObjects.last?["counts"] as? [String: Int] == ["on": 0, "total": 0, "waiting": 0, "all": 1],
           "web remote: a zone lists its listed members in zone order with on, total and waiting; one not listed counts only in all",
           "\(zoneObjects)")
+    // covers: S482
+    let takenRow = RemoteRow(Facts(id: "hp", name: "Kitchen", kind: "AirPlay 2", on: true, volume: 30, isAirPlay: true,
+                                   key: "ap:hp", taken: true), text: t)
+    let takenZone = RemoteZoneRow(storedZones[0], listed: [takenRow])
+    check(takenRow.on && takenRow.waiting && takenZone.on == 1 && takenZone.waiting == 1,
+          "web remote: a speaker another device took shows on and counts as waiting, not playing")
     var hiddenDesk = HiddenSpeakers()
     hiddenDesk.hide(key: "lc:usb", name: "Desk", kind: "USB")
     let shownRows = hiddenDesk.partition(zoneRows, key: \.key).shown
