@@ -262,3 +262,54 @@ fn a_rate_step_holds_as_a_floor_by_address_and_steps_down_after_it_leaves() {
     run_to(&mut rig, 200.0);
     assert_eq!(rig.stream.latency_frames(), LOW, "back to P200's level");
 }
+
+/// The receiver asks for a packet past the midpoint between its send and
+/// its play time, still before it plays.
+fn ask_tight(rig: &mut Rig, id: SpeakerId) {
+    let now = rig.t();
+    let latency = rig.latency();
+    let packet = 352.0 / 44_100.0;
+    let tight = rig
+        .audio(id)
+        .into_iter()
+        .rfind(|sent| {
+            let play = sent.at + latency - sent.margin - packet;
+            now >= (sent.at + play) / 2.0 + 0.005 && now < play - 0.005
+        })
+        .expect("a packet past its midpoint");
+    let request = ResendRequest {
+        seq: 1,
+        first: tight.header.seq,
+        count: 1,
+    };
+    rig.stream
+        .handle_control_packet(id, &request.encode(), rig.now);
+    rig.drain();
+}
+
+// covers: P260
+#[test]
+fn three_requests_too_tight_to_answer_in_a_minute_step_to_the_rate_ceiling() {
+    let mut rig = rig_at(LOW, false);
+    let id = rig.add(speaker(1, Codec::Pcm));
+    for at in [1.0, 16.0] {
+        run_to(&mut rig, at);
+        ask_tight(&mut rig, id);
+    }
+    run_to(&mut rig, 30.0);
+    assert_eq!(rig.stream.latency_frames(), LOW, "two are not starved");
+    ask_tight(&mut rig, id);
+    run_to(&mut rig, 31.0);
+    assert_eq!(rig.stream.latency_frames(), CEILING);
+    assert_eq!(steps(&rig), [CEILING], "one step");
+
+    // Three in one second are one burst, not a starved receiver.
+    let mut rig = rig_at(LOW, false);
+    let id = rig.add(speaker(1, Codec::Pcm));
+    run_to(&mut rig, 1.0);
+    for _ in 0..3 {
+        ask_tight(&mut rig, id);
+    }
+    run_to(&mut rig, 10.0);
+    assert_eq!(rig.stream.latency_frames(), LOW, "one burst");
+}
