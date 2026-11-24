@@ -9344,7 +9344,7 @@ do {
         .components(separatedBy: "\n}\n").first ?? ""
     let masterRowSource = bar.components(separatedBy: "private func masterRow(").dropFirst().first?
         .components(separatedBy: "\n    }\n").first ?? ""
-    check(bar.contains("HStack(spacing: PanelLayout.iconGap) {\n                SpeakerBadge(symbol: symbol, state: state, size: PanelLayout.iconBox")
+    check(bar.contains("HStack(spacing: PanelLayout.iconGap) {\n                SpeakerBadge(symbol: symbol, state: .look(state, taken: taken), size: PanelLayout.iconBox")
             && panelPresetSource.contains("HStack(spacing: PanelLayout.iconGap) {\n                    Image(systemName: \"square.stack.3d.up.fill\")")
             && panelPresetSource.contains(".frame(width: PanelLayout.iconBox)\n                    Text(t.presets)")
             && !panelPresetSource.contains(".overlay(") && !panelPresetSource.contains(".menuStyle(.borderlessButton)")
