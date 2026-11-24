@@ -1609,7 +1609,7 @@ impl Stream {
         } else if !self.stepped_up {
             self.stepped_up = true;
             self.step_wait_told = false;
-            self.step_wanted = Some((self.latency_frames + STEP_FRAMES).min(MAX_LATENCY_FRAMES));
+            self.step_wanted = Some((self.latency_frames.min(to) + STEP_FRAMES).min(ceiling));
         }
     }
 
