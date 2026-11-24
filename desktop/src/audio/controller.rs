@@ -9109,6 +9109,46 @@ mod tests {
         assert_eq!(taken_reports(backend.poll()), [BTreeSet::new()]);
     }
 
+    // The mockup's rule, as on the Mac: a taken speaker stays with the other
+    // device until a new stream starts or its switch flips.
+    // covers: S482
+    #[test]
+    fn a_new_stream_takes_a_speaker_waiting_for_sound_back() {
+        use crate::audio::cast::tests::{FakeCast, KITCHEN, id};
+        use audiosync_cast::error::LaunchError;
+        use audiosync_cast::host::{AttemptId, HostEvent};
+        use audiosync_cast::session::{SessionEnd, SessionError};
+        let mut backend = backend();
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        backend.poll();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.poll();
+        cast.report(HostEvent::Ended {
+            attempt: AttemptId(cast.state().next),
+            device: id(KITCHEN),
+            end: SessionEnd::Failed(SessionError::Launch(LaunchError::Quiet)),
+        });
+        backend.poll();
+        backend.poll();
+        assert!(!backend.on_demand_taken.is_empty());
+        backend.stop();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let events = backend.poll();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, BackendEvent::SpeakersTaken { ids } if ids.is_empty())),
+            "{events:?}"
+        );
+        assert_eq!(
+            backend.on_demand.status(&KITCHEN.to_owned()),
+            Some(Status::Active)
+        );
+    }
+
     // covers: S186, S189
     #[test]
     fn with_only_a_cast_speaker_a_source_change_keeps_the_old_capture_until_its_tap_faded() {
