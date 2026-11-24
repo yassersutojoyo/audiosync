@@ -24,8 +24,8 @@ use audiosync_remote::{Command, Config, RemoteError, RemoteServer};
 use slint::{ComponentHandle, SharedString};
 
 use super::{
-    App, REMOTE_PUBLIC_NOTICE_ID, availability, cast_group_note, cast_state, group_note, row_state,
-    speaker_kind, with_app,
+    App, REMOTE_PUBLIC_NOTICE_ID, RowState, availability, cast_group_note, cast_state, group_note,
+    row_state, speaker_kind, with_app,
 };
 use crate::Strings;
 use crate::network_profile::{ProfileSource, PublicNetworkWarning, Watch};
@@ -206,6 +206,10 @@ impl RowText for StringsText<'_> {
     }
 
     fn note(&self, state: &AppState, speaker: &Speaker) -> String {
+        let row_state = row_state(state.speaker_state(speaker));
+        if row_state == RowState::Taken {
+            return self.0.get_in_use_by_another_device().into();
+        }
         if let Some(cast) = &speaker.cast {
             let group_note = cast_group_note(&self.0, speaker);
             let note = self
@@ -215,7 +219,6 @@ impl RowText for StringsText<'_> {
                 return note.into();
             }
         }
-        let row_state = row_state(state.speaker_state(speaker));
         let note = self.0.invoke_speaker_availability(
             availability(speaker.availability),
             speaker.code_every_time,
