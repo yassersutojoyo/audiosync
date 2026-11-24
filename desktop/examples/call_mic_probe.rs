@@ -64,7 +64,10 @@ mod probe {
         STGM_READ,
     };
     use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_QWORD, RegGetValueW};
-    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    use windows::Win32::System::Threading::{
+        GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+    };
     use windows::Win32::System::Variant::VT_LPWSTR;
     use windows::Win32::System::WinRT::RoGetActivationFactory;
     use windows::core::{GUID, HRESULT, HSTRING, IInspectable, IUnknown, Interface, PCWSTR, Ref};
@@ -136,6 +139,10 @@ mod probe {
             Some("route") => match args.get(1) {
                 Some(path) => route(path),
                 None => Err("`route` needs the browser's path".into()),
+            },
+            Some("callapp") => match (args.get(1), args.get(2), args.get(3)) {
+                (Some(label), Some(exes), Some(seconds)) => call_app(label, exes, seconds),
+                _ => Err("`callapp` needs a label, executable names and seconds".into()),
             },
             Some("list") => list(),
             Some(other) => Err(format!("unknown role {other:?}")),
@@ -2099,6 +2106,139 @@ if (ask.get('ring') === '1') {
             println!("RESULT P{case}: {held}/{P_RUNS}");
         }
         println!("RESULT P read-back equal {equal_runs}/{}", 3 * P_RUNS);
+        Ok(())
+    }
+
+    // MARK: Call apps: Zoom and Teams desktop on the runner
+
+    /// The lower-case file name of `pid`'s executable, empty when unreadable.
+    fn exe_of(pid: u32) -> String {
+        // SAFETY: a query-only handle, closed after the name is copied out.
+        unsafe {
+            let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
+                return String::new();
+            };
+            let mut wide = [0u16; 1024];
+            let mut length = wide.len() as u32;
+            let read = QueryFullProcessImageNameW(
+                process,
+                PROCESS_NAME_WIN32,
+                windows::core::PWSTR(wide.as_mut_ptr()),
+                &mut length,
+            );
+            let _ = CloseHandle(process);
+            if read.is_err() {
+                return String::new();
+            }
+            let path = String::from_utf16_lossy(&wide[..length as usize]);
+            path.rsplit('\\').next().unwrap_or("").to_lowercase()
+        }
+    }
+
+    /// One run of S485 and S486 against a real call app while the script
+    /// drives its UI: the default is the cable (the silent endpoint), the
+    /// other endpoint is the recorded output. Once a process of `exes`
+    /// listens, one of its processes with an active render session is
+    /// pinned to the recorded output and read back 250 ms later.
+    fn call_app(label: &str, exes: &str, seconds: &str) -> Fallible<()> {
+        let names: Vec<String> = exes.split(',').map(str::to_lowercase).collect();
+        let window = Duration::from_secs(seconds.parse().map_err(|_| "seconds".to_owned())?);
+        let enumerator = enumerator()?;
+        // SAFETY: reads the console default.
+        let console = unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eConsole) }
+            .map_err(|e| failed("GetDefaultAudioEndpoint", &e))?;
+        let Some((cable, cable_name)) = usable(&console) else {
+            println!("CALLAPP-RESULT {label} untested: the console default is unusable");
+            return Ok(());
+        };
+        let Some((recorded, recorded_name)) = pick_render(&enumerator, &cable)? else {
+            println!("CALLAPP-RESULT {label} untested: no second render endpoint");
+            return Ok(());
+        };
+        Defaults::new()?.set(&cable, &[eConsole, eMultimedia])?;
+        let policy = Policy::new()?;
+        println!("CALLAPP {label}: silent endpoint {cable_name:?}, recorded {recorded_name:?}");
+        let ours = |pid: u32| pid != std::process::id() && names.contains(&exe_of(pid));
+        let app_on = |id: &str| -> Fallible<Vec<u32>> {
+            Ok(sessions_on(&enumerator, id)?
+                .iter()
+                .filter(|s| s.active && ours(s.pid))
+                .map(|s| s.pid)
+                .collect())
+        };
+        let start = Instant::now();
+        let mut listening: Option<Instant> = None;
+        let mut pinned: Option<(u32, Instant)> = None;
+        let mut verdict: Option<bool> = None;
+        while start.elapsed() < window {
+            if listening.is_none()
+                && let Some(s) = sessions_of(&enumerator, eCapture)?
+                    .iter()
+                    .find(|s| s.active && ours(s.pid))
+            {
+                listening = Some(Instant::now());
+                println!(
+                    "CALLAPP {label}: pid {} ({}) listens at {} ms",
+                    s.pid,
+                    exe_of(s.pid),
+                    start.elapsed().as_millis()
+                );
+            }
+            if let Some(heard) = listening
+                && pinned.is_none()
+                && let Some(s) = sessions_of(&enumerator, eRender)?
+                    .iter()
+                    .find(|s| s.active && ours(s.pid))
+            {
+                let before = if app_on(&cable)?.contains(&s.pid) {
+                    "silent endpoint"
+                } else {
+                    "recorded output"
+                };
+                for role in [eConsole, eMultimedia] {
+                    policy.set(s.pid, role, &render_interface(&recorded))?;
+                }
+                pinned = Some((s.pid, Instant::now()));
+                println!(
+                    "CALLAPP {label}: pid {} ({}) plays on the {before}, pinned {} ms after it \
+                     listened",
+                    s.pid,
+                    exe_of(s.pid),
+                    heard.elapsed().as_millis()
+                );
+            }
+            if let Some((_, at)) = pinned
+                && verdict.is_none()
+                && at.elapsed() >= STAYED
+            {
+                let (silent, on_recorded) = (app_on(&cable)?, app_on(&recorded)?);
+                verdict = Some(silent.is_empty() && !on_recorded.is_empty());
+                println!(
+                    "CALLAPP {label}: at 250 ms pids on the silent endpoint {silent:?}, on the \
+                     recorded output {on_recorded:?}"
+                );
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        let (silent, on_recorded) = (app_on(&cable)?, app_on(&recorded)?);
+        println!(
+            "CALLAPP {label}: at the end pids on the silent endpoint {silent:?}, on the recorded \
+             output {on_recorded:?}"
+        );
+        if let Some((pid, _)) = pinned {
+            for role in [eConsole, eMultimedia] {
+                let _ = policy.set(pid, role, "");
+            }
+        }
+        println!(
+            "CALLAPP-RESULT {label} {}",
+            match (listening, verdict) {
+                (None, _) => "untested: the app never opened the microphone",
+                (Some(_), None) => "untested: the app listened but never played",
+                (Some(_), Some(true)) => "pass: on the recorded output",
+                (Some(_), Some(false)) => "fail: still on the silent endpoint",
+            }
+        );
         Ok(())
     }
 

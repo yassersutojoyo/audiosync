@@ -27,6 +27,7 @@ on:
       - '*/call-mic-probe-1124'
       - '*/call-mic-rule-1124'
       - '*/browser-call-route-1124'
+      - '*/call-zoom-teams-1124'
   workflow_dispatch:
 
 concurrency:
@@ -78,6 +79,7 @@ jobs:
           cargo build --locked --release --example call_mic_probe --target x86_64-pc-windows-msvc
           mkdir -p ../bin
           cp target/x86_64-pc-windows-msvc/release/examples/call_mic_probe.exe ../bin/
+          cp ../scripts/call_apps_probe.ps1 ../bin/
 
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
@@ -90,7 +92,7 @@ jobs:
     needs: build
     # Same image as the silent-output proof, where the VB-CABLE install is known to work.
     runs-on: windows-2022
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
@@ -162,6 +164,14 @@ jobs:
           Select-String -Path $log -Pattern '^(RESULT|READBACK|ROUTE)' | ForEach-Object { "- $($_.Line)" } |
             Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
           exit $code
+
+      - name: Zoom and Teams desktop, 5 runs each
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & bin/call_apps_probe.ps1 -Probe (Resolve-Path bin/call_mic_probe.exe) -Log probe-log/apps.txt
+          Select-String -Path probe-log/apps.txt -Pattern '^CALLAPP-(RESULT|SUMMARY)' | ForEach-Object { "- $($_.Line)" } |
+            Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
 
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         if: ${{ !cancelled() }}
