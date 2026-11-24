@@ -5401,6 +5401,12 @@ impl<D: Driver> AudioBackend for Controller<D> {
         let from = self.switch_origin();
         self.switch_from = None;
         self.end_session();
+        // A new stream takes back the speakers yielded to another sender, as
+        // the Mac's new policy does (S482).
+        for id in std::mem::take(&mut self.on_demand_taken) {
+            self.on_demand.switched_on(id.clone());
+            self.let_go(&id, false);
+        }
         self.sync_app_output(true);
         self.sync_default_output(moves_default(Some(source)));
         self.log
