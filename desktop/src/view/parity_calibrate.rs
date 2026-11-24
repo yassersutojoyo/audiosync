@@ -133,6 +133,7 @@ fn calibrate_all_opens_its_sheet_with_the_left_out_before_any_run() {
         DeviceTraits {
             form_factor: Some(3),
             enumerator: Some("BTHENUM".to_owned()),
+            vb_cable: false,
         },
     );
     let mut adapter = crate::adapter::AudioAdapter::new(

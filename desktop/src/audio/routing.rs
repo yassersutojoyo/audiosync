@@ -147,8 +147,8 @@ pub struct RoutingCheck {
 
 /// Where the source captured as `captured` is heard straight, from the
 /// active render endpoints in `endpoints`, while AudioSync plays to the
-/// endpoints in `rendered`, after the last check's `played_on`. See the
-/// module documentation.
+/// outputs in `rendered` (endpoints, and network speakers whose IDs match
+/// none), after the last check's `played_on`. See the module documentation.
 pub fn check(
     captured: &Captured,
     endpoints: &[EndpointAudio],

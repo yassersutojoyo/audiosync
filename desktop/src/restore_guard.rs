@@ -262,7 +262,7 @@ struct SettingsRecords {
 
 impl Records for SettingsRecords {
     fn on_disk(&mut self) -> bool {
-        records_on_disk(&self.path)
+        records_on_disk(&self.path) || crate::audio::wasapi::kept_on_disk()
     }
 
     fn restore(&mut self) {
@@ -270,6 +270,7 @@ impl Records for SettingsRecords {
             Ok(mut audio) => {
                 audio.set_debug_log(self.log.clone());
                 crate::os::restore_records(&mut audio, &self.log, self.path.as_deref());
+                crate::audio::wasapi::restore_kept(&self.log);
             }
             Err(error) => self
                 .log

@@ -601,13 +601,17 @@ pub fn name_apps(sources: &mut [SourceInfo], names: &AppNames) {
 /// listed, by name, then endpoint ID. An endpoint without an ID can't be
 /// opened. A Bluetooth hands-free one ([`is_hands_free`]) is marked: opening
 /// it switches the headset to call mode, which interrupts its stereo sound.
-/// One without a readable name shows its ID.
+/// One without a readable name shows its ID. VB-CABLE's "CABLE Output" is
+/// left out: it carries the silent output's sound (VC45).
 pub fn input_sources(readings: Vec<EndpointReading>) -> Vec<SourceInfo> {
     let mut inputs: Vec<SourceInfo> = readings
         .into_iter()
         .filter_map(|reading| {
             let endpoint_id = reading.id.ok()?;
             let properties = reading.properties.unwrap_or_default();
+            if properties.vb_cable {
+                return None;
+            }
             let name = properties
                 .name
                 .filter(|name| !name.trim().is_empty())

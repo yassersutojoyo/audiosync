@@ -3,14 +3,18 @@
 //
 // It names AudioSync's copyright holder and license (GPL-3.0 for the built exe,
 // no warranty), and credits Slint with its AboutSlint widget. Keep both.
+// On Windows it also credits VB-CABLE with the two sentences its licence asks
+// for, word for word (docs/WINDOWS_SILENT_OUTPUT_SPEC.md VC22).
 
 import { AboutSlint, VerticalBox } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { DialogButton, Fluent } from "widgets.slint";
+import { DialogButton, Fluent, LinkButton } from "widgets.slint";
 
 export component AboutDialog inherits Dialog {
     in property <string> version;
+    // Windows only: the VB-CABLE credit under Slint's.
+    in property <bool> vb-cable-credit;
 
     title: Strings.menu-about;
     icon: @image-url("../res/audiosync-tile-256.png");
@@ -24,6 +28,8 @@ export component AboutDialog inherits Dialog {
 
     // OK or Escape.
     callback closed();
+    // The VB-CABLE credit's link.
+    callback vendor-page-requested();
     // Ctrl+Q, the gear's Exit, from this window.
     callback exit-requested();
     // The app's menu keys from this window, as the Settings window takes them.
@@ -136,6 +142,31 @@ export component AboutDialog inherits Dialog {
                 AboutSlint {
                     width: 129px;
                     height: self.min-height;
+                }
+            }
+
+            if root.vb-cable-credit: VerticalLayout {
+                spacing: 2px;
+
+                HorizontalLayout {
+                    alignment: center;
+
+                    LinkButton {
+                        text: Strings.silent-output-origin;
+                        label: Strings.silent-output-credit-label;
+                        text-color: Tokens.text;
+                        clicked => {
+                            root.vendor-page-requested();
+                        }
+                    }
+                }
+
+                Text {
+                    text: Strings.silent-output-donation;
+                    font-size: Tokens.font-size-caption;
+                    color: Tokens.secondary-text;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
                 }
             }
         }

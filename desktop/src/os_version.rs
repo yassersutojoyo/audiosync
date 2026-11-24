@@ -19,12 +19,13 @@ pub const UNSUPPORTED_MESSAGE: &str = "AudioSync needs Windows 11 or later.";
 
 /// Whether AudioSync runs on `version`: Windows 11 (10.0.22000) or later.
 pub fn is_supported(version: OsVersion) -> bool {
-    version
-        >= OsVersion {
-            major: 10,
-            minor: 0,
-            build: FIRST_WINDOWS_11_BUILD,
-        }
+    cfg!(feature = "ci-proof")
+        || version
+            >= OsVersion {
+                major: 10,
+                minor: 0,
+                build: FIRST_WINDOWS_11_BUILD,
+            }
 }
 
 #[cfg(test)]
@@ -40,12 +41,14 @@ mod tests {
     }
 
     // covers: S389
+    #[cfg(not(feature = "ci-proof"))]
     #[test]
     fn windows_10_22h2_is_refused() {
         assert!(!is_supported(version(10, 0, 19045)));
     }
 
     // covers: S389
+    #[cfg(not(feature = "ci-proof"))]
     #[test]
     fn the_build_before_windows_11_is_refused() {
         assert!(!is_supported(version(10, 0, FIRST_WINDOWS_11_BUILD - 1)));
@@ -64,12 +67,21 @@ mod tests {
     }
 
     // covers: S389
+    #[cfg(not(feature = "ci-proof"))]
+    #[test]
+    fn windows_server_2022_is_refused_without_the_ci_proof_feature() {
+        assert!(!is_supported(version(10, 0, 20348)));
+    }
+
+    // covers: S389
+    #[cfg(not(feature = "ci-proof"))]
     #[test]
     fn windows_7_is_refused() {
         assert!(!is_supported(version(6, 1, 7601)));
     }
 
     // covers: S389
+    #[cfg(not(feature = "ci-proof"))]
     #[test]
     fn an_older_major_version_is_refused_whatever_its_build() {
         assert!(!is_supported(version(6, 3, 26100)));

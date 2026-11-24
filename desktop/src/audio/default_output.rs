@@ -12,6 +12,13 @@
 use serde::{Deserialize, Serialize};
 
 use super::backend::OutputKind;
+use super::silent_output::GUARD;
+use std::time::{Duration, Instant};
+
+/// How long a silent endpoint that appears mid-stream waits before the
+/// switch takes it: an installer step's VC40 guard runs in another process
+/// for [`GUARD`] after it sees the cable, polling each second.
+const SETTLE: Duration = GUARD.saturating_add(Duration::from_secs(5));
 
 /// A default-output role AudioSync may move.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,6 +60,8 @@ pub struct Candidate {
     /// Whether it holds Windows' communications role, where a call plays:
     /// such an endpoint is never the silent one (S486).
     pub communications: bool,
+    /// Its device is VB-CABLE (`crate::audio::silent_output::is_vb_cable`).
+    pub vb_cable: bool,
 }
 
 /// Windows' default output per role, and the active render endpoints.
@@ -83,6 +92,9 @@ enum State {
     Switched(Record),
     /// Streaming without the switch: the default output gets no copy (S470).
     Fallback,
+    /// As [`State::Fallback`] for want of a silent endpoint, until one has
+    /// been listed for [`SETTLE`] since the time held here (VC36, VC41).
+    AwaitsSilent(Option<Instant>),
 }
 
 /// The switch's state across a stream, and the record as on disk.
@@ -90,6 +102,9 @@ enum State {
 pub struct DefaultSwitch {
     state: State,
     on_disk: Option<Record>,
+    /// AudioSync is installing VB-CABLE, whose endpoints Windows may make
+    /// the default until the install sets them back (VC41).
+    installing: bool,
 }
 
 /// The silent endpoint among `endpoints`: a virtual one that isn't among
@@ -126,12 +141,49 @@ impl DefaultSwitch {
 
     /// Whether the default output gets no copy now (S470).
     pub fn holds_out_default(&self) -> bool {
-        self.state == State::Fallback
+        matches!(self.state, State::Fallback | State::AwaitsSilent(_))
     }
 
     /// Whether the switch is in effect.
     pub fn switched(&self) -> bool {
         matches!(self.state, State::Switched(_))
+    }
+
+    /// Ends the wait of a silent endpoint that appeared mid-stream.
+    #[cfg(test)]
+    pub fn settled(&mut self) {
+        if let State::AwaitsSilent(Some(at)) = &mut self.state {
+            *at = Instant::now().checked_sub(SETTLE).unwrap_or(*at);
+        }
+    }
+
+    /// Whether AudioSync is installing VB-CABLE.
+    pub fn installing(&self) -> bool {
+        self.installing
+    }
+
+    /// Leaves VB-CABLE out of [`Self::silent`] while AudioSync installs it.
+    pub fn hold_out_cable(&mut self, installing: bool) {
+        self.installing = installing;
+    }
+
+    /// The silent endpoint as [`silent_endpoint`] picks it, VB-CABLE left
+    /// out while AudioSync installs it (VC41).
+    pub fn silent(&self, endpoints: &[Candidate], chosen: &[&str]) -> Option<String> {
+        let kept: Vec<Candidate> = endpoints
+            .iter()
+            .filter(|candidate| !(self.installing && candidate.vb_cable))
+            .cloned()
+            .collect();
+        silent_endpoint(&kept, chosen).map(str::to_owned)
+    }
+
+    /// After a silent endpoint was added: a stream that holds the default out
+    /// engages again at its next check.
+    pub fn try_again(&mut self) {
+        if self.holds_out_default() {
+            self.state = State::Off;
+        }
     }
 
     /// Whether a whole-system stream has been handled since it started.
@@ -175,7 +227,9 @@ impl DefaultSwitch {
         match self.try_engage(endpoints, store, chosen) {
             Ok(line) => vec![line],
             Err(mut lines) => {
-                self.state = State::Fallback;
+                if !matches!(self.state, State::AwaitsSilent(_)) {
+                    self.state = State::Fallback;
+                }
                 lines.push(
                     "default output: Windows' default output gets no copy while this stream runs"
                         .to_owned(),
@@ -195,7 +249,8 @@ impl DefaultSwitch {
         let listed = endpoints
             .endpoints()
             .map_err(|error| not_moved(format!("the endpoints couldn't be listed: {error}")))?;
-        let Some(silent) = silent_endpoint(&listed, chosen).map(str::to_owned) else {
+        let Some(silent) = self.silent(&listed, chosen) else {
+            self.state = State::AwaitsSilent(None);
             return Err(not_moved("no silent endpoint".to_owned()));
         };
         let mut previous = Vec::new();
@@ -274,6 +329,21 @@ impl DefaultSwitch {
         store: &mut dyn RecordStore,
         chosen: &[&str],
     ) -> Vec<String> {
+        if let State::AwaitsSilent(seen) = self.state {
+            let listed = endpoints
+                .endpoints()
+                .is_ok_and(|listed| self.silent(&listed, chosen).is_some());
+            match seen {
+                _ if !listed => self.state = State::AwaitsSilent(None),
+                None => self.state = State::AwaitsSilent(Some(Instant::now())),
+                Some(at) if at.elapsed() >= SETTLE => {
+                    self.state = State::Off;
+                    return self.engage(endpoints, store, chosen);
+                }
+                Some(_) => {}
+            }
+            return Vec::new();
+        }
         let State::Switched(record) = &self.state else {
             return Vec::new();
         };
@@ -551,6 +621,7 @@ pub(crate) mod tests {
             kind,
             listened: false,
             communications: false,
+            vb_cable: false,
         }
     }
 
@@ -813,6 +884,29 @@ pub(crate) mod tests {
         switch.engage(&mut fake, &mut store, &[SPEAKERS, CABLE]);
         assert!(calls.borrow().is_empty());
         assert!(switch.holds_out_default());
+    }
+
+    // covers: VC41
+    #[test]
+    fn a_silent_endpoint_appearing_mid_stream_waits_out_the_install_guard() {
+        let (_, mut fake, mut store) = world();
+        let at = fake
+            .endpoints
+            .iter()
+            .position(|candidate| candidate.id == CABLE)
+            .unwrap();
+        let cable = fake.endpoints.remove(at);
+        let mut switch = DefaultSwitch::default();
+        switch.engage(&mut fake, &mut store, &[SPEAKERS]);
+        fake.endpoints.push(cable);
+        switch.check(&mut fake, &mut store, &[SPEAKERS]);
+        switch.check(&mut fake, &mut store, &[SPEAKERS]);
+        // The installer's own VC40 guard would set a move now back.
+        assert_eq!(defaults(&fake), (Some(SPEAKERS), Some(SPEAKERS)));
+        assert!(switch.holds_out_default());
+        switch.settled();
+        switch.check(&mut fake, &mut store, &[SPEAKERS]);
+        assert_eq!(defaults(&fake), (Some(CABLE), Some(CABLE)));
     }
 
     // covers: S469

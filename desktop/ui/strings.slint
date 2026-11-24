@@ -1006,6 +1006,25 @@ export global Strings {
         return @tr("You may hear your PC's sound twice: it also plays straight from {0}, and from {1}, where AudioSync plays too. Make an output you don't listen to the Windows default (Sound settings). Muting {0} alone isn't enough.", mute, shared);
     }
 
+    // The double-audio notice on a Windows PC with no output nobody listens
+    // to: Fix It adds VB-CABLE as one (docs/WINDOWS_SILENT_OUTPUT_SPEC.md VC22).
+    out property <string> silent-output-offer: @tr("You may hear your PC's sound twice.");
+    out property <string> silent-output-note: @tr("Fix It adds VB-CABLE, a free audio driver. Windows asks once.");
+    out property <string> silent-output-button: @tr("Fix It");
+    out property <string> silent-output-button-label: @tr("Hear it only once");
+    // The two sentences VB-Audio's licence asks for, word for word, in the
+    // Windows About dialog (VC22).
+    out property <string> silent-output-origin: "The origin of VB-CABLE : www.vb-cable.com.";
+    out property <string> silent-output-donation: "VB-CABLE is a donationware, all participations are welcome.";
+    out property <string> silent-output-credit-label: @tr("Open VB-CABLE's page on vb-audio.com");
+    out property <string> silent-output-downloading: @tr("Adding VB-CABLE…");
+    out property <string> silent-output-refused: @tr("Windows didn't allow it, so nothing changed.");
+    out property <string> silent-output-download-failed: @tr("VB-CABLE couldn't be downloaded, so nothing changed. Check the connection.");
+    out property <string> silent-output-mismatch: @tr("The download didn't match AudioSync's check, so nothing changed.");
+    out property <string> silent-output-installer-failed: @tr("VB-CABLE wasn't installed, so nothing changed.");
+    out property <string> silent-output-restart: @tr("Restart Windows to hear it once.");
+    out property <string> silent-output-not-on-arm64: @tr("AudioSync can't fix this on this PC yet.");
+
     // The double-audio guide, opened from Show How on that notice. Each list
     // is output names as "A, B and C" (list-and). AudioSync changes none of these
     // settings itself; a step's button opens the Settings page (on Linux, a
@@ -1150,7 +1169,7 @@ export global Strings {
     out property <string> help-tips-title: @tr("Tips");
     out property <string> help-bluetooth: @tr("Bluetooth speakers and headphones add a lag of their own, so they often need a delay below 0. They also take a little longer to start playing.\n\nFor a headset, AudioSync lists its stereo output and leaves out its Hands-Free output and microphone, which carry call audio.");
     out property <string> help-double-title: @tr("Hearing Sound Twice");
-    out property <string> help-double: @tr("Windows keeps playing the source on its own output while AudioSync plays its synced copies. So you don't hear it twice, AudioSync moves the source to a virtual output nobody listens to while it streams, and moves it back when streaming stops. For All System Audio, that output becomes the Windows default; for one app, only that app is moved.\n\nWhen it can't, a speaker the source already plays on gets no copy from AudioSync. Volume, EQ and delay don't apply to it.\n\nDon't mute the app itself in the Volume mixer: AudioSync would capture silence.");
+    out property <string> help-double: @tr("Windows keeps playing the source on its own output while AudioSync plays its synced copies. So you don't hear it twice, AudioSync moves the source to a virtual output nobody listens to while it streams, and moves it back when streaming stops. For All System Audio, that output becomes the Windows default; for one app, only that app is moved.\n\nWhen it can't, a speaker the source already plays on gets no copy from AudioSync. Volume, EQ and delay don't apply to it.\n\nOn a PC with no virtual output, AudioSync offers to add VB-CABLE by VB-Audio as one. To remove it, uninstall VB-CABLE under Settings > Apps > Installed apps, or run VB-Audio's setup again and choose Remove Driver, then restart Windows. AudioSync then offers it again when the source plays out loud.\n\nDon't mute the app itself in the Volume mixer: AudioSync would capture silence.");
     out property <string> help-double-linux: @tr("PipeWire keeps playing the source on its own outputs while AudioSync plays its synced copies, so you may hear it twice. For one app, send it to an output you don't listen to in a volume control that sets each app's output (pavucontrol does). For All System Audio, make such an output the default in Sound settings. If you have no output to spare, add a virtual one that plays nothing out loud (a PipeWire null sink). Don't mute or turn down the app itself: AudioSync captures it at that volume.\n\nWhen AudioSync detects this, it shows a notice. Its Show How button opens the steps for your setup, with a button that starts your desktop's sound settings or pavucontrol when one is installed.");
     out property <string> help-more-title: @tr("More Controls");
     out property <string> help-more-source-quits: @tr("When the source app quits, AudioSync switches to All System Audio and keeps playing.");

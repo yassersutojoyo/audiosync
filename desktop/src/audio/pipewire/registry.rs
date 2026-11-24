@@ -376,6 +376,7 @@ impl DefaultEndpoints for SinkDefaults {
                 communications: false,
                 kind: endpoint.kind,
                 id: endpoint.id,
+                vb_cable: false,
             })
             .collect();
         if graph.named(OWN_SINK).is_some() {
@@ -384,6 +385,7 @@ impl DefaultEndpoints for SinkDefaults {
                 kind: OutputKind::Virtual,
                 listened: false,
                 communications: false,
+                vb_cable: false,
             });
         }
         Ok(candidates)

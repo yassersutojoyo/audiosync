@@ -336,6 +336,10 @@ export struct NoticeItem {
     has-guide: bool,
     // The notice offers Retry, which starts AirPlay again.
     has-retry: bool,
+    // The double-audio notice offers Fix It, which adds VB-CABLE;
+    // `silent-busy` while an install runs, when the button does nothing.
+    has-silent-output: bool,
+    silent-busy: bool,
     // The notice offers Open Privacy Settings, for microphone access.
     has-privacy: bool,
     // The updater's notice: its buttons, in order.

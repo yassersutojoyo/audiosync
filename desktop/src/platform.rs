@@ -370,7 +370,7 @@ pub fn system_summary() -> String {
 /// app runs emulated (an x64 build on an ARM64 PC); `None` when it can't be
 /// read or has no such name.
 #[cfg(windows)]
-fn native_machine() -> Option<&'static str> {
+pub(crate) fn native_machine() -> Option<&'static str> {
     use windows::Win32::System::SystemInformation::{
         IMAGE_FILE_MACHINE, IMAGE_FILE_MACHINE_AMD64, IMAGE_FILE_MACHINE_ARM64,
         IMAGE_FILE_MACHINE_I386,

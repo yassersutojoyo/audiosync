@@ -106,6 +106,7 @@ Each install script checks the download against the release's SHA-256 checksums;
 - For video, a player with an audio delay setting (mpv, VLC, IINA) can hold the picture back to match.
 - HomePods: in Allow Speaker & TV Access, pick “Anyone on the Same Network” on a network you trust.
 - On the Mac, leave the sound output on a local device, not a HomePod. The window doesn't open at login; click the Dock icon.
+- On Windows, the x64 installer (For everyone) adds [VB-CABLE](https://vb-audio.com/Cable/) by VB-Audio, a free audio driver, so you hear your PC's sound once and not twice. Elsewhere, Fix It on the double-audio notice adds it, and Windows asks once. The origin of VB-CABLE : www.vb-cable.com. VB-CABLE is a donationware, all participations are welcome. Uninstalling AudioSync removes the cable its installer added; otherwise uninstall VB-CABLE under Settings > Apps > Installed apps, or run VB-Audio's setup again and choose Remove Driver, then restart Windows.
 - The rest is in the AudioSync Guide, under Help on the Mac and in the gear menu on Windows and Linux.
 
 ## Good to know

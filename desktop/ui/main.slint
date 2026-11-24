@@ -3356,6 +3356,8 @@ export component MainWindow inherits Window {
     callback notice-retry-requested(int);
     // Open Privacy Settings on a notice.
     callback notice-privacy-requested(int);
+    // Fix It on the double-audio notice.
+    callback notice-silent-output-requested();
     callback notice-update-button-pressed(UpdateButton);
     callback close-requested();
     callback exit-requested();
@@ -3705,6 +3707,9 @@ export component MainWindow inherits Window {
             }
             privacy-requested(id) => {
                 root.notice-privacy-requested(id);
+            }
+            silent-output-requested => {
+                root.notice-silent-output-requested();
             }
             update-button-pressed(button) => {
                 root.notice-update-button-pressed(button);

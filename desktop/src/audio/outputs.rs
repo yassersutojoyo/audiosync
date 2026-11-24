@@ -72,6 +72,9 @@ pub struct DeviceTraits {
     pub form_factor: Option<u32>,
     /// `PKEY_Device_EnumeratorName`.
     pub enumerator: Option<String>,
+    /// Its device is VB-CABLE, the silent output AudioSync offers to add
+    /// (`crate::audio::silent_output::is_vb_cable`).
+    pub vb_cable: bool,
 }
 
 impl DeviceTraits {
@@ -214,6 +217,8 @@ pub struct EndpointProperties {
     /// (`PKEY_AudioEngine_DeviceFormat`); only input devices use it, to
     /// offer their channel pairs.
     pub channels: Option<u16>,
+    /// Its device is VB-CABLE (`crate::audio::silent_output::is_vb_cable`).
+    pub vb_cable: bool,
 }
 
 /// Something the listing did with an endpoint that the log should say.
@@ -369,6 +374,7 @@ pub fn list_endpoints(readings: Vec<EndpointReading>, default_id: Option<&str>) 
             traits: DeviceTraits {
                 form_factor: properties.form_factor,
                 enumerator: properties.enumerator,
+                vb_cable: properties.vb_cable,
             },
             name_read: properties.name.is_some(),
             name: properties
@@ -1044,6 +1050,7 @@ mod tests {
                 enumerator: Some(bus.to_owned()),
                 display_port: false,
                 channels: None,
+                vb_cable: false,
             }),
         }
     }
@@ -1070,6 +1077,7 @@ mod tests {
                 traits: DeviceTraits {
                     form_factor: Some(3),
                     enumerator: Some("BTHENUM".to_owned()),
+                    vb_cable: false,
                 },
             }],
             "the stereo endpoint stays, whatever the hands-free one's form factor"
@@ -1807,6 +1815,7 @@ mod tests {
             DeviceTraits {
                 form_factor: Some(3),
                 enumerator: Some("HDAUDIO".to_owned()),
+                vb_cable: false,
             }
         );
         assert_eq!(listing.endpoints[0].traits.mic_kind(), MicKind::Headphones);

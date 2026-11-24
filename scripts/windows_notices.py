@@ -1113,6 +1113,17 @@ def build(target):
         app.get("repository") or "")
     out.text("LICENSE", read_text(os.path.join(REPO, "LICENSE")), "AudioSync")
     cast_roots_notice(out)
+    if not linux:
+        # Fetched on the user's PC, never shipped, so no licence text (VC60).
+        out.add("", "", "VB-CABLE, the virtual audio cable by VB-Audio (Vincent Burel), isn't part",
+                "of AudioSync. The x64 installer, or Fix It on the double-audio notice,",
+                "downloads it from VB-Audio, checks it against a pinned SHA-256 and runs",
+                "VB-Audio's installer unmodified.",
+                "The origin of VB-CABLE : www.vb-cable.com.",
+                "VB-CABLE is a donationware, all participations are welcome.",
+                "Use in a company or institution needs licences bought from VB-Audio:",
+                "https://vb-audio.com/Services/licensing.htm",
+                "VB-CABLE: https://vb-audio.com/Cable/")
 
     out.heading("2. The Rust standard library")
     out.add("", "The parts of the Rust standard library the app uses, compiled into the",

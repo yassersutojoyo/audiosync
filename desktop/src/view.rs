@@ -4168,6 +4168,10 @@ impl App {
         let w = weak.clone();
         main.on_notice_privacy_requested(move |_| with_app(&w, App::open_microphone_privacy));
         let w = weak.clone();
+        main.on_notice_silent_output_requested(move || {
+            with_app(&w, |app| app.update(|b| b.add_silent_output()))
+        });
+        let w = weak.clone();
         main.on_notice_focus_changed(move |id, focused| {
             with_app(&w, |app| {
                 note_focus(&mut app.main_focus.borrow_mut().notice, id, focused);
@@ -4294,6 +4298,10 @@ impl App {
         let w = weak.clone();
         flyout.on_notice_privacy_requested(move |_| with_app(&w, App::open_microphone_privacy));
         let w = weak.clone();
+        flyout.on_notice_silent_output_requested(move || {
+            with_app(&w, |app| app.update(|b| b.add_silent_output()))
+        });
+        let w = weak.clone();
         flyout.on_network_settings_requested(move || with_app(&w, App::open_network_settings));
         let w = weak.clone();
         flyout.on_notice_update_button_pressed(move |button| {
@@ -4413,6 +4421,10 @@ impl App {
     fn connect_about(self: &Rc<Self>) {
         self.follow_dialog_frame(&self.about(), "about dialog");
         self.about().set_version(env!("CARGO_PKG_VERSION").into());
+        self.about().set_vb_cable_credit(cfg!(windows));
+        let weak = Rc::downgrade(self);
+        self.about()
+            .on_vendor_page_requested(move || with_app(&weak, App::open_vendor_page));
         self.about().on_exit_requested(quit);
         let about = self.about().as_weak();
         self.about().on_closed(move || {
@@ -4596,6 +4608,15 @@ impl App {
     /// calibration that asks.
     fn open_microphone_privacy(&self) {
         let uri = SettingsPage::MicrophonePrivacy.uri();
+        if !crate::platform::open_settings(uri) {
+            self.log
+                .log(|| format!("notice: the shell did not open {uri}"));
+        }
+    }
+
+    /// Opens VB-CABLE's page for the About dialog's credit (VC22).
+    fn open_vendor_page(&self) {
+        let uri = crate::audio::silent_output::VENDOR_PAGE;
         if !crate::platform::open_settings(uri) {
             self.log
                 .log(|| format!("notice: the shell did not open {uri}"));
@@ -7550,6 +7571,17 @@ fn calibration_failure(strings: &Strings<'_>, reference: &str, failure: Failure)
 }
 
 pub fn notice_item(strings: &Strings<'_>, notice: &ui_model::Notice) -> NoticeItem {
+    use ui_model::SilentOutput as S;
+    let silent = match &notice.message {
+        NoticeMessage::HeardTwice { silent_output, .. } => Some(*silent_output),
+        _ => None,
+    };
+    // The button takes Show How's place (VC22), and a restart needs neither.
+    let has_silent_output = matches!(
+        silent,
+        Some(S::Offered { .. } | S::Downloading | S::Waiting)
+    );
+    let restart = silent == Some(S::Restart);
     NoticeItem {
         id: i32::try_from(notice.id).unwrap_or(i32::MAX),
         message: notice_text(strings, &notice.message),
@@ -7563,8 +7595,10 @@ pub fn notice_item(strings: &Strings<'_>, notice: &ui_model::Notice) -> NoticeIt
             _ => SharedString::new(),
         },
         time: notice.time.as_str().into(),
-        has_guide: guide::guide(&notice.message).is_some(),
+        has_guide: guide::guide(&notice.message).is_some() && !has_silent_output && !restart,
         has_retry: notice.message == NoticeMessage::AirPlayStopped,
+        has_silent_output,
+        silent_busy: matches!(silent, Some(S::Downloading | S::Waiting)),
         has_privacy: matches!(notice.message, NoticeMessage::MicrophoneBlocked { .. }),
         update_buttons: update_buttons(&notice.message),
         info: notice.message.reports_a_change(),
@@ -7827,20 +7861,50 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
             source,
             mute,
             shared,
+            silent_output,
             ..
         } => {
             let mute = joined(strings, mute);
             let shared = joined(strings, shared);
-            match source {
+            let today = match source {
                 Some(source) => strings.invoke_notice_heard_twice_app(
                     source_name(strings, source),
                     mute,
                     shared,
                 ),
                 None => strings.invoke_notice_heard_twice_system(mute, shared),
-            }
+            };
+            silent_output_text(strings, today, *silent_output)
         }
     }
+}
+
+/// The double-audio notice with Fix It: two short lines in place of
+/// today's text while it is offered, the second saying where the install got
+/// to (docs/WINDOWS_SILENT_OUTPUT_SPEC.md, VC22-VC38).
+fn silent_output_text(
+    strings: &Strings<'_>,
+    today: SharedString,
+    shown: ui_model::SilentOutput,
+) -> SharedString {
+    use ui_model::{SilentFailure as F, SilentOutput as S};
+    let line = match shown {
+        S::None => return today,
+        S::Restart => return strings.get_silent_output_restart(),
+        S::Offered { failed: None } => strings.get_silent_output_note(),
+        S::Offered {
+            failed: Some(failure),
+        } => match failure {
+            F::Refused => strings.get_silent_output_refused(),
+            F::Download => strings.get_silent_output_download_failed(),
+            F::Mismatch => strings.get_silent_output_mismatch(),
+            F::Installer => strings.get_silent_output_installer_failed(),
+            F::Restart => strings.get_silent_output_restart(),
+        },
+        S::Downloading | S::Waiting => strings.get_silent_output_downloading(),
+        S::NotOnArm64 => strings.get_silent_output_not_on_arm64(),
+    };
+    format!("{}\n{line}", strings.get_silent_output_offer()).into()
 }
 
 /// A recalled member AudioSync never learned a name for reads "Unknown device".
@@ -21337,6 +21401,84 @@ pub(crate) mod tests {
         );
     }
 
+    // covers: VC22, VC23, VC35
+    #[test]
+    fn the_double_audio_notice_offers_fix_it_in_short_lines() {
+        use crate::ui_model::{SilentFailure, SilentOutput};
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let item = |silent_output| {
+            notice_item(
+                &strings,
+                &ui_model::Notice {
+                    id: 1,
+                    subject: "double audio".to_owned(),
+                    message: NoticeMessage::HeardTwice {
+                        source: None,
+                        mute: vec!["Speakers".into()],
+                        shared: Vec::new(),
+                        default_output: Some("Speakers".into()),
+                        silent_output,
+                    },
+                    time: String::new(),
+                    post: 0,
+                },
+            )
+        };
+        let twice = "You may hear your PC's sound twice.";
+        let offered = item(SilentOutput::Offered { failed: None });
+        assert_eq!(
+            offered.message.as_str(),
+            format!("{twice}\nFix It adds VB-CABLE, a free audio driver. Windows asks once.")
+        );
+        assert!(offered.has_silent_output && !offered.has_guide);
+        assert_eq!(strings.get_silent_output_button(), "Fix It");
+        let refused = item(SilentOutput::Offered {
+            failed: Some(SilentFailure::Refused),
+        });
+        assert_eq!(
+            refused.message.as_str(),
+            format!("{twice}\nWindows didn't allow it, so nothing changed.")
+        );
+        let restart = item(SilentOutput::Restart);
+        assert_eq!(restart.message.as_str(), "Restart Windows to hear it once.");
+        assert!(!restart.has_silent_output && !restart.has_guide);
+        let arm64 = item(SilentOutput::NotOnArm64);
+        assert_eq!(
+            arm64.message.as_str(),
+            format!("{twice}\nAudioSync can't fix this on this PC yet.")
+        );
+        assert!(arm64.has_guide);
+        // No text of the app says "silent output" (his 23.35 words).
+        let shown = include_str!("../ui/strings.slint")
+            .split("@tr(\"")
+            .skip(1)
+            .filter_map(|text| text.split('"').next())
+            .find(|text| text.to_lowercase().contains("silent output"));
+        assert_eq!(shown, None);
+    }
+
+    // covers: VC22
+    #[test]
+    fn the_about_dialog_credits_vb_cable_on_windows_with_its_link() {
+        let about = include_str!("../ui/about.slint");
+        assert!(about.contains("if root.vb-cable-credit:"));
+        assert!(about.contains("text: Strings.silent-output-origin;"));
+        assert!(about.contains("text: Strings.silent-output-donation;"));
+        assert!(about.contains("root.vendor-page-requested();"));
+        let strings = include_str!("../ui/strings.slint");
+        assert!(
+            strings
+                .contains("silent-output-origin: \"The origin of VB-CABLE : www.vb-cable.com.\";")
+        );
+        assert!(strings.contains(
+            "silent-output-donation: \"VB-CABLE is a donationware, all participations are welcome.\";"
+        ));
+        let app = app_over(MockBackend::new());
+        app.connect_about();
+        assert_eq!(app.about().get_vb_cable_credit(), cfg!(windows));
+    }
+
     // covers: S242
     #[test]
     fn double_audio_from_all_apps_except_some_names_the_source_in_the_uis_words() {
@@ -21350,6 +21492,7 @@ pub(crate) mod tests {
                 mute: vec!["TV".into()],
                 shared: Vec::new(),
                 default_output: None,
+                silent_output: crate::ui_model::SilentOutput::None,
             },
         );
         let named = strings.invoke_source_all_except("Spotify and Chrome".into());
@@ -21652,6 +21795,7 @@ pub(crate) mod tests {
                 mute: vec!["Speakers".into()],
                 shared: vec!["Headphones".into()],
                 default_output: None,
+                silent_output: crate::ui_model::SilentOutput::None,
             }),
             "Dismiss: double audio"
         );

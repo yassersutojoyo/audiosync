@@ -23,6 +23,9 @@ test = true
 # example speakers and nothing plays, for work on the UI. It does nothing on
 # Windows, and release builds never turn it on.
 mock-backend = []
+# Lets the app start on Windows before 11 so the silent-output proof can run on
+# the Server 2022 CI runner. Release builds never turn it on.
+ci-proof = []
 
 [dependencies]
 audiosync-core = { path = "../core" }
@@ -84,7 +87,11 @@ windows = { version = "0.62", features = [
     "Storage_Search",
     "Storage_Streams",
     "Wdk_System_SystemServices",
+    # The configuration manager: VB-CABLE's device by its hardware ID
+    # (src/audio/wasapi/vb_cable.rs).
+    "Win32_Devices_DeviceAndDriverInstallation",
     "Win32_Devices_FunctionDiscovery",
+    "Win32_Devices_Properties",
     "Win32_Foundation",
     "Win32_Globalization",
     # DWM: Mica in the title bars and the flyout's rounded corners (src/backdrop.rs).
@@ -167,6 +174,8 @@ roxmltree = "0.21.1"
 ed25519-dalek = { version = "3.0.0", default-features = false, features = ["fast"] }
 base64 = "0.23.1"
 zip = { version = "9.1.2", default-features = false, features = ["deflate-flate2"] }
+# The VB-CABLE pack's pinned SHA-256 (src/audio/silent_output.rs).
+sha2 = { version = "0.11.1", default-features = false }
 
 [target.'cfg(not(windows))'.dependencies]
 slint = { version = "=1.18.1", default-features = false, features = ["renderer-femtovg"] }

@@ -131,9 +131,17 @@ Source.
 
 Windows can't mute the sound AudioSync captures, so the source would also
 play straight from the PC, without the delay. AudioSync deals with that only
-when the PC has a virtual output, and it doesn't install one. Without one, the
-PC's own speaker plays ahead of the rest and a notice asks you to route or mute
-it by hand. With a virtual output, AudioSync moves the sound itself while it
+when the PC has a virtual output. Without one, the PC's own speaker plays
+ahead of the rest and a notice says so. The x64 installer, when it installs
+for everyone, adds [VB-CABLE](https://vb-audio.com/Cable/) by VB-Audio, a free
+audio driver, as that output, so this rarely shows. Elsewhere the notice's
+Fix It adds it, and Windows asks for admin permission once. The origin of
+VB-CABLE : www.vb-cable.com. VB-CABLE is a donationware, all participations
+are welcome. On ARM64 there's no Fix It yet, so route or mute the sound by
+hand. Uninstalling AudioSync removes the cable its installer added; otherwise
+uninstall VB-CABLE under Settings > Apps > Installed apps, or run VB-Audio's
+setup again and choose Remove Driver, then restart Windows. With a
+virtual output, AudioSync moves the sound itself while it
 streams. With All System Audio it makes a virtual output (a software audio
 device, such as a virtual cable, that it isn't playing to) the Windows
 default; with one app it moves only that app there. Both go back when

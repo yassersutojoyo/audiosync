@@ -59,32 +59,7 @@ impl DefaultEndpoints for WasapiDefaults {
     }
 
     fn set_default(&mut self, id: &str, role: Role) -> Result<(), String> {
-        let _apartment = Apartment::enter().map_err(|error| error.to_string())?;
-        // SAFETY: creates an in-process COM object; COM is initialized above.
-        let client: IUnknown = unsafe { CoCreateInstance(&POLICY_CONFIG_CLIENT, None, CLSCTX_ALL) }
-            .map_err(|error| failure("CoCreateInstance(CPolicyConfigClient)", &error))?;
-        let mut raw = std::ptr::null_mut();
-        // SAFETY: asks the live object for the interface; on success `raw`
-        // holds one reference, which `config` takes over and releases.
-        unsafe { client.query(&POLICY_CONFIG, &mut raw) }
-            .ok()
-            .map_err(|error| failure("QueryInterface(IPolicyConfig)", &error))?;
-        // SAFETY: as above.
-        let config = unsafe { IUnknown::from_raw(raw) };
-        let id = HSTRING::from(id);
-        // SAFETY: a COM object's first field points to its method table;
-        // slot 13 of IPolicyConfig's table is SetDefaultEndpoint, which
-        // takes the object, a NUL-terminated ID that outlives the call and
-        // a role.
-        let result = unsafe {
-            let table = *(config.as_raw() as *const *const *const c_void);
-            let call: SetDefaultEndpoint =
-                std::mem::transmute(*table.add(SET_DEFAULT_ENDPOINT_SLOT));
-            call(config.as_raw(), PCWSTR(id.as_ptr()), windows_role(role))
-        };
-        result
-            .ok()
-            .map_err(|error| failure("IPolicyConfig::SetDefaultEndpoint", &error))
+        set_default_endpoint(id, windows_role(role))
     }
 
     fn endpoints(&mut self) -> Result<Vec<Candidate>, String> {
@@ -117,10 +92,40 @@ impl DefaultEndpoints for WasapiDefaults {
                     id,
                     kind,
                     listened,
+                    vb_cable: properties.vb_cable,
                 })
             })
             .collect())
     }
+}
+
+/// Makes `id`, a render or capture endpoint, the default for `role`.
+pub(super) fn set_default_endpoint(id: &str, role: ERole) -> Result<(), String> {
+    let _apartment = Apartment::enter().map_err(|error| error.to_string())?;
+    // SAFETY: creates an in-process COM object; COM is initialized above.
+    let client: IUnknown = unsafe { CoCreateInstance(&POLICY_CONFIG_CLIENT, None, CLSCTX_ALL) }
+        .map_err(|error| failure("CoCreateInstance(CPolicyConfigClient)", &error))?;
+    let mut raw = std::ptr::null_mut();
+    // SAFETY: asks the live object for the interface; on success `raw`
+    // holds one reference, which `config` takes over and releases.
+    unsafe { client.query(&POLICY_CONFIG, &mut raw) }
+        .ok()
+        .map_err(|error| failure("QueryInterface(IPolicyConfig)", &error))?;
+    // SAFETY: as above.
+    let config = unsafe { IUnknown::from_raw(raw) };
+    let id = HSTRING::from(id);
+    // SAFETY: a COM object's first field points to its method table;
+    // slot 13 of IPolicyConfig's table is SetDefaultEndpoint, which
+    // takes the object, a NUL-terminated ID that outlives the call and
+    // a role.
+    let result = unsafe {
+        let table = *(config.as_raw() as *const *const *const c_void);
+        let call: SetDefaultEndpoint = std::mem::transmute(*table.add(SET_DEFAULT_ENDPOINT_SLOT));
+        call(config.as_raw(), PCWSTR(id.as_ptr()), role)
+    };
+    result
+        .ok()
+        .map_err(|error| failure("IPolicyConfig::SetDefaultEndpoint", &error))
 }
 
 /// The active endpoints of `flow`; one that fails is left out.

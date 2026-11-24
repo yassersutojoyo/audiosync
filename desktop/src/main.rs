@@ -166,6 +166,11 @@ fn main() -> ExitCode {
         restore_guard::run(command);
         return ExitCode::SUCCESS;
     }
+    // The installer's step (VC25), elevated with the installer, beside any running copy.
+    #[cfg(windows)]
+    if audio::silent_output::installer_asks(std::env::args_os()) {
+        std::process::exit(audio::wasapi::add_for_installer());
+    }
     // After Restart Now the quitting copy still holds the single instance;
     // claiming it first would hand this launch over to that copy.
     #[cfg(any(windows, all(target_os = "linux", not(test))))]

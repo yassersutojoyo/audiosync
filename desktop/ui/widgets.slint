@@ -400,6 +400,8 @@ export global Glyphs {
     out property <string> microphone: "\u{E720}";
     out property <string> gear: "\u{E713}";
     out property <string> lock: "\u{E72E}";
+    // Windows' administrator shield: the button that asks for an OK.
+    out property <string> shield: "\u{EA18}";
 
     // A switched-on output's own volume in Windows: the muted speaker while
     // muted, the speaker with one wave while low (spec S198).
@@ -434,7 +436,7 @@ export global Glyphs {
     // its Presets, Equalizer, microphone and timer are filled where the Mac's
     // are outlines, and its bolt and warning are outlines where the Mac's are filled.
     public pure function drawn-everywhere(glyph: string) -> bool {
-        return glyph == root.shuffle || glyph == root.repeat-all || glyph == root.repeat-one || glyph == root.more || glyph == root.previous || glyph == root.next || glyph == root.play || glyph == root.pause || glyph == root.volume-low || glyph == root.volume-mid || glyph == root.volume-high || glyph == root.volume-muted || glyph == root.presets || glyph == root.equalizer || glyph == root.microphone || glyph == root.timer || glyph == root.lock || glyph == root.auto-connect || glyph == root.warning;
+        return glyph == root.shuffle || glyph == root.repeat-all || glyph == root.repeat-one || glyph == root.more || glyph == root.previous || glyph == root.next || glyph == root.play || glyph == root.pause || glyph == root.volume-low || glyph == root.volume-mid || glyph == root.volume-high || glyph == root.volume-muted || glyph == root.presets || glyph == root.equalizer || glyph == root.microphone || glyph == root.timer || glyph == root.lock || glyph == root.auto-connect || glyph == root.warning || glyph == root.shield;
     }
 
     // Shuffle and Repeat are drawn on a 20-unit box with 2-unit strokes and
@@ -546,6 +548,10 @@ export global Glyphs {
         }
         if glyph == root.check {
             return "M3 8.5 L6.5 12 L13 4.5";
+        }
+        // Own drawing: a shield with a flat top and a pointed foot.
+        if glyph == root.shield {
+            return "M8 1.5 L13.5 3.5 V8 C13.5 11 11.25 13.4 8 14.5 C4.75 13.4 2.5 11 2.5 8 V3.5 Z";
         }
         return "";
     }
@@ -1285,6 +1291,8 @@ export component SmallButton inherits Rectangle {
     in property <length> font-size: Tokens.font-size-callout;
     // Can't be used now: grey, as the Mac's disabled push button.
     in property <bool> dimmed;
+    // Grey while its own work runs, yet kept in the Tab order so focus stays on it.
+    in property <bool> busy;
     // The Mac's system push button in a teal-tinted sheet: teal at 5% with no
     // edge (measured on its Calibrate All sheet), or filled as the default button.
     in property <bool> system;
@@ -1296,8 +1304,11 @@ export component SmallButton inherits Rectangle {
     out property <bool> has-focus: focus.has-focus;
     callback clicked();
 
+    // A glyph before the text, such as the administrator shield; empty for none.
+    in property <string> glyph;
+
     in property <length> side-padding: 10px;
-    min-width: label.preferred-width + 2 * root.side-padding;
+    min-width: content.preferred-width + 2 * root.side-padding;
     preferred-width: self.min-width;
     height: 24px;
     border-radius: Tokens.radius-control;
@@ -1320,7 +1331,7 @@ export component SmallButton inherits Rectangle {
     // A dimmed button is out of the Tab order, as the Mac's disabled one.
     focus := FocusScope {
         focus-on-click: false;
-        focus-on-tab-navigation: !root.dimmed;
+        focus-on-tab-navigation: !root.dimmed || root.busy;
         key-pressed(event) => {
             if event.text == " " || event.text == Key.Return {
                 root.clicked();
@@ -1343,15 +1354,26 @@ export component SmallButton inherits Rectangle {
         }
     }
 
-    label := Text {
-        text: root.text;
-        font-size: root.font-size;
-        font-weight: Fluent.weight-medium;
-        // Teal text at 4.5:1 or more, where the Mac's #1c9f91 is 3.27:1.
-        color: root.dimmed ? Tokens.text.with-alpha(0.5) : root.primary ? #ffffff : root.grey ? Tokens.text : root.system ? Tokens.teal-text : Fluent.house-text;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-        accessible-role: none;
+    content := HorizontalLayout {
+        alignment: center;
+        spacing: 4px;
+
+        if root.glyph != "": Glyph {
+            glyph: root.glyph;
+            font-size: root.font-size;
+            color: label.color;
+        }
+
+        label := Text {
+            text: root.text;
+            font-size: root.font-size;
+            font-weight: Fluent.weight-medium;
+            // Teal text at 4.5:1 or more, where the Mac's #1c9f91 is 3.27:1.
+            color: root.dimmed ? Tokens.text.with-alpha(0.5) : root.primary ? #ffffff : root.grey ? Tokens.text : root.system ? Tokens.teal-text : Fluent.house-text;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
     }
 
     FocusRing {
@@ -5891,6 +5913,8 @@ export component NoticeStack inherits VerticalLayout {
     callback retry-requested(int);
     // Open Privacy Settings on a notice: open the microphone privacy page.
     callback privacy-requested(int);
+    // Fix It on the double-audio notice.
+    callback silent-output-requested();
     // A button of the updater's notice.
     callback update-button-pressed(UpdateButton);
     // Whether one of a notice's buttons has keyboard focus, each time that
@@ -6077,6 +6101,25 @@ export component NoticeStack inherits VerticalLayout {
                             }
                             changed keyboard-focused => {
                                 row.guide-focused = self.keyboard-focused;
+                            }
+                        }
+                    }
+
+                    if notice.has-silent-output: HorizontalLayout {
+                        alignment: start;
+                        SmallButton {
+                            text: Strings.silent-output-button;
+                            tip: Strings.silent-output-button-label;
+                            glyph: Glyphs.shield;
+                            dimmed: notice.silent-busy;
+                            busy: notice.silent-busy;
+                            clicked => {
+                                if !notice.silent-busy {
+                                    root.silent-output-requested();
+                                }
+                            }
+                            changed has-focus => {
+                                row.guide-focused = self.has-focus;
                             }
                         }
                     }

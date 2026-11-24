@@ -130,6 +130,7 @@ pub fn sink_traits(node: &Node) -> DeviceTraits {
     DeviceTraits {
         form_factor,
         enumerator: enumerator.map(str::to_owned),
+        vb_cable: false,
     }
 }
 
@@ -379,6 +380,7 @@ impl Graph {
                     channels: node
                         .prop_channels()
                         .map(|channels| channels.min(super::format::MAX_CHANNELS)),
+                    vb_cable: false,
                 }),
             })
             .collect()

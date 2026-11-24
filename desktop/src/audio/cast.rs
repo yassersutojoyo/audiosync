@@ -1196,6 +1196,13 @@ impl CastSpeakers {
         self.enabled.map(|id| id.to_string())
     }
 
+    /// The ID of the device that plays.
+    pub fn playing_id(&self) -> Option<String> {
+        self.attempt
+            .filter(|attempt| attempt.status == CastStatus::Playing)
+            .map(|attempt| attempt.device.to_string())
+    }
+
     /// Whether a device is on and either listed or in a session: then local
     /// outputs wait for it by [`CastSpeakers::anchor`].
     pub fn chosen(&self) -> bool {

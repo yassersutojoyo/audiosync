@@ -73,12 +73,19 @@ Source: "{#SourceDir}\THIRD-PARTY-NOTICES.txt"; DestDir: "{app}"; Flags: ignorev
 Name: "{autoprograms}\AudioSync"; Filename: "{app}\audiosync.exe"; WorkingDir: "{app}"
 
 [Run]
+#if Arch == "x64"
+; Adds VB-CABLE under Setup's own elevation, so no prompt of its own; a failure
+; leaves AudioSync installed (docs/WINDOWS_SILENT_OUTPUT_SPEC.md VC25).
+Filename: "{app}\audiosync.exe"; Parameters: "--add-vb-cable"; StatusMsg: "Adding VB-CABLE"; Flags: runhidden waituntilterminated; Check: AddsVbCable
+#endif
 ; postinstall entries run as the user who started Setup, never elevated.
 Filename: "{app}\audiosync.exe"; Description: "Open AudioSync"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
 ; Puts back the outputs a stream moved (S469, S471) while the files are still there (S474).
 Filename: "{app}\audiosync.exe"; Parameters: "--restore-outputs"; Flags: runhidden waituntilterminated; RunOnceId: "RestoreOutputs"
+; The folder exists only while a cable the step above added does (VC53).
+Filename: "{app}\VB-CABLE\VBCABLE_Setup_x64.exe"; Parameters: "-u -h"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "RemoveVbCable"
 
 [UninstallDelete]
 ; What the app's updater leaves next to the files above (S301, S304).
@@ -86,8 +93,65 @@ Type: files; Name: "{app}\audiosync.exe.bak"
 Type: files; Name: "{app}\audiosync.exe.new"
 Type: files; Name: "{app}\THIRD-PARTY-NOTICES.txt.bak"
 Type: files; Name: "{app}\THIRD-PARTY-NOTICES.txt.new"
+; What the VB-CABLE step extracted (VC37).
+Type: filesandordirs; Name: "{app}\VB-CABLE"
 
 [Code]
+#if Arch == "x64"
+var
+  VbCableKnown, VbCableThere, ReadyPageSaid: Boolean;
+
+// A VB-CABLE device in any state, by its hardware ID under the ROOT
+// enumerator, as the app finds it (VC9, VC21).
+function HasVbCable: Boolean;
+var
+  Classes, Devices: TArrayOfString;
+  I, J: Integer;
+  Key, Ids: String;
+begin
+  if not VbCableKnown then
+  begin
+    VbCableKnown := True;
+    if RegGetSubkeyNames(HKLM, 'SYSTEM\CurrentControlSet\Enum\ROOT', Classes) then
+      for I := 0 to GetArrayLength(Classes) - 1 do
+      begin
+        Key := 'SYSTEM\CurrentControlSet\Enum\ROOT\' + Classes[I];
+        if RegGetSubkeyNames(HKLM, Key, Devices) then
+          for J := 0 to GetArrayLength(Devices) - 1 do
+            if RegQueryMultiStringValue(HKLM, Key + '\' + Devices[J], 'HardwareID', Ids) and
+              (Pos(#0 + 'vbaudiovacwdm' + #0, #0 + Lowercase(Ids) + #0) > 0) then
+              VbCableThere := True;
+      end;
+  end;
+  Result := VbCableThere;
+end;
+
+// For everyone is the install that is already elevated (VC25).
+function AddsVbCable: Boolean;
+begin
+  Result := IsAdminInstallMode and not HasVbCable;
+end;
+
+// The Ready to install page names the step with VB-Audio's two sentences (VC22).
+procedure CurPageChanged(CurPageID: Integer);
+var
+  Grown: Integer;
+begin
+  if (CurPageID = wpReady) and not ReadyPageSaid and AddsVbCable then
+  begin
+    ReadyPageSaid := True;
+    WizardForm.ReadyLabel.Caption :=
+      'It also adds VB-CABLE by VB-Audio, so you hear your PC''s sound once.' + #13#10#13#10 +
+      'The origin of VB-CABLE : www.vb-cable.com.' + #13#10 +
+      'VB-CABLE is a donationware, all participations are welcome.' + #13#10#13#10 +
+      SetupMessage(msgReadyLabel2b);
+    Grown := WizardForm.ReadyLabel.AdjustHeight;
+    WizardForm.ReadyMemo.Top := WizardForm.ReadyMemo.Top + Grown;
+    WizardForm.ReadyMemo.Height := WizardForm.ReadyMemo.Height - Grown;
+  end;
+end;
+#endif
+
 // The uninstaller has no Restart Manager step like CloseApplications, and a
 // running copy holds audiosync.exe, so it is stopped here as install.ps1 does.
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

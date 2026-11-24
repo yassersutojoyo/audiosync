@@ -1815,6 +1815,7 @@ fn b12() -> Vec<Row> {
                     mute: vec!["Headphones".into()],
                     shared: Vec::new(),
                     default_output: Some("Headphones".into()),
+                    silent_output: crate::ui_model::SilentOutput::None,
                 },
             )
         }),

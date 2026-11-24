@@ -35,6 +35,8 @@
 //! - [`render`]: an output's render pipeline, from the ring to the device.
 //! - [`routing`]: whether the source is heard twice, straight from Windows
 //!   as well as through AudioSync's delayed copies.
+//! - [`silent_output`]: adding VB-CABLE as the silent output when the PC has
+//!   none.
 //! - `wasapi` (Windows only): the WASAPI driver; `wasapi::open` gives the
 //!   backend the app runs on.
 //!
@@ -73,6 +75,7 @@ pub mod pipewire;
 pub mod process;
 pub mod render;
 pub mod routing;
+pub mod silent_output;
 #[cfg(test)]
 pub mod test_cells;
 pub mod wake_resume;

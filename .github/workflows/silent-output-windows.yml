@@ -1,0 +1,162 @@
+name: Silent output (Windows)
+
+# The double-audio proof of docs/WINDOWS_SILENT_OUTPUT_SPEC.md on clean
+# runners: a song heard twice before VB-CABLE is added (VC51) and once after
+# AudioSync's own installer added it unattended (VC52), then the uninstaller's
+# removal logged (VC53), and on ARM64 the same through Fix It (VC54).
+# Runs by hand and when its own files change on the branch that adds it.
+#
+# VB-CABLE is donationware (https://vb-audio.com/Services/licensing.htm) and
+# Scream is MS-PL: the job downloads both, checked by hash, and installs them
+# on the runner only. Neither is bundled, vendored or a dependency of AudioSync.
+on:
+  push:
+    branches:
+      - '*/win-vcable-1120'
+    paths:
+      - .github/workflows/silent-output-windows.yml
+      - desktop/installer/audiosync.iss
+      - scripts/stranger/windows_silent_output.ps1
+      - scripts/stranger/scream_window.py
+      - scripts/stranger/heard.py
+      - scripts/stranger/remote.py
+  workflow_dispatch:
+
+concurrency:
+  group: silent-output-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  SLINT_COMPILER_DENY_WARNINGS: '1'
+  SKIA_BINARIES_URL: file://${{ github.workspace }}/skia-cache/{tag}/skia-binaries-{key}.tar.gz
+
+jobs:
+  skia:
+    uses: ./.github/workflows/skia.yml
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: skia
+    # Same image as skia.yml: its Skia objects need that image's MSVC STL to link.
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-pc-windows-msvc, aarch64-pc-windows-msvc]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Rust toolchain (1.99.1)
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal
+          rustup default 1.99.1
+          rustup target add ${{ matrix.target }}
+
+      - name: Skia cache key
+        id: skia
+        run: echo "key=$(bash scripts/skia_cache_key.sh ${{ matrix.target }})" >> "$GITHUB_OUTPUT"
+
+      - name: Skia (stored by skia.yml)
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: skia-cache
+          key: ${{ steps.skia.outputs.key }}
+          fail-on-cache-miss: true
+
+      - name: Release build and the receiver
+        run: |
+          (cd desktop && cargo build --locked --release --features ci-proof --target ${{ matrix.target }})
+          # Static CRT: the receiver runs in a Nano Server container with no Visual C++ runtime.
+          RUSTFLAGS='-C target-feature=+crt-static' \
+            cargo build --locked --release --manifest-path airplay/Cargo.toml --example stranger_rx --target ${{ matrix.target }}
+          mkdir -p bin
+          cp desktop/target/${{ matrix.target }}/release/audiosync.exe bin/
+          cp airplay/target/${{ matrix.target }}/release/examples/stranger_rx.exe bin/
+
+      # Pinned and checked by hash, as in windows.yml; only x64 has the installer step (VC25).
+      - name: Inno Setup 6.7.3
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/innosetup.exe" https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe
+          echo "9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732  $RUNNER_TEMP/innosetup.exe" | sha256sum -c
+          MSYS2_ARG_CONV_EXCL="*" "$RUNNER_TEMP/innosetup.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER
+
+      - name: Installer of the proof's build
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        working-directory: desktop
+        run: |
+          python -I ../scripts/windows_notices.py ${{ matrix.target }}
+          bash ../scripts/build_installer.sh x64 target/${{ matrix.target }}/release target/installer-x64
+          cp target/installer-x64/AudioSync-Setup.exe ../bin/
+
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: silent-output-bin-${{ matrix.target }}
+          path: bin
+          retention-days: 1
+
+  proof:
+    name: Heard twice, then once (${{ matrix.target }})
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Not windows-latest: Server 2025 refuses the SWD Scream device (run
+          # 44292105824), and the ROOT one is listed as virtual, so there would
+          # be no double audio to show; Server 2022 also carries Docker.
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2022
+            arch: x64
+            optional: false
+          # VC54: untested rather than red when the runner or a step can't do it.
+          - target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+            arch: arm64
+            optional: true
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.optional }}
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: silent-output-bin-${{ matrix.target }}
+          path: bin
+
+      - name: Heard twice, VB-CABLE added, heard once
+        shell: pwsh
+        run: >-
+          ./scripts/stranger/windows_silent_output.ps1 -Arch ${{ matrix.arch }}
+          -Exe bin/audiosync.exe
+          -Rx bin/stranger_rx.exe
+          ${{ matrix.arch == 'x64' && '-Setup bin/AudioSync-Setup.exe' || '' }}
+          -Work silent-output-work
+
+      - name: Untested on this runner (VC54)
+        if: ${{ failure() && matrix.optional }}
+        run: |
+          echo "- UNTESTED VC54 on ${{ matrix.runner }}: a step failed, see the log; VC23 stays as written" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the recordings and logs (workflow artifact)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: silent-output-${{ matrix.arch }}
+          path: silent-output-work
+          if-no-files-found: warn
+          retention-days: 7

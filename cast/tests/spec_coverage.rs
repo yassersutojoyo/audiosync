@@ -160,7 +160,8 @@ fn rust_files(dir: &Path, found: &mut Vec<PathBuf>) {
 
 /// Clauses named by `marker` lines in the Rust files under `dirs` (relative
 /// to the cast crate), with where each was named; and every malformed marker
-/// line. Lines in `desktop/` also carry engine IDs (S, P, U) and a
+/// line. Lines in `desktop/` also carry engine IDs (S, P, U), silent output
+/// IDs (VC) and a
 /// parenthesised note, which are skipped.
 fn marked(dirs: &[&str], marker: &str) -> (BTreeMap<Id, Vec<String>>, Vec<String>) {
     let mut files = Vec::new();
@@ -214,7 +215,7 @@ fn host_ids(list: &str) -> Vec<Option<Id>> {
     }
     bare.split(',')
         .map(str::trim)
-        .filter(|id| !id.starts_with(['S', 'P', 'U']))
+        .filter(|id| !id.starts_with(['S', 'P', 'U']) && !id.starts_with("VC"))
         .map(clause_id)
         .collect()
 }
@@ -477,6 +478,7 @@ fn a_desktop_marker_keeps_its_cast_ids_around_engine_ids_and_notes() {
         Some(ids(&["C70", "C104"]))
     );
     assert_eq!(found("S112 (a note that runs on,"), Some(Vec::new()));
+    assert_eq!(found("VC36, C9"), Some(ids(&["C9"])));
     assert_eq!(found("C2, X9"), None);
 }
 

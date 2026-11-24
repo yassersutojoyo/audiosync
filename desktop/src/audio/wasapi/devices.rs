@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use windows::Win32::Devices::FunctionDiscovery::{
-    PKEY_Device_EnumeratorName, PKEY_Device_FriendlyName,
+    PKEY_Device_EnumeratorName, PKEY_Device_FriendlyName, PKEY_DeviceInterface_FriendlyName,
 };
 use windows::Win32::Foundation::PROPERTYKEY;
 use windows::Win32::Media::Audio::{
@@ -121,6 +121,12 @@ pub(super) fn properties(device: &IMMDevice) -> Result<EndpointProperties, Strin
             .and_then(|text| GUID::try_from(text.trim_matches(['{', '}'])).ok())
             == Some(KSNODETYPE_DISPLAYPORT_INTERFACE),
         channels: format_channels(&store, &PKEY_AudioEngine_DeviceFormat),
+        vb_cable: device_id(device).is_ok_and(|id| {
+            super::vb_cable::endpoint_is_vb_cable(
+                &id,
+                string_property(&store, &PKEY_DeviceInterface_FriendlyName).as_deref(),
+            )
+        }),
     })
 }
 
@@ -195,7 +201,7 @@ fn failure(call: &str, error: &windows::core::Error) -> String {
 }
 
 /// A string property of `store`, if it holds one under `key`.
-fn string_property(store: &IPropertyStore, key: &PROPERTYKEY) -> Option<String> {
+pub(super) fn string_property(store: &IPropertyStore, key: &PROPERTYKEY) -> Option<String> {
     // SAFETY: reads one property into a PROPVARIANT this function owns and
     // clears; its string is read only when the variant says it holds one.
     unsafe {

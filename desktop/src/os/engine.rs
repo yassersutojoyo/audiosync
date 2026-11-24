@@ -32,6 +32,12 @@ pub fn backend<D: Driver + 'static>(
     // Before the settings are read, so a record restored now isn't read.
     #[cfg(windows)]
     restore_records(&mut audio, log, settings_file.path());
+    // Waits on a setup that may still run, off the launch (VC42).
+    #[cfg(windows)]
+    std::thread::spawn({
+        let log = log.clone();
+        move || audio::wasapi::restore_kept(&log)
+    });
     #[cfg(windows)]
     audio.set_restore_guard(crate::restore_guard::keeper());
     // S473 while S477's own sink isn't the default.
@@ -64,6 +70,16 @@ pub fn backend<D: Driver + 'static>(
         ),
     );
     adapter.set_cast_file(cast_file, cast_unread);
+    #[cfg(windows)]
+    adapter.set_silent_output(std::sync::Arc::new(audio::wasapi::VbCablePlatform {
+        user_agent: crate::updater::fetch::user_agent(
+            "Windows",
+            env!("CARGO_PKG_VERSION"),
+            std::env::consts::ARCH,
+        ),
+        data_folder: data_folder::folder(),
+        kept: audio::wasapi::kept_file(),
+    }));
     Box::new(adapter)
 }
 
