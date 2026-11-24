@@ -8,6 +8,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 - On Windows, the x64 installer, when it installs for everyone, adds VB-CABLE by VB-Audio, a free audio driver, as the silent output AudioSync moves your PC's sound to while it streams, so you hear it once and not twice. On a PC the installer didn't reach, Fix It on the "You may hear your PC's sound twice" notice adds it, and Windows asks once. Uninstalling AudioSync removes a cable its installer added, and the About dialog credits VB-CABLE.
 - On the Mac, Windows and Linux, an app that's using the microphone, like a call, is left out of a whole-system stream, so you hear the call right away on your own output instead of late on the network speakers. It joins the stream again a few seconds after it stops using the microphone. On Windows, an app that keeps playing on an output it picked for itself can't be moved, so its call stays in the stream.
+- On the Mac, Windows and Linux, Settings > Speakers has an Auto-disconnect AirPlay and Cast switch, off by default. When it's on, AudioSync lets go of its AirPlay and Google Cast speakers after the minutes of silence you set in After 15 min of silence (1 to 240), and connects them again when sound plays.
 
 ### Changed
 
@@ -18,7 +19,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows and Linux, a long name scrolls 30 times a second and stops redrawing once it fits, so an open, idle window no longer redraws at the display's rate, as on the Mac.
 - On Linux, AudioSync always switches to All System Audio when the app you capture quits, as on the Mac and Windows, and the Switch to All System Audio When the Source App Quits switch is gone from Settings. If you had it off, streaming now goes on with All System Audio instead of stopping.
 - On Windows and Linux, AirPlay pairing and passwords work as on the Mac: the PIN prompt takes 4 digits, speakers that play together and each need a password are all asked at once, and one Cancel closes their prompts. An AirPlay speaker's volume slider no longer moves while you hold it.
-
+- On the Mac, Windows and Linux, an AirPlay speaker that doesn't report its latency starts with 0.2 s of extra room, and a speaker that needed more room earlier starts its next stream at that level.
 - The AirPlay Delay field now shows only the extra delay you set, so a TV that read 278 ms now reads 78 ms; the part AudioSync sets on its own is no longer shown, the main window's status line no longer names it, and the hints under the delay fields are shorter. What you hear stays the same.
 - When an AirPlay speaker keeps asking for lost audio on a bad network, AudioSync now gives it 0.3 s more room in one step instead of 0.1 s, which ended the cut-outs in our bad-network tests. After a bad stretch that speaker stays about a third of a second later until AudioSync quits. On a good network nothing changes. The help now says AirPlay adds at most 0.4 s.
 
