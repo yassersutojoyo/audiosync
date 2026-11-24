@@ -4,14 +4,16 @@
 # checked by hash, never shipped) on a software-enumerated device, which
 # AudioSync lists as a built-in speaker, as on a PC whose only output is its
 # own. With that endpoint the only one and the default, it checks:
-#   no spare device: streaming starts, the default stays where it was and the
-#     log says it gets no copy (S470);
+#   the move: with VB-CABLE added by the x64 install (VC25), streaming moves
+#     the default off the speaker and the log names the silent endpoint;
+#     without it, the default stays where it was and the log says it gets no
+#     copy (S470);
 #   volume keys: a volume set on the default as the taskbar does it stays
 #     while streaming, and the stream goes on (S192);
 #   muted output: the System slider on a muted default unmutes it (S197);
 #   real volume keys move AudioSync's master, not the default (S429), and
 #     show the level pop-up;
-#   a muted, then a quiet, default shows the hint, its fix and its tooltip;
+#   a muted, then a quiet, speaker shows the hint, its fix and its tooltip;
 #   a speaker's slider volume is the same after Ctrl+Q and a relaunch;
 #   a source app killed while streaming leaves a notice (S227);
 #   restore: with a second endpoint added, the default the app moved and every
@@ -40,6 +42,7 @@ class MMDeviceEnumeratorClass {}
 interface IMMDeviceEnumerator {
   [PreserveSig] int EnumAudioEndpoints(int dataFlow, int stateMask, out IMMDeviceCollection devices);
   [PreserveSig] int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice device);
+  [PreserveSig] int GetDevice([MarshalAs(UnmanagedType.LPWStr)] string id, out IMMDevice device);
 }
 
 [ComImport, Guid("0BD7A1BE-7A1A-44DB-8397-CC5392387B5E"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -111,10 +114,15 @@ public static class Endpoints {
     }
   }
 
+  // The endpoint the volume calls act on; the console default when null.
+  public static string Target;
+
   static IAudioEndpointVolume Volume() {
     Guid iid = typeof(IAudioEndpointVolume).GUID;
     object face;
-    Marshal.ThrowExceptionForHR(DefaultDevice(0).Activate(ref iid, 23, IntPtr.Zero, out face));
+    IMMDevice device = null;
+    if (Target != null) Marshal.ThrowExceptionForHR(Enumerator().GetDevice(Target, out device));
+    Marshal.ThrowExceptionForHR((device ?? DefaultDevice(0)).Activate(ref iid, 23, IntPtr.Zero, out face));
     return (IAudioEndpointVolume)face;
   }
 
@@ -349,6 +357,7 @@ for ($i = 0; $i -lt 60 -and $count -eq 0; $i++) { Start-Sleep -Seconds 1; $count
 Get-PnpDevice -PresentOnly -Class MEDIA, AudioEndpoint -ErrorAction SilentlyContinue | Format-Table -AutoSize Status, Class, FriendlyName, InstanceId |
   Out-String -Width 200 | Tee-Object -FilePath "$Work/env.txt" -Append
 $default = Get-Defaults
+$speaker = [Endpoints]::Default(0)
 "default output: $default" | Tee-Object -FilePath "$Work/env.txt" -Append
 if ($count -ne 1) { Not-Tried "$count active output endpoints after installing the driver (one needed)" }
 
@@ -430,11 +439,18 @@ if (-not (Test-On $row)) { $row.GetCurrentPattern($TogglePattern).Toggle(); Star
 if (-not (Test-On $streaming)) { $streaming.GetCurrentPattern($TogglePattern).Toggle() }
 Start-Sleep -Seconds 6
 
-# A1.11: the only output is the default; nothing to move it to.
-Check 'A1.11' ((Test-Alive) -and (Test-On $streaming)) 'streaming is on with the default output the only one'
-Check 'A1.11' ((Get-Defaults) -eq $default) "the default output stayed where it was ($(Get-Defaults))"
-$noCopy = Get-LogLines "Windows' default output gets no copy while this stream runs"
-Check 'A1.11' ($noCopy.Count -ge 1) "the log gives the reason ($(($noCopy | Select-Object -First 1).Line))"
+# A1.11: the install's VB-CABLE takes the default; without it the speaker is
+# the only output and nothing can.
+if ([Endpoints]::ActiveCount() -gt 1) {
+  Check 'A1.11' ((Test-Alive) -and (Test-On $streaming)) 'streaming is on with VB-CABLE added by the install'
+  Check 'A1.11' (([Endpoints]::Default(0) -ne $speaker) -and ([Endpoints]::Default(1) -ne $speaker)) "the default output moved off the speaker ($(Get-Defaults))"
+  $why = Get-LogLines 'default output: moved to the silent endpoint'
+} else {
+  Check 'A1.11' ((Test-Alive) -and (Test-On $streaming)) 'streaming is on with the default output the only one'
+  Check 'A1.11' ((Get-Defaults) -eq $default) "the default output stayed where it was ($(Get-Defaults))"
+  $why = Get-LogLines "Windows' default output gets no copy while this stream runs"
+}
+Check 'A1.11' ($why.Count -ge 1) "the log gives the reason ($(($why | Select-Object -First 1).Line))"
 (Get-LogLines 'default output:') | ForEach-Object { "log: $($_.Line)" }
 
 # A1.2: a volume set on the default from outside, as the taskbar does, stays.
@@ -528,8 +544,9 @@ $after = [Endpoints]::Level()
 Check 'A10.11' (($null -ne $down) -and ($null -ne $up) -and [math]::Abs($up - $down - 3) -lt 0.01) "two Volume Down presses then one Volume Up: master $down, then $up"
 Check 'A10.11' ([math]::Abs($after - $before) -lt 0.005) "the default output stayed at $([math]::Round($after * 100, 1))% (was $([math]::Round($before * 100, 1))%)"
 
-# A10.10: a muted, then a quiet, default shows the hint line, its fix and,
+# A10.10: a muted, then a quiet, speaker shows the hint line, its fix and,
 # on hover, its tooltip.
+[Endpoints]::Target = $speaker
 foreach ($pass in 'muted', 'low') {
   if ($pass -eq 'muted') { [Endpoints]::SetMute($true) } else { [Endpoints]::SetMute($false); [Endpoints]::SetLevel(0.05) }
   Start-Sleep -Seconds 3
@@ -549,6 +566,7 @@ foreach ($pass in 'muted', 'low') {
   Save-Shot "A10.10-$pass"
 }
 [Endpoints]::SetLevel(0.5)
+[Endpoints]::Target = $null
 
 # A10.10: a speaker's volume set on its slider is the same after Ctrl+Q and a
 # relaunch. A plain launch, since a test instance saves no settings. The slider
