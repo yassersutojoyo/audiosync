@@ -141,7 +141,9 @@ struct AppSettings: Equatable {
 
     /// The idle minutes typed in Settings, nil unless a whole number from 1 to 240.
     static func releaseMinutes(typed: String) -> Int? {
-        Int(typed.trimmingCharacters(in: .whitespaces)).flatMap { (1...maxReleaseMinutes).contains($0) ? $0 : nil }
+        let digits = typed.trimmingCharacters(in: .whitespaces)
+        guard digits.allSatisfy({ ("0"..."9").contains($0) }) else { return nil }
+        return Int(digits).flatMap { (1...maxReleaseMinutes).contains($0) ? $0 : nil }
     }
     static let defaultMaster: Double = 100
     /// Where a local speaker without a delay of its own started before the

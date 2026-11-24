@@ -84,8 +84,15 @@ component ReleaseMinutes inherits VerticalLayout {
     callback submitted(int);
 
     function apply(text: string) {
-        root.invalid = !text.is-float() || text.to-float() != round(text.to-float()) || text.to-float() < 1 || text.to-float() > 240;
-        if !root.invalid {
+        // Leaving a field just put back keeps its range message.
+        if text == "\{root.minutes}" {
+            return;
+        }
+        // Only the number's own digits read back as the text, so "15.0", "1e1" and "+15" don't.
+        root.invalid = !text.is-float() || "\{round(text.to-float())}" != text || text.to-float() < 1 || text.to-float() > 240;
+        if root.invalid {
+            field.text = root.minutes;
+        } else {
             root.submitted(text.to-float());
         }
     }

@@ -314,9 +314,11 @@ struct SettingsView: View {
     }
 
     private func applyMinutes() {
+        // Leaving a field just put back keeps its range message.
+        guard minutes.text != String(model.releaseMinutes) else { return }
         let typed = AppSettings.releaseMinutes(typed: minutes.text)
         minutes.invalid = typed == nil
-        if let typed { model.actions.setReleaseWhenQuiet(true, typed) }
+        if let typed { model.actions.setReleaseWhenQuiet(true, typed) } else { minutes.text = String(model.releaseMinutes) }
     }
 
     /// The switch, what it does, and while macOS keeps the keys, why and where to change it.
