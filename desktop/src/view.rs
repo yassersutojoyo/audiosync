@@ -13506,7 +13506,7 @@ pub(crate) mod tests {
                 .invoke_speaker_availability_help(a, every_time, state)
                 .to_string()
         };
-        let every_time = "Asks for a code each time, so auto-connect leaves it off. Turn it on to enter the code.";
+        let every_time = "Asks for a code each time, so auto-connect leaves it off.\nTurn it on to enter the code.";
         assert_eq!(
             help(Availability::NeedsCode, true, RowState::Off),
             every_time
@@ -16211,7 +16211,7 @@ pub(crate) mod tests {
         };
         assert_eq!(
             notice_text(&strings, &ahead).as_str(),
-            "AirPlay speakers play about 1.5 s ahead of Kitchen: they wait 20 s at most. \
+            "AirPlay speakers play about 1.5 s ahead of Kitchen: they wait 20 s at most.\n\
              Lower its offset to keep them together."
         );
         assert_eq!(
@@ -19462,7 +19462,7 @@ pub(crate) mod tests {
                     .starts_with(name.as_str())
                     && e.accessible_description().unwrap_or_default()
                         == "Asks for a code every time. Asks for a code each time, so auto-connect \
-                            leaves it off. Turn it on to enter the code."
+                            leaves it off.\nTurn it on to enter the code."
             })
             .find_all()
             .is_empty();
@@ -21380,7 +21380,7 @@ pub(crate) mod tests {
             (
                 ui_model::AirPlayProblem::ReceiverUnverified,
                 "Den TV",
-                "Den TV didn't answer as the speaker you paired, so it's off. If it's yours, use Forget Pairing and pair it again.",
+                "Den TV didn't answer as the speaker you paired, so it's off.\nIf it's yours, use Forget Pairing and pair it again.",
             ),
         ] {
             let text = notice_text(
@@ -21429,7 +21429,7 @@ pub(crate) mod tests {
     fn an_airplay_speaker_given_up_on_says_it_is_off() {
         let app = app_over(MockBackend::new());
         let strings = app.strings();
-        let unreachable = "Den TV couldn't be reached, so it's off. Check it's on and on this network, then turn it on again.";
+        let unreachable = "Den TV couldn't be reached, so it's off.\nCheck it's on and on this network, then turn it on again.";
         for (problem, says) in [
             (ui_model::AirPlayProblem::NotResponding, unreachable),
             (ui_model::AirPlayProblem::ConnectionLost, unreachable),
@@ -26054,7 +26054,7 @@ pub(crate) mod tests {
         let hint = element(&app, "PresetsCard::empty-note").expect("a caption in the empty list");
         assert_eq!(
             hint.accessible_label().as_deref(),
-            Some("No presets yet. Set up your speakers, then choose Save as Preset.")
+            Some("No presets yet.\nSet up your speakers, then choose Save as Preset.")
         );
     }
 

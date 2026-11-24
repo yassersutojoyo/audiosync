@@ -1700,7 +1700,7 @@ do {
             && text.nativeAirPlayRefused(name: "Den") == text.castProblem(.refused, name: "Den")
             && text.nativeAirPlayBusy(name: "Den") != unreachableOff && text.nativeAirPlayRefused(name: "Den") != unreachableOff,
           "native off: a busy speaker names the other device and a refusing one says it declined, neither sends the user to the network")
-    check(text.nativeAirPlayPairingsNotSaved.hasSuffix(" Free up disk space if it's full."),
+    check(text.nativeAirPlayPairingsNotSaved.hasSuffix("\nFree up disk space if it's full."),
           "native pairings: the not-saved notice says what to do next, as on Windows")
 }
 
@@ -2233,10 +2233,10 @@ do {
           "capture notice: the waiting text names the app when one was found, and reads generic otherwise")
     // covers: S350
     check(UIStrings().waitingForAudio(nil, permissionInDoubt: true)
-            == "Waiting for audio. No sound once it plays? In Privacy & Security → "
+            == "Waiting for audio.\nNo sound once it plays? In Privacy & Security → "
                 + "Screen & System Audio Recording, turn on “System Audio Recording Only”."
           && UIStrings().waitingForAudio("Spotify", permissionInDoubt: true)
-            .hasPrefix("Waiting for audio from Spotify. No sound once it plays? ")
+            .hasPrefix("Waiting for audio from Spotify.\nNo sound once it plays? ")
           && !UIStrings().waitingForAudio(nil).contains("System Settings"),
           "capture notice: until a tap in this app run has heard sound, the waiting text names the recording permission")
     // covers: S350
@@ -4304,12 +4304,12 @@ do {
     check(impostor.apply(.error(id: "A9", .receiverUnverified, retryMs: nil, detail: ""))
                 == .turnOff("native:A9", .receiverUnverified)
             && UIStrings().nativeAirPlayReceiverUnverified(name: "Den TV")
-                == "Den TV didn't answer as the speaker you paired, so it's off. "
+                == "Den TV didn't answer as the speaker you paired, so it's off.\n"
                     + "If it's yours, use Forget Pairing and pair it again.",
           "P56 native airplay: a receiver that fails its signature check goes off with its own notice, as on Windows")
     // covers: S346
     check(UIStrings().nativeAirPlayTimingUnavailable(name: "Loft")
-            == "Loft can't get PTP timing, so it's off. "
+            == "Loft can't get PTP timing, so it's off.\n"
                 + "Close any app on port 319 or 320, then turn it on again.",
           "native airplay: the PTP text reads as on Windows")
     var titled = NoticeList()
@@ -4432,7 +4432,7 @@ do {
         let stoppedNotice = Notice(subject: Notice.airplaySender, text: UIStrings().nativeAirPlayStopped, date: t0)
         // covers: S222
         check(stoppedNotice.retriesAirPlay && !Notice(subject: Notice.start, text: "", date: t0).retriesAirPlay
-                && stoppedNotice.text == "AirPlay stopped or couldn't start. AudioSync retries every 10 seconds. "
+                && stoppedNotice.text == "AirPlay stopped or couldn't start. AudioSync retries every 10 seconds.\n"
                     + "Click Retry to try now.",
               "EC7 native airplay: the notice that it stopped or couldn't start offers Retry, in Windows' words",
               stoppedNotice.text)
@@ -5998,9 +5998,9 @@ do {
     let texts = [t.nativeAirPlayPlaysThroughSpeakers(name: "Den TV"), t.nativeAirPlayAppleTVPlays(name: "Den"),
                  t.nativeAirPlayPlaysInGroup(name: "Right", group: "Living Room")]
     // covers: P177 (the Apple TV and its group), S247 (the held member)
-    check(texts == ["Den TV plays through its home theater, which AudioSync already uses, so it's off. "
+    check(texts == ["Den TV plays through its home theater, which AudioSync already uses, so it's off.\n"
                         + "Turn the group off to use the Apple TV.",
-                    "AudioSync already plays to Den's Apple TV, so the group is off. Turn the Apple TV off to use the group.",
+                    "AudioSync already plays to Den's Apple TV, so the group is off.\nTurn the Apple TV off to use the group.",
                     "Right plays as part of Living Room, so it stays off by itself."]
             && !texts.joined().contains("\u{2014}"),
           "P177 native airplay: the Apple TV, its group and a held member each say why they are off")
@@ -9107,7 +9107,7 @@ do {
         (presetText.updatePreset, "Update to Current Settings"),
         (presetText.deletePreset, "Delete"),
         (presetText.noPresets, "No Presets"),
-        (presetText.presetsEmpty, "No presets yet. Set up your speakers, then choose Save as Preset."),
+        (presetText.presetsEmpty, "No presets yet.\nSet up your speakers, then choose Save as Preset."),
         (presetText.choosePreset, "Choose a Preset"),
         (presetText.presetSaved("Evening"), "Evening saved"),
         (presetText.presetUpdated("Evening"), "Evening updated"),
@@ -14801,7 +14801,7 @@ do {
     check(t.castProblem(.takenOver, name: "Den") == "Den stopped AudioSync's stream, so it's off. Turn it on again to stream to it.",
           "cast: a stream the TV's own controls or another app stopped reads as stopped, naming no other app")
     check(t.castResyncHelp == "Restarts the stream, with a short gap, so this speaker plays at its offset again"
-            && t.calibrationFailure(.interrupted) == "The speakers or delays changed while measuring. "
+            && t.calibrationFailure(.interrupted) == "The speakers or delays changed while measuring.\n"
                 + "Leave them alone and try again."
             && t.calibrationFailure(.implausible) == "The two speakers were too far apart to measure. "
                 + "Make sure the microphone can hear both speakers, and try again.",
@@ -15722,7 +15722,7 @@ do {
             && ahead.update(device: nil, aheadMs: 60) == AirPlayAheadNotice.Step(clear: kitchen, post: nil),
           "cast+airplay: a small lead reads as 0.1 s, and the notice clears when the Cast speaker goes off")
     let text = t.airPlayAheadOfCast(tenths: 15, speaker: "Kitchen")
-    check(text == "AirPlay speakers play about 1.5 s ahead of Kitchen: they wait 20 s at most. "
+    check(text == "AirPlay speakers play about 1.5 s ahead of Kitchen: they wait 20 s at most.\n"
             + "Lower its offset to keep them together." && !text.contains("\u{2014}")
             && t.airPlayAheadOfCast(tenths: 20, speaker: "Den").contains("about 2.0 s ahead of Den"),
           "cast+airplay: the notice says how far ahead, with no em dash")

@@ -1435,12 +1435,12 @@ fn windows_help_on_hearing_twice_asks_for_no_change() {
 fn stuck_notices_say_what_to_do_next() {
     let strings = include_str!("../ui/strings.slint");
     for text in [
-        "AudioSync couldn't save your settings, so changes are lost when it quits. Free up disk space if it's full.",
-        "AudioSync couldn't save your AirPlay pairings, so changes are lost when it quits. Free up disk space if it's full.",
-        "The download is broken, so nothing was installed. Get the new version from the release page.",
-        "There isn't enough disk space, so nothing was installed. Free up space, then try again.",
-        "{} can't get PTP timing, so it's off. Close any app on port 319 or 320, then turn it on again.",
-        "The speakers or delays changed while measuring. Leave them alone and try again.",
+        "AudioSync couldn't save your settings, so changes are lost when it quits.\\nFree up disk space if it's full.",
+        "AudioSync couldn't save your AirPlay pairings, so changes are lost when it quits.\\nFree up disk space if it's full.",
+        "The download is broken, so nothing was installed.\\nGet the new version from the release page.",
+        "There isn't enough disk space, so nothing was installed.\\nFree up space, then try again.",
+        "{} can't get PTP timing, so it's off.\\nClose any app on port 319 or 320, then turn it on again.",
+        "The speakers or delays changed while measuring.\\nLeave them alone and try again.",
         "The two speakers were too far apart to measure. Make sure the microphone can hear both speakers, and try again.",
         "Restarts the stream, with a short gap, so this speaker plays at its offset again",
     ] {

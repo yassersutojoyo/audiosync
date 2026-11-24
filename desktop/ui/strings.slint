@@ -163,26 +163,26 @@ export global Strings {
 
     // Notices: what happened and what to do about it
     out property <string> notice-no-speaker: @tr("Turn on at least one speaker first (under This PC or Connected Speakers).");
-    out property <string> notice-capture-failed: @tr("AudioSync couldn't capture the selected source. Turn streaming off and on, or pick another source.");
+    out property <string> notice-capture-failed: @tr("AudioSync couldn't capture the selected source.\nTurn streaming off and on, or pick another source.");
     out property <string> notice-capture-lost: @tr("AudioSync lost the audio from the selected source, so streaming has stopped. Turn streaming on again, or pick another source.");
     // Streaming is on but the source hasn't played anything yet (S350).
     out property <string> notice-waiting-for-audio: @tr("Waiting for audio. Play something and it streams right away.");
-    out property <string> notice-airplay-stopped: @tr("AirPlay stopped or couldn't start. AudioSync retries every 10 seconds. Select Retry to try now.");
+    out property <string> notice-airplay-stopped: @tr("AirPlay stopped or couldn't start. AudioSync retries every 10 seconds.\nSelect Retry to try now.");
     // The settings file in the app's data folder couldn't be written.
-    out property <string> notice-settings-not-saved: @tr("AudioSync couldn't save your settings, so changes are lost when it quits. Free up disk space if it's full.");
+    out property <string> notice-settings-not-saved: @tr("AudioSync couldn't save your settings, so changes are lost when it quits.\nFree up disk space if it's full.");
     // Another app holds a PTP port, so AirPlay 2 speakers that need PTP timing can't play.
-    out property <string> notice-airplay-ptp-ports-taken: @tr("Another app holds port 319 or 320, so some AirPlay 2 speakers can't play. Close that app.");
+    out property <string> notice-airplay-ptp-ports-taken: @tr("Another app holds port 319 or 320, so some AirPlay 2 speakers can't play.\nClose that app.");
     // The file with the AirPlay pairings couldn't be written.
-    out property <string> notice-pairings-not-saved: @tr("AudioSync couldn't save your AirPlay pairings, so changes are lost when it quits. Free up disk space if it's full.");
+    out property <string> notice-pairings-not-saved: @tr("AudioSync couldn't save your AirPlay pairings, so changes are lost when it quits.\nFree up disk space if it's full.");
     // Launch at Sign-In: Windows refused to add AudioSync to its startup
     // apps, refused to remove it, or has it turned off in Task Manager or
     // Settings (AudioSync then opens Settings > Apps > Startup).
-    out property <string> notice-launch-at-login-failed: Platform.os == OperatingSystemType.linux ? @tr("AudioSync couldn't add itself to autostart. Check that ~/.config/autostart can be written to.") : @tr("Windows didn't let AudioSync start at sign-in. Put a shortcut to it in shell:startup (Windows+R), with a space and --background at the end of its Target.");
-    out property <string> notice-launch-at-login-not-removed: Platform.os == OperatingSystemType.linux ? @tr("AudioSync couldn't remove itself from autostart. Delete io.github.yassersutojoyo.audiosync.desktop from ~/.config/autostart.") : @tr("Windows didn't let AudioSync stop starting at sign-in. Turn it off in Settings > Apps > Startup.");
-    out property <string> notice-launch-at-login-off-in-settings: @tr("AudioSync is off in Windows' startup apps. Turn it on in Settings > Apps > Startup.");
+    out property <string> notice-launch-at-login-failed: Platform.os == OperatingSystemType.linux ? @tr("AudioSync couldn't add itself to autostart.\nCheck that ~/.config/autostart can be written to.") : @tr("Windows didn't let AudioSync start at sign-in.\nPut a shortcut to it in shell:startup (Windows+R), with a space and --background at the end of its Target.");
+    out property <string> notice-launch-at-login-not-removed: Platform.os == OperatingSystemType.linux ? @tr("AudioSync couldn't remove itself from autostart. Delete io.github.yassersutojoyo.audiosync.desktop from ~/.config/autostart.") : @tr("Windows didn't let AudioSync stop starting at sign-in.\nTurn it off in Settings > Apps > Startup.");
+    out property <string> notice-launch-at-login-off-in-settings: @tr("AudioSync is off in Windows' startup apps.\nTurn it on in Settings > Apps > Startup.");
     // Windows lists no active sound output (none connected, or all turned
     // off) while a network speaker is on: apps have nowhere to play.
-    out property <string> notice-no-sound-output: Platform.os == OperatingSystemType.linux ? @tr("PipeWire has no working sound output, so nothing reaches your speakers. Connect or turn on one in Sound settings.") : @tr("Windows has no working sound output, so nothing reaches your speakers. Connect or turn on one in Sound settings.");
+    out property <string> notice-no-sound-output: Platform.os == OperatingSystemType.linux ? @tr("PipeWire has no working sound output, so nothing reaches your speakers. Connect or turn on one in Sound settings.") : @tr("Windows has no working sound output, so nothing reaches your speakers.\nConnect or turn on one in Sound settings.");
 
     // Pairing with an Apple TV that asks for a PIN: the dialog and the
     // speaker menu.
@@ -238,9 +238,9 @@ export global Strings {
 
     public pure function password-message(speaker: string, wrong: bool) -> string {
         if wrong {
-            return @tr("{} didn't accept that password. Enter the one set in the Home app or the speaker's settings. Cancel turns the speaker off.", speaker);
+            return @tr("{} didn't accept that password.\nEnter the one set in the Home app or the speaker's settings. Cancel turns the speaker off.", speaker);
         }
-        return @tr("{} needs a password. Enter the one set in the Home app or the speaker's settings. Cancel turns the speaker off.", speaker);
+        return @tr("{} needs a password.\nEnter the one set in the Home app or the speaker's settings. Cancel turns the speaker off.", speaker);
     }
 
     // Speaker presets (spec S259 to S269)
@@ -256,7 +256,7 @@ export global Strings {
     out property <string> update-preset: @tr("Update to Current Settings");
     out property <string> delete-preset: @tr("Delete");
     // The open presets list while there is none, above Save as Preset….
-    out property <string> no-presets-hint: @tr("No presets yet. Set up your speakers, then choose Save as Preset.");
+    out property <string> no-presets-hint: @tr("No presets yet.\nSet up your speakers, then choose Save as Preset.");
     // The Presets row, here and in the flyout, while no preset is current.
     out property <string> choose-preset: @tr("Choose a Preset");
     // What Invoke on the Presets row does, as the Mac's hint.
@@ -358,7 +358,7 @@ export global Strings {
     // Add by Address…: a Google Cast speaker that discovery can't find.
     out property <string> cast-add-address: @tr("Add by Address…");
     out property <string> cast-add-address-title: @tr("Add a Cast Speaker by Address");
-    out property <string> cast-add-address-message: @tr("For a Google Cast speaker that doesn't show up. Enter its IP address or host name (add :port if it isn't 8009).");
+    out property <string> cast-add-address-message: @tr("For a Google Cast speaker that doesn't show up.\nEnter its IP address or host name (add :port if it isn't 8009).");
     out property <string> cast-address-label: @tr("Address");
     out property <string> cast-address-invalid: @tr("That isn't an IP address or host name. Check it and try again.");
     // On the Add button and read out while the address is checked.
@@ -473,7 +473,7 @@ export global Strings {
     // network has Windows' Public profile.
     // The first launch after the update that turned the saved groups into zones.
     out property <string> notice-groups-became-zones: @tr("Your groups are zones now. Each zone has its own volume, and its speakers show under it.");
-    out property <string> remote-public-network: @tr("On this public network, anyone can open the web remote's pairing page. Turn the web remote off while you're here.");
+    out property <string> remote-public-network: @tr("On this public network, anyone can open the web remote's pairing page.\nTurn the web remote off while you're here.");
     public pure function remote-port-in-use(port: int) -> string {
         return @tr("Another app uses port {}, so the web remote can't start. Enter another port and select Use Port.", port);
     }
@@ -490,7 +490,7 @@ export global Strings {
     // On the page, after the name of the chosen input while it is unplugged.
     out property <string> remote-source-not-connected: @tr("not connected");
     out property <string> remote-failed: @tr("The web remote couldn't start. Turn it off and on again.");
-    out property <string> remote-forget-failed: @tr("AudioSync couldn't save the paired devices list, so they come back after a restart. Select Forget All Remote Devices again.");
+    out property <string> remote-forget-failed: @tr("AudioSync couldn't save the paired devices list, so they come back after a restart.\nSelect Forget All Remote Devices again.");
     out property <string> resume-after-sleep: @tr("Resume Playback After Sleep");
     out property <string> resume-after-sleep-info: @tr("When your PC wakes, the song that was playing continues once your speakers are back.");
 
@@ -581,12 +581,12 @@ export global Strings {
     out property <string> notice-update-unreachable: @tr("AudioSync couldn't reach the update server. Check your connection, then try again.");
     out property <string> notice-update-unreadable: @tr("AudioSync couldn't read the update information from the server. Try again later.");
     out property <string> notice-update-download-failed: @tr("The update didn't download completely, so nothing was installed. The running version stays.");
-    out property <string> notice-update-bad-signature: @tr("The download failed its check, so nothing was installed. Try again later, or get it from the release page.");
-    out property <string> notice-update-broken: @tr("The download is broken, so nothing was installed. Get the new version from the release page.");
-    out property <string> notice-update-disk-full: @tr("There isn't enough disk space, so nothing was installed. Free up space, then try again.");
-    out property <string> notice-update-read-only: @tr("AudioSync can't write to its folder, so nothing was installed. Get the new version from the release page.");
-    out property <string> notice-update-in-use: @tr("Another copy of AudioSync is using its files. Close the other copies, then try again.");
-    out property <string> notice-update-failed: @tr("The update couldn't be installed. Try again later, or get it from the release page.");
+    out property <string> notice-update-bad-signature: @tr("The download failed its check, so nothing was installed.\nTry again later, or get it from the release page.");
+    out property <string> notice-update-broken: @tr("The download is broken, so nothing was installed.\nGet the new version from the release page.");
+    out property <string> notice-update-disk-full: @tr("There isn't enough disk space, so nothing was installed.\nFree up space, then try again.");
+    out property <string> notice-update-read-only: @tr("AudioSync can't write to its folder, so nothing was installed.\nGet the new version from the release page.");
+    out property <string> notice-update-in-use: @tr("Another copy of AudioSync is using its files.\nClose the other copies, then try again.");
+    out property <string> notice-update-failed: @tr("The update couldn't be installed.\nTry again later, or get it from the release page.");
     // `renames` is one or more of notice-update-rename joined by list-and,
     // the exe first.
     public pure function notice-update-restore-failed(renames: string) -> string {
@@ -596,8 +596,8 @@ export global Strings {
     public pure function notice-update-rename(bak: string, live: string) -> string {
         return @tr("{} to {}", bak, live);
     }
-    out property <string> notice-update-relaunch-failed: @tr("The new version couldn't start, so AudioSync went back to the old one. Get the new version from the release page.");
-    out property <string> notice-update-blocked: @tr("Windows security blocked the update, so nothing was installed. Get the new version from the release page.");
+    out property <string> notice-update-relaunch-failed: @tr("The new version couldn't start, so AudioSync went back to the old one.\nGet the new version from the release page.");
+    out property <string> notice-update-blocked: @tr("Windows security blocked the update, so nothing was installed.\nGet the new version from the release page.");
     // Linux: a copy not started from an AppImage, such as one a .deb or .rpm installed.
     out property <string> notice-update-not-appimage: @tr("AudioSync updates itself only when it runs from the AppImage, and this copy doesn't, for example because it was installed from a .deb or .rpm package. To update, download the newer package from the release page and install it the same way.");
 
@@ -766,17 +766,17 @@ export global Strings {
     // folder (data_folder.rs) before the first save over it.
     public pure function notice-settings-kept-aside(file: string) -> string {
         if Platform.os == OperatingSystemType.linux {
-            return @tr("AudioSync couldn't read your settings, so it uses the defaults. The old file is kept as {} in ~/.local/share/audiosync.", file);
+            return @tr("AudioSync couldn't read your settings, so it uses the defaults.\nThe old file is kept as {} in ~/.local/share/audiosync.", file);
         }
-        return @tr("AudioSync couldn't read your settings, so it uses the defaults. The old file is kept as {} in %LOCALAPPDATA%\\AudioSync.", file);
+        return @tr("AudioSync couldn't read your settings, so it uses the defaults.\nThe old file is kept as {} in %LOCALAPPDATA%\\AudioSync.", file);
     }
 
     // The same when a newer AudioSync wrote the file, which updating reads.
     public pure function notice-settings-from-newer(file: string) -> string {
         if Platform.os == OperatingSystemType.linux {
-            return @tr("Your settings are from a newer AudioSync, so this one uses the defaults. They're kept as {}; update AudioSync to get them back.", file);
+            return @tr("Your settings are from a newer AudioSync, so this one uses the defaults.\nThey're kept as {}; update AudioSync to get them back.", file);
         }
-        return @tr("Your settings are from a newer AudioSync, so this one uses the defaults. They're kept as {}; update AudioSync to get them back.", file);
+        return @tr("Your settings are from a newer AudioSync, so this one uses the defaults.\nThey're kept as {}; update AudioSync to get them back.", file);
     }
 
     // The same for the file with the AirPlay pairings: those speakers ask
@@ -790,7 +790,7 @@ export global Strings {
 
     // A speaker that couldn't start was turned off.
     public pure function notice-speaker-failed(speaker: string) -> string {
-        return @tr("{} couldn't start, so it's off. Close any app using it, then turn it on again.", speaker);
+        return @tr("{} couldn't start, so it's off.\nClose any app using it, then turn it on again.", speaker);
     }
 
     // A speaker was unplugged or switched off while it played; it stays on.
@@ -803,7 +803,7 @@ export global Strings {
     // the setting "Allow applications to take exclusive control of this
     // device", in the device's properties under Sound settings.
     public pure function notice-speaker-busy(speaker: string) -> string {
-        return @tr("{} is in use by another app. Close that app, or turn off exclusive control in More sound settings > Playback > Properties > Advanced.", speaker);
+        return @tr("{} is in use by another app.\nClose that app, or turn off exclusive control in More sound settings > Playback > Properties > Advanced.", speaker);
     }
 
     // A speaker that ran away again soon after its reopen plays on (S347).
@@ -825,7 +825,7 @@ export global Strings {
 
     // The Google Cast sender stopped working with this speaker on.
     public pure function notice-cast-sender-stopped(speaker: string) -> string {
-        return @tr("Google Cast stopped working, so {} is off. Exit AudioSync and open it again.", speaker);
+        return @tr("Google Cast stopped working, so {} is off.\nExit AudioSync and open it again.", speaker);
     }
 
     // A member of a stereo pair or home theater group asks for a password,
@@ -842,7 +842,7 @@ export global Strings {
     // An AirPlay speaker that stopped answering or lost its connection with
     // no retry left, so it was turned off.
     public pure function notice-airplay-unreachable-off(speaker: string) -> string {
-        return @tr("{} couldn't be reached, so it's off. Check it's on and on this network, then turn it on again.", speaker);
+        return @tr("{} couldn't be reached, so it's off.\nCheck it's on and on this network, then turn it on again.", speaker);
     }
 
     // An AirPlay speaker that stayed busy with no retry left, so it was turned off.
@@ -868,13 +868,13 @@ export global Strings {
             return @tr("{} declined the stream. AudioSync tries again shortly.", speaker);
         }
         if problem == AirPlayProblem.needs-password {
-            return @tr("{} asks for a password, so it's off. Turn it on again to enter it.", speaker);
+            return @tr("{} asks for a password, so it's off.\nTurn it on again to enter it.", speaker);
         }
         if problem == AirPlayProblem.needs-pin {
             return @tr("{} needs pairing with a code, so it's off. Turn it on again to pair.", speaker);
         }
         if problem == AirPlayProblem.still-needs-code {
-            return @tr("{0} still asks for a code after pairing, so it's off. In the Home app, set its access to “Anyone on the Same Network”.", speaker);
+            return @tr("{0} still asks for a code after pairing, so it's off.\nIn the Home app, set its access to “Anyone on the Same Network”.", speaker);
         }
         // It turned the session down before any pairing step and never
         // asked for a PIN or password, so the cause stays unnamed.
@@ -896,7 +896,7 @@ export global Strings {
             return @tr("{} needs AirPlay 2, which this launch of AudioSync runs without, so it's off.", speaker);
         }
         if problem == AirPlayProblem.timing-unavailable {
-            return @tr("{} can't get PTP timing, so it's off. Close any app on port 319 or 320, then turn it on again.", speaker);
+            return @tr("{} can't get PTP timing, so it's off.\nClose any app on port 319 or 320, then turn it on again.", speaker);
         }
         if problem == AirPlayProblem.too-many-airplay2-speakers {
             return @tr("AudioSync plays up to {0} AirPlay 2 speakers at once, so {1} waits. It starts once one of them stops.", root.airplay2-sessions, speaker);
@@ -906,13 +906,13 @@ export global Strings {
         }
         // An Apple TV and its home theater group never play at once.
         if problem == AirPlayProblem.plays-through-speakers {
-            return @tr("{} plays through its home theater, which AudioSync already uses, so it's off. Turn the group off to use the Apple TV.", speaker);
+            return @tr("{} plays through its home theater, which AudioSync already uses, so it's off.\nTurn the group off to use the Apple TV.", speaker);
         }
         if problem == AirPlayProblem.receiver-unverified {
-            return @tr("{} didn't answer as the speaker you paired, so it's off. If it's yours, use Forget Pairing and pair it again.", speaker);
+            return @tr("{} didn't answer as the speaker you paired, so it's off.\nIf it's yours, use Forget Pairing and pair it again.", speaker);
         }
         if problem == AirPlayProblem.apple-tv-plays {
-            return @tr("AudioSync already plays to {}'s Apple TV, so the group is off. Turn the Apple TV off to use the group.", speaker);
+            return @tr("AudioSync already plays to {}'s Apple TV, so the group is off.\nTurn the Apple TV off to use the group.", speaker);
         }
         if problem == AirPlayProblem.plays-in-group {
             return @tr("{} plays as part of its stereo pair or home theater group, so it stays off by itself.", speaker);
@@ -924,7 +924,7 @@ export global Strings {
     // than theirs, but at most 20 s, so a longer Cast delay leaves them ahead.
     // `seconds` is a number with one decimal, such as "1.5".
     public pure function notice-airplay-ahead(seconds: string, speaker: string) -> string {
-        return @tr("AirPlay speakers play about {} s ahead of {}: they wait 20 s at most. Lower its offset to keep them together.", seconds, speaker);
+        return @tr("AirPlay speakers play about {} s ahead of {}: they wait 20 s at most.\nLower its offset to keep them together.", seconds, speaker);
     }
 
     // A Google Cast speaker can't play, so it is off.
@@ -943,18 +943,18 @@ export global Strings {
         }
         if problem == CastProblem.blocked {
             if Platform.os == OperatingSystemType.linux {
-                return @tr("{} couldn't reach the stream on this PC, so it's off. Allow AudioSync in your firewall, then turn it on again.", speaker);
+                return @tr("{} couldn't reach the stream on this PC, so it's off.\nAllow AudioSync in your firewall, then turn it on again.", speaker);
             }
-            return @tr("{} couldn't reach the stream on this PC, so it's off. Allow AudioSync in Windows Firewall, on Public networks too, then turn it on again.", speaker);
+            return @tr("{} couldn't reach the stream on this PC, so it's off.\nAllow AudioSync in Windows Firewall, on Public networks too, then turn it on again.", speaker);
         }
         if problem == CastProblem.search-stopped {
             return @tr("AudioSync stopped looking for Google Cast speakers, so {} is off. To try again, exit AudioSync and open it again.", speaker);
         }
         if problem == CastProblem.not-genuine {
-            return @tr("{} couldn't prove it's a genuine Google Cast speaker, so it's off. If you trust it, remove it and add it again.", speaker);
+            return @tr("{} couldn't prove it's a genuine Google Cast speaker, so it's off.\nIf you trust it, remove it and add it again.", speaker);
         }
         if problem == CastProblem.unauthenticated {
-            return @tr("{} didn't prove it's a genuine Google Cast speaker, but plays anyway. Turn it off if you don't know it.", speaker);
+            return @tr("{} didn't prove it's a genuine Google Cast speaker, but plays anyway.\nTurn it off if you don't know it.", speaker);
         }
         return @tr("{} lost its connection, so it's off. Turn it on again to reconnect.", speaker);
     }
@@ -969,20 +969,20 @@ export global Strings {
     public pure function notice-heard-twice-app(source: string, mute: string, shared: string) -> string {
         if Platform.os == OperatingSystemType.linux {
             if shared == "" {
-                return @tr("You may hear {0} twice: it also plays from {1}. Mute {1}, or select Show How.", source, mute);
+                return @tr("You may hear {0} twice: it also plays from {1}.\nMute {1}, or select Show How.", source, mute);
             }
             if mute == "" {
-                return @tr("You may hear {0} twice: it also plays from {1}. Select Show How to fix it.", source, shared);
+                return @tr("You may hear {0} twice: it also plays from {1}.\nSelect Show How to fix it.", source, shared);
             }
-            return @tr("You may hear {0} twice: it also plays from {1} and {2}. Select Show How to fix it.", source, mute, shared);
+            return @tr("You may hear {0} twice: it also plays from {1} and {2}.\nSelect Show How to fix it.", source, mute, shared);
         }
         if shared == "" {
-            return @tr("You may hear {0} twice: it also plays from {1}. Mute {1}, or select Show How.", source, mute);
+            return @tr("You may hear {0} twice: it also plays from {1}.\nMute {1}, or select Show How.", source, mute);
         }
         if mute == "" {
-            return @tr("You may hear {0} twice: it also plays from {1}. Select Show How to fix it.", source, shared);
+            return @tr("You may hear {0} twice: it also plays from {1}.\nSelect Show How to fix it.", source, shared);
         }
-        return @tr("You may hear {0} twice: it also plays from {1} and {2}. Select Show How to fix it.", source, mute, shared);
+        return @tr("You may hear {0} twice: it also plays from {1} and {2}.\nSelect Show How to fix it.", source, mute, shared);
     }
 
     // The same while the whole system is captured: what Windows plays on its
@@ -990,20 +990,20 @@ export global Strings {
     public pure function notice-heard-twice-system(mute: string, shared: string) -> string {
         if Platform.os == OperatingSystemType.linux {
             if shared == "" {
-                return @tr("You may hear your PC's sound twice: it also plays from {0}. Mute {0}, or select Show How.", mute);
+                return @tr("You may hear your PC's sound twice: it also plays from {0}.\nMute {0}, or select Show How.", mute);
             }
             if mute == "" {
-                return @tr("You may hear your PC's sound twice: it also plays from {0}. Select Show How to fix it.", shared);
+                return @tr("You may hear your PC's sound twice: it also plays from {0}.\nSelect Show How to fix it.", shared);
             }
-            return @tr("You may hear your PC's sound twice: it also plays from {0} and {1}. Select Show How to fix it.", mute, shared);
+            return @tr("You may hear your PC's sound twice: it also plays from {0} and {1}.\nSelect Show How to fix it.", mute, shared);
         }
         if shared == "" {
-            return @tr("You may hear your PC's sound twice: it also plays from {0}. Mute {0}, or select Show How.", mute);
+            return @tr("You may hear your PC's sound twice: it also plays from {0}.\nMute {0}, or select Show How.", mute);
         }
         if mute == "" {
-            return @tr("You may hear your PC's sound twice: it also plays from {0}. Select Show How to fix it.", shared);
+            return @tr("You may hear your PC's sound twice: it also plays from {0}.\nSelect Show How to fix it.", shared);
         }
-        return @tr("You may hear your PC's sound twice: it also plays from {0} and {1}. Select Show How to fix it.", mute, shared);
+        return @tr("You may hear your PC's sound twice: it also plays from {0} and {1}.\nSelect Show How to fix it.", mute, shared);
     }
 
     // The double-audio notice on a Windows PC with no output nobody listens
@@ -1439,7 +1439,7 @@ export global Strings {
     // The tooltip on the two code notes; the same text as on the Mac.
     public pure function speaker-availability-help(a: Availability, every-time: bool, state: RowState) -> string {
         if every-time && (a == Availability.needs-code || (a == Availability.open && state == RowState.off)) {
-            return @tr("Asks for a code each time, so auto-connect leaves it off. Turn it on to enter the code.");
+            return @tr("Asks for a code each time, so auto-connect leaves it off.\nTurn it on to enter the code.");
         }
         if a == Availability.needs-code {
             return @tr("This speaker asks for a code or password. AudioSync asks you for it when you turn the speaker on.");
@@ -1904,15 +1904,15 @@ export global Strings {
     out property <string> calibration-no-microphone: Platform.os == OperatingSystemType.linux ? @tr("AudioSync couldn't record from the microphone. Check the input in Sound settings.") : @tr("AudioSync couldn't record from the microphone. Check the input in Settings > System > Sound.");
     out property <string> calibration-unsupported-rate: Platform.os == OperatingSystemType.linux ? @tr("The microphone runs at a sample rate calibration can't use. Choose another input in Sound settings, and try again.") : @tr("The microphone runs at a sample rate calibration can't use. Set its format to 48 kHz in Settings > System > Sound, and try again.");
     out property <string> calibration-source-silent: @tr("The test sound couldn't start because streaming stalled. Turn streaming off and on, and try again.");
-    out property <string> calibration-interrupted: @tr("The speakers or delays changed while measuring. Leave them alone and try again.");
+    out property <string> calibration-interrupted: @tr("The speakers or delays changed while measuring.\nLeave them alone and try again.");
     out property <string> calibration-delay-changed: @tr("This speaker's delay changed after it was measured. Calibrate All again.");
     out property <string> calibration-microphone-changed: @tr("The microphone changed during the calibration. Keep one microphone as the default input, and try again.");
     out property <string> calibration-microphone-skipped: @tr("The microphone dropped audio during the measurement, so its timing can't be trusted. Try again.");
-    out property <string> calibration-hands-free: Platform.os == OperatingSystemType.linux ? @tr("The default input is a Bluetooth headset's call microphone. Choose another input in Sound settings, then try again.") : @tr("The default input is a Bluetooth headset's call microphone. Choose another input in Sound settings, then try again.");
-    out property <string> calibration-microphone-in-use: Platform.os == OperatingSystemType.linux ? @tr("Another app has the microphone to itself. Close that app, and try again.") : @tr("Another app has the microphone to itself. Close that app, or turn off exclusive control in More sound settings > Recording > Properties > Advanced.");
+    out property <string> calibration-hands-free: Platform.os == OperatingSystemType.linux ? @tr("The default input is a Bluetooth headset's call microphone.\nChoose another input in Sound settings, then try again.") : @tr("The default input is a Bluetooth headset's call microphone.\nChoose another input in Sound settings, then try again.");
+    out property <string> calibration-microphone-in-use: Platform.os == OperatingSystemType.linux ? @tr("Another app has the microphone to itself. Close that app, and try again.") : @tr("Another app has the microphone to itself.\nClose that app, or turn off exclusive control in More sound settings > Recording > Properties > Advanced.");
     out property <string> calibration-unfinished: @tr("AudioSync couldn't finish working out the delay. Try again.");
     out property <string> calibration-too-short: @tr("The recording was too short. Try again.");
-    out property <string> calibration-too-long: Platform.os == OperatingSystemType.linux ? @tr("The delays are too long to measure in one recording at the microphone's sample rate. Lower the largest delay, and try again.") : @tr("The delays are too long to measure in one recording. Lower the largest delay, or set the microphone to 48 kHz.");
+    out property <string> calibration-too-long: Platform.os == OperatingSystemType.linux ? @tr("The delays are too long to measure in one recording at the microphone's sample rate. Lower the largest delay, and try again.") : @tr("The delays are too long to measure in one recording.\nLower the largest delay, or set the microphone to 48 kHz.");
     out property <string> calibration-implausible: @tr("The two speakers were too far apart to measure. Make sure the microphone can hear both speakers, and try again.");
 
     public pure function calibrate-label(name: string) -> string {
@@ -1971,7 +1971,7 @@ export global Strings {
     }
 
     public pure function calibration-echo(subject: string) -> string {
-        return @tr("An echo or other sound was almost as loud as {}. Give the microphone a clear line to both speakers.", subject);
+        return @tr("An echo or other sound was almost as loud as {}.\nGive the microphone a clear line to both speakers.", subject);
     }
 
     public pure function calibration-done(ms: int) -> string {
@@ -2044,7 +2044,7 @@ export global Strings {
     out property <string> calibrate-all-ended-delays: @tr("A delay changed during the measurement.");
 
     public pure function calibrate-all-hint(reference: string) -> string {
-        return @tr("Put the microphone where you listen. AudioSync plays a sweep on each speaker that is on. Nothing changes until you click Apply.");
+        return @tr("Put the microphone where you listen.\nAudioSync plays a sweep on each speaker that is on. Nothing changes until you click Apply.");
     }
 
     // Measure Again was refused: `needs` from calibration-needs, with the row's speaker by its name.
@@ -2060,7 +2060,7 @@ export global Strings {
     }
 
     // Every other speaker that is on is left out by its kind.
-    out property <string> calibrate-all-only-left-out: @tr("The microphone can't hear the other speakers that are on. Turn on another speaker, or choose Include Anyway below.");
+    out property <string> calibrate-all-only-left-out: @tr("The microphone can't hear the other speakers that are on.\nTurn on another speaker, or choose Include Anyway below.");
     out property <string> calibrate-all-included: @tr("Included anyway: measured in this run.");
     out property <string> calibrate-all-left-out-title: @tr("Left out");
     out property <string> include-anyway: @tr("Include Anyway");
@@ -2403,7 +2403,7 @@ export global Strings {
     out property <string> setup-network: @tr("Network type");
     out property <string> setup-network-detail: @tr("AudioSync finds AirPlay and Google Cast speakers on your network.");
     out property <string> setup-network-private: @tr("Private network");
-    out property <string> setup-network-public: @tr("This network is set to Public, so speakers may be blocked. At home, set it to Private.");
+    out property <string> setup-network-public: @tr("This network is set to Public, so speakers may be blocked.\nAt home, set it to Private.");
     out property <string> setup-network-offline: @tr("Not connected to a network");
     out property <string> setup-firewall: @tr("Windows Firewall");
     out property <string> setup-firewall-detail: @tr("Windows Firewall can block speakers on a network.");
