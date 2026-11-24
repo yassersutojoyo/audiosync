@@ -412,3 +412,86 @@ fn a_rate_step_while_another_step_is_on_its_way_fades_in_as_that_one_applies() {
     );
     assert_eq!(rig.stream.latency_frames(), CEILING);
 }
+
+// covers: P260
+#[test]
+fn a_receiver_starved_while_another_ones_step_down_is_on_its_way_still_steps_up() {
+    let mut rig = rig_at(LOW, true);
+    rig.stream.set_step_down_times(
+        Duration::from_secs(30),
+        Duration::from_secs(120),
+        Duration::from_secs(20),
+    );
+    let a = rig.add(speaker(1, Codec::Pcm));
+    let b = rig.add(speaker(2, Codec::Pcm));
+    starve(&mut rig, a, &[1.0, 16.0, 31.0]);
+    run_to(&mut rig, 32.0);
+    assert_eq!(rig.stream.latency_frames(), CEILING, "a starved");
+    starve(&mut rig, b, &[33.0, 34.0]);
+    rig.writer.take_move();
+    // A's try starts its step down; it is on its way.
+    while rig.writer.take_move().is_none() {
+        assert!(rig.t() < 90.0, "a's try starts");
+        let next = rig.t() + 0.01;
+        run_to(&mut rig, next);
+    }
+    assert_eq!(rig.stream.latency_frames(), CEILING, "on its way");
+    // B's third tight request: B is starved.
+    ask_tight(&mut rig, b);
+    let starved = rig.t();
+    let down = until_lf_leaves(&mut rig, CEILING, starved + 1.0).expect("a's step down");
+    assert_eq!(rig.stream.latency_frames(), LOW);
+    let up = until_lf_leaves(&mut rig, LOW, down + 3.0).expect("b's step up");
+    assert!(up - down < 3.0);
+    assert_eq!(rig.stream.latency_frames(), CEILING);
+}
+
+/// The receiver asks for the packet whose send-to-play midpoint comes
+/// next, just before that midpoint.
+fn ask_before_midpoint(rig: &mut Rig, id: SpeakerId) {
+    let now = rig.t();
+    let latency = rig.latency();
+    let packet = 352.0 / 44_100.0;
+    let early = rig
+        .audio(id)
+        .into_iter()
+        .find(|sent| {
+            let play = sent.at + latency - sent.margin - packet;
+            now < (sent.at + play) / 2.0 - 0.005
+        })
+        .expect("a packet before its midpoint");
+    let request = ResendRequest {
+        seq: 1,
+        first: early.header.seq,
+        count: 1,
+    };
+    rig.stream
+        .handle_control_packet(id, &request.encode(), rig.now);
+    rig.drain();
+}
+
+// covers: P260
+#[test]
+fn requests_just_before_the_midpoint_or_past_the_play_time_are_not_tight() {
+    let mut rig = rig_at(LOW, false);
+    let id = rig.add(speaker(1, Codec::Pcm));
+    for at in [1.0, 2.0, 3.0] {
+        run_to(&mut rig, at);
+        ask_before_midpoint(&mut rig, id);
+    }
+    run_to(&mut rig, 10.0);
+    assert_eq!(rig.stream.latency_frames(), LOW, "in time");
+    assert!(steps(&rig).is_empty());
+
+    // Late requests are P200's, never P260's.
+    let mut rig = rig_at(LOW, false);
+    let id = rig.add(speaker(1, Codec::Pcm));
+    for at in [2.0, 3.0, 4.0] {
+        run_to(&mut rig, at);
+        gap(&mut rig, id);
+    }
+    // P200's step waits for a quiet run, which this programme never has.
+    run_to(&mut rig, 10.0);
+    assert_eq!(rig.stream.latency_frames(), LOW, "late");
+    assert!(steps(&rig).is_empty());
+}
