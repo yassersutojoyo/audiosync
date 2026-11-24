@@ -76,7 +76,7 @@ struct AppSettings: Equatable {
         /// Resume Playback After Sleep (S465), off unless turned on.
         static let resumesAfterSleep = "resumePlaybackAfterSleep"
         /// Release speakers when nothing plays (S483), and after how many
-        /// whole minutes; stored, with no control yet.
+        /// whole minutes: Settings > Auto-disconnect AirPlay and Cast.
         static let releaseWhenQuiet = "releaseSpeakersWhenQuiet"
         static let releaseMinutes = "releaseSpeakersAfterMinutes"
         static let webRemotePort = "webRemotePort"
@@ -136,6 +136,13 @@ struct AppSettings: Equatable {
     static let defaultVolume: Double = 60
     /// The idle time a new release setting starts with (S483).
     static let defaultReleaseMinutes = 15
+    /// The longest idle time, as `on_demand::MAX_RELEASE_MINUTES` in the core.
+    static let maxReleaseMinutes = 240
+
+    /// The idle minutes typed in Settings, nil unless a whole number from 1 to 240.
+    static func releaseMinutes(typed: String) -> Int? {
+        Int(typed.trimmingCharacters(in: .whitespaces)).flatMap { (1...maxReleaseMinutes).contains($0) ? $0 : nil }
+    }
     static let defaultMaster: Double = 100
     /// Where a local speaker without a delay of its own started before the
     /// local delay model, unless an older single delay was stored (S77).
@@ -246,7 +253,7 @@ struct AppSettings: Equatable {
         s.systemVolumesLeft = levels(read(Keys.systemVolumesLeft)) { min(1, max(0, $0)) }
         s.resumesAfterSleep = read(Keys.resumesAfterSleep) as? Bool ?? false
         s.releaseWhenQuiet = read(Keys.releaseWhenQuiet) as? Bool ?? false
-        if let minutes = read(Keys.releaseMinutes) as? Int, minutes >= 1 { s.releaseMinutes = minutes }
+        if let minutes = read(Keys.releaseMinutes) as? Int, minutes >= 1 { s.releaseMinutes = min(minutes, maxReleaseMinutes) }
         return s
     }
 
@@ -552,6 +559,11 @@ struct SettingsStore {
     func save(webRemote: Bool) { write(webRemote, Keys.webRemote) }
 
     func save(resumesAfterSleep: Bool) { write(resumesAfterSleep, Keys.resumesAfterSleep) }
+
+    func save(releaseWhenQuiet: Bool, releaseMinutes: Int) {
+        write(releaseWhenQuiet, Keys.releaseWhenQuiet)
+        write(releaseMinutes, Keys.releaseMinutes)
+    }
 
     func save(webRemotePort: Int) { write(webRemotePort, Keys.webRemotePort) }
 

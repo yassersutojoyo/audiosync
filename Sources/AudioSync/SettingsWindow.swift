@@ -162,6 +162,10 @@ struct SettingsView: View {
     let onHeight: (CGFloat) -> Void
     static let width: CGFloat = 460
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The idle minutes as typed. An object rather than @State: the Command
+    /// Line Tools toolchain ships without SwiftUI's macro plugins.
+    @StateObject private var minutes = MinutesDraft()
+    @FocusState private var minutesFocused: Bool
 
     var body: some View {
         // Unlike a flexible frame, it reports the content's own height when measured unbounded.
@@ -199,6 +203,8 @@ struct SettingsView: View {
                 Divider()
                 SwitchRow(title: t.showVirtualDevices, isOn: Binding(get: { model.showVirtualDevices },
                                                                      set: { model.actions.setShowVirtualDevices($0) }))
+                Divider()
+                releaseRow(t)
                 Divider()
                 Text(t.hiddenSpeakers)
                     .font(.subheadline)
@@ -260,6 +266,59 @@ struct SettingsView: View {
         .padding(.bottom, 10)
     }
 
+    /// Auto-disconnect AirPlay and Cast, and while it is on, after how many minutes of silence (S483).
+    private func releaseRow(_ t: UIStrings) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            SwitchRow(title: t.releaseWhenQuiet,
+                      isOn: Binding(get: { model.releaseWhenQuiet },
+                                    set: { model.actions.setReleaseWhenQuiet($0, model.releaseMinutes) }))
+            Text(t.releaseWhenQuietInfo)
+                .font(.subheadline)
+                .foregroundStyle(Brand.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            if model.releaseWhenQuiet { releaseMinutesField(t).padding(.top, 6) }
+        }
+        .padding(.bottom, 10)
+    }
+
+    /// Enter or leaving the field applies it; only a whole number from 1 to 240 does, and Escape puts it back.
+    private func releaseMinutesField(_ t: UIStrings) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text(t.releaseAfter).accessibilityHidden(true)
+                TextField(t.releaseMinutesLabel, text: $minutes.text)
+                    .focused($minutesFocused)
+                    .multilineTextAlignment(.trailing)
+                    .modifier(HouseFieldLook(focused: minutesFocused))
+                    .frame(width: 56)
+                    .accessibilityLabel(t.releaseMinutesLabel)
+                    .layarKey(t.releaseMinutesLabel)
+                    .onSubmit { applyMinutes() }
+                    .onExitCommand {
+                        minutes.text = String(model.releaseMinutes)
+                        minutes.invalid = false
+                    }
+                Text(t.releaseMinutesUnit).accessibilityHidden(true)
+            }
+            if minutes.invalid {
+                Text(t.releaseMinutesRange)
+                    .font(.caption)
+                    .foregroundStyle(Brand.errorText)
+            }
+        }
+        .onAppear {
+            minutes.text = String(model.releaseMinutes)
+            minutes.invalid = false
+        }
+        .onChange(of: minutesFocused) { _, focused in if !focused { applyMinutes() } }
+    }
+
+    private func applyMinutes() {
+        let typed = AppSettings.releaseMinutes(typed: minutes.text)
+        minutes.invalid = typed == nil
+        if let typed { model.actions.setReleaseWhenQuiet(true, typed) }
+    }
+
     /// The switch, what it does, and while macOS keeps the keys, why and where to change it.
     private func volumeKeysRow(_ t: UIStrings) -> some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -309,6 +368,12 @@ struct SettingsView: View {
             }
         }
     }
+}
+
+/// The Auto-disconnect minutes while they are typed, and whether the last try was out of range.
+final class MinutesDraft: ObservableObject {
+    @Published var text = ""
+    @Published var invalid = false
 }
 
 /// One titled box of the Settings window, drawn like the main window's cards.

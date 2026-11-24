@@ -37,6 +37,9 @@ const SLACK: Seconds = 1e-6;
 /// The idle time a new release setting starts with, in minutes (S483).
 pub const DEFAULT_RELEASE_MINUTES: u32 = 15;
 
+/// The longest idle time the setting takes, in minutes; the shortest is 1.
+pub const MAX_RELEASE_MINUTES: u32 = 240;
+
 /// Where a speaker the user switched on is (S482, S483).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Status {
@@ -157,6 +160,11 @@ impl<K: Ord + Clone> OnDemand<K> {
             }
             _ => None,
         }
+    }
+
+    /// The idle time the release waits, `None` while it is off (S483).
+    pub fn release_minutes(&self) -> Option<u32> {
+        self.release_minutes
     }
 
     /// Turns the idle release on with `minutes`, or off with `None` (S483).

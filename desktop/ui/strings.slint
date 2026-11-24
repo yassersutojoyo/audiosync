@@ -493,6 +493,14 @@ export global Strings {
     out property <string> remote-forget-failed: @tr("AudioSync couldn't save the list of paired devices, so they are paired again once you exit AudioSync and open it again. Select Forget All Remote Devices again.");
     out property <string> resume-after-sleep: @tr("Resume Playback After Sleep");
     out property <string> resume-after-sleep-info: @tr("When your PC wakes, the song that was playing continues once your speakers are back.");
+    // Settings > Speakers: release AirPlay and Cast speakers after a silence (S483).
+    out property <string> release-when-quiet: @tr("Auto-disconnect AirPlay and Cast");
+    out property <string> release-when-quiet-info: @tr("Reconnects when sound plays.");
+    // "After [15] min of silence", the field between the two.
+    out property <string> release-after: @tr("After");
+    out property <string> release-minutes-unit: @tr("min of silence");
+    out property <string> release-minutes-label: @tr("Minutes of silence before AirPlay and Cast speakers disconnect");
+    out property <string> release-minutes-range: @tr("1 to 240 minutes");
 
     // Tray icon and its flyout (the macOS menu bar panel)
     out property <string> open-app: @tr("Open AudioSync");

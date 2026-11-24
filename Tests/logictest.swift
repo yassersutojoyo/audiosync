@@ -19971,6 +19971,13 @@ do {
             && AppSettings.load { releaseStored[$0] }.releaseAfterMinutes == 30
             && AppSettings.load { releaseDamaged[$0] }.releaseAfterMinutes == 15,
           "settings: releasing speakers when nothing plays is off by default, and a stored idle time under a minute keeps 15")
+    let releaseLong: [String: Any] = [AppSettings.Keys.releaseWhenQuiet: true, AppSettings.Keys.releaseMinutes: 500]
+    // covers: S483
+    check(AppSettings.releaseMinutes(typed: "15") == 15 && AppSettings.releaseMinutes(typed: " 240 ") == 240
+            && AppSettings.releaseMinutes(typed: "0") == nil && AppSettings.releaseMinutes(typed: "241") == nil
+            && AppSettings.releaseMinutes(typed: "1.5") == nil && AppSettings.releaseMinutes(typed: "") == nil
+            && AppSettings.load { releaseLong[$0] }.releaseAfterMinutes == 240,
+          "settings: Auto-disconnect takes a whole number of minutes from 1 to 240, and a stored longer idle time reads as 240")
     check(NowPlayingMonitor.polls(shown: false, sending: false, casting: false, remote: false, resumeArmed: true)
             && !NowPlayingMonitor.polls(shown: false, sending: false, casting: false, remote: false, resumeArmed: false)
             && NowPlayingMonitor.polls(shown: true, sending: false, casting: false, remote: false, resumeArmed: false),

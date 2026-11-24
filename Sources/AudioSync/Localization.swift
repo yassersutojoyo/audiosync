@@ -1444,6 +1444,14 @@ struct UIStrings {
     let hideDockIconOff = "When this is off, the Dock icon stays."
     let resumeAfterSleep = "Resume Playback After Sleep"
     let resumeAfterSleepInfo = "When your Mac wakes, the song that was playing continues once your speakers are back."
+    /// Settings > Speakers: release AirPlay and Cast speakers after a silence (S483).
+    let releaseWhenQuiet = "Auto-disconnect AirPlay and Cast"
+    let releaseWhenQuietInfo = "Reconnects when sound plays."
+    /// "After [15] min of silence", the field between the two.
+    let releaseAfter = "After"
+    let releaseMinutesUnit = "min of silence"
+    let releaseMinutesLabel = "Minutes of silence before AirPlay and Cast speakers disconnect"
+    let releaseMinutesRange = "1 to 240 minutes"
     let launchAtLoginFailed = "macOS did not allow AudioSync to launch at login. You can add it in System Settings → General → Login Items & Extensions."
     let launchAtLoginMoveToApplications = "Move AudioSync to the Applications folder and open it from there to turn on Launch at Login."
     let launchAtLoginOffFailed = "macOS did not allow AudioSync to stop launching at login. You can remove it in System Settings → General → Login Items & Extensions."

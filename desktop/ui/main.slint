@@ -3131,6 +3131,8 @@ export component MainWindow inherits Window {
     in property <bool> show-virtual-devices;
     in property <Appearance> appearance;
     in property <bool> resume-after-sleep;
+    in property <bool> release-when-quiet;
+    in property <int> release-minutes: 15;
     // Settings > Launch at Sign-In: what the Run key says, read again by Rust.
     in property <bool> launch-at-login;
     // A release build that updates itself shows the updater's menu items.
@@ -3340,6 +3342,7 @@ export component MainWindow inherits Window {
     callback show-virtual-devices-toggled(bool);
     callback appearance-chosen(Appearance);
     callback resume-after-sleep-toggled(bool);
+    callback release-when-quiet-changed(bool, int);
     callback launch-at-login-toggled(bool);
     callback check-updates-automatically-toggled(bool);
     callback volume-keys-toggled(bool);

@@ -1010,7 +1010,8 @@ fn keyboard_shortcuts_are_declared() {
 /// that its virtual outputs are hidden. Seven strings of the AudioSync Guide
 /// name AirPlay too, with the receivers the sender plays, the ones it can't
 /// yet, and the track info it sends. Check Setup's Network type row says only
-/// that AudioSync finds AirPlay speakers on the network.
+/// that AudioSync finds AirPlay speakers on the network. Settings names
+/// AirPlay in Auto-disconnect AirPlay and Cast, a setting for the sender.
 #[test]
 fn no_text_promises_airplay() {
     let strings = include_str!("../ui/strings.slint");
@@ -1060,6 +1061,10 @@ fn no_text_promises_airplay() {
                 )
                 || line.contains("@tr(\"Waiting: AirPlay 2 speakers on another network\")")
                 || line.contains("needs-airplay2: @tr(\"Needs AirPlay 2\")")
+                || line.contains("release-when-quiet: @tr(\"Auto-disconnect AirPlay and Cast\")")
+                || line.contains(
+                    "release-minutes-label: @tr(\"Minutes of silence before AirPlay and Cast"
+                )
                 || line.contains(
                     "setup-network-detail: @tr(\"AudioSync finds AirPlay and Google Cast speakers on your network.\")"
                 )

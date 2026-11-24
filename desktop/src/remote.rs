@@ -1015,6 +1015,8 @@ pub(crate) mod tests {
             airplay_searching: false,
             when_source_quits: Default::default(),
             resume_after_sleep: false,
+            release_when_quiet: false,
+            release_minutes: 15,
             cast_list: crate::ui_model::CastList::Quiet,
             cast_by_address: false,
             cast_on: false,

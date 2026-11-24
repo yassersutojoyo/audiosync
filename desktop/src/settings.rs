@@ -835,8 +835,8 @@ pub struct Settings {
     /// The main window's Presets list is open (spec S259).
     #[serde(deserialize_with = "bool_or_false")]
     pub presets_list_open: bool,
-    /// Release speakers when nothing plays (S483), off by default; no
-    /// control shows it yet.
+    /// Settings > Auto-disconnect AirPlay and Cast: release speakers when
+    /// nothing plays (S483), off by default.
     #[serde(deserialize_with = "bool_or_false")]
     pub release_when_quiet: bool,
     /// Its idle time in whole minutes (S483).
@@ -1377,7 +1377,9 @@ impl Settings {
             show_virtual_devices: self.show_virtual_devices,
             presets_list_open: self.presets_list_open,
             release_when_quiet: self.release_when_quiet,
-            release_minutes: self.release_minutes.max(1),
+            release_minutes: self
+                .release_minutes
+                .clamp(1, on_demand::MAX_RELEASE_MINUTES),
             appearance: self.appearance,
             window: self.window.and_then(clamp_window),
             guide_window: self.guide_window.map(|place| WindowPlace {
