@@ -2039,7 +2039,7 @@ typedef struct AscAirPlayCounters {
 /* The stream's counters, as asc_airplay_stream_counters copies them. */
 typedef struct AscAirPlayStreamCounters {
     double rate_hz;                /* the current input rate estimate */
-    uint64_t packets_encoded;      /* one per packet of the timeline */
+    uint64_t packets_encoded;      /* once per packet; none without a speaker (P251) */
     uint64_t silent_frames;        /* inserted where the input hadn't arrived in time */
     uint64_t input_frames_dropped;
 } AscAirPlayStreamCounters;

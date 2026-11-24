@@ -437,8 +437,8 @@ impl StreamCounters {
         f64::from_bits(self.rate_bits.load(Ordering::Relaxed))
     }
 
-    /// Packets cut and encoded: one per packet of the timeline, however
-    /// many speakers play it (P80).
+    /// Packets encoded: one per packet of the timeline, however many
+    /// speakers play it (P80), and none while the stream has none (P251).
     pub fn packets_encoded(&self) -> u64 {
         self.packets_encoded.load(Ordering::Relaxed)
     }
@@ -1506,6 +1506,23 @@ impl Stream {
                 .map(|ap2| SealedStore::new(&ap2.key, codec)),
             clock_identity: config.airplay2.as_ref().and_then(|ap2| ap2.clock_identity),
         };
+        if self.speakers.is_empty() {
+            // Nothing was encoded while the stream had no speaker (P251).
+            let mut frames = [[0i16; 2]; FRAMES_PER_PACKET];
+            let oldest = self
+                .next_cut
+                .saturating_sub((DELAY_PACKETS + MARGIN_PACKETS) as u64);
+            for packet in oldest..self.next_cut {
+                let number = self.packet_base + packet;
+                if let Some((payload, silent)) = self.pcm.get(number) {
+                    audio::read_pcm_payload(payload, &mut frames);
+                    encode(Codec::Alac, &frames, &mut self.alac, number, silent);
+                    self.counters
+                        .packets_encoded
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
         let context = context!(self);
         let first = context.first_due(speaker.delay, t);
         speaker.start_at(first, speaker.first_rtptime);
@@ -2099,7 +2116,12 @@ impl Stream {
         };
         let number = self.packet_base + self.next_cut;
         encode(Codec::Pcm, &self.frames, &mut self.pcm, number, silent);
-        encode(Codec::Alac, &self.frames, &mut self.alac, number, silent);
+        if !self.speakers.is_empty() {
+            encode(Codec::Alac, &self.frames, &mut self.alac, number, silent);
+            self.counters
+                .packets_encoded
+                .fetch_add(1, Ordering::Relaxed);
+        }
         for speaker in &mut self.speakers {
             if let Some(own) = &mut speaker.own {
                 let mut frames = self.frames;
@@ -2110,9 +2132,6 @@ impl Stream {
         self.counters
             .silent_frames
             .fetch_add(u64::from(silent), Ordering::Relaxed);
-        self.counters
-            .packets_encoded
-            .fetch_add(1, Ordering::Relaxed);
         self.next_cut += 1;
     }
 

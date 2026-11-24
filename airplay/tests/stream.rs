@@ -403,6 +403,34 @@ fn an_own_encoding_joining_late_finds_packets_a_long_delay_back() {
     }
 }
 
+// covers: P251
+#[test]
+fn a_stream_with_no_speaker_encodes_nothing_and_a_late_joiner_still_finds_its_packets() {
+    let mut rig = Rig::with_host();
+    rig.run_for(Duration::from_secs(25));
+    assert!(rig.stream.next_packet() > 3000);
+    assert_eq!(rig.stream.counters().packets_encoded(), 0);
+
+    let joined = rig.t();
+    let mut config = speaker(1, Codec::Alac);
+    config.delay = Duration::from_millis(15_000);
+    let id = rig.add(config);
+    rig.run_for(Duration::from_secs(2));
+    let audio = rig.audio(id);
+    let first = audio.first().expect("a first packet");
+    let n = rig.frame_of(id, first.header.timestamp);
+    assert!(
+        rig.c(n) < joined - 14.0,
+        "cut at {}, joined at {joined}",
+        rig.c(n)
+    );
+    assert!(audio.len() > 100);
+    for packet in &audio {
+        let n = rig.frame_of(id, packet.header.timestamp) as u64;
+        assert_eq!(decode(Codec::Alac, &packet.payload)[0], host_frame(n));
+    }
+}
+
 // covers: P84
 #[test]
 fn a_packet_already_cut_leaves_its_send_lead_before_its_time() {
