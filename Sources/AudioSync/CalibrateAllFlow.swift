@@ -471,14 +471,13 @@ enum CalibrateAllFlow {
     }
 
     /// The blocker the row shows for the engine's `blocker` while the power
-    /// switch's press waits for its turn (`pendingPower`).
+    /// switch's press waits for its turn (`pendingPower`). Switching on keeps
+    /// the engine's reason: only the started engine knows which speakers play.
     static func switchBlocker(_ blocker: CalibrateAllBlocker?, pendingPower: Bool?,
                               holdsOutputs: Bool) -> CalibrateAllBlocker? {
         holdsOutputs ? .busy
             // Switching off: the reason the engine will give, shown with the switch rather than after the stop.
             : pendingPower == false ? .notPlaying(.streaming)
-            // Switching on: the streaming reason goes with the switch too; any other reason stays.
-            : pendingPower == true && blocker == .notPlaying(.streaming) ? nil
             : blocker
     }
 
