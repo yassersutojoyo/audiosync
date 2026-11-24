@@ -123,6 +123,10 @@ mod probe {
                 Some(id) => mic(id),
                 None => Err("`mic` needs an endpoint ID".into()),
             },
+            Some("route2") => match (args.get(1), args.get(2)) {
+                (Some(chrome), Some(edge)) => route2(chrome, edge),
+                _ => Err("`route2` needs Chrome's and Edge's paths".into()),
+            },
             Some("route") => match args.get(1) {
                 Some(path) => route(path),
                 None => Err("`route` needs the browser's path".into()),
@@ -1408,6 +1412,20 @@ navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
         /// Chrome on [`PAGE`] in a new profile, once its tone plays and it
         /// listens; `None` when either never shows within 30 s.
         fn chrome(&self, run: &str) -> Fallible<Option<Chrome>> {
+            self.browser(self.chrome_path, PAGE, "", run, [true, true])
+        }
+
+        /// The browser at `path` on `page_text` with `query`, once it plays
+        /// and listens as far as `wants` asks; `None` when that never shows
+        /// within 30 s. A run named `*-1` prints the command line.
+        fn browser(
+            &self,
+            path: &str,
+            page_text: &str,
+            query: &str,
+            run: &str,
+            wants: [bool; 2],
+        ) -> Fallible<Option<Chrome>> {
             let own = std::process::id();
             let before: Vec<u32> = sessions_of(&self.enumerator, eRender)?
                 .iter()
@@ -1417,8 +1435,9 @@ navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
             let dir = std::env::temp_dir().join("call-mic-chrome");
             std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
             let page = dir.join("call.html");
-            std::fs::write(&page, PAGE).map_err(|e| format!("{}: {e}", page.display()))?;
-            let child = Command::new(self.chrome_path)
+            std::fs::write(&page, page_text).map_err(|e| format!("{}: {e}", page.display()))?;
+            let mut command = Command::new(path);
+            command
                 .arg(format!(
                     "--user-data-dir={}",
                     dir.join(format!("profile-{run}")).display()
@@ -1431,11 +1450,15 @@ navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
                     "--allow-file-access-from-files",
                 ])
                 .arg(format!(
-                    "file:///{}",
+                    "file:///{}{query}",
                     page.display().to_string().replace('\\', "/")
-                ))
+                ));
+            if run.ends_with("-1") {
+                println!("ROUTE2: command line {command:?}");
+            }
+            let child = command
                 .spawn()
-                .map_err(|e| format!("starting Chrome failed: {e}"))?;
+                .map_err(|e| format!("starting the browser failed: {e}"))?;
             let mut chrome = Chrome {
                 child,
                 player: 0,
@@ -1448,16 +1471,19 @@ navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
                     .map_or(0, |s| s.pid))
             };
             let deadline = Instant::now() + Duration::from_secs(30);
-            while Instant::now() < deadline && (chrome.player == 0 || chrome.listener == 0) {
-                if chrome.player == 0 {
+            let missing = |chrome: &Chrome| {
+                (wants[0] && chrome.player == 0) || (wants[1] && chrome.listener == 0)
+            };
+            while Instant::now() < deadline && missing(&chrome) {
+                if wants[0] && chrome.player == 0 {
                     chrome.player = fresh(eRender)?;
                 }
-                if chrome.listener == 0 {
+                if wants[1] && chrome.listener == 0 {
                     chrome.listener = fresh(eCapture)?;
                 }
                 thread::sleep(POLL);
             }
-            Ok((chrome.player != 0 && chrome.listener != 0).then_some(chrome))
+            Ok((!missing(&chrome)).then_some(chrome))
         }
 
         fn pin(&self, pid: u32, to: &str) -> Fallible<()> {
@@ -1669,6 +1695,176 @@ navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
             let _ = defaults.set(&multimedia, &[eMultimedia]);
         }
         println!("RESULT ROUTE {result}");
+        Ok(())
+    }
+
+    // MARK: Browser call routes, v2: controls read from the session lists
+
+    /// A tone unless `tone=late`, the microphone held when `mic=1`, and with
+    /// `tone=late` the tone 2 s after the microphone opened.
+    const PAGE2: &str = r#"<!doctype html><title>call</title><script>
+const ask = new URLSearchParams(location.search);
+function play() {
+  const context = new AudioContext();
+  const tone = context.createOscillator();
+  const level = context.createGain();
+  level.gain.value = 0.05;
+  tone.connect(level).connect(context.destination);
+  tone.start();
+}
+if (ask.get('tone') !== 'late') play();
+if (ask.get('mic') === '1') {
+  navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+    window.held = stream;
+    if (ask.get('tone') === 'late') setTimeout(play, 2000);
+  });
+}
+</script>"#;
+    const CASE_RUNS: usize = 5;
+
+    impl Route<'_> {
+        /// The capture endpoint `pid` listens on, by name.
+        fn listening_on(&self, pid: u32) -> Fallible<String> {
+            Ok(active_devices(&self.enumerator, eCapture)?
+                .iter()
+                .find(|device| {
+                    sessions_of_device(device)
+                        .iter()
+                        .any(|s| s.pid == pid && s.active)
+                })
+                .map_or("none".to_owned(), friendly_name))
+        }
+
+        /// Cases 1, 2 and 4: the browser plays, the system default moves
+        /// from the cable to the recorded output; does its session follow?
+        fn follow(&self, case: usize, path: &str, query: &str, run: usize) -> Fallible<bool> {
+            let wants = [true, query.contains("mic=1")];
+            let Some(browser) =
+                self.browser(path, PAGE2, query, &format!("c{case}-{run}"), wants)?
+            else {
+                println!("ROUTE2 case {case} run {run}: untested, the browser never played");
+                return Ok(false);
+            };
+            thread::sleep(Duration::from_secs(1));
+            let start = self.where_is(browser.player)?;
+            let moved = Instant::now();
+            self.defaults
+                .set(&self.recorded, &[eConsole, eMultimedia])?;
+            let arrived = poll(|| self.on(&self.recorded, browser.player))?;
+            let ends = self.where_is(browser.player)?;
+            let mic = if browser.listener == 0 {
+                "no microphone".to_owned()
+            } else {
+                format!(
+                    "capture pid {} on {:?}",
+                    browser.listener,
+                    self.listening_on(browser.listener)?
+                )
+            };
+            println!(
+                "ROUTE2 case {case} run {run}: render pid {} started on {start}; on the recorded \
+                 output after {}; at the end on {ends}; {mic}",
+                browser.player,
+                arrived.map_or("never".to_owned(), |at| format!(
+                    "{} ms",
+                    at.duration_since(moved).as_millis()
+                )),
+            );
+            Ok(arrived.is_some())
+        }
+
+        /// Case 3, the call order: silent, the microphone opens, the rule
+        /// pins the listener, the tone starts 2 s later. Where does it play?
+        fn call_order(&self, path: &str, run: usize) -> Fallible<bool> {
+            let Some(browser) = self.browser(
+                path,
+                PAGE2,
+                "?mic=1&tone=late",
+                &format!("c3-{run}"),
+                [false, true],
+            )?
+            else {
+                println!("ROUTE2 case 3 run {run}: untested, the browser never listened");
+                return Ok(false);
+            };
+            let pinned = Instant::now();
+            self.pin(browser.listener, &render_interface(&self.recorded))?;
+            let opened = poll(|| Ok(self.where_is(browser.listener)? != "none"))?;
+            thread::sleep(Duration::from_millis(250));
+            let lands = self.where_is(browser.listener)?;
+            let other = sessions_of(&self.enumerator, eRender)?
+                .iter()
+                .filter(|s| s.active && s.pid != browser.listener && s.pid != std::process::id())
+                .count();
+            self.pin(browser.listener, "")?;
+            println!(
+                "ROUTE2 case 3 run {run}: pid {} pinned; its output opened {} after the pin, on \
+                 {lands}; other active render sessions {other}",
+                browser.listener,
+                opened.map_or("never".to_owned(), |at| format!(
+                    "{} ms",
+                    at.duration_since(pinned).as_millis()
+                )),
+            );
+            Ok(lands == "recorded")
+        }
+    }
+
+    /// Fable's controls: the default move with a tone only, with the
+    /// microphone open, the call order with the pin, and Edge.
+    fn route2(chrome_path: &str, edge_path: &str) -> Fallible<()> {
+        let enumerator = enumerator()?;
+        // SAFETY: reads the console default.
+        let console = unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eConsole) }
+            .map_err(|e| failed("GetDefaultAudioEndpoint", &e))?;
+        let Some((cable, cable_name)) = usable(&console) else {
+            println!(
+                "RESULT ROUTE2 untested: the console default is a device the probe never uses"
+            );
+            return Ok(());
+        };
+        let Some((recorded, recorded_name)) = pick_render(&enumerator, &cable)? else {
+            println!("RESULT ROUTE2 untested: no second render endpoint");
+            return Ok(());
+        };
+        println!("ROUTE2: A {cable_name:?}, B {recorded_name:?}");
+        let route = Route {
+            enumerator: enumerator.clone(),
+            chrome_path,
+            cable: cable.clone(),
+            recorded,
+            heard: Heard::default(),
+            music: 0,
+            defaults: Defaults::new()?,
+            policy: Policy::new()?,
+        };
+        route.defaults.set(&cable, &[eConsole, eMultimedia])?;
+        for case in 1..=4 {
+            let mut held = 0;
+            for run in 1..=CASE_RUNS {
+                let outcome = match case {
+                    1 => route.follow(1, chrome_path, "?mic=0", run),
+                    2 => route.follow(2, chrome_path, "?mic=1", run),
+                    3 => route.call_order(chrome_path, run),
+                    _ => route.follow(4, edge_path, "?mic=0", run),
+                };
+                match outcome {
+                    Ok(true) => held += 1,
+                    Ok(false) => {}
+                    Err(error) => println!("ROUTE2 case {case} run {run}: error {error}"),
+                }
+                let _ = route.defaults.set(&cable, &[eConsole, eMultimedia]);
+                thread::sleep(Duration::from_secs(1));
+            }
+            println!(
+                "RESULT ROUTE2 case {case}: {held}/{CASE_RUNS} {}",
+                if case == 3 {
+                    "on the recorded output"
+                } else {
+                    "followed the default to B within 5 s"
+                }
+            );
+        }
         Ok(())
     }
 

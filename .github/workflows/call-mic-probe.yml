@@ -12,10 +12,10 @@ name: Call microphone probe (Windows)
 # permission prompt answered by Chrome's own flag. Chrome stands for the
 # engine Electron and WebView apps share, not for those apps.
 #
-# `route` then compares two ways to bring that call to the recorded output,
-# 10 runs each, with a 3 kHz default-path tone standing for the music: the
-# default flipped to the recorded output and straight back with the pin in
-# place, or the default moved to the recorded output for the call.
+# `route2` then runs the controls for bringing that call to the recorded
+# output, 5 runs each, read from the session lists: a headed browser with a
+# tone only, then with the microphone open, follows a system default move;
+# the call order (silent, microphone, pin, tone 2 s later); Edge as case 1.
 #
 # VB-CABLE is donationware (https://vb-audio.com/Services/licensing.htm) and
 # Scream (MS-PL) only supplies devcon here: the job downloads both, checked by
@@ -148,7 +148,13 @@ jobs:
           if (Test-Path $chrome) {
             & bin/call_mic_probe.exe chrome $chrome 2>&1 | Tee-Object -FilePath $log -Append
             if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
-            & bin/call_mic_probe.exe route $chrome 2>&1 | Tee-Object -FilePath $log -Append
+            $edge = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+            foreach ($browser in $chrome, $edge) {
+              "ROUTE2: version $((Get-Item $browser).VersionInfo.ProductVersion) of $browser" |
+                Tee-Object -FilePath $log -Append
+            }
+            "ROUTE2: $((Get-CimInstance Win32_OperatingSystem).Caption)" | Tee-Object -FilePath $log -Append
+            & bin/call_mic_probe.exe route2 $chrome $edge 2>&1 | Tee-Object -FilePath $log -Append
             if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
           } else {
             'RESULT Q5 untested: no Chrome on the runner' | Tee-Object -FilePath $log -Append
