@@ -1608,7 +1608,7 @@ export component TrayFlyout inherits Window {
                         }
 
                         // Linux has no Settings page to open.
-                        if root.zones.length == 0 && root.speakers.length == 0 && root.airplay-none-found && Platform.os != OperatingSystemType.linux: HorizontalLayout {
+                        if root.zones.length == 0 && root.speakers.length == 0 && root.airplay-none-found && !root.all-hidden && !root.connected-all-hidden && Platform.os != OperatingSystemType.linux: HorizontalLayout {
                             alignment: start;
                             LinkButton {
                                 text: Strings.open-network-settings;

@@ -618,7 +618,7 @@ struct MainView: View {
                         .padding(10)
                     if !listsNone { Divider() }
                 } else if listsNone {
-                    emptyNote(empty, hint: hint, under: [])
+                    emptyNote(empty, hint: model.text.emptyListHint(empty, hint: hint), under: [])
                 } else if hasAirPlay && localNetworkHint == .denied, let hint {
                     LocalNetworkHintView(message: hint, text: model.text).padding(10)
                     Divider()

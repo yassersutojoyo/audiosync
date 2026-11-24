@@ -4301,7 +4301,7 @@ export component MainWindow inherits Window {
                         focus-id <=> root.focus-speaker-id;
                         focus-part <=> root.focus-speaker-part;
                         // Linux has no Settings page to open.
-                        show-network-settings: root.airplay-none-found && Platform.os != OperatingSystemType.linux;
+                        show-network-settings: root.airplay-none-found && Platform.os != OperatingSystemType.linux && !(root.connected-all-hidden && root.connected.length == 0 && root.connected-zoned.length == 0);
                         network-settings => {
                             root.network-settings-requested();
                         }

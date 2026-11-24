@@ -1430,17 +1430,21 @@ struct UIStrings {
     }
     /// Connected Speakers with no speaker at all. Once AirPlay and Google
     /// Cast both found none: what is missing, then with `fix` (the main
-    /// window) the one likely fix on a second line, unless the Local Network
-    /// hint beside it gives it. Otherwise the network note.
+    /// window) the one likely fix on a second line. Otherwise the network note.
     func networkEmpty(airPlayNone: Bool, cast: CastListState, hint: LocalNetworkHint = .none,
                       localNetworkRefused: Bool = false, airPlaySearching: Bool = false, fix: Bool) -> String {
         if airPlayNone && !airPlaySearching && (cast == .quiet || cast == .noneFound) {
-            guard fix && hint == .none else { return noSpeakers }
+            guard fix else { return noSpeakers }
             return noSpeakers + "\n" + (localNetworkRefused ? allowLocalNetwork : checkSameNetwork)
         }
         return networkSpeakersNote(airPlayNone: airPlayNone, cast: cast, hint: hint,
                                    localNetworkRefused: localNetworkRefused, airPlaySearching: airPlaySearching)
             ?? airPlayNoneFound(hint: hint, localNetworkRefused: localNetworkRefused)
+    }
+    /// The Local Network hint row under an empty list; none once the list's
+    /// own lines give the fix or say every speaker is hidden.
+    func emptyListHint(_ empty: String, hint: String?) -> String? {
+        empty.hasPrefix(noSpeakers) || empty == allSpeakersHidden ? nil : hint
     }
     let checkSameNetwork = "Check that this Mac and your speakers are on the same network."
     let allowLocalNetwork = "Allow AudioSync in System Settings → Privacy & Security → Local Network."

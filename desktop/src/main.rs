@@ -991,7 +991,7 @@ mod tests {
     fn the_no_speakers_note_offers_open_network_settings() {
         let main = include_str!("../ui/main.slint");
         assert!(main.contains(
-            "show-network-settings: root.airplay-none-found && Platform.os != OperatingSystemType.linux;"
+            "show-network-settings: root.airplay-none-found && Platform.os != OperatingSystemType.linux && !(root.connected-all-hidden && root.connected.length == 0 && root.connected-zoned.length == 0);"
         ));
         let body = handler_body(main, "text: Strings.open-network-settings;", "clicked");
         assert!(body.contains("root.network-settings();"), "{body}");
