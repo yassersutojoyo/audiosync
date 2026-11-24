@@ -46,6 +46,7 @@ mod probe {
     use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
     use windows::Win32::Foundation::PROPERTYKEY;
     use windows::Win32::Foundation::{CloseHandle, ERROR_SUCCESS, HANDLE};
+    use windows::Win32::Media::Audio::Endpoints::IAudioMeterInformation;
     use windows::Win32::Media::Audio::{
         AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, ActivateAudioInterfaceAsync,
         AudioSessionStateActive, DEVICE_STATE, DEVICE_STATE_ACTIVE, EDataFlow, ERole,
@@ -1254,10 +1255,10 @@ navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
     // MARK: Browser call routes: flip the default, or move it for the call
 
     const SIGNAL_HZ: f32 = 3000.0;
-    const SIGNAL_LEVEL: f32 = 0.1;
-    /// Detection blocks of 5 ms; a block carries the signal above a tenth
-    /// of its level.
-    const BLOCK_MS: u64 = 5;
+    /// The music's level, four times Chrome's tone: an endpoint whose peak
+    /// is above [`MUSIC_PEAK`] carries the music.
+    const SIGNAL_LEVEL: f32 = 0.2;
+    const MUSIC_PEAK: f32 = 0.12;
     const RUNS: usize = 10;
     const LEAK_MAX_MS: u64 = 30;
     const GAP_MAX_MS: u64 = 100;
@@ -1271,7 +1272,9 @@ navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
     const SET_DEFAULT_SLOT: usize = 13;
     type SetDefault = unsafe extern "system" fn(*mut c_void, PCWSTR, ERole) -> HRESULT;
 
-    type Heard = Arc<Mutex<Vec<(Instant, bool)>>>;
+    /// When each meter reading was taken, and whether the cable and the
+    /// recorded output carried the music.
+    type Heard = Arc<Mutex<Vec<(Instant, bool, bool)>>>;
 
     struct Defaults(IUnknown);
 
@@ -1309,98 +1312,53 @@ navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
         }
     }
 
-    fn carries_signal(block: &[f32], rate: f32) -> bool {
-        let coeff = 2.0 * (std::f32::consts::TAU * SIGNAL_HZ / rate).cos();
-        let (mut s1, mut s2) = (0f32, 0f32);
-        for x in block {
-            let s = x + coeff * s1 - s2;
-            s2 = s1;
-            s1 = s;
-        }
-        let power = (s1 * s1 + s2 * s2 - coeff * s1 * s2).max(0.0);
-        2.0 * power.sqrt() / block.len() as f32 > SIGNAL_LEVEL / 10.0
-    }
-
-    /// Captures endpoint `id` until `stop` and logs, per block, when it
-    /// arrived and whether it carried the signal.
-    fn listen(id: String, heard: Heard, stop: Arc<AtomicBool>) -> thread::JoinHandle<Fallible<()>> {
+    /// Reads both render endpoints' peak meters every 2 ms until `stop`.
+    /// Both cable endpoints feed one capture side on the runner, so the
+    /// render side is where the two can be told apart.
+    fn meter(
+        cable: String,
+        recorded: String,
+        heard: Heard,
+        stop: Arc<AtomicBool>,
+    ) -> thread::JoinHandle<Fallible<()>> {
         thread::spawn(move || {
             init_com()?;
-            // SAFETY: calls on the stream this thread owns; each packet is
-            // read as `frames` float frames before it is released.
-            unsafe {
-                let client = enumerator()?
-                    .GetDevice(&HSTRING::from(id.as_str()))
-                    .map_err(|e| failed("GetDevice", &e))?
-                    .Activate::<IAudioClient>(CLSCTX_ALL, None)
-                    .map_err(|e| failed("Activate(IAudioClient)", &e))?;
-                let format = client
-                    .GetMixFormat()
-                    .map_err(|e| failed("GetMixFormat", &e))?;
-                let (channels, rate, bits) = (
-                    usize::from((*format).nChannels),
-                    (*format).nSamplesPerSec as f32,
-                    (*format).wBitsPerSample,
-                );
-                let init =
-                    client.Initialize(AUDCLNT_SHAREMODE_SHARED, 0, BUFFER_HNS, 0, format, None);
-                CoTaskMemFree(Some(format.cast_const().cast()));
-                init.map_err(|e| failed("Initialize", &e))?;
-                if bits != 32 {
-                    return Err(format!("capture has {bits}-bit samples, not float"));
+            let enumerator = enumerator()?;
+            let open = |id: &str| -> Fallible<IAudioMeterInformation> {
+                // SAFETY: opens an endpoint by ID and activates its meter.
+                unsafe {
+                    enumerator
+                        .GetDevice(&HSTRING::from(id))
+                        .map_err(|e| failed("GetDevice", &e))?
+                        .Activate::<IAudioMeterInformation>(CLSCTX_ALL, None)
+                        .map_err(|e| failed("Activate(IAudioMeterInformation)", &e))
                 }
-                let capture = client
-                    .GetService::<IAudioCaptureClient>()
-                    .map_err(|e| failed("GetService(IAudioCaptureClient)", &e))?;
-                client.Start().map_err(|e| failed("Start", &e))?;
-                let block = (rate as u64 * BLOCK_MS / 1000) as usize;
-                let mut pending: Vec<f32> = Vec::new();
-                while !stop.load(Ordering::Relaxed) {
-                    while capture.GetNextPacketSize().is_ok_and(|frames| frames > 0) {
-                        let mut data = std::ptr::null_mut();
-                        let (mut frames, mut flags) = (0, 0);
-                        if capture
-                            .GetBuffer(&mut data, &mut frames, &mut flags, None, None)
-                            .is_err()
-                        {
-                            break;
-                        }
-                        let at = Instant::now();
-                        if flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 != 0 {
-                            pending.extend(std::iter::repeat_n(0.0, frames as usize));
-                        } else {
-                            let samples = std::slice::from_raw_parts(
-                                data.cast::<f32>(),
-                                frames as usize * channels,
-                            );
-                            pending.extend(samples.iter().step_by(channels));
-                        }
-                        let _ = capture.ReleaseBuffer(frames);
-                        while pending.len() >= block {
-                            let has = carries_signal(&pending[..block], rate);
-                            pending.drain(..block);
-                            if let Ok(mut heard) = heard.lock() {
-                                heard.push((at, has));
-                            }
-                        }
-                    }
-                    thread::sleep(Duration::from_millis(5));
+            };
+            let (on_cable, on_recorded) = (open(&cable)?, open(&recorded)?);
+            while !stop.load(Ordering::Relaxed) {
+                // SAFETY: reads the live meters.
+                let peaks = unsafe { (on_cable.GetPeakValue(), on_recorded.GetPeakValue()) };
+                if let (Ok(cable), Ok(recorded)) = peaks
+                    && let Ok(mut heard) = heard.lock()
+                {
+                    heard.push((Instant::now(), cable > MUSIC_PEAK, recorded > MUSIC_PEAK));
                 }
-                let _ = client.Stop();
+                thread::sleep(POLL);
             }
             Ok(())
         })
     }
 
-    /// Milliseconds of blocks in `[from, from + WINDOW)` whose signal
-    /// equals `signal`.
-    fn blocks_ms(heard: &Heard, from: Instant, signal: bool) -> u64 {
+    /// Milliseconds in `[from, from + WINDOW)` during which the cable (or,
+    /// with `recorded`, the recorded output) carried the music, or did not.
+    fn music_ms(heard: &Heard, from: Instant, recorded: bool, music: bool) -> u64 {
         let heard = heard.lock().map(|h| h.clone()).unwrap_or_default();
-        let count = heard
-            .iter()
-            .filter(|(at, has)| *at >= from && *at < from + WINDOW && *has == signal)
-            .count();
-        count as u64 * BLOCK_MS
+        heard
+            .windows(2)
+            .filter(|pair| pair[0].0 >= from && pair[0].0 < from + WINDOW)
+            .filter(|pair| (if recorded { pair[0].2 } else { pair[0].1 }) == music)
+            .map(|pair| pair[1].0.duration_since(pair[0].0).as_millis() as u64)
+            .sum()
     }
 
     struct Chrome {
@@ -1423,8 +1381,7 @@ navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
         chrome_path: &'a str,
         cable: String,
         recorded: String,
-        cable_heard: Heard,
-        recorded_heard: Heard,
+        heard: Heard,
         music: u32,
         defaults: Defaults,
         policy: Policy,
@@ -1541,9 +1498,9 @@ navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
             let chrome_at = self.where_is(chrome.player)?;
             let music_at = self.where_is(self.music)?;
             thread::sleep((WINDOW + Duration::from_millis(100)).saturating_sub(flip.elapsed()));
-            let leak = blocks_ms(&self.recorded_heard, flip, true);
-            let gap = blocks_ms(&self.cable_heard, flip, false);
-            let baseline = blocks_ms(&self.cable_heard, flip - WINDOW, true);
+            let leak = music_ms(&self.heard, flip, true, true);
+            let gap = music_ms(&self.heard, flip, false, false);
+            let baseline = music_ms(&self.heard, flip - WINDOW, false, true);
             let ends = self.where_is(chrome.player)?;
             self.pin(chrome.player, "")?;
             let pass = chrome_at == "recorded"
@@ -1649,36 +1606,29 @@ navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
         let mut music = Helper::start(&["tone", "signal"])?;
         music.wait_for("started")?;
         let stop = Arc::new(AtomicBool::new(false));
-        let mut ears = Vec::new();
-        for (id, name) in active_devices(&enumerator, eCapture)?
-            .iter()
-            .filter_map(usable)
-        {
-            let heard = Heard::default();
-            let handle = listen(id, Arc::clone(&heard), Arc::clone(&stop));
-            ears.push((name, heard, handle));
-        }
+        let heard = Heard::default();
+        let meters = meter(
+            cable.clone(),
+            recorded.clone(),
+            Arc::clone(&heard),
+            Arc::clone(&stop),
+        );
         thread::sleep(Duration::from_secs(1));
         let since = Instant::now() - LOOK_AT;
-        let toned: Vec<bool> = ears
-            .iter()
-            .map(|(_, heard, _)| {
-                heard
-                    .lock()
-                    .is_ok_and(|h| h.iter().any(|(at, has)| *at >= since && *has))
-            })
-            .collect();
-        let names: Vec<&String> = ears.iter().map(|(name, _, _)| name).collect();
-        println!("ROUTE: capture endpoints {names:?}, carrying the tone {toned:?}");
-        let result = if ears.len() == 2 && toned.iter().filter(|t| **t).count() == 1 {
-            let cable_at = usize::from(!toned[0]);
+        let music_on_cable = heard
+            .lock()
+            .is_ok_and(|h| h.iter().any(|(at, cable, _)| *at >= since && *cable));
+        println!(
+            "ROUTE: the music shows on the cable's meter {}",
+            yes_no(music_on_cable)
+        );
+        let result = if music_on_cable {
             let route = Route {
                 enumerator: enumerator.clone(),
                 chrome_path,
                 cable: cable.clone(),
                 recorded,
-                cable_heard: Arc::clone(&ears[cable_at].1),
-                recorded_heard: Arc::clone(&ears[1 - cable_at].1),
+                heard,
                 music: music.pid(),
                 defaults: Defaults::new()?,
                 policy: Policy::new()?,
@@ -1707,13 +1657,11 @@ navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
                 passed[1]
             )
         } else {
-            "untested: no capture endpoint pairs with the cable alone".to_owned()
+            "untested: the music never showed on the cable's meter".to_owned()
         };
         stop.store(true, Ordering::Relaxed);
-        for (name, _, handle) in ears {
-            if let Ok(Err(error)) = handle.join() {
-                println!("ROUTE: capture of {name:?}: {error}");
-            }
+        if let Ok(Err(error)) = meters.join() {
+            println!("ROUTE: meters: {error}");
         }
         music.finish();
         let _ = defaults.set(&cable, &[eConsole]);
