@@ -9102,8 +9102,9 @@ mod tests {
         backend.set_cast_enabled(KITCHEN, true).unwrap();
         backend.start(&SourceId::WholeSystem).unwrap();
         assert!(taken_reports(backend.poll()).is_empty());
+        let attempt = cast.state().next;
         cast.report(HostEvent::Ended {
-            attempt: AttemptId(cast.state().next),
+            attempt: AttemptId(attempt),
             device: id(KITCHEN),
             end: SessionEnd::Failed(SessionError::Launch(LaunchError::Quiet)),
         });
@@ -9132,8 +9133,9 @@ mod tests {
         backend.set_cast_enabled(KITCHEN, true).unwrap();
         backend.start(&SourceId::WholeSystem).unwrap();
         backend.poll();
+        let attempt = cast.state().next;
         cast.report(HostEvent::Ended {
-            attempt: AttemptId(cast.state().next),
+            attempt: AttemptId(attempt),
             device: id(KITCHEN),
             end: SessionEnd::Failed(SessionError::Launch(LaunchError::Quiet)),
         });

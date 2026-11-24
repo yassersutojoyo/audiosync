@@ -4728,6 +4728,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             BackendEvent::SpeakersTaken { ids } => {
                 let new: Vec<String> = ids.difference(&self.taken).cloned().collect();
                 for id in new {
+                    self.reconnecting.remove(&id);
                     self.end_reconnect_notice(&id, NoticeEnd::LeftSender);
                 }
                 self.taken = ids;
