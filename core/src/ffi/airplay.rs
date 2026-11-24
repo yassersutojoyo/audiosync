@@ -11837,11 +11837,18 @@ mod tests {
         );
     }
 
-    /// The let-go (true) and take-back (false) events waiting now.
+    /// The let-go or yielded (true) and take-back (false) events waiting now.
     fn demand_events(handle: *mut AscAirPlay) -> Vec<(String, bool)> {
         std::iter::from_fn(|| take_event(handle))
-            .filter(|e| e.kind == AIRPLAY_EVENT_LET_GO || e.kind == AIRPLAY_EVENT_TAKE_BACK)
-            .map(|e| (e.id, e.kind == AIRPLAY_EVENT_LET_GO))
+            .filter(|e| {
+                [
+                    AIRPLAY_EVENT_LET_GO,
+                    AIRPLAY_EVENT_YIELDED,
+                    AIRPLAY_EVENT_TAKE_BACK,
+                ]
+                .contains(&e.kind)
+            })
+            .map(|e| (e.id, e.kind != AIRPLAY_EVENT_TAKE_BACK))
             .collect()
     }
 
