@@ -4,15 +4,45 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
+### Added
+
+- On Windows, the x64 installer, when it installs for everyone, adds VB-CABLE by VB-Audio, a free audio driver, as the silent output AudioSync moves your PC's sound to while it streams, so you hear it once and not twice. On a PC the installer didn't reach, Fix It on the "You may hear your PC's sound twice" notice adds it, and Windows asks once. Uninstalling AudioSync removes a cable its installer added, and the About dialog credits VB-CABLE.
+- On the Mac, Windows and Linux, an app that's using the microphone, like a call, is left out of a whole-system stream, so you hear the call right away on your own output instead of late on the network speakers. It joins the stream again a few seconds after it stops using the microphone. On Windows, an app that keeps playing on an output it picked for itself can't be moved, so its call stays in the stream.
+- On the Mac, Windows and Linux, Settings > Speakers has an Auto-disconnect AirPlay and Cast switch, off by default. When it's on, AudioSync lets go of its AirPlay and Google Cast speakers after the minutes of silence you set in After 15 min of silence (1 to 240), and connects them again when sound plays.
+
 ### Changed
 
+- On the Mac, Windows and Linux, when another phone or computer takes over an AirPlay or Google Cast speaker you're streaming to, AudioSync lets it have the speaker instead of taking it back. The speaker stays switched on in your list, and AudioSync plays to it again when you switch it off and on, or when sound starts again after a short silence and keeps going for about 5 seconds, so a notification sound doesn't bring it back. A Cast speaker that dropped while nothing played waits for sound the same way instead of reconnecting to an idle device.
+- On the Mac, Windows and Linux, AudioSync answers each AirPlay speaker's request for lost audio twice, the second copy 20 ms after the first, so the audio still gets there when one copy is lost on a bad network.
+- On the Mac, Windows and Linux, AudioSync no longer encodes AirPlay audio while no speaker is in the stream.
+- On the Mac, the open main window uses less CPU: Now Playing asks the player once a second, the logo and the strands behind Now Playing animate without redrawing the whole window, and a scrolling title moves 30 times a second.
+- On Windows and Linux, a long name scrolls 30 times a second and stops redrawing once it fits, so an open, idle window no longer redraws at the display's rate, as on the Mac.
+- On Linux, AudioSync always switches to All System Audio when the app you capture quits, as on the Mac and Windows, and the Switch to All System Audio When the Source App Quits switch is gone from Settings. If you had it off, streaming now goes on with All System Audio instead of stopping.
+- On Windows and Linux, AirPlay pairing and passwords work as on the Mac: the PIN prompt takes 4 digits, speakers that play together and each need a password are all asked at once, and one Cancel closes their prompts. An AirPlay speaker's volume slider no longer moves while you hold it.
+- On the Mac, Windows and Linux, an AirPlay speaker that doesn't report its latency starts with 0.2 s of extra room, and a speaker that needed more room earlier starts its next stream at that level.
 - The AirPlay Delay field now shows only the extra delay you set, so a TV that read 278 ms now reads 78 ms; the part AudioSync sets on its own is no longer shown, the main window's status line no longer names it, and the hints under the delay fields are shorter. What you hear stays the same.
-- When an AirPlay speaker keeps asking for lost audio on a bad network, AudioSync now gives it 0.3 s more room in one step instead of 0.1 s, which ended the cut-outs in our bad-network tests. After a bad stretch that speaker stays about a third of a second later until AudioSync quits. On a good network nothing changes. The help now says AirPlay adds at most 0.4 s.
+- When an AirPlay speaker keeps asking for lost audio on a bad network, AudioSync now gives it 0.3 s more room in one step instead of 0.1 s, which ended the cut-outs in our bad-network tests. After a bad stretch that speaker stays about a third of a second later for a while. On a good network nothing changes. The help now says AirPlay adds at most 0.4 s.
+- On the Mac, Windows and Linux, an AirPlay speaker that got that extra room tries to come back down to where it started once it has gone 10 minutes without asking for much lost audio. It steps down only at a quiet moment: a pause, a new stream, or a silent stretch in the music. If it starts asking again within the next 10 minutes, it goes straight back to the larger room, even when the step down hadn't been heard yet, and waits twice as long before the next try, up to an hour.
+- On the Mac, Windows and Linux, an AirPlay speaker whose few requests for lost audio come in with too little time left to answer them also gets the 0.3 s step, so a speaker that asks rarely no longer stays at its start level. It stops at the same 0.4 s.
+- On the Mac, Windows and Linux, a speaker another phone or computer took over says In use by another device on its row and shows as not playing, and its notice reads "<name> is in use by another device."
+- On the Mac, Windows and Linux, an empty Connected Speakers list says "No speakers found yet." and, in the main window, the one fix most likely to help on the line below, such as checking that the computer and the speakers are on the same network. The menu bar panel and the tray flyout show the first line only, and the empty list no longer says that virtual devices are hidden.
+- On the Mac, Windows and Linux, long notices, hints and prompts are shorter: one line says what's wrong and the next says how to fix it, in the same words on all three.
 
 ### Fixed
 
 - On Linux, each preset's … button stays visible while Orca runs, as on the Mac with VoiceOver and on Windows with Narrator.
 - On Windows and Linux, a notice that is closing no longer takes clicks, as on the Mac.
+- On the Mac, Windows and Linux, an AirPlay speaker on a jittery network keeps the extra room it asked for while it stays in the stream, instead of dropping back and cutting out every minute.
+- On the Mac, Windows and Linux, a song no longer loses its first moments on AirPlay speakers when the player reopens its stream between tracks or the capture stalls for a moment. On Windows, the first song after you start streaming keeps its start too.
+- On Windows, All System Audio is now captured from the default output itself, and on Linux from that output's monitor, so a player that closes its stream between tracks no longer loses the start of the next song. On Windows, apps playing on other outputs are still captured.
+- On Windows and Linux, switching the default output mid-song moves the capture at once, so AirPlay and Google Cast speakers no longer go quiet for a few seconds.
+- On Windows, if the PC loses power while AudioSync has moved your output, your default and app outputs are put back at your next sign-in.
+- On the Mac, Windows and Linux, an AirPlay speaker that refuses to show a pairing code now says so and turns off, and tells you what to set on a receiving Mac, instead of reading as a pairing that didn't finish.
+- On the Mac, an AirPlay speaker lost in the middle of pairing turns off with its PIN notice, and an Apple TV that refuses AudioSync shows its notice once, as on Windows and Linux.
+- On the Mac, Windows and Linux, a Google Cast device or group whose only fault is an expired Google intermediate certificate, which some older Chromecasts ran into in March 2025, plays again with a one-time notice instead of being refused.
+- On the Mac, Previous on Spotify slides the new cover in from the left the whole way, even when Spotify reports the same song again with another album.
+- On the Mac, Windows and Linux, Previous more than 3 seconds into a song restarts it with the Now Playing card standing still, instead of sliding as if the song changed.
+- On the Mac, the Calibrate All Speakers row no longer lights up for a moment when you press the power switch to turn streaming on.
 
 ## [0.9.3] - 2026-11-20
 
