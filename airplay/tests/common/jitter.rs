@@ -112,7 +112,7 @@ impl JitteryTv {
 
     /// Takes in what the stream sent since the last call, asks for what is
     /// missing and hands the sender the requests that reached it.
-    fn pump(&mut self, rig: &mut Rig) {
+    pub fn pump(&mut self, rig: &mut Rig) {
         while self.seen < rig.sent.len() {
             let sent = &rig.sent[self.seen];
             self.seen += 1;
@@ -204,6 +204,33 @@ impl JitteryTv {
             rig.answer_flushes();
             self.pump(rig);
         }
+    }
+
+    /// Drops what the rig sent and every packet played more than 10 s ago,
+    /// so an hours-long run holds minutes, not hours; returns the play
+    /// times of the dropped packets that arrived after them.
+    pub fn forget(&mut self, rig: &mut Rig) -> Vec<f64> {
+        rig.sent.drain(..self.seen);
+        self.seen = 0;
+        let now = rig.t();
+        let old = self.packets[..self.unchecked]
+            .iter()
+            .take_while(|packet| packet.play < now - 10.0)
+            .count();
+        let late = self.packets[..old]
+            .iter()
+            .filter(|packet| packet.late())
+            .map(|packet| packet.play)
+            .collect();
+        self.packets.drain(..old);
+        self.unchecked -= old;
+        self.by_seq = self
+            .packets
+            .iter()
+            .enumerate()
+            .map(|(index, packet)| (packet.seq, index))
+            .collect();
+        late
     }
 
     /// The requests that reached the sender from `from` to `to` seconds.
