@@ -113,6 +113,8 @@ Each install script checks the download against the release's SHA-256 checksums;
 
 - Google Cast plays one speaker or Google Home group at a time. Cast has no shared clock, so you set its offset by ear once and it's remembered; Resync under its volume fixes drift.
 - Several Bluetooth outputs at once share one radio, which shares 2.4 GHz with Wi-Fi, so they may stutter. Fewer of them, 5 GHz Wi-Fi or AirPlay for the rest helps.
+- Auto-disconnect AirPlay and Cast in Settings (off by default) lets those speakers go after a stretch of silence, 15 minutes unless you pick 1 to 240. They come back once sound plays for about 5 seconds. Local outputs never disconnect.
+- If a phone or another computer starts playing on one of your AirPlay or Cast speakers, AudioSync lets it have it and the row says In use by another device. The speaker comes back when you start something new and it plays for about 5 seconds, or when you switch it off and on.
 - The Web Remote is plain HTTP, so I'd keep it off on networks you share with strangers.
 
 ## Something broken?
