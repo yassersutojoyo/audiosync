@@ -11976,8 +11976,12 @@ pub(crate) mod tests {
         use i_slint_backend_testing::ElementHandle;
         let app = app_over(MockBackend::new());
         app.main.show().expect("the main window shows");
+        hold_clock();
         app.main.invoke_sync_toggled("local:desk".into());
         app.poll();
+        draw_frames();
+        // The pane folds open over 250 ms; read before that and it is blank.
+        advance_clock(Duration::from_millis(300));
         draw_frames();
         let steps = ["\u{2212}100 ms, decrease delay", "+10 ms, increase delay"]
             .iter()
@@ -12013,10 +12017,13 @@ pub(crate) mod tests {
     fn typing_not_yet_applied_dashes_a_line_under_the_field_and_draws_no_outline() {
         let app = app_over(MockBackend::new());
         app.main.show().expect("the main window shows");
+        hold_clock();
         app.main.invoke_sync_toggled("local:desk".into());
         app.main
             .invoke_delay_edited("local:desk".into(), "400".into());
         app.poll();
+        draw_frames();
+        advance_clock(Duration::from_millis(300));
         draw_frames();
         let field = element(&app, "SyncControls::field").expect("the delay field shows");
         let (at, size) = (field.absolute_position(), field.size());
