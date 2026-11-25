@@ -30,6 +30,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- On the Mac, Windows and Linux, AirPlay 2 speakers that support PTP timing now get it first, as Apple's own sender gives it to them. A WiiM Amp that took the older NTP timing stopped playing after a few minutes, while AudioSync still showed it playing, until its volume changed.
 - On Linux, each preset's … button stays visible while Orca runs, as on the Mac with VoiceOver and on Windows with Narrator.
 - On Windows and Linux, a notice that is closing no longer takes clicks, as on the Mac.
 - On the Mac, Windows and Linux, an AirPlay speaker on a jittery network keeps the extra room it asked for while it stays in the stream, instead of dropping back and cutting out every minute.
@@ -1178,6 +1179,7 @@ The first public release, an early alpha.
 - Now Playing works with Spotify and Music only.
 - The prebuilt app needs macOS 26 (Tahoe) or later.
 
+[Unreleased]: https://github.com/yassersutojoyo/audiosync/compare/v0.9.3...HEAD
 [0.9.3]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.9.3
 [0.9.2]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.9.2
 [0.9.1]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.9.1

@@ -92,6 +92,9 @@ pub(super) struct Ap2Active {
     pub(super) ptp_served: bool,
     /// The session SETUP answer settled the session on NTP (P205).
     pub(super) ntp_chosen: bool,
+    /// It asked for PTP first with no remembered entry, so a PTP answer
+    /// doesn't show the receiver refuses NTP and isn't remembered (P217).
+    ptp_unproven: bool,
     /// The P179 restart entry it started with, which a P228 restart keeps.
     ptp_restart: Option<Option<bool>>,
 }
@@ -258,7 +261,13 @@ impl Driver {
         let ptp_configured = ptp.is_some();
         config.ptp = ptp;
         config.peers = peers;
-        config.timing = if remembered { Timing::Ptp } else { Timing::Ntp };
+        // PTP first whenever the service gave this receiver a peer (P157);
+        // the session falls back to NTP if the receiver refuses it.
+        config.timing = if ptp_configured {
+            Timing::Ptp
+        } else {
+            Timing::Ntp
+        };
         let events_key = SessionKey(self.next_session);
         self.next_session += 1;
         let mut pairing_connection = None;
@@ -298,6 +307,7 @@ impl Driver {
             ptp_configured,
             ptp_served: false,
             ntp_chosen: false,
+            ptp_unproven: ptp_configured && !remembered,
             ptp_restart: restart,
         }));
         self.own_groups.insert(group);
@@ -466,6 +476,13 @@ impl Driver {
     /// host (P217). An NTP session that had no PTP service leaves a PTP
     /// entry as it is.
     fn remember_timing(&mut self, key: &DeviceKey, timing: Timing) {
+        if timing == Timing::Ptp
+            && self
+                .ap2_active(key)
+                .is_some_and(|active| active.ptp_unproven)
+        {
+            return;
+        }
         let without_ptp = self
             .ap2_active(key)
             .is_some_and(|active| !active.session.has_ptp());
@@ -990,6 +1007,9 @@ impl Driver {
                 self.emit_speaker(key, SpeakerEvent::HomeKitPaired(credentials));
             }
             Ap2Event::TimingRefused => {
+                if let Some(active) = self.ap2_active(key) {
+                    active.ptp_unproven = false;
+                }
                 if self.timing_memory.remove(key).is_some() {
                     self.emit_speaker(key, SpeakerEvent::TimingForgotten);
                 }

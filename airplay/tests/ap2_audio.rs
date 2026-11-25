@@ -1166,7 +1166,8 @@ fn ptp_fake() -> FakeAp2 {
         ("features", int((1 << 38) | (1 << 41) | (1 << 48))),
         ("statusFlags", int(0x4)),
     ]));
-    fake.status_once.insert("SETUP session".to_owned(), 501);
+    // An open receiver handles only PTP.
+    fake.refuse_timing.push("NTP".to_owned());
     fake
 }
 
@@ -1195,7 +1196,7 @@ fn ap2_ptp_session() {
     );
     let keys = server.fake().keys();
     let setups = keys.iter().filter(|k| *k == "SETUP session").count();
-    assert_eq!(setups, 2, "NTP refused, then PTP: {keys:?}");
+    assert_eq!(setups, 1, "PTP first, no NTP probe: {keys:?}");
     let setup = server.fake().last("SETUP session").cloned().expect("SETUP");
     let body = read_dict(&setup.body).expect("plist");
     let clock_id = body
@@ -1330,7 +1331,7 @@ fn ap2_ntp_lets_the_ptp_ports_go() {
     let _serial = serial();
     let udp = Udp::bind();
     let mut fake = ptp_fake();
-    fake.status_once.clear();
+    fake.refuse_timing = vec!["PTP".to_owned()];
     let server = Ap2Server::start(udp.fake(fake));
     let local = free_ptp_ports();
     let (sender, _host) = start(SenderClock::new(Instant::now()), local, udp.ptp_ports());
@@ -1345,8 +1346,9 @@ fn ap2_ntp_lets_the_ptp_ports_go() {
         server.fake().keys()
     );
     let keys = server.fake().keys();
-    assert_eq!(keys.iter().filter(|k| *k == "SETUP session").count(), 1);
-    // The receiver took NTP, so another PTP stack may have 319 and 320.
+    assert_eq!(keys.iter().filter(|k| *k == "SETUP session").count(), 2);
+    // The receiver refused PTP and took NTP, so another PTP stack may have
+    // 319 and 320.
     assert!(wait_until(LONG, || ports_free(local)));
     udp.control.take();
     assert!(
@@ -1583,28 +1585,21 @@ fn remembered(events: &[SpeakerEvent]) -> Option<TimingMemory> {
 fn ap2_timing_choice_outlives_the_launch() {
     let _serial = serial();
     let udp = Udp::bind();
-    let mut fake = ptp_fake();
-    fake.status_once.clear();
-    fake.refuse_timing.push("NTP".to_owned());
-    let server = Ap2Server::start(udp.fake(fake));
+    let server = Ap2Server::start(udp.fake(ptp_fake()));
     let speaker = versioned(&server, 65, PTP_FEATURES, "366.0");
 
-    // Nothing stored: NTP is refused, PTP takes it, and the host gets the
-    // choice with the TXT values of that SETUP.
+    // Nothing stored: PTP first takes it. That answer doesn't show the
+    // receiver refuses NTP, so nothing is remembered.
     let (timings, events) = launch(&server, &udp, &speaker, None, SpeakerState::Playing);
-    assert_eq!(timings, ["NTP", "PTP"]);
-    let stored = remembered(&events).expect("the choice reaches the host");
-    assert_eq!(
-        stored,
-        TimingMemory {
-            timing: Timing::Ptp,
-            features: speaker.features().0,
-            srcvers: Some("366.0".to_owned()),
-        }
-    );
+    assert_eq!(timings, ["PTP"]);
+    assert_eq!(remembered(&events), None);
 
-    // The next launch with the stored entry asks for PTP at once: one NTP
-    // probe across both launches.
+    // An entry an NTP refusal left, as an earlier build kept it, stays.
+    let stored = TimingMemory {
+        timing: Timing::Ptp,
+        features: speaker.features().0,
+        srcvers: Some("366.0".to_owned()),
+    };
     let (timings, events) = launch(
         &server,
         &udp,
@@ -1615,7 +1610,7 @@ fn ap2_timing_choice_outlives_the_launch() {
     assert_eq!(timings, ["PTP"]);
     assert!(!events.contains(&SpeakerEvent::TimingForgotten));
 
-    // A new srcvers forgets the entry, so the NTP attempt comes back once.
+    // A new srcvers forgets it, and PTP first takes the receiver again.
     let updated = versioned(&server, 65, PTP_FEATURES, "377.1");
     let (timings, events) = launch(
         &server,
@@ -1624,28 +1619,50 @@ fn ap2_timing_choice_outlives_the_launch() {
         Some(stored.clone()),
         SpeakerState::Playing,
     );
-    assert_eq!(timings, ["NTP", "PTP"]);
-    assert!(events.contains(&SpeakerEvent::TimingForgotten));
-    let renewed = remembered(&events).expect("the new entry");
-    assert_eq!(renewed.timing, Timing::Ptp);
-    assert_eq!(renewed.srcvers.as_deref(), Some("377.1"));
-    let (timings, _) = launch(
-        &server,
-        &udp,
-        &updated,
-        Some(renewed),
-        SpeakerState::Playing,
-    );
     assert_eq!(timings, ["PTP"]);
+    assert!(events.contains(&SpeakerEvent::TimingForgotten));
+    assert_eq!(remembered(&events), None);
 
     // So do new features.
     let changed = versioned(&server, 65, "0x0,0x10241", "366.0");
     let (timings, events) = launch(&server, &udp, &changed, Some(stored), SpeakerState::Playing);
-    assert_eq!(timings, ["NTP", "PTP"]);
+    assert_eq!(timings, ["PTP"]);
     assert!(events.contains(&SpeakerEvent::TimingForgotten));
+    assert_eq!(remembered(&events), None);
+}
+
+// covers: P157
+#[test]
+fn ap2_ptp_first_when_the_receiver_takes_both() {
+    let _serial = serial();
+    let udp = Udp::bind();
+    // Takes NTP too, as a receiver that stops playing under NTP does.
+    let mut fake = ptp_fake();
+    fake.refuse_timing.clear();
+    let server = Ap2Server::start(udp.fake(fake));
+    let speaker = versioned(&server, 67, PTP_FEATURES, "366.0");
+    let (timings, events) = launch(&server, &udp, &speaker, None, SpeakerState::Playing);
+    assert_eq!(timings, ["PTP"]);
+    // Nothing marks it as a receiver that takes only PTP (P205, P214).
+    assert_eq!(remembered(&events), None);
+}
+
+// covers: P157, P217
+#[test]
+fn ap2_ptp_taken_after_an_ntp_refusal_is_remembered() {
+    let _serial = serial();
+    let udp = Udp::bind();
+    // PTP first is refused once, NTP always: the retry on PTP that follows
+    // shows the receiver takes only PTP.
+    let mut fake = ptp_fake();
+    fake.status_once.insert("SETUP session".to_owned(), 501);
+    let server = Ap2Server::start(udp.fake(fake));
+    let speaker = versioned(&server, 68, PTP_FEATURES, "366.0");
+    let (timings, events) = launch(&server, &udp, &speaker, None, SpeakerState::Playing);
+    assert_eq!(timings, ["PTP", "NTP", "PTP"]);
     assert_eq!(
-        remembered(&events).map(|memory| memory.features),
-        Some(changed.features().0)
+        remembered(&events).map(|memory| memory.timing),
+        Some(Timing::Ptp)
     );
 }
 
@@ -1656,8 +1673,7 @@ fn ap2_remembered_ptp_refused_is_forgotten() {
     let udp = Udp::bind();
     // The receiver now takes NTP and refuses PTP.
     let mut fake = ptp_fake();
-    fake.status_once.clear();
-    fake.refuse_timing.push("PTP".to_owned());
+    fake.refuse_timing = vec!["PTP".to_owned()];
     let server = Ap2Server::start(udp.fake(fake));
     let speaker = versioned(&server, 66, PTP_FEATURES, "366.0");
     let stored = TimingMemory {
