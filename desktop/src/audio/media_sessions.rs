@@ -630,6 +630,11 @@ impl<L: SessionList> Reader<L> {
             artwork,
             cover_failed,
             modes: self.sessions.modes(&listing.listed[index].1),
+            timeline: self
+                .sessions
+                .timeline(&listing.listed[index].1)
+                .ok()
+                .and_then(|raw| Timeline::read(raw, wall_ticks(SystemTime::now()), Instant::now())),
         })
     }
 

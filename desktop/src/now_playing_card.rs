@@ -19,6 +19,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
+use crate::audio::now_playing::{RawTimeline, Timeline, same_place};
 use crate::track_slide::PRESS_WINDOW;
 use crate::ui_model::AppState;
 use crate::window_rules::Rgb;
@@ -270,7 +271,7 @@ impl ArtworkCache {
 }
 
 /// What the card shows of a session.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct CardTrack {
     /// The app's user model ID, as the session reports it.
     pub app_id: String,
@@ -281,9 +282,36 @@ pub struct CardTrack {
     /// The cover's read or decode failed, so none is on its way.
     pub cover_failed: bool,
     pub modes: PlayModes,
+    /// Where the song stands; `None` when the player reports no position.
+    pub timeline: Option<Timeline>,
 }
 
+/// Leaves `timeline` out: it moves on all the time, as on the Mac.
+impl PartialEq for CardTrack {
+    fn eq(&self, other: &CardTrack) -> bool {
+        self.app_id == other.app_id
+            && self.title == other.title
+            && self.artist == other.artist
+            && self.playing == other.playing
+            && self.artwork == other.artwork
+            && self.cover_failed == other.cover_failed
+            && self.modes == other.modes
+    }
+}
+
+impl Eq for CardTrack {}
+
 impl CardTrack {
+    /// How far into the song the player is at `now`.
+    pub fn elapsed_at(&self, now: Instant) -> Option<Duration> {
+        let timeline = self.timeline?;
+        Some(if self.playing {
+            timeline.elapsed + now.saturating_duration_since(timeline.at)
+        } else {
+            timeline.elapsed
+        })
+    }
+
     /// The line under the title: the artist, or the app when the session
     /// names no artist, as on the Mac.
     pub fn subtitle(&self) -> String {
@@ -374,6 +402,8 @@ pub struct NowPlayingCard {
     skipped_at: Option<Instant>,
     /// Since when no session counts while the card still shows.
     gap_since: Option<Instant>,
+    /// The song before's timeline, while the reading still has it.
+    stale: Option<RawTimeline>,
 }
 
 impl NowPlayingCard {
@@ -436,7 +466,22 @@ impl NowPlayingCard {
                 return false;
             }
         }
+        if let Some(song) = next.as_mut() {
+            if let Some(shown) = self.track.as_ref().filter(|shown| !same_song(shown, song)) {
+                self.stale = shown.timeline.map(|timeline| timeline.raw).or(self.stale);
+            }
+            if let Some(raw) = song.timeline.map(|timeline| timeline.raw) {
+                if self.stale.is_some_and(|stale| same_place(stale, raw)) {
+                    song.timeline = None;
+                } else {
+                    self.stale = None;
+                }
+            }
+        }
         if next == self.track {
+            if let (Some(shown), Some(song)) = (self.track.as_mut(), next) {
+                shown.timeline = song.timeline;
+            }
             return false;
         }
         self.track = next;
@@ -543,6 +588,7 @@ pub mod fake {
             artwork: None,
             cover_failed: false,
             modes: PlayModes::default(),
+            timeline: None,
         }
     }
 }
@@ -738,6 +784,40 @@ mod tests {
         assert!(!card.sync_at(source(), true, held + Duration::from_millis(3900)));
     }
 
+    /// A player may report the previous song's position for a moment after
+    /// Next; Previous then still goes back to that song, so the card slides.
+    // covers: S463
+    #[test]
+    fn previous_right_after_next_slides_while_the_old_position_lingers() {
+        use crate::audio::now_playing::{RawTimeline, Timeline};
+        use crate::track_slide::{Direction, Place, TrackSlide};
+        let fake = FakeControls::default();
+        let mut card = card(&fake);
+        let mut slide = TrackSlide::new(Place::Window);
+        let source = || Some(CardSource::AnyApp);
+        let start = Instant::now();
+        let at = |s: f64| start + Duration::from_secs_f64(s);
+        let second = 10_000_000;
+        let raw = RawTimeline {
+            start: 0,
+            end: 300 * second,
+            position: 220 * second,
+            updated: 0,
+        };
+        let timed = |title: &str| CardTrack {
+            timeline: Timeline::read(raw, 0, start),
+            ..track("Spotify.exe", title, "Band", true)
+        };
+        fake.read(Some(timed("One")));
+        assert!(card.sync_at(source(), true, start));
+        card.send_at(Transport::Next, start);
+        fake.read(Some(timed("Two")));
+        assert!(card.sync_at(source(), true, at(0.5)));
+        let elapsed = card.track().and_then(|track| track.elapsed_at(at(1.5)));
+        slide.press(Some(Direction::Previous), true, false, elapsed, at(1.5));
+        assert!(slide.look(at(2.0)).1, "the card waits for the song before");
+    }
+
     /// The Mac's rule: a pressed card waits for the new cover up to the
     /// cover fetch's timeout, and the slide keeps the press's side.
     // covers: S459, S463
@@ -754,7 +834,7 @@ mod tests {
             fake.read(Some(with_cover(track("Spotify.exe", "One", "Band", true))));
             assert!(card.sync_at(source(), true, start));
             card.send_at(Transport::Previous, start);
-            slide.press(Some(Direction::Previous), true, false, start);
+            slide.press(Some(Direction::Previous), true, false, None, start);
             fake.read(Some(track("Spotify.exe", "Two", "Band", true)));
             assert!(!card.sync_at(source(), true, at(0.4)));
             assert!(

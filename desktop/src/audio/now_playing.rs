@@ -840,7 +840,7 @@ impl TimelineGuard {
 
 /// Whether two timelines put a track at the same place. The update time is
 /// left out: an app may refresh it on a timeline it no longer advances.
-fn same_place(one: RawTimeline, other: RawTimeline) -> bool {
+pub fn same_place(one: RawTimeline, other: RawTimeline) -> bool {
     (one.start, one.end, one.position) == (other.start, other.end, other.position)
 }
 

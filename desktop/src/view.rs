@@ -2368,16 +2368,21 @@ impl App {
         {
             let now = self.frame_now();
             let (window_shows, panel_shows, still) = self.slides_shown();
+            let elapsed = self
+                .now_playing
+                .borrow()
+                .track()
+                .and_then(|track| track.elapsed_at(std::time::Instant::now()));
             if direction.is_some() {
                 self.trace_frames("track button press", Duration::from_millis(600));
                 self.time_slide("track button press", now);
             }
             self.window_slide
                 .borrow_mut()
-                .press(direction, window_shows, still, now);
+                .press(direction, window_shows, still, elapsed, now);
             self.panel_slide
                 .borrow_mut()
-                .press(direction, panel_shows, still, now);
+                .press(direction, panel_shows, still, elapsed, now);
         }
         self.now_playing.borrow_mut().send(command);
     }

@@ -19474,6 +19474,10 @@ do {
                               heldFor: TrackSlide.waited(heldFor: 2.0, sincePress: TrackSlide.cap + 0.05)) == .show
             && TrackSlide.direction(pressed: .previous, secondsSincePress: TrackSlide.cap + 0.05) == .previous,
           "cover wait: a cover 3.5 s after Previous still counts as the press's, and the hold ends at the cap however slow the fetch")
+    check(TrackSlide.restarts(.previous, elapsed: 3.5) && !TrackSlide.restarts(.previous, elapsed: 2)
+            && !TrackSlide.restarts(.previous, elapsed: nil) && !TrackSlide.restarts(.next, elapsed: 60)
+            && !TrackSlide.restarts(nil, elapsed: 60),
+          "cover wait: Previous past 0:03 restarts the song with the card still; before 0:03 or with no position it waits")
     let waitGaveUp = ArtHold.gaveUp(waitLoading, on: waitLoading)
     check(waitGaveUp?.artPending == false && waitGaveUp?.artwork == nil
             && waitGaveUp.map { ArtHold.decide(shown: waitShown, next: $0, heldFor: 0.3) } == .show
