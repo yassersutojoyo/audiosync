@@ -6553,6 +6553,7 @@ pub fn row_state(state: SpeakerState) -> RowState {
         SpeakerState::Waiting(ui_model::Waiting::NotOnNetwork) => RowState::NotOnNetwork,
         SpeakerState::Waiting(ui_model::Waiting::ForPassword) => RowState::WaitingForPassword,
         SpeakerState::Waiting(ui_model::Waiting::ForPin) => RowState::WaitingForPin,
+        SpeakerState::Waiting(ui_model::Waiting::Taken) => RowState::Taken,
     }
 }
 
@@ -6748,6 +6749,7 @@ pub fn speaker_item(
         // On while streaming, as the Mac's row state (MenuBar.swift:505-507):
         // a speaker that reconnects or waits still shows as playing.
         plays: SpeakerState::new(speaker.enabled, state.running) == SpeakerState::Playing
+            && speaker.waiting != Some(ui_model::Waiting::Taken)
             && speaker
                 .cast
                 .as_ref()
@@ -16153,6 +16155,44 @@ pub(crate) mod tests {
             cast.state = ui_model::CastState::Playing;
         }
         assert!(speaker_item(&state, &speaker, true, false, None).plays);
+    }
+
+    // covers: S482
+    #[test]
+    fn a_taken_row_says_another_device_uses_it_also_for_a_cast_group() {
+        let app = app_over(MockBackend::new());
+        let mut backend = MockBackend::new();
+        backend.set_running(true);
+        let state = backend.snapshot();
+        let mut speaker = state.speaker("airplay:kitchen").unwrap().clone();
+        speaker.waiting = Some(ui_model::Waiting::Taken);
+        let strings = app.strings();
+        let text = "In use by another device".to_owned();
+        let row = speaker_item(&state, &speaker, true, false, None);
+        assert_eq!(row.state, RowState::Taken);
+        assert!(!row.plays, "another device plays it, not us");
+        assert_eq!(strings.invoke_speaker_note(row).to_string(), text);
+        assert_eq!(
+            strings
+                .invoke_value(RowState::Taken, "Kitchen".into())
+                .to_string(),
+            text
+        );
+        speaker.kind = ui_model::SpeakerKind::Cast;
+        speaker.cast = Some(ui_model::CastRow {
+            state: ui_model::CastState::Idle,
+            muted: false,
+            volume_fixed: false,
+            volume_step: 0.01,
+            group: Some(ui_model::CastGroup {
+                members: ui_model::CastMembers::NotReported,
+            }),
+            added_by_address: false,
+            offline: false,
+            taken_over: false,
+        });
+        let row = speaker_item(&state, &speaker, true, false, None);
+        assert_eq!(strings.invoke_speaker_note(row).to_string(), text);
     }
 
     #[test]

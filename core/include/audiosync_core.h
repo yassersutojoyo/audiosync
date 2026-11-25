@@ -149,6 +149,7 @@ extern "C" {
 #define ASC_AIRPLAY_EVENT_STORED 15         /* a PIN pairing whose verify failed stored its credentials; the PAIRING_FAILED that follows ends it: .detail "" or why they last this run only */
 #define ASC_AIRPLAY_EVENT_LET_GO 16         /* let the speaker go while it stays switched on (taken by another sender, or released when nothing plays): remove it, and add it again only on TAKE_BACK or the user's switch */
 #define ASC_AIRPLAY_EVENT_TAKE_BACK 17      /* start the speaker again: remove it if added, then add it */
+#define ASC_AIRPLAY_EVENT_YIELDED 18        /* LET_GO for a speaker yielded to another sender: its row says another device uses it */
 
 /* A PAIRED event's .error. */
 #define ASC_AIRPLAY_PAIRED_FOR_SESSION 1 /* paired for this session only: nothing stored or written, it asks for a code every time */

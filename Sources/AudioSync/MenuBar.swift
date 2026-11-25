@@ -37,6 +37,8 @@ final class AppModel: ObservableObject {
         var waitingForPtp = false
         /// An AirPlay speaker the sender keeps trying to reach (S222).
         var reconnecting = false
+        /// An AirPlay or Cast speaker another sender took (S482).
+        var taken = false
         /// An AirPlay speaker switched on whose PIN or password prompt is
         /// queued or open (S223).
         var codeWait: NativeCodeWait? = nil
@@ -1968,15 +1970,15 @@ struct MenuBarView: View {
         let t = model.text
         let hint = t.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
                              waitingForPtp: speaker.waitingForPtp, reconnecting: speaker.reconnecting,
-                             codeWait: speaker.codeWait, name: speaker.name,
+                             taken: speaker.taken, codeWait: speaker.codeWait, name: speaker.name,
                              unannounced: speaker.unannounced, target: speaker.airPlayTarget) ?? note
         let castWaits = speaker.cast?.status == .connecting || speaker.cast?.status == .reconnecting
         let connecting = model.state(of: speaker) != .off && (castWaits || speaker.cast == nil && speaker.reconnecting)
         return CompactRow(name: speaker.name, symbol: speaker.symbol, state: model.state(of: speaker),
                           text: t, height: rowHeight, hint: hint,
-                          shownNote: t.panelRowNote(hint), connecting: connecting,
+                          shownNote: t.panelRowNote(hint), connecting: connecting, taken: speaker.taken,
                           renamedFrom: speaker.renamedFrom,
-                          value: t.rowValue(model.state(of: speaker), offline: speaker.unannounced),
+                          value: t.rowValue(model.state(of: speaker), offline: speaker.unannounced, taken: speaker.taken),
                           kind: speaker.tag, airPlay2: speaker.airPlay2, product: speaker.product,
                           // The row's note says what its prompt waits for instead.
                           availability: speaker.codeWait == nil ? speaker.availability : .open,
@@ -2008,6 +2010,8 @@ private struct CompactRow: View {
     var shownNote: String? = nil
     /// Draws the amber connecting arc and colours the note amber.
     var connecting = false
+    /// Another device took it: the badge shows it on, not playing (S482).
+    var taken = false
     /// A renamed speaker's system name, read by VoiceOver after its name.
     var renamedFrom: String? = nil
     /// VoiceOver's label and value in place of the speaker's: a zone's, read
@@ -2033,7 +2037,8 @@ private struct CompactRow: View {
     var body: some View {
         Button(action: toggle) {
             HStack(spacing: PanelLayout.iconGap) {
-                SpeakerBadge(symbol: symbol, state: state, size: PanelLayout.iconBox, ring: true, connecting: connecting)
+                SpeakerBadge(symbol: symbol, state: .look(state, taken: taken), size: PanelLayout.iconBox, ring: true,
+                             connecting: connecting)
                 // The name goes before the availability note when both don't fit.
                 ScrollingTitle(text: name)
                     .font(.body)

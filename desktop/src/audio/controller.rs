@@ -63,7 +63,7 @@ use audiosync_core::policy::Seconds;
 use audiosync_core::policy::airplay_reconnect::{SENDER_RETRY_SECONDS, SenderRestart, SenderStart};
 use audiosync_core::policy::call_listeners::{CallListeners, Facts, ListenerAction};
 use audiosync_core::policy::delay::{BRIEF_LOSS_HOLD, native_airplay_latency_ms};
-use audiosync_core::policy::on_demand::{self, Action, OnDemand};
+use audiosync_core::policy::on_demand::{self, Action, OnDemand, Status};
 use audiosync_core::policy::source::AudioSource;
 use audiosync_core::policy::source_quit::{
     SourceQuitAction, SourceQuitWatch, Streaming, WhenSourceQuits,
@@ -1097,6 +1097,8 @@ pub struct Controller<D: Driver> {
     on_demand_origin: Instant,
     /// When the policy last took the capture's peak.
     on_demand_fed: Option<Instant>,
+    /// The speakers last reported in [`BackendEvent::SpeakersTaken`].
+    on_demand_taken: BTreeSet<String>,
 }
 
 impl<D: Driver> Controller<D> {
@@ -1177,6 +1179,17 @@ impl<D: Driver> Controller<D> {
             cast.set_quiet(!self.on_demand.playing());
         }
         self.apply_on_demand(actions);
+        let taken: BTreeSet<String> = self
+            .on_demand
+            .switched_on_keys()
+            .into_iter()
+            .filter(|id| matches!(self.on_demand.status(id), Some(Status::Waiting { .. })))
+            .collect();
+        if taken != self.on_demand_taken {
+            self.on_demand_taken = taken.clone();
+            self.pending
+                .push(BackendEvent::SpeakersTaken { ids: taken });
+        }
     }
 
     fn apply_on_demand(&mut self, actions: Vec<Action<String>>) {
@@ -1289,6 +1302,7 @@ impl<D: Driver> Controller<D> {
             on_demand: OnDemand::new(0.0),
             on_demand_origin: Instant::now(),
             on_demand_fed: None,
+            on_demand_taken: BTreeSet::new(),
         }
     }
 
@@ -7058,6 +7072,9 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
         BackendEvent::AirPlayWaitOver { id } => {
             format!("AirPlay speaker ({id}) no longer waits: the sender started it")
         }
+        BackendEvent::SpeakersTaken { ids } => {
+            format!("speakers another device uses now: {ids:?}")
+        }
         BackendEvent::AirPlayFailed { id, problem } => {
             format!("AirPlay speaker ({id}) can't play ({problem:?}); it is turned off")
         }
@@ -9053,6 +9070,80 @@ mod tests {
         let status = backend.on_demand.status(&KITCHEN.to_owned());
         assert!(matches!(status, Some(Status::Waiting { .. })), "{status:?}");
         assert_eq!(cast.state().started.len(), 1, "not relaunched");
+    }
+
+    // covers: S482
+    #[test]
+    fn a_speaker_waiting_for_sound_is_reported_taken_until_its_switch_goes_off() {
+        use crate::audio::cast::tests::{FakeCast, KITCHEN, id};
+        use audiosync_cast::error::LaunchError;
+        use audiosync_cast::host::{AttemptId, HostEvent};
+        use audiosync_cast::session::{SessionEnd, SessionError};
+        let taken_reports = |events: Vec<BackendEvent>| -> Vec<BTreeSet<String>> {
+            events
+                .into_iter()
+                .filter_map(|event| match event {
+                    BackendEvent::SpeakersTaken { ids } => Some(ids),
+                    _ => None,
+                })
+                .collect()
+        };
+        let mut backend = backend();
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        backend.poll();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert!(taken_reports(backend.poll()).is_empty());
+        let attempt = cast.state().next;
+        cast.report(HostEvent::Ended {
+            attempt: AttemptId(attempt),
+            device: id(KITCHEN),
+            end: SessionEnd::Failed(SessionError::Launch(LaunchError::Quiet)),
+        });
+        let mut reports = taken_reports(backend.poll());
+        reports.extend(taken_reports(backend.poll()));
+        assert_eq!(reports, [BTreeSet::from([KITCHEN.to_owned()])]);
+        assert!(taken_reports(backend.poll()).is_empty(), "told once");
+        backend.set_cast_enabled(KITCHEN, false).unwrap();
+        assert_eq!(taken_reports(backend.poll()), [BTreeSet::new()]);
+    }
+
+    // As on the Mac, starting a stream alone does not take a speaker back from
+    // the other device: fresh lasting sound or its switch does (S482).
+    // covers: S482
+    #[test]
+    fn a_new_stream_without_sound_leaves_a_taken_speaker_with_the_other_device() {
+        use crate::audio::cast::tests::{FakeCast, KITCHEN, id};
+        use audiosync_cast::error::LaunchError;
+        use audiosync_cast::host::{AttemptId, HostEvent};
+        use audiosync_cast::session::{SessionEnd, SessionError};
+        let mut backend = backend();
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        backend.poll();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.poll();
+        let attempt = cast.state().next;
+        cast.report(HostEvent::Ended {
+            attempt: AttemptId(attempt),
+            device: id(KITCHEN),
+            end: SessionEnd::Failed(SessionError::Launch(LaunchError::Quiet)),
+        });
+        backend.poll();
+        backend.poll();
+        assert!(!backend.on_demand_taken.is_empty());
+        backend.stop();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.poll();
+        assert!(!backend.on_demand_taken.is_empty());
+        assert_ne!(
+            backend.on_demand.status(&KITCHEN.to_owned()),
+            Some(Status::Active)
+        );
     }
 
     // covers: S186, S189

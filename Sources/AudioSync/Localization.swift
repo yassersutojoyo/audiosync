@@ -199,9 +199,11 @@ struct UIStrings {
     }
 
     /// A speaker row's accessibility value: its state, then that it is off
-    /// the network.
-    func rowValue(_ state: SpeakerState, offline: Bool) -> String {
-        offline ? value(state) + ", " + notOnNetwork : value(state)
+    /// the network or that another device took it.
+    func rowValue(_ state: SpeakerState, offline: Bool, taken: Bool = false) -> String {
+        let read = offline ? value(state) + ", " + notOnNetwork : value(state)
+        guard taken, case .playing = state else { return read }
+        return read + ", " + inUseByAnotherDevice
     }
 
     /// What clicking a speaker (or group) does, as its tooltip.
@@ -875,12 +877,14 @@ struct UIStrings {
     let waitingForAirPlay2 = "Waiting: too many AirPlay 2 speakers"
     /// Under the name of a speaker waiting for PTP (S285).
     let waitingForPtp = "Waiting: AirPlay 2 speakers on another network"
+    /// Under the name of a speaker another sender took (S482).
+    let inUseByAnotherDevice = "In use by another device"
     /// From its second failed retry, an AirPlay speaker the sender keeps
     /// trying to reach stays on, with this notice (S222).
     func nativeAirPlayRetrying(_ problem: NativeSpeakerEvent.Problem, name: String) -> String {
         switch problem {
         case .connectionLost: return "\(name) lost its connection. AudioSync keeps trying to reconnect."
-        case .busy: return "\(name) seems to be playing from another device. AudioSync keeps trying."
+        case .busy: return "\(name) is in use by another device."
         case .refused, .incompatible: return "\(name) declined the stream. AudioSync tries again shortly."
         default: return "\(name) isn't responding. AudioSync keeps trying to reach it."
         }
@@ -1592,10 +1596,12 @@ struct UIStrings {
     /// what a Cast speaker does, what an AirPlay speaker's PIN or password
     /// prompt waits for, that an AirPlay 2 speaker waits, that an
     /// AirPlay speaker is off the network, or what a stereo pair or home
-    /// theater group is made of.
+    /// theater group is made of. A speaker another device took says that
+    /// first.
     func rowNote(cast: CastRow?, waitingForAirPlay2: Bool, waitingForPtp: Bool = false, reconnecting: Bool = false,
-                 codeWait: NativeCodeWait? = nil, name: String = "",
+                 taken: Bool = false, codeWait: NativeCodeWait? = nil, name: String = "",
                  unannounced: Bool, target: AirPlayTargetRow?) -> String? {
+        if taken { return inUseByAnotherDevice }
         if let cast { return castNote(cast) }
         switch codeWait {
         case .password?: return waitingForPassword

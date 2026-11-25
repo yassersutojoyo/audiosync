@@ -5945,6 +5945,12 @@ do {
           "P215 native airplay: VoiceOver reads an unannounced row's value as on, then off the network, "
             + "and its hint doesn't say it again",
           t.rowValue(SpeakerState(enabled: true, streaming: true), offline: true))
+    // covers: S482
+    check(t.rowValue(SpeakerState(enabled: true, streaming: true), offline: false, taken: true)
+            == t.on + ", " + t.inUseByAnotherDevice
+            && t.rowValue(SpeakerState(enabled: false, streaming: true), offline: false, taken: true) == t.off,
+          "S482: VoiceOver reads a row another device took as on, then in use by another device",
+          t.rowValue(SpeakerState(enabled: true, streaming: true), offline: false, taken: true))
 
     var missing = listedPair()
     missing.apply(.gone(id: right, name: "Right"))
@@ -9340,7 +9346,7 @@ do {
         .components(separatedBy: "\n}\n").first ?? ""
     let masterRowSource = bar.components(separatedBy: "private func masterRow(").dropFirst().first?
         .components(separatedBy: "\n    }\n").first ?? ""
-    check(bar.contains("HStack(spacing: PanelLayout.iconGap) {\n                SpeakerBadge(symbol: symbol, state: state, size: PanelLayout.iconBox")
+    check(bar.contains("HStack(spacing: PanelLayout.iconGap) {\n                SpeakerBadge(symbol: symbol, state: .look(state, taken: taken), size: PanelLayout.iconBox")
             && panelPresetSource.contains("HStack(spacing: PanelLayout.iconGap) {\n                    Image(systemName: \"square.stack.3d.up.fill\")")
             && panelPresetSource.contains(".frame(width: PanelLayout.iconBox)\n                    Text(t.presets)")
             && !panelPresetSource.contains(".overlay(") && !panelPresetSource.contains(".menuStyle(.borderlessButton)")
@@ -16421,6 +16427,12 @@ do {
             && zoneObjects.last?["counts"] as? [String: Int] == ["on": 0, "total": 0, "waiting": 0, "all": 1],
           "web remote: a zone lists its listed members in zone order with on, total and waiting; one not listed counts only in all",
           "\(zoneObjects)")
+    // covers: S482
+    let takenRow = RemoteRow(Facts(id: "hp", name: "Kitchen", kind: "AirPlay 2", on: true, volume: 30, isAirPlay: true,
+                                   key: "ap:hp", taken: true), text: t)
+    let takenZone = RemoteZoneRow(storedZones[0], listed: [takenRow])
+    check(takenRow.on && takenRow.waiting && takenZone.on == 1 && takenZone.waiting == 1,
+          "web remote: a speaker another device took shows on and counts as waiting, not playing")
     var hiddenDesk = HiddenSpeakers()
     hiddenDesk.hide(key: "lc:usb", name: "Desk", kind: "USB")
     let shownRows = hiddenDesk.partition(zoneRows, key: \.key).shown
@@ -20608,6 +20620,46 @@ do {
             && callTapLog.count == 1,
           "calls: a tap macOS won't change in place is built again, and the refusal is logged once for the set",
           "\(String(describing: callTapMoved)) \(callTapSteps) \(callTapLog.count)")
+}
+
+// MARK: A speaker another device took says so on its row (S482)
+do {
+    let takenText = UIStrings()
+    let takenGroupRow = CastRow(status: .idle, muted: false, volumeFixed: false, group: .notReported)
+    // covers: S482
+    check(takenText.rowNote(cast: nil, waitingForAirPlay2: false, reconnecting: true, taken: true,
+                            unannounced: false, target: nil) == "In use by another device"
+            && takenText.rowNote(cast: takenGroupRow, waitingForAirPlay2: false, taken: true,
+                                 unannounced: false, target: nil) == takenText.inUseByAnotherDevice,
+          "taken: the row says In use by another device, over its reconnecting or Cast group note")
+    // covers: S482
+    check(SpeakerState.look(.playing, taken: true) == .willPlay && SpeakerState.look(.playing, taken: false) == .playing
+            && SpeakerState.look(.off, taken: true) == .off,
+          "taken: the badge shows a taken speaker on but not playing")
+
+    var takenAirPlay = NativeAirPlayModel()
+    takenAirPlay.letGo.insert("T1")
+    takenAirPlay.taken.insert("T1")
+    takenAirPlay.keepLetGo(enabled: ["native:T1"])
+    let takenKept = takenAirPlay.taken
+    takenAirPlay.keepLetGo(enabled: [])
+    // covers: S482
+    check(takenKept == ["T1"] && takenAirPlay.taken.isEmpty,
+          "taken: an AirPlay row stays taken while on and clears when its switch goes off", "\(takenKept)")
+
+    let takenDen = "fedcba9876543210fedcba9876543210"
+    var takenCast = CastModel()
+    takenCast.apply(.appeared(CastDevice(id: takenDen, name: "Den"), offsetMs: nil))
+    _ = takenCast.turnOn(takenDen)
+    takenCast.startSent(takenDen)
+    _ = takenCast.started(takenDen, attempt: 8, refusal: ASC_CAST_REFUSED_NONE)
+    _ = takenCast.apply(.ended(attempt: 8, .quiet))
+    let takenWaits = takenCast.taken
+    takenCast.turnOff(takenDen)
+    _ = takenCast.turnOn(takenDen)
+    // covers: S482
+    check(takenWaits && !takenCast.taken,
+          "taken: a Cast speaker waiting for sound is taken until the user's switch brings it back")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

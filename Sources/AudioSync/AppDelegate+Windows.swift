@@ -810,6 +810,7 @@ extension AppDelegate {
                                     waitingForAirPlay2: receiver.map { native?.waitReason($0) == .tooManyAirPlay2 } ?? false,
                                     waitingForPtp: receiver.map { native?.waitReason($0) == .ptpOtherNetwork } ?? false,
                                     reconnecting: receiver.map { native?.isReconnecting($0) == true } ?? false,
+                                    taken: receiver.map { native?.taken.contains($0) == true } ?? false,
                                     codeWait: receiver.flatMap { native?.codeWait($0) },
                                     unannounced: receiver.map { native?.isUnannounced($0) == true } ?? false,
                                     paired: receiver.map { native?.isPaired($0) == true } ?? false,

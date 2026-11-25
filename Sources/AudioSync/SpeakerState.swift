@@ -22,6 +22,12 @@ enum SpeakerState: Equatable {
     /// True when a click asks to turn the speaker on (which also starts
     /// streaming when it is off); false when it asks to turn it off.
     var clickTurnsOn: Bool { self != .playing }
+
+    /// How the badge shows a speaker in `state`: one another device took is
+    /// on but not playing ours (S482).
+    static func look(_ state: SpeakerState, taken: Bool) -> SpeakerState {
+        state == .playing && taken ? .willPlay : state
+    }
 }
 
 /// Whether an AirPlay speaker can be played to as it is, from what discovery

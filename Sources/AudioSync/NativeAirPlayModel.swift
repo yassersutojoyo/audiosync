@@ -1278,11 +1278,15 @@ struct NativeAirPlayModel {
     /// released when nothing plays, until it takes them back or the user
     /// switches them (S482, S483).
     var letGo: Set<String> = []
+    /// The let-go receivers yielded to another sender: their rows say
+    /// another device uses them (S482).
+    var taken: Set<String> = []
 
     /// Forgets the let-go receivers whose switch is off (app IDs in
     /// `enabled`), however it was switched: one switched on again joins.
     mutating func keepLetGo(enabled: Set<String>) {
         letGo.formIntersection(enabled.compactMap(NativeAirPlayID.receiver))
+        taken.formIntersection(letGo)
     }
 
     /// The app added a speaker to the sender.

@@ -24,8 +24,8 @@ use audiosync_remote::{Command, Config, RemoteError, RemoteServer};
 use slint::{ComponentHandle, SharedString};
 
 use super::{
-    App, REMOTE_PUBLIC_NOTICE_ID, availability, cast_group_note, cast_state, group_note, row_state,
-    speaker_kind, with_app,
+    App, REMOTE_PUBLIC_NOTICE_ID, RowState, availability, cast_group_note, cast_state, group_note,
+    row_state, speaker_kind, with_app,
 };
 use crate::Strings;
 use crate::network_profile::{ProfileSource, PublicNetworkWarning, Watch};
@@ -206,6 +206,10 @@ impl RowText for StringsText<'_> {
     }
 
     fn note(&self, state: &AppState, speaker: &Speaker) -> String {
+        let row_state = row_state(state.speaker_state(speaker));
+        if row_state == RowState::Taken {
+            return self.0.get_in_use_by_another_device().into();
+        }
         if let Some(cast) = &speaker.cast {
             let group_note = cast_group_note(&self.0, speaker);
             let note = self
@@ -215,7 +219,6 @@ impl RowText for StringsText<'_> {
                 return note.into();
             }
         }
-        let row_state = row_state(state.speaker_state(speaker));
         let note = self.0.invoke_speaker_availability(
             availability(speaker.availability),
             speaker.code_every_time,
@@ -1416,6 +1419,27 @@ mod tests {
         let speaker = state.speaker("cc:192.0.2.20").expect("listed");
         let text = super::StringsText(app.strings());
         assert_eq!(text.note(&state, speaker), "Added by address");
+    }
+
+    // covers: S482
+    #[test]
+    fn the_phone_row_note_of_a_taken_cast_speaker_says_another_device_uses_it() {
+        use crate::remote::RowText;
+        use crate::ui_model::Waiting;
+        let app = over_loopback(MockBackend::new());
+        app.update(|b| {
+            b.add_cast_address("192.0.2.21").expect("added");
+        });
+        let mut state = app.snapshot();
+        state.running = true;
+        let mut speaker = state.speaker("cc:192.0.2.21").expect("listed").clone();
+        speaker.enabled = true;
+        speaker.waiting = Some(Waiting::Taken);
+        let cast = speaker.cast.as_mut().expect("a Cast speaker");
+        cast.state = crate::ui_model::CastState::Playing;
+        cast.muted = true;
+        let text = super::StringsText(app.strings());
+        assert_eq!(text.note(&state, &speaker), "In use by another device");
     }
 
     // covers: S343

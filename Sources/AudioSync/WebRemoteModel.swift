@@ -94,6 +94,8 @@ extension RemoteRow {
         var note: String?
         var key = ""
         var waiting = false
+        /// Another device took it: on, but not playing here (S482).
+        var taken = false
         var streaming = true
     }
 
@@ -112,7 +114,7 @@ extension RemoteRow {
                   available: !codeBlocked,
                   notice: codeBlocked ? text.remoteTurnOnInApp : text.availability(f.availability) ?? f.note,
                   volumeAdjustable: f.castVolumeFixed != true,
-                  key: f.key, waiting: f.waiting, asksForCode: codeBlocked,
+                  key: f.key, waiting: f.waiting || !turnsOn && f.taken, asksForCode: codeBlocked,
                   volumeStep: f.castVolumeFixed == nil ? 1 : max(1, (100 * castStep).rounded()))
     }
 

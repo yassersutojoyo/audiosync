@@ -466,6 +466,9 @@ pub enum Waiting {
     ForPassword,
     /// Its PIN pairing runs (S223).
     ForPin,
+    /// An AirPlay or Cast speaker another sender took: it stays on and
+    /// comes back on fresh lasting sound or the user's switch (S482).
+    Taken,
 }
 
 /// Where a pairing's PIN prompt is.

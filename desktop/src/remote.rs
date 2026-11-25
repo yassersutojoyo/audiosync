@@ -352,7 +352,7 @@ fn zones(state: &AppState, listed_now: &[&Speaker]) -> Vec<RemoteZone> {
                         on(speaker)
                             && matches!(
                                 speaker.waiting,
-                                Some(Waiting::ForAirPlay2Slot | Waiting::ForPtp)
+                                Some(Waiting::ForAirPlay2Slot | Waiting::ForPtp | Waiting::Taken)
                             )
                     }),
                 },
@@ -1568,6 +1568,20 @@ pub(crate) mod tests {
         assert!(
             State::from_json(&snapshot.to_json(0)).is_ok(),
             "the snapshot passes the crate's checks"
+        );
+    }
+
+    // covers: S482
+    #[test]
+    fn a_zone_counts_a_member_another_device_took_as_on_and_waiting_not_playing() {
+        let mut state = zoned();
+        state.speakers[2].waiting = Some(Waiting::Taken);
+        let snapshot = snapshot(&state, not_virtual, None, "Desk PC", &Text);
+        let downstairs = &snapshot.zones[0];
+        assert_eq!((downstairs.counts.on, downstairs.counts.waiting), (2, 1));
+        assert!(
+            snapshot.speaker("kitchen").unwrap().on,
+            "its switch shows on"
         );
     }
 

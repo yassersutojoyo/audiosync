@@ -2217,7 +2217,7 @@ private struct ZoneMemberCompactRow: View {
     private var note: String? {
         model.text.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
                            waitingForPtp: speaker.waitingForPtp, reconnecting: speaker.reconnecting,
-                           codeWait: speaker.codeWait, name: speaker.name,
+                           taken: speaker.taken, codeWait: speaker.codeWait, name: speaker.name,
                            unannounced: speaker.unannounced, target: speaker.airPlayTarget)
             ?? zone.members.first { $0.key == speaker.key }?.note
     }
@@ -2227,13 +2227,13 @@ private struct ZoneMemberCompactRow: View {
         HStack(spacing: 12) {
             Button { model.setEnabled(speaker, state.clickTurnsOn) } label: {
                 // As wide as a full row's switch, so the names line up.
-                SpeakerBadge(symbol: speaker.symbol, state: state, size: ZoneLook.compactBadge)
+                SpeakerBadge(symbol: speaker.symbol, state: .look(state, taken: speaker.taken), size: ZoneLook.compactBadge)
                     .frame(width: ZoneLook.badgeColumn)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(t.inZoneLabel(speaker.name, zone: zone.name))
             .layarKey(t.inZoneLabel(speaker.name, zone: zone.name))
-            .accessibilityValue(t.rowValue(state, offline: speaker.unannounced))
+            .accessibilityValue(t.rowValue(state, offline: speaker.unannounced, taken: speaker.taken))
             .accessibilityHint(t.rowHint(state, note: note))
             .accessibilityAction(named: t.renameSpeaker) { model.startRename(speaker, in: .inZones) }
             .help(t.help(state))
@@ -2462,14 +2462,14 @@ struct SpeakerRow: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .badgePin, spacing: 12) {
                 Button { toggle(state.clickTurnsOn) } label: {
-                    SpeakerBadge(symbol: speaker.symbol, state: state, size: 32)
+                    SpeakerBadge(symbol: speaker.symbol, state: .look(state, taken: speaker.taken), size: 32)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(t.speakerLabel(name: speaker.name, tag: tag,
                                                    renamedFrom: speaker.renamedFrom))
                 .layarKey(t.speakerLabel(name: speaker.name, tag: tag,
                                                    renamedFrom: speaker.renamedFrom))
-                .accessibilityValue(t.rowValue(state, offline: speaker.unannounced))
+                .accessibilityValue(t.rowValue(state, offline: speaker.unannounced, taken: speaker.taken))
                 .accessibilityHint(t.rowHint(state, note: note ?? t.availability(speaker.availability)))
                 .accessibilityAction(named: t.renameSpeaker) { model.startRename(speaker) }
                 .help(t.help(state))
@@ -2713,7 +2713,7 @@ struct SpeakerRow: View {
     private var note: String? {
         model.text.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
                            waitingForPtp: speaker.waitingForPtp, reconnecting: speaker.reconnecting,
-                           codeWait: speaker.codeWait, name: speaker.name,
+                           taken: speaker.taken, codeWait: speaker.codeWait, name: speaker.name,
                            unannounced: speaker.unannounced, target: speaker.airPlayTarget) ?? zoneNote
     }
 
