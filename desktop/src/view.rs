@@ -13506,9 +13506,7 @@ pub(crate) mod tests {
                 .invoke_speaker_availability_help(a, every_time, state)
                 .to_string()
         };
-        let every_time = "This speaker asks for a code each time it connects, so \
-                          auto-connect leaves it off. AudioSync asks you for the code \
-                          when you turn the speaker on.";
+        let every_time = "Asks for a code each time, so auto-connect leaves it off.\nTurn it on to enter the code.";
         assert_eq!(
             help(Availability::NeedsCode, true, RowState::Off),
             every_time
@@ -15534,8 +15532,7 @@ pub(crate) mod tests {
         let app = app_over(backend);
         app.main.invoke_speaker_toggled("airplay:living".into());
         draw_frames();
-        let text = "Living Room shows a 4-digit code on its screen. Enter it to pair. Cancel \
-                    turns the speaker off; turn it on again to retry.";
+        let text = "Enter the 4-digit code shown on Living Room. Cancel turns the speaker off.";
         assert!(
             ElementHandle::find_by_accessible_label(&app.pin_dialog(), text)
                 .next()
@@ -16214,8 +16211,8 @@ pub(crate) mod tests {
         };
         assert_eq!(
             notice_text(&strings, &ahead).as_str(),
-            "AirPlay speakers can wait at most 20 s for a Google Cast speaker, so they play \
-             about 1.5 s ahead of Kitchen. Lower its offset to keep them together."
+            "AirPlay speakers play about 1.5 s ahead of Kitchen: they wait 20 s at most.\n\
+             Lower its offset to keep them together."
         );
         assert_eq!(
             notice_title(&strings, &ahead).as_str(),
@@ -18628,17 +18625,15 @@ pub(crate) mod tests {
             };
             airplay_moves_line(&strings, &moves).map(|line| line.to_string())
         };
-        let share = "AirPlay speakers share one delay, so a new AirPlay delay applies to ";
+        let share = "AirPlay speakers share one delay, so this also moves ";
         assert_eq!(moves(&[], false), None);
         assert_eq!(
             moves(&[], true).unwrap(),
-            format!("{share}the AirPlay speakers in no zone too.")
+            format!("{share}the AirPlay speakers in no zone.")
         );
         assert_eq!(
             moves(&["Kitchen", "Garden"], true).unwrap(),
-            format!(
-                "{share}the AirPlay speakers in “Kitchen” and “Garden”, and those in no zone too."
-            )
+            format!("{share}the AirPlay speakers in “Kitchen” and “Garden”, and those in no zone.")
         );
 
         let row = |name: &str, state| SheetRow {
@@ -19466,9 +19461,8 @@ pub(crate) mod tests {
                     .unwrap_or_default()
                     .starts_with(name.as_str())
                     && e.accessible_description().unwrap_or_default()
-                        == "Asks for a code every time. This speaker asks for a code each time it \
-                            connects, so auto-connect leaves it off. AudioSync asks you for the \
-                            code when you turn the speaker on."
+                        == "Asks for a code every time. Asks for a code each time, so auto-connect \
+                            leaves it off.\nTurn it on to enter the code."
             })
             .find_all()
             .is_empty();
@@ -21366,7 +21360,7 @@ pub(crate) mod tests {
             (
                 ui_model::AirPlayProblem::PlaysThroughSpeakers,
                 "Den TV",
-                "Den TV plays through its home theater speakers",
+                "Den TV plays through its home theater, which",
             ),
             (
                 ui_model::AirPlayProblem::AppleTvPlays,
@@ -21386,7 +21380,7 @@ pub(crate) mod tests {
             (
                 ui_model::AirPlayProblem::ReceiverUnverified,
                 "Den TV",
-                "Den TV didn't answer as the speaker you paired, so it's off. If it's yours, use Forget Pairing and turn it on to pair again with its code.",
+                "Den TV didn't answer as the speaker you paired, so it's off.\nIf it's yours, use Forget Pairing and pair it again.",
             ),
         ] {
             let text = notice_text(
@@ -21435,7 +21429,7 @@ pub(crate) mod tests {
     fn an_airplay_speaker_given_up_on_says_it_is_off() {
         let app = app_over(MockBackend::new());
         let strings = app.strings();
-        let unreachable = "Den TV couldn't be reached, so it's off. Check that the speaker is on and on the same network, then turn it on again.";
+        let unreachable = "Den TV couldn't be reached, so it's off.\nCheck it's on and on this network, then turn it on again.";
         for (problem, says) in [
             (ui_model::AirPlayProblem::NotResponding, unreachable),
             (ui_model::AirPlayProblem::ConnectionLost, unreachable),
@@ -22034,14 +22028,14 @@ pub(crate) mod tests {
         };
         let newer = text(true);
         assert!(
-            newer.starts_with("Your saved settings are from a newer version of AudioSync")
+            newer.starts_with("Your settings are from a newer AudioSync")
                 && newer.contains("kept as settings.newer-1.json")
-                && newer.ends_with("Update AudioSync to get your settings back."),
+                && newer.ends_with("update AudioSync to get them back."),
             "{newer}"
         );
         let ignored = text(false);
         assert!(
-            ignored.starts_with("AudioSync couldn't read your saved settings when it started"),
+            ignored.starts_with("AudioSync couldn't read your settings"),
             "{ignored}"
         );
         let pairings = notice_text(
@@ -26060,9 +26054,7 @@ pub(crate) mod tests {
         let hint = element(&app, "PresetsCard::empty-note").expect("a caption in the empty list");
         assert_eq!(
             hint.accessible_label().as_deref(),
-            Some(
-                "No presets yet. Turn on the speakers you want, set the volumes and the curve, then save them as a preset."
-            )
+            Some("No presets yet.\nSet up your speakers, then choose Save as Preset.")
         );
     }
 

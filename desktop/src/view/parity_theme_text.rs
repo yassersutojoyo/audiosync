@@ -33,9 +33,9 @@ fn texts_read_as_the_macs() {
     }
     assert_eq!(
         strings
-            .matches("and then on each other speaker that is on, one at a time")
+            .matches("AudioSync plays a sweep on each speaker that is on.")
             .count(),
-        2
+        1
     );
     assert_eq!(
         strings
