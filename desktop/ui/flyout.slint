@@ -1588,7 +1588,7 @@ export component TrayFlyout inherits Window {
                             // Text alone, no beating dot before it, as the Mac's note (MenuBar.swift:1857-1867).
                             none-note := HorizontalLayout {
                                 property <bool> both-none: root.airplay-none-found && root.cast-list == CastList.none-found;
-                                property <string> list-note: root.airplay-none-found ? (self.both-none ? Strings.network-none-found : Strings.airplay-none-found) : root.airplay-searching ? (root.cast-list == CastList.none-found || root.cast-list == CastList.failed ? Strings.looking-for-airplay-speakers : Strings.looking-for-speakers) : Strings.connected-none;
+                                property <string> list-note: root.airplay-none-found ? (self.both-none || root.cast-list == CastList.quiet ? Strings.no-speakers : Strings.airplay-none-found) : root.airplay-searching ? (root.cast-list == CastList.none-found || root.cast-list == CastList.failed ? Strings.looking-for-airplay-speakers : Strings.looking-for-speakers) : Strings.connected-none;
                                 property <string> cast-note: self.both-none || self.list-note == Strings.looking-for-speakers ? "" : Strings.cast-list(root.cast-list);
                                 property <string> text: root.this-pc.length == 0 && root.all-hidden ? Strings.flyout-all-hidden : root.this-pc.length == 0 && root.airplay-none-found ? Strings.no-speakers : self.cast-note == "" ? self.list-note : self.list-note == Strings.connected-none ? self.cast-note : self.list-note + " " + self.cast-note;
                                 spacing: 10px;
@@ -1608,7 +1608,7 @@ export component TrayFlyout inherits Window {
                         }
 
                         // Linux has no Settings page to open.
-                        if root.zones.length == 0 && root.speakers.length == 0 && root.airplay-none-found && Platform.os != OperatingSystemType.linux: HorizontalLayout {
+                        if root.zones.length == 0 && root.speakers.length == 0 && root.airplay-none-found && !root.all-hidden && !root.connected-all-hidden && Platform.os != OperatingSystemType.linux: HorizontalLayout {
                             alignment: start;
                             LinkButton {
                                 text: Strings.open-network-settings;

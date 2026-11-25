@@ -276,8 +276,7 @@ struct MainView: View {
                             if !model.zones.isEmpty { zonesSection(t) }
                             speakerSection(t.connectedSection, speakers: layout.connected, zoned: zoned.connected,
                                            empty: t.connectedEmpty(allHidden: model.hidden.inConnected,
-                                                                   virtualHidden: model.virtualOutputsHidden,
-                                                                   networkEmpty: model.networkEmptyText),
+                                                                   networkEmpty: model.networkEmptyText(fix: true)),
                                            scroll: proxy,
                                            connected: true, airPlayListed: all.connected.contains { $0.isAirPlay },
                                            problem: model.airPlayProblem,
@@ -619,7 +618,7 @@ struct MainView: View {
                         .padding(10)
                     if !listsNone { Divider() }
                 } else if listsNone {
-                    emptyNote(empty, hint: hint, under: [])
+                    emptyNote(empty, hint: model.text.emptyListHint(empty, hint: hint), under: [])
                 } else if hasAirPlay && localNetworkHint == .denied, let hint {
                     LocalNetworkHintView(message: hint, text: model.text).padding(10)
                     Divider()

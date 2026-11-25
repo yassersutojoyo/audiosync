@@ -1227,9 +1227,9 @@ struct UIStrings {
     /// Under that slider when the device turned down the level set on it.
     let systemVolumeRefused = "This output didn't accept the new volume."
 
-    let noSpeakers = "No speakers found"
+    let noSpeakers = "No speakers found yet."
     /// The menu bar panel's list with no speaker and nothing hidden: "No
-    /// speakers found" waits for AirPlay's first look, as on Windows.
+    /// speakers found yet." waits for AirPlay's first look, as on Windows.
     /// `airPlayStarting`: the sender isn't up yet and nothing stopped it.
     func panelNoSpeakers(airPlayFoundNone: Bool, airPlayStarting: Bool, networkEmpty: String) -> String {
         airPlayFoundNone ? noSpeakers : airPlayStarting ? lookingForSpeakers : networkEmpty
@@ -1369,8 +1369,8 @@ struct UIStrings {
     let hideSpeaker = "Hide Speaker"
     let hideSpeakerHelp = "Turns the speaker off and takes it out of the speaker lists. Hidden Speakers brings it back."
     /// The menu bar panel's list when every speaker in it is hidden: the panel has no gear menu.
-    let panelAllHidden = "Every speaker is hidden. Open AudioSync and choose Hidden Speakers to show one again."
-    let panelConnectedHidden = "Every connected speaker is hidden. Open AudioSync and choose Hidden Speakers to show one again."
+    let panelAllHidden = "Every speaker is hidden."
+    let panelConnectedHidden = "Every connected speaker is hidden."
     /// What VoiceOver says after Hide Speaker and after choosing a hidden speaker.
     func speakerHidden(_ name: String) -> String { "\(name) hidden" }
     func speakerShown(_ name: String) -> String { "\(name) shown" }
@@ -1387,19 +1387,31 @@ struct UIStrings {
         kind.isEmpty ? "\(name) (not found)" : "\(name) (\(kind), not found)"
     }
     /// A section whose every speaker is hidden.
-    let allSpeakersHidden = "Every speaker here is hidden. To show one again, choose Settings… in the gear menu and click Unhide."
-    /// Connected Speakers with no row: every speaker hidden, else
-    /// `networkEmpty`, under a line saying virtual devices are hidden when
-    /// they were its only outputs (S434).
-    func connectedEmpty(allHidden: Bool, virtualHidden: Bool, networkEmpty: String) -> String {
-        allHidden ? allSpeakersHidden : virtualHidden ? virtualDevicesHidden + "\n" + networkEmpty : networkEmpty
+    let allSpeakersHidden = "Every speaker here is hidden. Unhide them in Settings, in the gear menu."
+    /// Connected Speakers with no row: every speaker hidden, else `networkEmpty`.
+    func connectedEmpty(allHidden: Bool, networkEmpty: String) -> String {
+        allHidden ? allSpeakersHidden : networkEmpty
     }
-    let virtualDevicesHidden = "Virtual devices are hidden. To list them, choose Settings… in the gear menu and turn on Show Virtual Devices."
-    /// The menu bar panel's Connected Speakers with no row and nothing hidden (S434).
-    func panelConnectedEmpty(virtualHidden: Bool, networkEmpty: String) -> String {
-        virtualHidden ? panelVirtualDevicesHidden + "\n" + networkEmpty : networkEmpty
+    /// Connected Speakers with no speaker at all. Once AirPlay and Google
+    /// Cast both found none: what is missing, then with `fix` (the main
+    /// window) the one likely fix on a second line. Otherwise the network note.
+    func networkEmpty(airPlayNone: Bool, cast: CastListState, hint: LocalNetworkHint = .none,
+                      localNetworkRefused: Bool = false, airPlaySearching: Bool = false, fix: Bool) -> String {
+        if airPlayNone && !airPlaySearching && (cast == .quiet || cast == .noneFound) {
+            guard fix else { return noSpeakers }
+            return noSpeakers + "\n" + (localNetworkRefused ? allowLocalNetwork : checkSameNetwork)
+        }
+        return networkSpeakersNote(airPlayNone: airPlayNone, cast: cast, hint: hint,
+                                   localNetworkRefused: localNetworkRefused, airPlaySearching: airPlaySearching)
+            ?? airPlayNoneFound(hint: hint, localNetworkRefused: localNetworkRefused)
     }
-    let panelVirtualDevicesHidden = "Virtual devices are hidden. Open AudioSync and turn on Show Virtual Devices in Settings."
+    /// The Local Network hint row under an empty list; none once the list's
+    /// own lines give the fix or say every speaker is hidden.
+    func emptyListHint(_ empty: String, hint: String?) -> String? {
+        empty.hasPrefix(noSpeakers) || empty == allSpeakersHidden ? nil : hint
+    }
+    let checkSameNetwork = "Check that this Mac and your speakers are on the same network."
+    let allowLocalNetwork = "Allow AudioSync in System Settings → Privacy & Security → Local Network."
     let cancel = "Cancel"
     let autoConnect = "Auto-Connect When Available"
     let launchAtLogin = "Launch at Login"

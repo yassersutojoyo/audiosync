@@ -38,16 +38,17 @@ export global Strings {
     out property <string> waiting-for-password: @tr("Waiting for the password");
     out property <string> status-off: @tr("Off");
     out property <string> connected-none: @tr("No connected speakers");
-    // The flyout's speaker list when it has no speaker and no zone.
-    out property <string> no-speakers: @tr("No speakers found");
+    // An empty Connected Speakers once AirPlay and Google Cast found none, and
+    // the flyout's speaker list when it has no speaker and no zone.
+    out property <string> no-speakers: @tr("No speakers found yet.");
+    // Under that line in the main window: the one fix most likely to work.
+    out property <string> no-speakers-fix: root.public-network ? @tr("Set this network to Private in Windows Settings.") : @tr("Check that this PC and your speakers are on the same network.");
     // The flyout's empty speaker list while AirPlay discovery runs.
     out property <string> looking-for-speakers: @tr("Looking for speakers…");
     // In its place while the Google Cast search has a note of its own.
     out property <string> looking-for-airplay-speakers: @tr("Looking for AirPlay speakers…");
     // Above the speaker lists while streaming with every speaker off.
     out property <string> no-speaker-on: @tr("No speaker is on. The first one you turn on starts playing.");
-    // Connected Speakers when its only outputs are virtual ones, hidden.
-    out property <string> connected-none-virtual-hidden: @tr("Virtual devices are hidden. To list them, choose Settings… in the gear menu and turn on Show Virtual Devices.");
     // Under Connected Speakers once AirPlay discovery has run for 20 seconds
     // without finding a speaker (a firewall or a Public network blocks it).
     out property <string> airplay-none-found: root.public-network ? @tr("No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it (or set the network to Private).") : Platform.os == OperatingSystemType.linux ? @tr("No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers, and that no firewall on this PC blocks AudioSync.") : @tr("No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it.");
@@ -350,11 +351,11 @@ export global Strings {
     // Last in a speaker's … menu and right-click menu.
     out property <string> hide-speaker: @tr("Hide Speaker");
     // A section whose every speaker is hidden.
-    out property <string> all-speakers-hidden: @tr("Every speaker here is hidden. To show one again, choose Settings… in the gear menu and select Unhide.");
+    out property <string> all-speakers-hidden: @tr("Every speaker here is hidden. Unhide them in Settings, in the gear menu.");
     // The tray flyout's list when every speaker is hidden: it has no Speakers menu.
-    out property <string> flyout-all-hidden: @tr("Every speaker is hidden. Open AudioSync and choose Settings… in its gear menu to show one again.");
+    out property <string> flyout-all-hidden: @tr("Every speaker is hidden.");
     // The same list when only the PC's own speakers are left in it.
-    out property <string> flyout-connected-hidden: @tr("Every connected speaker is hidden. Open AudioSync and choose Settings… in its gear menu to show one again.");
+    out property <string> flyout-connected-hidden: @tr("Every connected speaker is hidden.");
 
     // Add by Address…: a Google Cast speaker that discovery can't find.
     out property <string> cast-add-address: @tr("Add by Address…");
