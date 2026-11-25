@@ -214,7 +214,7 @@ jobs:
           readme="$work/mnt/README.md"
           grep -q "Open Anyway" "$readme"
           grep -qF '(https://github.com/yassersutojoyo/audiosync/blob/main/docs/DEVELOPMENT.md)' "$readme"
-          grep -qF 'src="https://github.com/yassersutojoyo/audiosync/raw/main/docs/images/main-window-light.png"' "$readme"
+          grep -qF 'src="https://github.com/yassersutojoyo/audiosync/raw/main/docs/images/readme-mac-main-light.png"' "$readme"
           if grep -nE ']\((\.?/)?[A-Za-z0-9_.][^):#"<> ]*[)# ]|(src|href)="(\.?/)?[A-Za-z0-9_.][^:#"<> ]*"' "$readme"; then
             echo "README.md in the image still has relative links"; exit 1
           fi

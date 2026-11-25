@@ -27,12 +27,12 @@
 <p align="center">
   <b>macOS</b><br>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/images/main-window-dark.png">
-    <img src="docs/images/main-window-light.png" width="280" alt="AudioSync main window on a Mac: the song playing with its art, the audio source, master volume, and the speakers, each with an on/off icon and a volume slider">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme-mac-main-dark.png">
+    <img src="docs/images/readme-mac-main-light.png" width="279" alt="AudioSync main window on a Mac: the song playing with its art, the audio source, master volume, and the speakers, each with an on/off icon and a volume slider">
   </picture>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/images/menu-bar-panel-dark.png">
-    <img src="docs/images/menu-bar-panel-light.png" width="160" alt="The AudioSync menu bar panel on a Mac: the song playing, master volume, and the speakers, each shown as on or off">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme-mac-panel-dark.png">
+    <img src="docs/images/readme-mac-panel-light.png" width="149" alt="The AudioSync menu bar panel on a Mac: the song playing, master volume, and the speakers, each shown as on or off">
   </picture>
 </p>
 
