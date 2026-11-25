@@ -192,6 +192,7 @@ impl Backend for Stage {
     fn refresh_devices(&mut self) {}
     fn set_when_source_quits(&mut self, _setting: WhenSourceQuits) {}
     fn set_resume_after_sleep(&mut self, _on: bool) {}
+    fn set_release_when_quiet(&mut self, _on: bool, _minutes: u32) {}
     // As the adapter's first step: what isn't an address is turned down.
     fn check_cast_address(&mut self, text: &str) -> Result<CastAddressCheck, CastAddressError> {
         crate::audio::cast_address::CastAddress::parse(text).ok_or(CastAddressError::Invalid)?;

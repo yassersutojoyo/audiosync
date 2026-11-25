@@ -1107,6 +1107,12 @@ impl<D: Driver> Controller<D> {
             .as_secs_f64()
     }
 
+    /// The idle release the policy holds, `None` while it is off (S483).
+    #[cfg(test)]
+    pub fn release_minutes(&self) -> Option<u32> {
+        self.on_demand.release_minutes()
+    }
+
     /// Feeds the policy the speakers switched on, the AirPlay sender's
     /// takeover reports and the capture's peak in windows of
     /// [`on_demand::WINDOW`] since the last feed, and carries out what it

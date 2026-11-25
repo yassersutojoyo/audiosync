@@ -734,7 +734,7 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// Settings > Resume Playback After Sleep (spec S465).
     resume_after_sleep: bool,
     /// Release speakers when nothing plays, and after how many minutes
-    /// (S483); stored, with no control yet.
+    /// (S483): Settings > Auto-disconnect AirPlay and Cast.
     release_when_quiet: bool,
     release_minutes: u32,
     /// The microphone calibration running, or letting its cut-off sweep
@@ -5358,6 +5358,8 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             }),
             when_source_quits: self.when_source_quits,
             resume_after_sleep: self.resume_after_sleep,
+            release_when_quiet: self.release_when_quiet,
+            release_minutes: self.release_minutes,
             cast_list: self.cast_list(),
             cast_by_address: self.audio.cast_discovery() != CastDiscovery::Off,
             cast_on: self.audio.cast_on(),
@@ -6573,6 +6575,15 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             .log(|| format!("resume playback after sleep: {on}"));
         self.resume_after_sleep = on;
         self.audio.set_resume_after_sleep(on);
+    }
+
+    fn set_release_when_quiet(&mut self, on: bool, minutes: u32) {
+        let minutes = minutes.clamp(1, audiosync_core::policy::on_demand::MAX_RELEASE_MINUTES);
+        self.log
+            .log(|| format!("auto-disconnect AirPlay and Cast: {on}, after {minutes} min"));
+        self.release_when_quiet = on;
+        self.release_minutes = minutes;
+        self.audio.set_release_when_quiet(on.then_some(minutes));
     }
 }
 
@@ -8392,6 +8403,32 @@ mod tests {
         );
         restored.restore(saved);
         assert!(restored.snapshot().resume_after_sleep);
+    }
+
+    // covers: S483
+    #[test]
+    fn auto_disconnect_reaches_the_policy_clamped_and_is_saved_and_restored() {
+        let mut adapter = adapter();
+        assert!(!adapter.snapshot().release_when_quiet);
+        assert_eq!(adapter.audio_mut().release_minutes(), None);
+        adapter.set_release_when_quiet(true, 500);
+        assert_eq!(adapter.snapshot().release_minutes, 240);
+        assert_eq!(adapter.audio_mut().release_minutes(), Some(240));
+        adapter.set_release_when_quiet(true, 0);
+        assert_eq!(adapter.audio_mut().release_minutes(), Some(1));
+        adapter.set_release_when_quiet(true, 45);
+        let saved = adapter.current_settings();
+        let mut restored = AudioAdapter::new(
+            MockBackend::empty(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+        );
+        restored.restore(saved);
+        assert!(restored.snapshot().release_when_quiet);
+        assert_eq!(restored.snapshot().release_minutes, 45);
+        assert_eq!(restored.audio_mut().release_minutes(), Some(45));
+        restored.set_release_when_quiet(false, 45);
+        assert_eq!(restored.audio_mut().release_minutes(), None);
     }
 
     // covers: S380

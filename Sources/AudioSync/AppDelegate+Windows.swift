@@ -481,6 +481,7 @@ extension AppDelegate {
         a.setVolumeKeys = { [weak self] on in self?.setVolumeKeys(on) }
         a.setHidesDockIcon = { [weak self] on in self?.setHidesDockIcon(on) }
         a.setResumesAfterSleep = { [weak self] on in self?.setResumesAfterSleep(on) }
+        a.setReleaseWhenQuiet = { [weak self] on, minutes in self?.setReleaseWhenQuiet(on, minutes: minutes) }
         a.openAccessibilitySettings = { NSWorkspace.shared.open(PrivacyPane.accessibility.url) }
         a.setAppearance = { [weak self] choice in self?.setAppearance(choice) }
         a.transport = { [weak self] command in self?.sendTransport(command) }
@@ -680,6 +681,8 @@ extension AppDelegate {
         publish(\.volumeKeys, volumeKeys)
         publish(\.hidesDockIcon, hidesDockIcon)
         publish(\.resumesAfterSleep, resumesAfterSleep)
+        publish(\.releaseWhenQuiet, releaseWhenQuiet)
+        publish(\.releaseMinutes, releaseMinutes)
         publish(\.volumeKeysNeedAccess, followVolumeKeys())
         publish(\.appearance, appearance)
         publish(\.deviceVolumes, followDeviceVolumes())
@@ -909,6 +912,17 @@ extension AppDelegate {
         guard on != resumesAfterSleep else { return }
         resumesAfterSleep = on
         DebugTrace.log("[AudioSync] Resume Playback After Sleep turned \(on ? "on" : "off")")
+        pushModel()
+    }
+
+    func setReleaseWhenQuiet(_ on: Bool, minutes: Int) {
+        let minutes = min(max(minutes, 1), AppSettings.maxReleaseMinutes)
+        guard on != releaseWhenQuiet || minutes != releaseMinutes else { return }
+        releaseWhenQuiet = on
+        releaseMinutes = minutes
+        store.save(releaseWhenQuiet: on, releaseMinutes: minutes)
+        DebugTrace.log("[AudioSync] Auto-disconnect AirPlay and Cast: \(on ? "on" : "off"), after \(minutes) min")
+        nativeAirPlay?.setReleaseMinutes(on ? minutes : 0)
         pushModel()
     }
 

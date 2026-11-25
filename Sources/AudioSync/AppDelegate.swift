@@ -264,6 +264,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var resumesAfterSleep: Bool {
         didSet { if resumesAfterSleep != oldValue { store.save(resumesAfterSleep: resumesAfterSleep) } }
     }
+    /// Auto-disconnect AirPlay and Cast, and after how many minutes of silence (S483).
+    var releaseWhenQuiet = false
+    var releaseMinutes = AppSettings.defaultReleaseMinutes
     /// What the last sleep noted for Resume Playback After Sleep, until the wake decides (S465).
     var wakeResume: WakeResume.Pending?
     /// Since when the running sender has listed no speaker at all (S154).
@@ -405,6 +408,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         localVolumeMemory = LocalVolumeMemory(remembered: saved.systemVolumesRemembered, found: saved.systemVolumesFound,
                                               left: saved.systemVolumesLeft)
         resumesAfterSleep = saved.resumesAfterSleep
+        releaseWhenQuiet = saved.releaseWhenQuiet
+        releaseMinutes = saved.releaseMinutes
         super.init()
         // didSet doesn't run in init, so the moved Cast names are saved here, once.
         if speakerNames != saved.speakerNames { store.save(speakerNames: speakerNames) }

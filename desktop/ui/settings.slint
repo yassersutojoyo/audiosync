@@ -6,7 +6,7 @@
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { Appearance, HiddenItem } from "types.slint";
-import { Divider, FocusRing, Fluent, Motion, OverlayScrollView, PowerSwitch, SmallButton } from "widgets.slint";
+import { Divider, FocusRing, Fluent, Motion, OverlayScrollView, PowerSwitch, SmallButton, TextField } from "widgets.slint";
 
 // A row 48 high, as the Mac's SettingsRow: 40 at least, 4 above and below.
 component SettingsRow inherits HorizontalLayout {
@@ -73,6 +73,71 @@ component CaptionedSwitchRow inherits VerticalLayout {
         color: Tokens.secondary-text;
         font-size: Tokens.font-size-subheadline;
         wrap: word-wrap;
+    }
+}
+
+// "After [15] min of silence", under Auto-disconnect AirPlay and Cast. Enter
+// or leaving the field applies it; only a whole number from 1 to 240 does.
+component ReleaseMinutes inherits VerticalLayout {
+    in property <int> minutes;
+    out property <bool> invalid;
+    callback submitted(int);
+
+    function apply(text: string) {
+        // Leaving a field just put back keeps its range message.
+        if text == "\{root.minutes}" {
+            return;
+        }
+        // Only the number's own digits read back as the text, so "15.0", "1e1" and "+15" don't.
+        root.invalid = !text.is-float() || "\{round(text.to-float())}" != text || text.to-float() < 1 || text.to-float() > 240;
+        if root.invalid {
+            field.text = root.minutes;
+        } else {
+            root.submitted(text.to-float());
+        }
+    }
+
+    spacing: 4px;
+    padding-bottom: 10px;
+
+    HorizontalLayout {
+        spacing: 8px;
+        alignment: start;
+
+        Text {
+            text: Strings.release-after;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+
+        field := TextField {
+            width: 64px;
+            text: root.minutes;
+            input-type: number;
+            horizontal-alignment: right;
+            accessible-label: Strings.release-minutes-label;
+            accessible-description: root.invalid ? Strings.release-minutes-range : "";
+            accepted(text) => {
+                root.apply(text);
+            }
+            changed has-focus => {
+                if !self.has-focus {
+                    root.apply(self.text);
+                }
+            }
+        }
+
+        Text {
+            text: Strings.release-minutes-unit;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+
+    if root.invalid: Text {
+        text: Strings.release-minutes-range;
+        color: Tokens.error-text;
+        font-size: Tokens.font-size-subheadline;
     }
 }
 
@@ -180,6 +245,8 @@ export component SettingsWindow inherits Window {
     in property <bool> volume-keys-available;
     in property <bool> volume-keys;
     in property <bool> show-virtual-devices;
+    in property <bool> release-when-quiet;
+    in property <int> release-minutes: 15;
     in property <[HiddenItem]> hidden-speakers;
     in property <bool> updater-available;
     in property <bool> check-updates-automatically;
@@ -192,6 +259,7 @@ export component SettingsWindow inherits Window {
     callback resume-after-sleep-toggled(bool);
     callback volume-keys-toggled(bool);
     callback show-virtual-devices-toggled(bool);
+    callback release-when-quiet-changed(bool, int);
     callback speaker-unhide-requested(string);
     callback check-updates-automatically-toggled(bool);
     callback check-for-updates-requested();
@@ -405,6 +473,24 @@ export component SettingsWindow inherits Window {
                             checked: root.show-virtual-devices;
                             toggled(on) => {
                                 root.show-virtual-devices-toggled(on);
+                            }
+                        }
+
+                        Divider { }
+
+                        CaptionedSwitchRow {
+                            text: Strings.release-when-quiet;
+                            caption: Strings.release-when-quiet-info;
+                            checked: root.release-when-quiet;
+                            toggled(on) => {
+                                root.release-when-quiet-changed(on, root.release-minutes);
+                            }
+                        }
+
+                        if root.release-when-quiet: ReleaseMinutes {
+                            minutes: root.release-minutes;
+                            submitted(minutes) => {
+                                root.release-when-quiet-changed(true, minutes);
                             }
                         }
 

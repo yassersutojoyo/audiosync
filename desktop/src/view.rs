@@ -3812,6 +3812,13 @@ impl App {
             with_app(&w, |app| app.update(|b| b.set_resume_after_sleep(on)))
         });
         let w = weak.clone();
+        main.on_release_when_quiet_changed(move |on, minutes| {
+            let minutes = u32::try_from(minutes).unwrap_or(1);
+            with_app(&w, |app| {
+                app.update(|b| b.set_release_when_quiet(on, minutes))
+            })
+        });
+        let w = weak.clone();
         main.on_master_volume_changed(move |volume| {
             with_app(&w, |app| app.move_master_volume(volume))
         });
@@ -6123,6 +6130,8 @@ impl WindowState for MainWindow {
             &self.global::<Motion>(),
         ));
         self.set_resume_after_sleep(state.resume_after_sleep);
+        self.set_release_when_quiet(state.release_when_quiet);
+        self.set_release_minutes(state.release_minutes as i32);
     }
 
     fn show_live_input_hint(&self, hint: &SharedString) {
@@ -25912,6 +25921,65 @@ pub(crate) mod tests {
         assert_eq!(app.settings().get_hidden_speakers().row_count(), 0);
         app.settings().invoke_close_requested();
         assert!(!app.settings.is_visible());
+    }
+
+    /// Auto-disconnect AirPlay and Cast is off at first with no minutes
+    /// field; on, the field shows 15 and Enter applies a whole number from
+    /// 1 to 240, while anything else shows the range and changes nothing.
+    // covers: S483
+    #[test]
+    fn auto_disconnect_shows_its_minutes_only_while_on_and_applies_a_number_in_range() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        assert!(app.main.invoke_shortcut(",".into(), true, false));
+        let field = || {
+            ElementHandle::find_by_accessible_label(
+                &app.settings(),
+                "Minutes of silence before AirPlay and Cast speakers disconnect",
+            )
+            .next()
+        };
+        let range_shown = || {
+            ElementHandle::find_by_accessible_label(&app.settings(), "1 to 240 minutes")
+                .next()
+                .is_some()
+        };
+        assert!(!app.settings().get_release_when_quiet());
+        assert!(field().is_none(), "no field while off");
+
+        app.settings().invoke_release_when_quiet_changed(true, 15);
+        draw_frames();
+        assert!(app.snapshot().release_when_quiet);
+        let shown = field().expect("the field while on");
+        assert_eq!(shown.accessible_value().as_deref(), Some("15"));
+
+        let enter = |text: &str| {
+            let shown = field().expect("the field");
+            shown.set_accessible_value(text);
+            let (at, size) = (shown.absolute_position(), shown.size());
+            click(
+                app.settings().window(),
+                at.x + size.width / 2.0,
+                at.y + size.height / 2.0,
+            );
+            press(app.settings().window(), "\n");
+        };
+        let typed = || field().and_then(|field| field.accessible_value());
+        enter("300");
+        assert!(range_shown());
+        assert_eq!(app.snapshot().release_minutes, 15);
+        assert_eq!(typed().as_deref(), Some("15"), "the stored number back");
+        enter("15.0");
+        assert!(range_shown(), "whole digits only");
+        assert_eq!(typed().as_deref(), Some("15"));
+        enter("30");
+        assert!(!range_shown());
+        assert_eq!(app.snapshot().release_minutes, 30);
+        assert_eq!(app.settings().get_release_minutes(), 30);
+
+        app.settings().invoke_release_when_quiet_changed(false, 30);
+        draw_frames();
+        assert!(field().is_none(), "hidden again once off");
     }
 
     /// A speaker's rename field fills its name slot, at least 120 px wide,
