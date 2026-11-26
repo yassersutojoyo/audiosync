@@ -12866,22 +12866,26 @@ pub(crate) mod tests {
         );
     }
 
-    /// On Windows the notes that no speaker was found always name Windows
-    /// Firewall, and suggest a Private network only once Windows reports a
-    /// Public one; the Guide names the firewall for any network.
+    /// The notes that no speaker was found name one fix: the same network,
+    /// or a Private network once Windows reports a Public one. The Guide
+    /// names the firewall for any network.
     // covers: S391
     #[test]
     fn the_none_found_notes_suggest_private_only_on_a_public_network() {
         let app = app_over(MockBackend::new());
         let strings = app.strings();
-        for note in [
-            strings.get_airplay_none_found(),
-            strings.get_network_none_found(),
-            strings.invoke_cast_list(CastList::NoneFound),
-        ] {
-            assert!(!note.contains("Private"), "{note}");
+        let notes = |strings: &Strings| {
+            [
+                strings.get_airplay_none_found(),
+                strings.get_network_none_found(),
+                strings.invoke_cast_list(CastList::NoneFound),
+            ]
+        };
+        for note in notes(&strings) {
             assert!(
-                !cfg!(windows) || note.contains("Windows Firewall allows AudioSync"),
+                note.ends_with(
+                    "found yet. Make sure this PC is on the same network as your speakers."
+                ),
                 "{note}"
             );
         }
@@ -12891,11 +12895,12 @@ pub(crate) mod tests {
                 .contains("Windows Firewall allows AudioSync")
         );
         strings.set_public_network(true);
-        assert!(
-            strings
-                .get_airplay_none_found()
-                .contains("set the network to Private")
-        );
+        for note in notes(&strings) {
+            assert!(
+                note.ends_with("found yet. Set this network to Private in Windows Settings."),
+                "{note}"
+            );
+        }
     }
 
     /// The Guide's AirPlay section says what the sender does: AirPlay 2
