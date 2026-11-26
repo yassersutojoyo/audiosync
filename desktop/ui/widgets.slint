@@ -1139,7 +1139,8 @@ export component IconButton inherits Rectangle {
     }
 
     if root.active: Rectangle {
-        x: (parent.width - self.width) / 2;
+        // It rides the glyph's slide, as the Mac's overlay does (MainWindow.swift:515-518).
+        x: (parent.width - self.width) / 2 + root.glyph-shift;
         // The Mac's hangs 7 px under the glyph's bottom (MainWindow.swift:507-508).
         y: (root.height + root.glyph-size) / 2 + 3px;
         width: 4px;
