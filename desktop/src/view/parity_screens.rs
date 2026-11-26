@@ -391,7 +391,7 @@ fn presets_equalizer_and_calibrate_are_28_high_rows_6_apart_with_no_border() {
     let presets = &presets[..presets.find("list := FoldPane").unwrap()];
     // The Mac's QuickRow.height (MainWindow.swift:1175).
     for row in [quick, equalizer, presets] {
-        assert!(row.contains("min-height: 28px;"));
+        assert!(row.contains("min-height: 28px"));
         assert!(
             !row.lines().any(|line| line.starts_with("    border-width")),
             "no border"

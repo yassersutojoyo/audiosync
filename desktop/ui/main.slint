@@ -1332,7 +1332,8 @@ component PresetsCard inherits Rectangle {
 
     VerticalLayout {
         Rectangle {
-            min-height: 28px;
+            // Its line too, so a scrolling column can't squeeze it into the next row.
+            min-height: 28px + name.min-height;
             border-radius: Fluent.radius-control;
             background: touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : transparent;
             animate background { duration: Fluent.fast; }
@@ -1656,8 +1657,9 @@ component EqualizerCard inherits Rectangle {
     callback clicked();
     callback focus-changed(bool);
 
-    // A row on the window: the whole row is the button.
-    min-height: 28px;
+    // A row on the window: the whole row is the button. Its curve's line
+    // counts too, so a scrolling column can't squeeze it into the next row.
+    min-height: 28px + curve.min-height;
     background: touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : transparent;
     animate background { duration: Fluent.fast; }
     border-radius: Fluent.radius-control;

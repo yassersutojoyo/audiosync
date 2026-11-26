@@ -12866,22 +12866,26 @@ pub(crate) mod tests {
         );
     }
 
-    /// On Windows the notes that no speaker was found always name Windows
-    /// Firewall, and suggest a Private network only once Windows reports a
-    /// Public one; the Guide names the firewall for any network.
+    /// The notes that no speaker was found name one fix: the same network,
+    /// or a Private network once Windows reports a Public one. The Guide
+    /// names the firewall for any network.
     // covers: S391
     #[test]
     fn the_none_found_notes_suggest_private_only_on_a_public_network() {
         let app = app_over(MockBackend::new());
         let strings = app.strings();
-        for note in [
-            strings.get_airplay_none_found(),
-            strings.get_network_none_found(),
-            strings.invoke_cast_list(CastList::NoneFound),
-        ] {
-            assert!(!note.contains("Private"), "{note}");
+        let notes = |strings: &Strings| {
+            [
+                strings.get_airplay_none_found(),
+                strings.get_network_none_found(),
+                strings.invoke_cast_list(CastList::NoneFound),
+            ]
+        };
+        for note in notes(&strings) {
             assert!(
-                !cfg!(windows) || note.contains("Windows Firewall allows AudioSync"),
+                note.ends_with(
+                    "found yet. Make sure this PC is on the same network as your speakers."
+                ),
                 "{note}"
             );
         }
@@ -12891,11 +12895,12 @@ pub(crate) mod tests {
                 .contains("Windows Firewall allows AudioSync")
         );
         strings.set_public_network(true);
-        assert!(
-            strings
-                .get_airplay_none_found()
-                .contains("set the network to Private")
-        );
+        for note in notes(&strings) {
+            assert!(
+                note.ends_with("found yet. Set this network to Private in Windows Settings."),
+                "{note}"
+            );
+        }
     }
 
     /// The Guide's AirPlay section says what the sender does: AirPlay 2
@@ -14369,6 +14374,33 @@ pub(crate) mod tests {
             left + width,
             view_left + view_width
         );
+    }
+
+    /// With a left column taller than the window, Presets and Equalizer keep
+    /// the Mac's 28 px plus their second line (MainWindow.swift:1198, 1213),
+    /// so that line never runs into the next row 6 px below.
+    #[test]
+    fn a_scrolling_left_column_keeps_room_for_the_rows_second_lines() {
+        let app = narrow_app(MockBackend::new());
+        app.main.set_current_preset("Evening".into());
+        app.main.set_equalizer_on(true);
+        app.main.set_equalizer_curve("Electronic".into());
+        advance_clock(Duration::from_millis(400));
+        draw_frames_at(1000, 360);
+        let frame = |id: &str| {
+            let element = element(&app, id).unwrap_or_else(|| panic!("{id}"));
+            (element.absolute_position().y, element.size().height)
+        };
+        let (_, name) = frame("PresetsCard::name");
+        let (_, curve) = frame("EqualizerCard::curve");
+        let (presets_y, presets) = frame("MainWindow::presets-card");
+        let (equalizer_y, equalizer) = frame("MainWindow::equalizer-card");
+        let (calibration_y, _) = frame("MainWindow::calibration-card");
+        assert!(name > 0.0 && curve > 0.0, "both second lines show");
+        assert_eq!(presets, 28.0 + name, "Presets");
+        assert_eq!(equalizer, 28.0 + curve, "Equalizer");
+        assert_eq!(equalizer_y, presets_y + presets + 6.0);
+        assert_eq!(calibration_y, equalizer_y + equalizer + 6.0);
     }
 
     /// The AirPlay delay reads as one line, its name and value, as on the

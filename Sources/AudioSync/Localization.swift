@@ -1107,8 +1107,7 @@ struct UIStrings {
         return text + " " + (refused ? networkAdvice : sameNetworkAdvice)
     }
     private static let sameNetworkAdvice = "Make sure this Mac is on the same network as your speakers."
-    private static let networkAdvice = "Make sure this Mac is on the same network as your speakers, "
-        + "and that AudioSync is allowed in System Settings → Privacy & Security → Local Network."
+    private static let networkAdvice = "Allow AudioSync in System Settings → Privacy & Security → Local Network."
     let thisMacNone = "No built-in output"
     /// Connected Speakers while AirPlay discovery takes its first look.
     let lookingForSpeakers = "Looking for speakers…"

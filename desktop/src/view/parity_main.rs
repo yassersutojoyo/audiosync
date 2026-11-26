@@ -140,6 +140,17 @@ fn the_transport_takes_no_hover_box_as_on_the_mac() {
     }
 }
 
+/// The dot under Shuffle or Repeat fades and slides in with its glyph, as
+/// the Mac's overlay rides the glyph's Reveal (MainWindow.swift:515-518, 1275-1286).
+#[test]
+fn the_mode_dot_slides_with_its_glyph() {
+    let widgets = include_str!("../../ui/widgets.slint").replace("\r\n", "\n");
+    let button = component(&widgets, "IconButton");
+    assert!(button.contains(
+        "if root.active: Rectangle {\n        // It rides the glyph's slide, as the Mac's overlay does (MainWindow.swift:515-518).\n        x: (parent.width - self.width) / 2 + root.glyph-shift;"
+    ));
+}
+
 /// Auto-connect's bolt is solid on every system, as the Mac's bolt.fill
 /// (MainWindow.swift:2435), where the icon font's is an outline.
 #[test]

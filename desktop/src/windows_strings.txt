@@ -1,6 +1,6 @@
-No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it (or set the network to Private).
-No AirPlay or Google Cast speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it (or set the network to Private).
-No Google Cast speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it (or set the network to Private).
+No AirPlay speakers found yet. Set this network to Private in Windows Settings.
+No AirPlay or Google Cast speakers found yet. Set this network to Private in Windows Settings.
+No Google Cast speakers found yet. Set this network to Private in Windows Settings.
 Windows system sounds, such as notification chimes, aren't included.
 Windows didn't let AudioSync start at sign-in.\nPut a shortcut to it in shell:startup (Windows+R), with a space and --background at the end of its Target.
 Windows didn't let AudioSync stop starting at sign-in.\nTurn it off in Settings > Apps > Startup.

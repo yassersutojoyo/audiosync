@@ -50,10 +50,11 @@ export global Strings {
     // Above the speaker lists while streaming with every speaker off.
     out property <string> no-speaker-on: @tr("No speaker is on. The first one you turn on starts playing.");
     // Under Connected Speakers once AirPlay discovery has run for 20 seconds
-    // without finding a speaker (a firewall or a Public network blocks it).
-    out property <string> airplay-none-found: root.public-network ? @tr("No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it (or set the network to Private).") : Platform.os == OperatingSystemType.linux ? @tr("No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers, and that no firewall on this PC blocks AudioSync.") : @tr("No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it.");
+    // without finding a speaker: the one fix most likely to work, as
+    // no-speakers-fix; the Guide covers the firewall.
+    out property <string> airplay-none-found: root.public-network ? @tr("No AirPlay speakers found yet. Set this network to Private in Windows Settings.") : @tr("No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers.");
     // In place of that note and the Google Cast one when neither finds any.
-    out property <string> network-none-found: root.public-network ? @tr("No AirPlay or Google Cast speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it (or set the network to Private).") : Platform.os == OperatingSystemType.linux ? @tr("No AirPlay or Google Cast speakers found yet. Make sure this PC is on the same network as your speakers, and that no firewall on this PC blocks AudioSync.") : @tr("No AirPlay or Google Cast speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it.");
+    out property <string> network-none-found: root.public-network ? @tr("No AirPlay or Google Cast speakers found yet. Set this network to Private in Windows Settings.") : @tr("No AirPlay or Google Cast speakers found yet. Make sure this PC is on the same network as your speakers.");
     // Under that note: opens Settings > Network & internet, as the Mac's
     // Open Local Network Settings does.
     out property <string> open-network-settings: @tr("Open Network Settings");
@@ -64,13 +65,10 @@ export global Strings {
             return @tr("Looking for Google Cast speakers…");
         }
         if state == CastList.none-found {
-            if Platform.os == OperatingSystemType.linux {
-                return @tr("No Google Cast speakers found yet. Make sure this PC is on the same network as your speakers, and that no firewall on this PC blocks AudioSync.");
-            }
             if root.public-network {
-                return @tr("No Google Cast speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it (or set the network to Private).");
+                return @tr("No Google Cast speakers found yet. Set this network to Private in Windows Settings.");
             }
-            return @tr("No Google Cast speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it.");
+            return @tr("No Google Cast speakers found yet. Make sure this PC is on the same network as your speakers.");
         }
         if state == CastList.failed {
             return @tr("AudioSync can't look for Google Cast speakers right now. To try again, exit AudioSync and open it again.");
