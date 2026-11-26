@@ -14371,6 +14371,33 @@ pub(crate) mod tests {
         );
     }
 
+    /// With a left column taller than the window, Presets and Equalizer keep
+    /// the Mac's 28 px plus their second line (MainWindow.swift:1198, 1213),
+    /// so that line never runs into the next row 6 px below.
+    #[test]
+    fn a_scrolling_left_column_keeps_room_for_the_rows_second_lines() {
+        let app = narrow_app(MockBackend::new());
+        app.main.set_current_preset("Evening".into());
+        app.main.set_equalizer_on(true);
+        app.main.set_equalizer_curve("Electronic".into());
+        advance_clock(Duration::from_millis(400));
+        draw_frames_at(1000, 360);
+        let frame = |id: &str| {
+            let element = element(&app, id).unwrap_or_else(|| panic!("{id}"));
+            (element.absolute_position().y, element.size().height)
+        };
+        let (_, name) = frame("PresetsCard::name");
+        let (_, curve) = frame("EqualizerCard::curve");
+        let (presets_y, presets) = frame("MainWindow::presets-card");
+        let (equalizer_y, equalizer) = frame("MainWindow::equalizer-card");
+        let (calibration_y, _) = frame("MainWindow::calibration-card");
+        assert!(name > 0.0 && curve > 0.0, "both second lines show");
+        assert_eq!(presets, 28.0 + name, "Presets");
+        assert_eq!(equalizer, 28.0 + curve, "Equalizer");
+        assert_eq!(equalizer_y, presets_y + presets + 6.0);
+        assert_eq!(calibration_y, equalizer_y + equalizer + 6.0);
+    }
+
     /// The AirPlay delay reads as one line, its name and value, as on the
     /// Mac: the steps, field and note fold open only from the value.
     #[test]
