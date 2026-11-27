@@ -205,8 +205,14 @@ impl UnreachableCause {
     /// The cause a failed connect's error gives, `None` for one that tells
     /// nothing about the receiver.
     pub fn of(error: &std::io::Error) -> Option<UnreachableCause> {
-        let _ = error;
-        None
+        use std::io::ErrorKind as Io;
+        match error.kind() {
+            Io::ConnectionRefused | Io::ConnectionReset => Some(UnreachableCause::Refused),
+            Io::TimedOut | Io::HostUnreachable | Io::NetworkUnreachable => {
+                Some(UnreachableCause::NoAnswer)
+            }
+            _ => None,
+        }
     }
 }
 
@@ -220,12 +226,23 @@ pub(crate) struct ConnectFailures {
 
 impl ConnectFailures {
     pub(crate) fn add(&mut self, cause: Option<UnreachableCause>) {
-        let _ = cause;
+        match cause {
+            Some(UnreachableCause::Refused) => self.refused = true,
+            Some(UnreachableCause::NoAnswer) => self.no_answer = true,
+            None => self.unexplained = true,
+        }
     }
 
+    /// One reset shows the receiver's network is up; an error that tells
+    /// nothing leaves the cause unknown.
     pub(crate) fn cause(self) -> Option<UnreachableCause> {
-        let _ = (self.refused, self.no_answer, self.unexplained);
-        None
+        if self.refused {
+            Some(UnreachableCause::Refused)
+        } else if self.no_answer && !self.unexplained {
+            Some(UnreachableCause::NoAnswer)
+        } else {
+            None
+        }
     }
 }
 

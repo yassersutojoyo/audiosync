@@ -6,7 +6,7 @@
 //! Plain data in and out, the same rule for every host.
 
 use audiosync_airplay::discovery::DenonBrand;
-use audiosync_airplay::error::{ErrorKind, SessionError};
+use audiosync_airplay::error::{ErrorKind, SessionError, UnreachableCause};
 use audiosync_airplay::sender::SpeakerState;
 
 use super::Seconds;
@@ -32,13 +32,24 @@ pub enum Outcome {
 
 impl Outcome {
     pub fn of_state(state: SpeakerState) -> Outcome {
-        let _ = state;
-        Outcome::Between
+        match state {
+            SpeakerState::Playing => Outcome::Played,
+            SpeakerState::Unannounced => Outcome::Unannounced,
+            SpeakerState::Connecting | SpeakerState::Retrying { .. } | SpeakerState::Stopped => {
+                Outcome::Between
+            }
+            SpeakerState::Failed => Outcome::Breaks,
+        }
     }
 
     pub fn of_error(error: &SessionError) -> Outcome {
-        let _ = (error, ErrorKind::Unreachable);
-        Outcome::Between
+        if error.kind == ErrorKind::Unreachable
+            && error.unreachable == Some(UnreachableCause::NoAnswer)
+        {
+            Outcome::NoAnswer
+        } else {
+            Outcome::Breaks
+        }
     }
 }
 
@@ -99,7 +110,22 @@ impl Standby {
 
     /// Takes an outcome the sender reported at `now`.
     pub fn outcome(&mut self, outcome: Outcome, now: Seconds, marks: &mut StandbyMarks) {
-        let _ = (outcome, now, marks);
+        match outcome {
+            Outcome::Played => {
+                self.run_since = None;
+                self.hint = false;
+                marks.hint_shown = false;
+            }
+            Outcome::Unannounced => self.count(Cause::Unannounced, now),
+            Outcome::NoAnswer => self.count(Cause::NoAnswer, now),
+            Outcome::Between => {}
+            Outcome::Breaks => self.run_since = None,
+        }
+    }
+
+    fn count(&mut self, cause: Cause, now: Seconds) {
+        self.run_since.get_or_insert(now);
+        self.cause = Some(cause);
     }
 
     /// Brings the speaker up to date at `now`; returns the hint when it
@@ -111,8 +137,40 @@ impl Standby {
         now: Seconds,
         marks: &mut StandbyMarks,
     ) -> Option<HintShown> {
-        let _ = (record, wanted, now, marks);
-        None
+        let recognized = match record {
+            Record::Seen(brand) => {
+                marks.recognized = brand.is_some();
+                brand.map(|brand| match brand {
+                    DenonBrand::Manufacturer => Recognized::Manufacturer,
+                    DenonBrand::AddressBlock => Recognized::AddressBlock,
+                })
+            }
+            Record::NotInView => marks.recognized.then_some(Recognized::StoredMark),
+        };
+        if !wanted {
+            self.run_since = None;
+            self.hint = false;
+            return None;
+        }
+        if record == Record::NotInView {
+            self.count(Cause::Unannounced, now);
+        }
+        let Some(recognized) = recognized else {
+            self.hint = false;
+            return None;
+        };
+        let asleep = self
+            .run_since
+            .is_some_and(|since| now - since >= ASLEEP_AFTER);
+        if !asleep || self.hint || marks.hint_shown {
+            return None;
+        }
+        self.hint = true;
+        marks.hint_shown = true;
+        Some(HintShown {
+            recognized,
+            cause: self.cause.unwrap_or(Cause::Unannounced),
+        })
     }
 }
 
