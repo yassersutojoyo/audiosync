@@ -725,9 +725,11 @@ enum StatusItemClick: Equatable {
     }
 
     /// When the press of the click released at `release` came, from the
-    /// system's latest-press reading `latest` (both system uptime).
+    /// system's latest-press reading `latest` (both system uptime). The
+    /// reading can miss a trackpad tap; one older than `pressRecency` is an
+    /// earlier click's, so the release stands in for the press.
     static func press(latest: TimeInterval, release: TimeInterval) -> TimeInterval {
-        latest
+        release - latest < pressRecency ? latest : release
     }
 
     /// `closingPress` is when the press on the icon that last closed the
