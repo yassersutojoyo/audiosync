@@ -157,7 +157,8 @@ fn add_by_address_is_a_small_bordered_button_on_the_badge_column() {
     assert!(element_of(&section, "text: Strings.cast-add-address;").ends_with("SmallButton {"));
     let at = section.find("text: Strings.cast-add-address;").unwrap();
     let before = &section[at.saturating_sub(300)..at];
-    assert!(before.contains("padding-left: Fluent.row-padding-x;"));
+    // rowPaddingX less rowInset (MainWindow.swift:655).
+    assert!(before.contains("padding-left: Fluent.row-padding-x - 8px;"));
     // 10 px under the line, as the Mac's (MainWindow.swift:664-665 on the rows-tidy commit).
     assert!(before.contains("padding-top: 10px;") && before.contains("padding-bottom: 6px;"));
 }

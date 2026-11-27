@@ -641,6 +641,21 @@ fn scroll(window: &slint::Window, position: LogicalPosition, delta_y: f32) {
     settle(window);
 }
 
+/// The zones scene scrolled until Home Theater, the Living Room member not
+/// found, is in view, as the Mac's rows-tidy photo shows its ASUS VG249.
+fn zones_with_one_not_found(s: &Scene) -> Result<(), String> {
+    s.load(MockBackend::zones_preview());
+    let at = center(&find(&s.app.main, "Living Room")?);
+    for _ in 0..20 {
+        if find(&s.app.main, "Home Theater").is_ok_and(|member| center(&member).y < 520.0) {
+            return Ok(());
+        }
+        scroll(s.app.main.window(), at, -60.0);
+        render(s.app.main.window());
+    }
+    Err("Home Theater stayed out of view".into())
+}
+
 /// A cover drawn here: a two-way gradient, so the ambient art has bands.
 fn cover() -> CardArtwork {
     const SIDE: u32 = 240;
@@ -1339,7 +1354,7 @@ fn b06() -> Vec<Row> {
 fn b07() -> Vec<Row> {
     vec![
         row("B07", "MAIN-ZONE-CARD", |s| {
-            s.load(MockBackend::zones_preview());
+            zones_with_one_not_found(s)?;
             s.main()
         }),
         row("B07", "MAIN-ZONE-COLLAPSED", |s| {
@@ -1790,7 +1805,7 @@ fn b12() -> Vec<Row> {
             s.main()
         }),
         row("B12", "MAIN-ROWS-TIDY", |s| {
-            s.speaker(DESK, |desk| desk.enabled = true)?;
+            zones_with_one_not_found(s)?;
             s.main()
         }),
         row("B12", "MAIN-ZONE-HEADER", |s| {

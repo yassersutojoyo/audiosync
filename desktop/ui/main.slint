@@ -1004,10 +1004,10 @@ component SpeakerSection inherits VerticalLayout {
                 Divider { }
             }
 
-            // On the speaker rows' badge column, as on the Mac, 10 px under
-            // the line as the note has above it.
+            // rowPaddingX less the 8 pt rowInset, as on the Mac (MainWindow.swift:655),
+            // 10 px under the line as the note has above it.
             HorizontalLayout {
-                padding-left: Fluent.row-padding-x;
+                padding-left: Fluent.row-padding-x - 8px;
                 padding-top: 10px;
                 padding-bottom: 6px;
                 alignment: start;

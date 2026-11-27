@@ -14211,6 +14211,66 @@ pub(crate) mod tests {
         );
     }
 
+    /// The Equalizer's curve menu is a plain menu of buttons on the Mac
+    /// (EqualizerWindow.swift:196-212), so Save Curve…, Rename and Delete
+    /// line up with the curves instead of leaving a check column.
+    #[test]
+    fn the_curve_menu_rows_line_up_as_the_macs() {
+        let source = include_str!("../ui/equalizer.slint");
+        assert!(
+            !source.contains("check-column: true"),
+            "a curve menu row keeps a check column"
+        );
+    }
+
+    /// The Guide's headings are body size and semibold with the text right
+    /// under them, and list items follow each other with no gap, as the Mac
+    /// Guide's paragraphs (AppDelegate+Windows.swift:1014).
+    #[test]
+    fn the_guide_sets_headings_and_lists_as_the_macs() {
+        let source = include_str!("../ui/help.slint");
+        let list = &source[source.find("component HelpList").expect("the list")..];
+        let list = &list[..list.find("\n}\n").expect("the list's end")];
+        assert!(list.contains("spacing: 0px;"), "a gap between items");
+        let section = &source[source.find("component HelpSection").expect("the section")..];
+        let section = &section[..section.find("\n}\n").expect("the section's end")];
+        assert!(!section.contains("SectionTitle"), "a caption-size heading");
+        assert!(!section.contains("spacing:"), "a gap under the heading");
+    }
+
+    /// About AudioSync sets its name, license and copyright as the Mac's
+    /// standard panel: the name at 14 px (74 px wide at 1x in two Mac
+    /// photos), the license at smallSystemFontSize (AboutPanel.swift:30),
+    /// the copyright in the text colour.
+    #[test]
+    fn the_about_dialog_sets_its_lines_as_the_macs_panel() {
+        let source = include_str!("../ui/about.slint");
+        let name = &source[source.find("text: Strings.app-name;").expect("the name")..];
+        assert!(name[..260].contains("font-size: 14px;"), "the name's size");
+        // The version's capitals are as tall as the license's in both photos.
+        let version = &source[source
+            .find("text: Strings.version(root.version);")
+            .expect("the version")..];
+        assert!(
+            version[..160].contains("font-size: Tokens.font-size-subheadline;"),
+            "the version's size"
+        );
+        let license = &source[source
+            .find("text: Strings.about-license;")
+            .expect("the license")..];
+        assert!(
+            license[..260].contains("font-size: Tokens.font-size-subheadline;"),
+            "the license's size"
+        );
+        let copyright = &source[source
+            .find("text: Strings.about-copyright;")
+            .expect("the copyright")..];
+        assert!(
+            copyright[..260].contains("color: Tokens.text;"),
+            "the copyright's colour"
+        );
+    }
+
     /// The main window over `backend` at its narrowest, 776 px, where the
     /// speaker list takes 524 px. draw_frames sets 1000 px again.
     fn narrow_app(backend: MockBackend) -> Rc<App> {
@@ -14445,6 +14505,35 @@ pub(crate) mod tests {
         assert_eq!(line.absolute_position().x - row.absolute_position().x, 54.0);
     }
 
+    /// The AirPlay delay row pads its line by the Mac's rowPaddingY, 8 pt
+    /// above and below (BrandTokens.swift:159, MainWindow.swift:2842), and
+    /// its timer is the Mac's 15 pt symbol (MainWindow.swift:2818).
+    #[test]
+    fn the_airplay_delay_row_pads_8_above_and_below_as_the_macs() {
+        let app = narrow_app(MockBackend::new());
+        advance_clock(Duration::from_millis(400));
+        draw_frames_at(776, 1400);
+        let title = element(&app, "AirPlayDelayControls::title").expect("the delay's name");
+        let pane = element(&app, "MainWindow::delay-pane").expect("the delay pane");
+        let title_bottom = title.absolute_position().y + title.size().height;
+        let pane_bottom = pane.absolute_position().y + pane.size().height;
+        assert_eq!(pane_bottom - title_bottom, 8.0);
+        let widgets = include_str!("../ui/widgets.slint");
+        let row = &widgets[widgets
+            .find("export component AirPlayDelayControls")
+            .expect("the delay row")..];
+        let row = &row[..row.find("\n}\n").expect("the row's end")];
+        assert!(
+            row.contains("padding-top: Fluent.row-padding-y;"),
+            "the top"
+        );
+        let timer = &row[..row.find("glyph: Glyphs.timer;").expect("the timer")];
+        assert!(
+            timer[timer.len() - 80..].contains("font-size: 15px;"),
+            "the timer's size"
+        );
+    }
+
     /// The AirPlay delay's name starts where the speakers' names do, and its
     /// value's fill ends 7 px inside the row: the Mac's 10 pt row inset
     /// (BrandTokens.swift:154) less the 3 px the fill reaches past the value,
@@ -14462,6 +14551,25 @@ pub(crate) mod tests {
         let row_end = row.absolute_position().x + row.size().width;
         let value_end = value.absolute_position().x + value.size().width;
         assert_eq!(row_end - value_end, 7.0);
+    }
+
+    /// Add by Address… starts 8 px left of the speakers' badges: the Mac's
+    /// rowPaddingX less its rowInset (MainWindow.swift:655), as its photos
+    /// show (MAIN-NO-SPEAKER-ON at 2x, MAIN-PRESET-SAVE-FIELD at 1x).
+    #[test]
+    fn add_by_address_starts_the_macs_row_inset_left_of_the_badges() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = narrow_app(MockBackend::new());
+        advance_clock(Duration::from_millis(400));
+        draw_frames_at(776, 1400);
+        let badge = element(&app, "SpeakerRow::badge").expect("a speaker's badge");
+        let add = ElementHandle::find_by_accessible_label(
+            &app.main,
+            &app.main.global::<Strings>().get_cast_add_address(),
+        )
+        .next()
+        .expect("Add by Address");
+        assert_eq!(badge.absolute_position().x - add.absolute_position().x, 8.0);
     }
 
     /// With Add by Address under it, the AirPlay delay's note shows whole
@@ -14503,8 +14611,9 @@ pub(crate) mod tests {
                 "the note shows: {}",
                 note.size().height
             );
+            // The Mac's rowPaddingY under it (MainWindow.swift:2842).
             assert!(
-                note_bottom + 12.0 <= pane_bottom + 0.5,
+                note_bottom + 8.0 <= pane_bottom + 0.5,
                 "h {height}: note ends {note_bottom}, pane {pane_bottom}"
             );
             assert!(
@@ -17943,6 +18052,38 @@ pub(crate) mod tests {
                 .filter(|height| *height > 0.0)
                 .collect();
         assert!(sliders.is_empty(), "a slider {sliders:?} px tall");
+    }
+
+    /// The badge of a zone member not found sits level with the middle of
+    /// its name and "Not found", as the Mac's ZoneMemberPlaceholder HStack
+    /// centres them (MainWindow.swift:2352-2354); a listed row's badge stays
+    /// below its name line.
+    #[test]
+    fn a_zone_member_not_found_centres_its_badge_on_its_name_and_note() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::zones_preview());
+        app.main.show().expect("the main window shows");
+        draw_frames_at(696, 2400);
+        draw_frames_at(696, 2400);
+        let badges: Vec<_> = ElementHandle::find_by_element_id(&app.main, "SpeakerRow::badge")
+            .filter(|badge| badge.size().height > 0.0)
+            .collect();
+        let lines: Vec<_> = ElementHandle::find_by_element_id(&app.main, "SpeakerRow::name-line")
+            .filter(|line| line.size().height > 0.0)
+            .collect();
+        assert_eq!(badges.len(), lines.len());
+        let offsets: Vec<f32> = badges
+            .iter()
+            .zip(&lines)
+            .map(|(badge, line)| {
+                (badge.absolute_position().y + badge.size().height / 2.0)
+                    - (line.absolute_position().y + line.size().height / 2.0)
+            })
+            .collect();
+        assert!(
+            offsets.iter().any(|offset| offset.abs() <= 1.0),
+            "no badge level with its name and note: {offsets:?}"
+        );
     }
 
     // covers: S246 (a Cast member a zone click left off says why), S247 (a

@@ -107,20 +107,24 @@ export component AboutDialog inherits Dialog {
             Text {
                 text: Strings.app-name;
                 font-weight: 700;
-                font-size: 24px;
+                // The Mac panel's name, as measured on two of its photos (74 px wide at 1x).
+                font-size: 14px;
                 color: Tokens.text;
                 horizontal-alignment: center;
             }
 
             Text {
                 text: Strings.version(root.version);
+                // The license's size, as in the Mac photos.
+                font-size: Tokens.font-size-subheadline;
                 color: Tokens.text;
                 horizontal-alignment: center;
             }
 
             Text {
                 text: Strings.about-license;
-                font-size: Tokens.font-size-caption;
+                // smallSystemFontSize, as AboutPanel.swift:30.
+                font-size: Tokens.font-size-subheadline;
                 color: Tokens.secondary-text;
                 horizontal-alignment: center;
                 wrap: word-wrap;
@@ -129,7 +133,8 @@ export component AboutDialog inherits Dialog {
             Text {
                 text: Strings.about-copyright;
                 font-size: Tokens.font-size-caption;
-                color: Tokens.secondary-text;
+                // The Mac panel sets its copyright in the label color, not grey.
+                color: Tokens.text;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }

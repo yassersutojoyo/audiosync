@@ -383,7 +383,6 @@ component CurveMenu inherits Rectangle {
                     MenuRow {
                         index: root.names.length;
                         text: Strings.equalizer-save-curve;
-                        check-column: true;
                         enabled: !root.naming;
                         step: panel.step;
                         count: panel.count;
@@ -400,7 +399,6 @@ component CurveMenu inherits Rectangle {
                     if root.saved-shown: MenuRow {
                         index: root.names.length + 1;
                         text: Strings.equalizer-rename-curve(root.saved-name);
-                        check-column: true;
                         enabled: !root.naming;
                         step: panel.step;
                         count: panel.count;
@@ -417,7 +415,6 @@ component CurveMenu inherits Rectangle {
                     if root.saved-shown: MenuRow {
                         index: root.names.length + 2;
                         text: Strings.equalizer-delete-curve(root.saved-name);
-                        check-column: true;
                         enabled: !root.naming;
                         step: panel.step;
                         count: panel.count;

@@ -3036,8 +3036,9 @@ export component AirPlayDelayControls inherits VerticalLayout {
     // 3 px the value's fill reaches past it, as on the speaker rows.
     padding-left: Fluent.row-padding-x;
     padding-right: Fluent.row-padding-x - 3px;
-    padding-top: 10px;
-    padding-bottom: 12px;
+    // The Mac's rowPaddingY above and below (MainWindow.swift:2842).
+    padding-top: Fluent.row-padding-y;
+    padding-bottom: Fluent.row-padding-y;
     accessible-role: groupbox;
     accessible-label: Strings.airplay-delay-title;
 
@@ -3051,8 +3052,10 @@ export component AirPlayDelayControls inherits VerticalLayout {
         HorizontalLayout {
             spacing: 12px;
 
+            // The Mac's 15 pt timer (MainWindow.swift:2818).
             Glyph {
                 width: 32px;
+                font-size: 15px;
                 glyph: Glyphs.timer;
                 color: Tokens.secondary-text;
             }
@@ -4002,7 +4005,9 @@ export component SpeakerRow inherits Rectangle {
                             x: 0px;
                             // In the middle of the gap between the name and the slider,
                             // as the Mac's badgePin, so a hint line below doesn't move it.
-                            y: floor((name-line.y + name-line.height + 5px / 2 - self.height / 2) / 1px) * 1px;
+                            // A member not found centres it on its name and note, as the
+                            // Mac's ZoneMemberPlaceholder HStack (MainWindow.swift:2352-2354).
+                            y: floor(((root.item.missing ? name-line.y + name-line.height / 2 : name-line.y + name-line.height + 5px / 2) - self.height / 2) / 1px) * 1px;
                             icon: DeviceIcons.glyph(root.item.headphone-name ? SpeakerKind.headphones : root.item.kind, root.item.product);
                             state: root.item.state;
                             plays: root.item.plays;

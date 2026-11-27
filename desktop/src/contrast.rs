@@ -2279,7 +2279,7 @@ fn a_speaker_rows_badge_stays_at_the_name_line() {
     let row = component_body(&widgets, "SpeakerRow");
     assert!(row.contains("name-line := HorizontalLayout {"));
     assert!(row.contains(
-        "y: floor((name-line.y + name-line.height + 5px / 2 - self.height / 2) / 1px) * 1px;"
+        "y: floor(((root.item.missing ? name-line.y + name-line.height / 2 : name-line.y + name-line.height + 5px / 2) - self.height / 2) / 1px) * 1px;"
     ));
 }
 
