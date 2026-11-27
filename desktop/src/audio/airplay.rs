@@ -104,6 +104,9 @@ use audiosync_core::policy::airplay_pairing::{
 use audiosync_core::policy::airplay_reconnect::{
     self as reconnect, ErrorReaction, Retries, SessionState,
 };
+use audiosync_core::policy::airplay_standby::{
+    Cause, Outcome, Recognized, Record, Standby, StandbyMarks,
+};
 use audiosync_core::policy::airplay_volume::{
     self as volume_rules, Reads, VOLUME_READ_INTERVAL, kept_volume, refuses_reads, slider_held,
     within_echo_window,
@@ -1282,6 +1285,10 @@ pub struct AirPlaySpeakers {
     pause: ExplicitPause,
     /// The clock the remote decisions count on.
     created_at: Instant,
+    /// Each speaker's run toward the standby hint, by speaker ID (P262).
+    standby: BTreeMap<String, Standby>,
+    /// The two marks each speaker stores, by speaker ID (P263).
+    standby_marks: BTreeMap<String, StandbyMarks>,
     log: DebugLog,
 }
 
@@ -1354,6 +1361,8 @@ impl AirPlaySpeakers {
             remote_controls: Vec::new(),
             pause: ExplicitPause::default(),
             created_at: Instant::now(),
+            standby: BTreeMap::new(),
+            standby_marks: BTreeMap::new(),
             log,
         };
         speakers.open_airplay2();
@@ -1852,6 +1861,82 @@ impl AirPlaySpeakers {
             .collect()
     }
 
+    /// Restores the standby marks stored with the speakers' saved settings
+    /// (P263).
+    pub fn restore_standby_marks(&mut self, marks: BTreeMap<String, StandbyMarks>) {
+        self.standby_marks = marks;
+    }
+
+    /// The standby marks to store, every speaker's that isn't the default.
+    pub fn standby_marks(&self) -> BTreeMap<String, StandbyMarks> {
+        self.standby_marks
+            .iter()
+            .filter(|(_, marks)| **marks != StandbyMarks::default())
+            .map(|(id, marks)| (id.clone(), *marks))
+            .collect()
+    }
+
+    fn standby_seconds(&self, now: Instant) -> f64 {
+        now.saturating_duration_since(self.created_at).as_secs_f64()
+    }
+
+    /// Counts a state or an error of `id` toward the standby rule (P262).
+    fn standby_outcome(&mut self, id: &str, event: &SpeakerEvent, now: Instant) {
+        let outcome = match event {
+            SpeakerEvent::State(state) => Outcome::of_state(*state),
+            SpeakerEvent::Error(error) => Outcome::of_error(&error.error),
+            _ => return,
+        };
+        let at = self.standby_seconds(now);
+        let marks = self.standby_marks.entry(id.to_owned()).or_default();
+        self.standby
+            .entry(id.to_owned())
+            .or_default()
+            .outcome(outcome, at, marks);
+    }
+
+    /// Brings every speaker's standby hint up to date at `now` and logs one
+    /// that shows (P262 to P264). Returns whether a hint came or went.
+    fn update_standby(&mut self, now: Instant) -> bool {
+        let at = self.standby_seconds(now);
+        let ids: BTreeSet<String> = self
+            .settings
+            .iter()
+            .filter(|(_, settings)| settings.enabled)
+            .map(|(id, _)| id.clone())
+            .chain(self.standby.keys().cloned())
+            .collect();
+        let mut changed = false;
+        for id in ids {
+            let wanted = self.streaming && self.settings(&id).enabled;
+            let record = self.listed.get(&id).map_or(Record::NotInView, |listed| {
+                Record::Seen(listed.device().denon_receiver())
+            });
+            let marks = self.standby_marks.entry(id.clone()).or_default();
+            let standby = self.standby.entry(id.clone()).or_default();
+            let before = standby.hint();
+            let shown = standby.update(record, wanted, at, marks);
+            changed |= before != standby.hint();
+            if let Some(shown) = shown {
+                let by = match shown.recognized {
+                    Recognized::Manufacturer => "manufacturer",
+                    Recognized::AddressBlock => "address block",
+                    Recognized::StoredMark => "stored mark",
+                };
+                let cause = match shown.cause {
+                    Cause::Unannounced => "unannounced",
+                    Cause::NoAnswer => "no answer",
+                };
+                self.log.log(|| {
+                    format!(
+                        "AirPlay speaker {id}: standby hint shows (recognized by {by}, cause {cause})"
+                    )
+                });
+            }
+        }
+        changed
+    }
+
     fn is_playing(&self, id: &str) -> bool {
         self.added
             .get(id)
@@ -2193,6 +2278,7 @@ impl AirPlaySpeakers {
                             .any(|member| self.over_airplay2(&speaker_id(&member.key))),
                         group: Some(self.group_info(target)),
                         product: target.product().into(),
+                        standby_hint: false,
                     };
                 }
                 AirPlayInfo {
@@ -2225,6 +2311,7 @@ impl AirPlaySpeakers {
                     product: self.listed.get(id).map_or(ProductKind::Unknown, |listed| {
                         listed.device().product().into()
                     }),
+                    standby_hint: self.standby.get(id).is_some_and(Standby::hint),
                 }
             })
             .collect();
@@ -3831,6 +3918,7 @@ impl AirPlaySpeakers {
             changed |= self.every_time_stream_ended(&mut events);
         }
         changed |= self.turn_off_uninvited(&mut events);
+        changed |= self.update_standby(Instant::now());
         if changed {
             events.insert(0, BackendEvent::AirPlayChanged);
         }
@@ -4537,6 +4625,7 @@ impl AirPlaySpeakers {
             }
             _ => false,
         };
+        self.standby_outcome(id, &event, Instant::now());
         self.session_event(id, event, events) || path_changed
     }
 
@@ -4855,7 +4944,7 @@ pub mod tests {
 
     use audiosync_airplay::clock::SenderClock;
     use audiosync_airplay::discovery::{BrowseEvent, Browser, DeviceId, ScopedAddr, ServiceRecord};
-    use audiosync_airplay::error::SessionError;
+    use audiosync_airplay::error::{SessionError, UnreachableCause};
     use audiosync_airplay::rtsp::{Message, Method, Parser, Request, Response};
     use audiosync_airplay::stream::{SpeakerLatency, Stream, StreamConfig};
     use audiosync_airplay::targets::Member;
@@ -8500,6 +8589,306 @@ pub mod tests {
             Err(AirPlayProblem::NeedsPassword),
             "it asks for a password from then on"
         );
+    }
+
+    /// A Denon receiver's RAOP record: its identifier in a D&M block, a
+    /// receiver model.
+    fn denon_receiver() -> Device {
+        let device_id = DeviceId([0x00, 0x05, 0xCD, 0x11, 0x22, 0x33]);
+        let mut txt: Vec<Vec<u8>> = OPEN_TXT.iter().map(|s| s.as_bytes().to_vec()).collect();
+        txt.push(b"am=AVR-X1700H".to_vec());
+        let record = ServiceRecord {
+            kind: ServiceKind::Raop,
+            instance: format!("{device_id}@Den"),
+            host: "den.local".to_owned(),
+            port: 7000,
+            txt,
+            addresses: vec![ScopedAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 11)))],
+        };
+        Device::from_records(DeviceKey::Id(device_id), Some(&record), None).expect("a device")
+    }
+
+    fn unanswered(fake: &FakeAirPlay, device: &Device) {
+        fake.push(SenderEvent::Speaker {
+            key: device.key.clone(),
+            event: SpeakerEvent::Error(SpeakerError {
+                error: SessionError {
+                    unreachable: Some(UnreachableCause::NoAnswer),
+                    ..SessionError::new(ErrorKind::Unreachable)
+                },
+                reason: ErrorKind::Unreachable.user_reason(),
+                retry_at: Some(Instant::now() + Duration::from_secs(1)),
+            }),
+        });
+    }
+
+    fn hint(airplay: &AirPlaySpeakers, id: &str) -> bool {
+        airplay
+            .speakers()
+            .iter()
+            .any(|speaker| speaker.id == id && speaker.standby_hint)
+    }
+
+    // The Windows and Linux host's part: the hint on the row 30 s into the
+    // run, once per sleep, cleared on play or off, and the two marks it
+    // stores coming back after a relaunch.
+    // covers: P262, P263, P264
+    #[test]
+    fn a_denon_receiver_asleep_off_the_network_shows_its_standby_hint_once() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let den = denon_receiver();
+        let id = id_of(&den);
+        fake.appear(&den);
+        airplay.poll();
+        airplay.set_enabled(&id, true).unwrap();
+        airplay.set_streaming(true);
+        fake.state(&den, SpeakerState::Playing);
+        airplay.poll();
+
+        let start = Instant::now();
+        unanswered(&fake, &den);
+        airplay.poll();
+        assert!(!airplay.update_standby(start + Duration::from_secs(20)));
+        assert!(!hint(&airplay, &id));
+        assert!(airplay.update_standby(start + Duration::from_secs(31)));
+        assert!(hint(&airplay, &id));
+        let marks = airplay.standby_marks();
+        assert_eq!(
+            marks.get(&id),
+            Some(&StandbyMarks {
+                recognized: true,
+                hint_shown: true
+            })
+        );
+
+        // Off clears it and keeps the mark: on again, no second hint.
+        airplay.set_enabled(&id, false).unwrap();
+        airplay.update_standby(start + Duration::from_secs(32));
+        assert!(!hint(&airplay, &id));
+        airplay.set_enabled(&id, true).unwrap();
+        unanswered(&fake, &den);
+        airplay.poll();
+        airplay.update_standby(start + Duration::from_secs(80));
+        assert!(!hint(&airplay, &id), "once per sleep");
+
+        // A relaunch with the stored marks while it sleeps out of view.
+        let fake = FakeAirPlay::new();
+        let mut relaunched = speakers(&fake);
+        relaunched.restore_standby_marks(marks);
+        let _ = relaunched.set_enabled(&id, true);
+        relaunched.set_streaming(true);
+        relaunched.update_standby(start);
+        relaunched.update_standby(start + Duration::from_secs(40));
+        assert!(
+            relaunched
+                .standby
+                .get(&id)
+                .is_some_and(|standby| !standby.hint()),
+            "the shown mark holds it back"
+        );
+
+        // Playing clears the shown mark, so the next sleep shows it.
+        fake.appear(&den);
+        relaunched.poll();
+        fake.state(&den, SpeakerState::Playing);
+        relaunched.poll();
+        assert_eq!(
+            relaunched
+                .standby_marks()
+                .get(&id)
+                .map(|marks| marks.hint_shown),
+            Some(false)
+        );
+        let later = Instant::now();
+        unanswered(&fake, &den);
+        relaunched.poll();
+        assert!(relaunched.update_standby(later + Duration::from_secs(31)));
+        assert!(hint(&relaunched, &id));
+    }
+
+    // A speaker that isn't a Denon or Marantz receiver never shows it.
+    // covers: P262
+    #[test]
+    fn another_speaker_asleep_off_the_network_shows_no_standby_hint() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let id = id_of(&kitchen);
+        fake.appear(&kitchen);
+        airplay.poll();
+        airplay.set_enabled(&id, true).unwrap();
+        airplay.set_streaming(true);
+        fake.state(&kitchen, SpeakerState::Playing);
+        airplay.poll();
+        let start = Instant::now();
+        unanswered(&fake, &kitchen);
+        airplay.poll();
+        assert!(!airplay.update_standby(start + Duration::from_secs(60)));
+        assert!(!hint(&airplay, &id));
+        assert!(airplay.standby_marks().is_empty());
+    }
+
+    fn refused(fake: &FakeAirPlay, device: &Device) {
+        fake.push(SenderEvent::Speaker {
+            key: device.key.clone(),
+            event: SpeakerEvent::Error(SpeakerError {
+                error: SessionError {
+                    unreachable: Some(UnreachableCause::Refused),
+                    ..SessionError::new(ErrorKind::Unreachable)
+                },
+                reason: ErrorKind::Unreachable.user_reason(),
+                retry_at: Some(Instant::now() + Duration::from_secs(1)),
+            }),
+        });
+    }
+
+    /// The hint of `id`, listed or not.
+    fn standby_hint(airplay: &AirPlaySpeakers, id: &str) -> bool {
+        airplay
+            .standby
+            .get(id)
+            .is_some_and(|standby| standby.hint())
+    }
+
+    /// A Denon receiver that plays in a fresh host.
+    fn denon_playing(fake: &FakeAirPlay, den: &Device) -> (AirPlaySpeakers, String) {
+        let mut airplay = speakers(fake);
+        let id = id_of(den);
+        fake.appear(den);
+        airplay.poll();
+        airplay.set_enabled(&id, true).unwrap();
+        airplay.set_streaming(true);
+        fake.state(den, SpeakerState::Playing);
+        airplay.poll();
+        (airplay, id)
+    }
+
+    /// The `sleep` of the fake: the goodbye, then the sender waits for it
+    /// to be announced again (P215).
+    fn goodbye(fake: &FakeAirPlay, airplay: &mut AirPlaySpeakers, den: &Device) {
+        fake.gone(den);
+        fake.state(den, SpeakerState::Unannounced);
+        airplay.poll();
+    }
+
+    /// The `wake` of the fake: announced again, and it plays.
+    fn wake(fake: &FakeAirPlay, airplay: &mut AirPlaySpeakers, den: &Device) {
+        fake.appear(den);
+        fake.state(den, SpeakerState::Playing);
+        airplay.poll();
+    }
+
+    // The host's side of the fake television cells N1 to N8 (P265), the
+    // sender's events faked on a fake clock; the crate's side, which kind
+    // of Unreachable a connect ends in, is in airplay/tests/session.rs.
+    // covers: P265
+    #[test]
+    fn denon_standby_cells_n1_to_n8() {
+        let den = denon_receiver();
+        let s = Duration::from_secs;
+
+        // N1: the hint 30 s after the goodbye, one log line, retries on.
+        let fake = FakeAirPlay::new();
+        let (mut airplay, id) = denon_playing(&fake, &den);
+        let slept = Instant::now();
+        goodbye(&fake, &mut airplay, &den);
+        let early = airplay.update_standby(slept + s(28));
+        let shown = airplay.update_standby(slept + s(32));
+        let again = airplay.update_standby(slept + s(40));
+        let retrying = airplay.added.contains_key(&id);
+        assert!(!early && shown && !again && standby_hint(&airplay, &id) && retrying);
+        cell(
+            "N1",
+            "no hint at 28 s, hint at 32 s, shown once, still added",
+        );
+
+        // N3: wake clears it; a second sleep shows it again.
+        wake(&fake, &mut airplay, &den);
+        airplay.update_standby(slept + s(45));
+        let cleared = !standby_hint(&airplay, &id);
+        let second = Instant::now();
+        goodbye(&fake, &mut airplay, &den);
+        assert!(cleared && airplay.update_standby(second + s(32)));
+        cell(
+            "N3",
+            "cleared on play, shown again 32 s into the second sleep",
+        );
+
+        // N4: off and on, then a relaunch while asleep: no hint either time.
+        airplay.set_enabled(&id, false).unwrap();
+        airplay.update_standby(second + s(33));
+        airplay.set_enabled(&id, true).unwrap();
+        unanswered(&fake, &den);
+        airplay.poll();
+        let after_toggle = airplay.update_standby(second + s(80)) || standby_hint(&airplay, &id);
+        let marks = airplay.standby_marks();
+        let fake = FakeAirPlay::new();
+        let mut relaunched = speakers(&fake);
+        relaunched.restore_standby_marks(marks);
+        let _ = relaunched.set_enabled(&id, true);
+        relaunched.set_streaming(true);
+        let launch = Instant::now();
+        relaunched.update_standby(launch);
+        let after_relaunch = relaunched.update_standby(launch + s(40));
+        assert!(!after_toggle && !after_relaunch && !standby_hint(&relaunched, &id));
+        cell("N4", "no hint after off and on, none after a relaunch");
+
+        // N5: seen once, then asleep at the next launch: the stored mark.
+        let fake = FakeAirPlay::new();
+        let (mut first, id) = denon_playing(&fake, &den);
+        first.set_streaming(false);
+        first.update_standby(Instant::now());
+        let marks = first.standby_marks();
+        let fake = FakeAirPlay::new();
+        let mut asleep = speakers(&fake);
+        asleep.restore_standby_marks(marks);
+        let _ = asleep.set_enabled(&id, true);
+        let launch = Instant::now();
+        asleep.set_streaming(true);
+        asleep.update_standby(launch);
+        let early = asleep.update_standby(launch + s(28));
+        assert!(!early && asleep.update_standby(launch + s(32)));
+        cell("N5", "hint 32 s after streaming starts, by the stored mark");
+
+        // N2: no goodbye, connects unanswered: listed, hint 30 s on.
+        let fake = FakeAirPlay::new();
+        let (mut airplay, id) = denon_playing(&fake, &den);
+        let first_unanswered = Instant::now();
+        unanswered(&fake, &den);
+        airplay.poll();
+        let early = airplay.update_standby(first_unanswered + s(28));
+        assert!(!early && airplay.update_standby(first_unanswered + s(32)));
+        assert!(hint(&airplay, &id));
+        cell("N2", "listed, hint 32 s after the first unanswered connect");
+
+        // N6: N1 with a speaker that is no Denon or Marantz receiver.
+        let fake = FakeAirPlay::new();
+        let tv = device(1, "Kitchen", OPEN_TXT);
+        let (mut airplay, id) = denon_playing(&fake, &tv);
+        let slept = Instant::now();
+        goodbye(&fake, &mut airplay, &tv);
+        assert!(!airplay.update_standby(slept + s(60)) && !standby_hint(&airplay, &id));
+        cell("N6", "no hint 60 s after the goodbye");
+
+        // N7: refused connects break the run.
+        let fake = FakeAirPlay::new();
+        let (mut airplay, id) = denon_playing(&fake, &den);
+        let quit = Instant::now();
+        refused(&fake, &den);
+        airplay.poll();
+        assert!(!airplay.update_standby(quit + s(60)) && !standby_hint(&airplay, &id));
+        cell("N7", "no hint 60 s into refused connects");
+
+        // N8: awake again after 10 s.
+        let fake = FakeAirPlay::new();
+        let (mut airplay, id) = denon_playing(&fake, &den);
+        let slept = Instant::now();
+        goodbye(&fake, &mut airplay, &den);
+        airplay.update_standby(slept + s(10));
+        wake(&fake, &mut airplay, &den);
+        assert!(!airplay.update_standby(slept + s(60)) && !standby_hint(&airplay, &id));
+        cell("N8", "no hint after a 10 s sleep");
     }
 
     // A receiver powered off mid-stream: discovery withdraws it about 40 s

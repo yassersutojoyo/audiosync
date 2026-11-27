@@ -61,6 +61,7 @@ use audiosync_core::fade::FADE_MS;
 use audiosync_core::lead::HeldLead;
 use audiosync_core::policy::Seconds;
 use audiosync_core::policy::airplay_reconnect::{SENDER_RETRY_SECONDS, SenderRestart, SenderStart};
+use audiosync_core::policy::airplay_standby::StandbyMarks;
 use audiosync_core::policy::call_listeners::{CallListeners, Facts, ListenerAction};
 use audiosync_core::policy::delay::{BRIEF_LOSS_HOLD, native_airplay_latency_ms};
 use audiosync_core::policy::on_demand::{self, Action, OnDemand, Status};
@@ -967,6 +968,9 @@ pub struct Controller<D: Driver> {
     routing: RoutingState,
     /// The AirPlay side, once there is a sender.
     airplay: Option<AirPlaySpeakers>,
+    /// The AirPlay speakers' standby marks, for a sender that starts later
+    /// (P263).
+    airplay_standby_marks: BTreeMap<String, StandbyMarks>,
     /// The sender's feed, which each capture borrows.
     feed: Option<FeedSlot>,
     /// The Google Cast side, once its host runs; it holds its own feed.
@@ -1257,6 +1261,7 @@ impl<D: Driver> Controller<D> {
             last_levels: None,
             routing: RoutingState::default(),
             airplay: None,
+            airplay_standby_marks: BTreeMap::new(),
             feed: None,
             cast: None,
             starter: None,
@@ -2063,6 +2068,10 @@ impl<D: Driver> Controller<D> {
         store: PairingStore,
     ) {
         let mut airplay = AirPlaySpeakers::new(link, self.policy.master(), self.log.clone(), store);
+        if let Some(before) = &self.airplay {
+            self.airplay_standby_marks = before.standby_marks();
+        }
+        airplay.restore_standby_marks(self.airplay_standby_marks.clone());
         airplay.set_zones(self.zone_volumes.airplay.clone());
         airplay.set_equalizer(&self.equalizer);
         self.log.log(|| {
@@ -5849,6 +5858,17 @@ impl<D: Driver> AudioBackend for Controller<D> {
         if let Some(airplay) = self.airplay.as_mut() {
             airplay.set_volume(id, position);
         }
+    }
+
+    fn restore_airplay_standby_marks(&mut self, marks: BTreeMap<String, StandbyMarks>) {
+        if let Some(airplay) = self.airplay.as_mut() {
+            airplay.restore_standby_marks(marks.clone());
+        }
+        self.airplay_standby_marks = marks;
+    }
+
+    fn airplay_standby_marks(&self) -> Option<BTreeMap<String, StandbyMarks>> {
+        Some(self.airplay.as_ref()?.standby_marks())
     }
 
     fn move_airplay_row(&mut self, id: &str, row: f64) {
