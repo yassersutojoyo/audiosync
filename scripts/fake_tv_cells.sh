@@ -79,6 +79,7 @@ held=(
     "audio::airplay::tests::the_tv_keeps_a_level_held_at_zone_0_through_calibrate_all=S290.held.z0"
     "audio::airplay::tests::the_tv_lets_a_level_held_at_zone_0_go_once_the_zone_moves=S290.held.z0.release"
     "audio::airplay::tests::s186_the_tv_gets_no_jump_or_rise_and_a_teardown_at_stop_and_quit=S186.end"
+    "audio::airplay::tests::denon_standby_cells_n1_to_n8=N1,N2,N3,N4,N5,N6,N7,N8"
 )
 if [ "$windows" = 1 ]; then
     cd "$root/desktop"

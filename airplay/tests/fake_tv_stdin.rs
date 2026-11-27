@@ -18,6 +18,14 @@ fn hide_and_show_are_commands_next_to_vol_and_quit() {
 }
 
 #[test]
+fn sleep_sleep_quiet_and_wake_are_commands() {
+    assert_eq!(read("sleep"), Line::Sleep { goodbye: true });
+    assert_eq!(read("sleep quiet"), Line::Sleep { goodbye: false });
+    assert_eq!(read("wake"), Line::Wake);
+    assert_eq!(read("sleep loud"), Line::Unknown);
+}
+
+#[test]
 fn a_bad_or_unknown_line_is_told_apart_from_an_empty_one() {
     assert_eq!(read("vol loud"), Line::BadVol);
     assert_eq!(read("vol"), Line::Unknown);
