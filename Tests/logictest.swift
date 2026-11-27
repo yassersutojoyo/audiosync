@@ -20732,5 +20732,64 @@ do {
           "standby: the model answers the row's hint by receiver ID")
 }
 
+// ROW-STATUS-SET: a row's status is a word or two, at most as long as "Not
+// on the network" and without a period; only the statuses with more to say
+// get a popover, and VoiceOver keeps the whole note.
+do {
+    let t = UIStrings()
+    func status(cast: CastRow? = nil, airPlay2Wait: Bool = false, ptp: Bool = false, retry: Bool = false,
+                taken: Bool = false, codeWait: NativeCodeWait? = nil, away: Bool = false,
+                target: AirPlayTargetRow? = nil, availability: SpeakerAvailability = .open,
+                standby: Bool = false) -> RowStatus? {
+        t.rowStatus(cast: cast, waitingForAirPlay2: airPlay2Wait, waitingForPtp: ptp, reconnecting: retry,
+                    taken: taken, codeWait: codeWait, name: "Living Room", unannounced: away, target: target,
+                    availability: availability, standby: standby)
+    }
+    let pair = AirPlayTargetRow(kind: .stereoPair, members: ["Left", "Right"], missing: [], incomplete: false)
+    let half = AirPlayTargetRow(kind: .stereoPair, members: ["Left", "Right"], missing: ["Right"], incomplete: true)
+    let all: [RowStatus?] = [
+        status(away: true), status(airPlay2Wait: true), status(ptp: true), status(retry: true),
+        status(taken: true), status(codeWait: .password), status(codeWait: .pin),
+        status(availability: .needsCode), status(availability: .codeEveryTime),
+        status(availability: .cantPlay(.needsPairing)), status(availability: .cantPlay(.airPlay2Only)),
+        status(target: pair), status(target: half), status(standby: true),
+        status(cast: CastRow(status: .paused, muted: false, volumeFixed: false, group: nil)),
+        status(cast: CastRow(status: .playing, muted: true, volumeFixed: false, group: nil)),
+        status(cast: CastRow(status: .idle, muted: false, volumeFixed: false, group: .known(["Kitchen", "Den"]))),
+    ]
+    let limit = "Not on the network".count
+    check(all.allSatisfy { $0.map { !$0.word.isEmpty && $0.word.count <= limit && !$0.word.hasSuffix(".") } ?? false },
+          "row status: every status is short and has no period", "\(all.map { $0?.word ?? "nil" })")
+    check(status(away: true)?.word == "Not on the network"
+            && status(away: true)?.detail == "It plays by itself once it's back on the network."
+            && status(away: true)?.title == "Living Room: Not on the network",
+          "row status: off the network, the detail goes into the popover")
+    check(status(retry: true) == RowStatus(word: "Reconnecting…", title: "Living Room: Reconnecting…", detail: nil, aside: nil)
+            && status(codeWait: .password)?.detail == nil && status(codeWait: .pin)?.word == "Enter the code",
+          "row status: a status with nothing more to say has no popover")
+    check(status(airPlay2Wait: true)?.word == "Waiting" && status(ptp: true)?.word == "Waiting"
+            && status(availability: .codeEveryTime)?.word == "Code every time"
+            && status(availability: .cantPlay(.needsPairing))?.word == "Can't pair yet",
+          "row status: the long waits and needs read as short words")
+    check(status(retry: true, availability: .needsCode)?.word == "Reconnecting…"
+            && status(retry: true, availability: .needsCode)?.detail == t.availabilityHelp(.needsCode),
+          "row status: the status about now leads, and the other goes into its popover")
+    check(status(target: pair)?.word == "Stereo pair" && status(target: pair)?.detail == "Left and Right"
+            && status(target: half)?.word == "Speaker missing"
+            && status(target: half)?.detail == "Stereo pair, missing Right.",
+          "row status: a group's members go into its popover")
+    let standbyStatus = status(away: true, standby: true)
+    check(standbyStatus?.word == "Standby" && standbyStatus?.title == "Living Room is in standby"
+            && standbyStatus?.detail?.contains("Network > Network Control > Always On") == true
+            && standbyStatus?.aside == "On older models the setting is called IP Control."
+            && t.statusInfoLabel("Standby", name: "Living Room") == "More about Standby on Living Room"
+            && t.keepReachableInStandby == "Keep Reachable in Standby…",
+          "row status: a receiver in standby names its network setting")
+    check(status() == nil
+            && t.rowNote(cast: nil, waitingForAirPlay2: false, unannounced: true, target: nil)
+                == "Not on the network right now, plays once it's back",
+          "row status: none for a speaker that simply plays, and VoiceOver keeps the whole note")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)

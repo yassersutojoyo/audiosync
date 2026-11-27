@@ -45,6 +45,9 @@ final class AppModel: ObservableObject {
         /// An AirPlay speaker in the sender that is out of view on the
         /// network, waiting to be announced again (P215).
         var unannounced = false
+        /// A Denon or Marantz receiver asleep off the network (P262): its row
+        /// says Standby and names the receiver's network standby setting.
+        var standby = false
         /// An AirPlay speaker AudioSync keeps a PIN pairing for.
         var paired = false
         /// An AirPlay speaker with stored credentials, also ones it turned
@@ -1980,16 +1983,21 @@ struct MenuBarView: View {
                              waitingForPtp: speaker.waitingForPtp, reconnecting: speaker.reconnecting,
                              taken: speaker.taken, codeWait: speaker.codeWait, name: speaker.name,
                              unannounced: speaker.unannounced, target: speaker.airPlayTarget) ?? note
+        // The main window's short status, without its info button (ROW-STATUS-SET).
+        let status = t.rowStatus(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
+                                 waitingForPtp: speaker.waitingForPtp, reconnecting: speaker.reconnecting,
+                                 taken: speaker.taken, codeWait: speaker.codeWait, name: speaker.name,
+                                 unannounced: speaker.unannounced, target: speaker.airPlayTarget,
+                                 availability: speaker.availability, standby: speaker.standby)
         let castWaits = speaker.cast?.status == .connecting || speaker.cast?.status == .reconnecting
         let connecting = model.state(of: speaker) != .off && (castWaits || speaker.cast == nil && speaker.reconnecting)
         return CompactRow(name: speaker.name, symbol: speaker.symbol, state: model.state(of: speaker),
-                          text: t, height: rowHeight, hint: hint,
-                          shownNote: t.panelRowNote(hint), connecting: connecting, taken: speaker.taken,
+                          text: t, height: rowHeight,
+                          hint: hint ?? (speaker.codeWait == nil ? t.availability(speaker.availability) : nil),
+                          shownNote: status?.word ?? t.panelRowNote(note), connecting: connecting, taken: speaker.taken,
                           renamedFrom: speaker.renamedFrom,
                           value: t.rowValue(model.state(of: speaker), offline: speaker.unannounced, taken: speaker.taken),
                           kind: speaker.tag, airPlay2: speaker.airPlay2, product: speaker.product,
-                          // The row's note says what its prompt waits for instead.
-                          availability: speaker.codeWait == nil ? speaker.availability : .open,
                           deviceVolume: model.deviceVolume(of: speaker).map { DeviceVolumeGlyph($0, text: t) }) {
             model.setEnabled(speaker, model.state(of: speaker).clickTurnsOn)
         }

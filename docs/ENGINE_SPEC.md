@@ -5756,8 +5756,6 @@ Tests in `desktop/src/view.rs` unless named.
 | a_long_zone_name_shows_in_full_in_its_tooltip (`desktop/src/view.rs`) | S420 |
 | a_long_in_zones_name_shows_in_full_in_its_tooltip (`desktop/src/view.rs`) | S420 |
 | a_zone_count_or_name_that_fits_shows_no_tooltip (`desktop/src/view.rs`) | S420 |
-| a_cut_pair_line_shows_in_full_in_its_tooltip (`desktop/src/view.rs`) | S420 |
-| a_pair_line_that_fits_shows_no_tooltip (`desktop/src/view.rs`) | S420 |
 | a_long_zone_name_leaves_the_in_zones_name_room (`desktop/src/view.rs`) | S420 |
 | a_window_that_fails_to_open_says_so_plainly_and_logs_the_reason (`desktop/src/view.rs`) | S420 |
 | a_change_the_system_reports_is_read_at_once_not_at_the_next_poll (`desktop/src/audio/media_sessions.rs`) | S218, S421 |
