@@ -9276,6 +9276,16 @@ do {
     // covers: S357
     check(duringClose(30 + shrink / 2, 30 + shrink) && !duringClose(30 + shrink + 0.01, 30 + shrink),
           "menu bar icon: a press is ignored only while the panel shrinks away; right after, it opens it")
+    // The system's latest-press reading can miss a click AppKit delivers (a
+    // trackpad tap), leaving the press that closed the panel as the latest.
+    let clickPress = StatusItemClick.press
+    // covers: S357
+    check(near(clickPress(104.95, 105), 104.95), "menu bar icon: a fresh press reading is the click's press")
+    // covers: S357
+    check(near(clickPress(100, 105), 105) && !duringClose(clickPress(100, 105), 100.14)
+            && tap(false, 100, clickPress(100, 105)) == .open,
+          "menu bar icon: a click the press reading missed after the panel closed opens it, not ignored as during the close",
+          "\(clickPress(100, 105))")
 
     let window = CGRect(x: 1000, y: 543, width: 306, height: 386)
     let grown = PanelResize.windowFrame(window, content: CGSize(width: 280, height: 359), to: CGSize(width: 280, height: 428))

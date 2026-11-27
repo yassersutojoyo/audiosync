@@ -920,12 +920,20 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         if NSApp.currentEvent?.modifierFlags.contains(.control) == true { return showMenu() }
         // VoiceOver or the keyboard can press the button too, with no mouse press of its own.
         let byMouse = NSApp.currentEvent.map { $0.type == .leftMouseUp || $0.type == .leftMouseDown } ?? false
+        let release = NSApp.currentEvent?.timestamp ?? Self.uptime
+        let latest = Self.latestPress
+        let press = byMouse ? StatusItemClick.press(latest: latest, release: release) : Self.uptime
+        if byMouse {
+            DebugTrace.log(String(format: "[AudioSync] status item click: press reading %.0f ms before the release, "
+                                  + "used %.0f ms before it; close ended %.0f ms before the press",
+                                  (release - latest) * 1000, (release - press) * 1000,
+                                  (press - (closeEndsAt ?? press)) * 1000))
+        }
         let action = StatusItemClick.action(panelVisible: presented, closingPress: byMouse ? closingPress : nil,
-                                            latestPress: Self.latestPress)
+                                            latestPress: press)
         closingPress = nil
         switch action {
         case .open:
-            let press = byMouse ? Self.latestPress : Self.uptime
             if StatusItemClick.pressDuringClose(press, closeEndsAt) {
                 DebugTrace.log("[AudioSync] status item click: ignored, the panel is still closing")
             } else {
