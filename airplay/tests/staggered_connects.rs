@@ -326,8 +326,18 @@ fn six_starts_once() -> Result<(), String> {
     }
     // A thread held past L restarts the timeline and flushes every speaker
     // (P143), after the burst too; a connect that held it fails the rerun.
+    // A driver that first runs over L after the sender started restarts it
+    // before anything sounds, which disturbs no one.
     events.drain(&sender);
-    if events.seen.iter().any(|(_, event)| {
+    let sounding = events
+        .seen
+        .iter()
+        .position(|(_, event)| {
+            matches!(event, SenderEvent::Speaker { key, event: SpeakerEvent::State(SpeakerState::Playing) }
+                if *key == p_key)
+        })
+        .expect("the playing receiver played");
+    if events.seen[sounding..].iter().any(|(_, event)| {
         matches!(
             event,
             SenderEvent::Timeline {
