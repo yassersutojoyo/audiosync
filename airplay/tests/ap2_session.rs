@@ -501,6 +501,23 @@ fn event_connection_answers_every_request() {
     assert!(rig.times_of("SETUP stream").is_empty());
 }
 
+// A receiver that ends the session closes both connections in any order;
+// whichever the sender sees first, it is the receiver's close.
+// covers: P249
+#[test]
+fn a_receiver_closing_the_event_connection_closes_the_session_as_the_receiver() {
+    let mut rig = transient();
+    assert!(rig.ready());
+    let now = rig.now;
+    rig.session.handle_events_closed(now);
+    rig.pump();
+    assert_eq!(kind(&rig), Some(ErrorKind::Lost));
+    assert!(
+        rig.failure()
+            .is_some_and(|error| error.closed_by_receiver())
+    );
+}
+
 // covers: P132
 #[test]
 fn feedback_every_two_seconds() {

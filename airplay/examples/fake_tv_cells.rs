@@ -43,6 +43,7 @@ use audiosync_airplay::sender::{
     NowPlaying, Progress, PtpPorts, Sender, SenderConfig, SenderEvent, SpeakerEvent,
     SpeakerOptions, SpeakerState,
 };
+use audiosync_airplay::takeover::TakeoverReport;
 use audiosync_airplay::volume::{MIN_DB, Volume, parse_reported};
 
 use cells::{Cell, PasswordStep, Pause, PtpRun, Status};
@@ -750,6 +751,16 @@ fn ptp(tv: Tv) -> [Cell; 3] {
     host.run(Some(&key), Duration::from_secs(1));
     let since = Instant::now();
     let tv = tv.switch_off_and_on(&mut host, &key, Duration::from_secs(1));
+    // Its close holds the speaker for P249's window; then the host starts
+    // it again, as both hosts do for a speaker that was playing (S482).
+    let no_evidence =
+        |event: &SpeakerEvent| matches!(event, SpeakerEvent::Takeover(TakeoverReport::NoEvidence));
+    host.run_until(Some(&key), LONG, |host| {
+        host.events_since(&key, since).iter().any(no_evidence)
+    });
+    host.sender.remove_speaker(&key);
+    host.sender
+        .add_speaker(device.clone(), SpeakerOptions::new(volume_for_row(20)));
     ptp_play(&tv, &mut host, &key, since, 0);
     let gone = ptp_run(&tv, &host, &key, 0, since);
     host.sender.shutdown();
