@@ -808,10 +808,12 @@ fn shutdown_keeps_its_bound_when_a_receiver_stops_reading() {
             .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Playing)
             .is_some()
     );
-    assert!(wait_until(LONG, || {
-        let log = receiver.log();
-        log.count("SET_PARAMETER") == 1 && log.audio.len() >= 20
-    }));
+    // Audio held behind a FLUSH the receiver never answers, as a timeline
+    // restart on a loaded runner leaves it: the bound can't wait for audio,
+    // since the FLUSH times out and the session reconnects (P134).
+    sender.pause();
+    sender.resume();
+    assert!(wait_until(LONG, || receiver.log().count("SET_PARAMETER") == 1));
     // The largest artwork there is: more than the socket buffers take.
     let mut jpeg = vec![0x5Au8; audiosync_airplay::metadata::MAX_ARTWORK_BYTES];
     jpeg[..3].copy_from_slice(&[0xFF, 0xD8, 0xFF]);
