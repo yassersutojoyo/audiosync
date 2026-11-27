@@ -2252,6 +2252,14 @@ impl AirPlaySpeakers {
                 .keys()
                 .filter(|id| !self.listed.contains_key(*id) && !self.targets.contains_key(*id)),
         );
+        // A receiver asleep since launch is never listed; its hint is its row (P263).
+        ids.extend(self.standby.iter().filter_map(|(id, standby)| {
+            (standby.hint()
+                && !self.listed.contains_key(id)
+                && !self.targets.contains_key(id)
+                && !self.added.contains_key(id))
+            .then_some(id)
+        }));
         let mut speakers: Vec<AirPlayInfo> = ids
             .into_iter()
             .map(|id| {

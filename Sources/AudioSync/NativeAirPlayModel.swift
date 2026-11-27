@@ -785,6 +785,8 @@ struct NativeAirPlayModel {
     func rows(enabled: Set<String>) -> [String] {
         var ids = Set(receivers.keys.filter { access($0) != nil })
         ids.formUnion(states.keys.filter { isPlaying($0) || receivers[$0] == nil || NativeTarget.kind($0) != nil })
+        // A receiver asleep since launch is never listed; its hint is its row (P263).
+        ids.formUnion(standby.known.filter { standby.hint($0) })
         ids = ids.filter { holdingTarget($0, on: enabled.contains(NativeAirPlayID.app($0))) == nil }
         return ids.sorted { a, b in
             let (x, y) = ((names[a] ?? a).lowercased(), (names[b] ?? b).lowercased())
