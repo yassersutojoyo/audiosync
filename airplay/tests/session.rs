@@ -1201,6 +1201,31 @@ fn errors_connect_and_response_timeouts() {
     assert_eq!(link.session.poll_timeout(), None);
 }
 
+// A receiver asleep off the network but still listed fails a Mac connect
+// with EHOSTDOWN, which std leaves uncategorized; a network that is down
+// tells as little of the receiver as one that is unreachable.
+#[test]
+fn a_host_or_network_that_is_down_counts_as_no_answer() {
+    use std::io::{Error, ErrorKind as Io};
+
+    assert_eq!(
+        UnreachableCause::of(&Error::from(Io::NetworkDown)),
+        Some(UnreachableCause::NoAnswer)
+    );
+    #[cfg(target_vendor = "apple")]
+    let host_down = Some(64);
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let host_down = Some(112);
+    #[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "android")))]
+    let host_down: Option<i32> = None;
+    if let Some(code) = host_down {
+        assert_eq!(
+            UnreachableCause::of(&Error::from_raw_os_error(code)),
+            Some(UnreachableCause::NoAnswer)
+        );
+    }
+}
+
 // The crate's part of P262: an Unreachable says whether a connect was
 // refused or went unanswered, over all of the session's addresses.
 #[test]
