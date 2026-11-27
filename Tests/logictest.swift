@@ -9283,9 +9283,12 @@ do {
     check(near(clickPress(104.95, 105), 104.95), "menu bar icon: a fresh press reading is the click's press")
     // covers: S357
     check(near(clickPress(100, 105), 105) && !duringClose(clickPress(100, 105), 100.14)
-            && tap(false, 100, clickPress(100, 105)) == .open,
+            && tap(false, nil, 100) == .open,
           "menu bar icon: a click the press reading missed after the panel closed opens it, not ignored as during the close",
           "\(clickPress(100, 105))")
+    // covers: S357
+    check(clickPress(98.8, 99.5) == 99.5 && tap(false, 98.8, 98.8) == .stayClosed,
+          "menu bar icon: a click held past half a second that closed the panel still leaves it closed on release")
 
     let window = CGRect(x: 1000, y: 543, width: 306, height: 386)
     let grown = PanelResize.windowFrame(window, content: CGSize(width: 280, height: 359), to: CGSize(width: 280, height: 428))

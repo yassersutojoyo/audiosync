@@ -929,8 +929,9 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                                   (release - latest) * 1000, (release - press) * 1000,
                                   (press - (closeEndsAt ?? press)) * 1000))
         }
+        // The closing press was recorded from the same raw reading, so compare like with like.
         let action = StatusItemClick.action(panelVisible: presented, closingPress: byMouse ? closingPress : nil,
-                                            latestPress: press)
+                                            latestPress: byMouse ? latest : press)
         closingPress = nil
         switch action {
         case .open:
