@@ -13,6 +13,15 @@ import CAudioSyncCore
 /// Engine code never builds user-facing text: it reports typed reasons
 /// (`SourceCapture.CaptureError`, `AirPlayPairing.Reason`) that are mapped
 /// to messages here. Raw Swift errors and OSStatus codes go to the debug log only.
+/// A speaker row's short status, its popover's title and text, and the
+/// popover's secondary last line (ROW-STATUS-SET). No detail: no info button.
+struct RowStatus: Equatable {
+    let word: String
+    let title: String
+    let detail: String?
+    let aside: String?
+}
+
 struct UIStrings {
 
     /// How numbers such as percentages are written: the user's locale (the
@@ -905,6 +914,93 @@ struct UIStrings {
     /// `notOnNetwork` in a menu bar panel row, where the full text is cut;
     /// the row's tooltip and VoiceOver keep the full text.
     let notOnNetworkShort = "Not on the network"
+    /// A speaker row's short status (ROW-STATUS-SET), at most as long as
+    /// "Not on the network"; its popover says the rest, and VoiceOver keeps
+    /// reading the whole `rowNote`.
+    let statusNotOnNetwork = "Not on the network"
+    let statusStandby = "Standby"
+    let statusWaiting = "Waiting"
+    let statusNeedsPassword = "Needs password"
+    let statusEnterCode = "Enter the code"
+    let statusAsksForCode = "Asks for a code"
+    let statusCodeEveryTime = "Code every time"
+    let statusCantPair = "Can't pair yet"
+    let statusInUse = "In use"
+    let statusPaused = "Paused"
+    let statusMuted = "Muted"
+    let statusCastGroup = "Cast group"
+    let statusStereoPair = "Stereo pair"
+    let statusHomeTheater = "Home theater"
+    let statusSpeakerMissing = "Speaker missing"
+    let detailNotOnNetwork = "It plays by itself once it's back on the network."
+    let detailStandby = "The receiver turns its network off in standby, so AudioSync can't reach it.\nOn the receiver, choose Network > Network Control > Always On."
+    let detailStandbyAside = "On older models the setting is called IP Control."
+    let detailWaitingForAirPlay2 = "AudioSync plays up to \(ASC_AIRPLAY2_SESSIONS) AirPlay 2 speakers at once. This one starts once one of them stops."
+    let detailWaitingForPtp = "AudioSync is playing to AirPlay 2 speakers on another network. Turn those speakers off and this one starts."
+    let detailPairingNotYet = "This speaker needs pairing, which AudioSync doesn't support for it yet."
+    let detailCodeEveryTime = "This speaker asks for a code each time it connects, so auto-connect leaves it off. AudioSync asks you for the code when you turn the speaker on."
+    let detailPaused = "Paused on the speaker itself."
+    let detailMuted = "Muted on the speaker itself."
+    let detailMutedGroup = "Muted on the group itself."
+    func statusTitle(name: String, status: String) -> String { "\(name): \(status)" }
+    func standbyTitle(name: String) -> String { "\(name) is in standby" }
+    /// The info button's VoiceOver label: "More about Standby on Living Room".
+    func statusInfoLabel(_ status: String, name: String) -> String { "More about \(status) on \(name)" }
+    let keepReachableInStandby = "Keep Reachable in Standby…"
+
+    /// A row's short status and its popover: the status about now leads
+    /// (standby, a Cast or AirPlay state), then what the speaker needs, then
+    /// what it is; a second status goes into the popover. Nil: no status.
+    func rowStatus(cast: CastRow?, waitingForAirPlay2: Bool, waitingForPtp: Bool = false, reconnecting: Bool = false,
+                   taken: Bool = false, codeWait: NativeCodeWait? = nil, name: String,
+                   unannounced: Bool, target: AirPlayTargetRow?, availability: SpeakerAvailability,
+                   standby: Bool = false) -> RowStatus? {
+        var now: (String, String?)?
+        if standby { now = (statusStandby, detailStandby) }
+        else if taken { now = (statusInUse, inUseByAnotherDevice + ".") }
+        else if let cast {
+            switch cast.status {
+            case .connecting: now = ("Connecting…", nil)
+            case .reconnecting: now = (self.reconnecting, nil)
+            case .paused: now = (statusPaused, detailPaused)
+            case .playing where cast.muted: now = (statusMuted, cast.group == nil ? detailMuted : detailMutedGroup)
+            case .playing, .idle: break
+            }
+        } else if case .password? = codeWait { now = (statusNeedsPassword, nil) }
+        else if case .pin? = codeWait { now = (statusEnterCode, nil) }
+        else if waitingForPtp { now = (statusWaiting, detailWaitingForPtp) }
+        else if waitingForAirPlay2 { now = (statusWaiting, detailWaitingForAirPlay2) }
+        else if reconnecting { now = (self.reconnecting, nil) }
+        else if unannounced { now = (statusNotOnNetwork, detailNotOnNetwork) }
+        var need: (String, String?)?
+        if codeWait == nil {
+            switch availability {
+            case .open: break
+            case .needsCode: need = (statusAsksForCode, availabilityHelp(.needsCode))
+            case .codeEveryTime: need = (statusCodeEveryTime, detailCodeEveryTime)
+            case .cantPlay(.needsPairing): need = (statusCantPair, detailPairingNotYet)
+            case .cantPlay: need = (self.availability(availability) ?? "", nil)
+            }
+        }
+        var kind: (String, String?)?
+        if let group = cast?.group {
+            if case .known(let names) = group { kind = (statusCastGroup, listed(names)) } else { kind = (statusCastGroup, nil) }
+        } else if let target {
+            if target.incomplete { kind = (statusSpeakerMissing, airPlayTargetNote(target) + ".") }
+            else { kind = (target.kind == .stereoPair ? statusStereoPair : statusHomeTheater, listed(target.members)) }
+        } else if cast?.manual == true {
+            kind = (castAddedByAddress, nil)
+        }
+        let chosen: (String, String?)
+        if let now { chosen = (now.0, now.1 ?? need?.1) }
+        else if let need { chosen = need }
+        else if let kind { chosen = kind }
+        else { return nil }
+        let detail = chosen.1.flatMap { $0.isEmpty ? nil : $0 }
+        return RowStatus(word: chosen.0,
+                         title: standby ? standbyTitle(name: name) : statusTitle(name: name, status: chosen.0),
+                         detail: detail, aside: standby ? detailStandbyAside : nil)
+    }
     /// An Apple TV whose home theater group AudioSync plays to (P177).
     func nativeAirPlayPlaysThroughSpeakers(name: String) -> String {
         "\(name) plays through its home theater, which AudioSync already uses, so it's off.\nTurn the group off to use the Apple TV."

@@ -549,6 +549,15 @@ final class NativeAirPlay {
     }
     /// Called when a row's offset E - e_s moved (main queue).
     var onOffsetsMoved: (() -> Void)?
+    /// Whether the app wants receiver `id`: on, alone or in a zone, while
+    /// streaming runs (main queue, P262).
+    var standbyWanted: ((String) -> Bool)?
+    /// Whether receiver `id` is switched on, streaming or not; the rule
+    /// looks at those and at the ones it already holds, as on Windows and Linux.
+    var standbySwitchedOn: ((String) -> Bool)?
+    /// Gets the standby marks to store, recognized and hint shown, when
+    /// they change (main queue, P263).
+    var onStandbyMarks: ((Set<String>, Set<String>) -> Void)?
 
     /// Gives each row in the sender whose offset E - e_s moved its new one
     /// (S283). Main queue, after the row's add on the queue. `moved`: a row
@@ -737,8 +746,12 @@ final class NativeAirPlay {
         var events: [NativeSpeakerEvent] = []
         var remotes: [NowPlayingMonitor.Command] = []
         var demands: [(String, Bool, Bool)] = []
+        var standbyOutcomes: [(String, Int32)] = []
         var rawEvent = AscAirPlayEvent()
         while asc_airplay_next_event(handle, &rawEvent) {
+            if rawEvent.standby != ASC_STANDBY_OUTCOME_NONE {
+                standbyOutcomes.append((Self.text(rawEvent.id), rawEvent.standby))
+            }
             if rawEvent.kind == ASC_AIRPLAY_EVENT_REMOTE {
                 if let command = Self.remote(rawEvent.remote) { remotes.append(command) }
             } else if rawEvent.kind == ASC_AIRPLAY_EVENT_LET_GO || rawEvent.kind == ASC_AIRPLAY_EVENT_TAKE_BACK
@@ -761,12 +774,16 @@ final class NativeAirPlay {
             }
         }
         let sounding = asc_airplay_sounding(handle)
-        guard !changes.isEmpty || !events.isEmpty || !remotes.isEmpty || !demands.isEmpty
-                || sounding != lastSounding else { return }
+        // The standby hint's 30 s pass without events, so it is checked once a second.
+        let standbyDue = pollsSinceVolumeRead == 0 || !standbyOutcomes.isEmpty
+        let changed = !changes.isEmpty || !events.isEmpty || !remotes.isEmpty || !demands.isEmpty
+            || sounding != lastSounding
+        guard changed || standbyDue else { return }
         lastSounding = sounding
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            self.apply(changes, events, sounding: sounding)
+            if changed { self.apply(changes, events, sounding: sounding) }
+            self.updateStandby(standbyOutcomes)
             self.handOver(remotes)
             if self.active { for (id, letGo, taken) in demands { self.onDemand?(id, letGo, taken) } }
         }
@@ -816,6 +833,31 @@ final class NativeAirPlay {
     }
 
     // MARK: - On the main queue
+
+    /// Feeds the standby rule the polled outcomes and brings every hint up
+    /// to date, logging each that shows (P262 to P264).
+    private func updateStandby(_ outcomes: [(String, Int32)]) {
+        guard active else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        let before = (model.standby.recognized, model.standby.hintShown)
+        for (id, code) in outcomes { model.standby.outcome(id, code, now: now) }
+        let switchedOn = standbySwitchedOn ?? { _ in false }
+        let known = model.standby.known
+        let records = model.receivers
+            .filter { switchedOn($0.key) || known.contains($0.key) }
+            .mapValues { $0.denon }
+        let wanted: (String) -> Bool = standbyWanted ?? { _ in false }
+        let shown = model.standby.update(records: records, wanted: wanted, now: now)
+        for (id, why) in shown {
+            let by = why.recognized == ASC_STANDBY_BY_STORED_MARK ? "stored mark"
+                : (why.recognized == ASC_DENON_ADDRESS_BLOCK ? "address block" : "manufacturer")
+            let cause = why.cause == ASC_STANDBY_CAUSE_NO_ANSWER ? "no answer" : "unannounced"
+            DebugTrace.log("[AirPlay] speaker \(id): standby hint shows (recognized by \(by), cause \(cause))")
+        }
+        if before != (model.standby.recognized, model.standby.hintShown) {
+            onStandbyMarks?(model.standby.recognized, model.standby.hintShown)
+        }
+    }
 
     private func apply(_ changes: [NativeReceiverChange], _ events: [NativeSpeakerEvent], sounding: Bool) {
         guard active else { return }
@@ -875,7 +917,7 @@ final class NativeAirPlay {
                                           raw.flags & UInt32(ASC_AIRPLAY_FLAG_CREDENTIALS_TURNED_DOWN) != 0,
                                       control: text(raw.control),
                                       missing: text(raw.missing).split(separator: "\n").map(String.init),
-                                      product: ProductKind(raw: raw.product))
+                                      product: ProductKind(raw: raw.product), denon: raw.denon)
         return raw.event == ASC_AIRPLAY_APPEARED ? .appeared(receiver) : .changed(receiver)
     }
 

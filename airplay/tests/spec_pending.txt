@@ -14,3 +14,7 @@ P246 the found and kind-change log lines are the host's; desktop/src tests it
 
 # A later stage implements them (sender crate and hosts, from the clause).
 P259 the rig cells run on the PC rig (WSL receiver, fake TV), outside the crate tests
+P262 the asleep-off-the-network rule lives in the shared core, which core/src/policy/airplay_standby.rs tests; the crate part, the cause of an Unreachable, is tested in tests/session.rs
+P263 the standby hint and its stored marks are the host's; desktop/src/audio/airplay.rs and the Mac logic test in Tests/logictest.swift test it
+P264 clearing the standby hint is the host's; desktop/src/audio/airplay.rs and the Mac logic test in Tests/logictest.swift test it
+P265 the cells N1 to N8 run in the desktop host test denon_standby_cells_n1_to_n8 and the fake_tv --denon profile in tests/fake_tv_denon.rs; the run against the WSL fake TV with a Windows test copy is still to come

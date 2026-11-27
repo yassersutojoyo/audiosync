@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use audiosync_cast::audio::Codec;
 use audiosync_core::eq::EqSettings;
+use audiosync_core::policy::airplay_standby::StandbyMarks;
 use audiosync_core::policy::device_volume::DeviceVolume;
 use audiosync_core::policy::source_quit::WhenSourceQuits;
 
@@ -20,6 +21,9 @@ use super::calibration::{CalibrationTap, Engine, Microphone, MicrophoneError};
 use super::cast_address::CastAddress;
 use super::outputs::OutputSettings;
 use super::routing::DirectPath;
+
+/// The standby marks and the names of their receivers, by receiver ID (P263).
+pub type StoredStandby = (BTreeMap<String, StandbyMarks>, BTreeMap<String, String>);
 
 /// The zone volume, 0 to 100, of every speaker in a zone (spec S249), by
 /// kind under the backend's own IDs: endpoint, AirPlay and Cast device IDs.
@@ -273,6 +277,9 @@ pub struct AirPlayInfo {
     pub group: Option<AirPlayGroup>,
     /// Its kind from its records, a target's by its members (P238, P241).
     pub product: ProductKind,
+    /// It is a Denon or Marantz receiver asleep off the network, so its row
+    /// names the receiver's network standby setting (P262, P263).
+    pub standby_hint: bool,
 }
 
 /// What a stereo pair or home theater group row says about its members.
@@ -1154,6 +1161,21 @@ pub trait AudioBackend {
     /// The AirPlay speaker's volume slider is held (true) or let go
     /// (false): a level it reads back meanwhile is ignored (S271).
     fn set_airplay_volume_dragging(&mut self, _id: &str, _dragging: bool) {}
+
+    /// Restores the AirPlay speakers' standby marks from the saved settings,
+    /// and the names those receivers last had (P263).
+    fn restore_airplay_standby_marks(
+        &mut self,
+        _marks: BTreeMap<String, StandbyMarks>,
+        _names: BTreeMap<String, String>,
+    ) {
+    }
+
+    /// The AirPlay speakers' standby marks and names to save; `None`
+    /// without an AirPlay sender, when the saved ones stay as they are (P263).
+    fn airplay_standby_marks(&self) -> Option<StoredStandby> {
+        None
+    }
 
     /// A phone's volume step holds the speaker's row as a drag does, until
     /// its steps rest (S291).

@@ -1410,6 +1410,46 @@ export global Strings {
         return "";
     }
 
+    // A speaker row's short status, at most as long as "Not on the network";
+    // the popover behind its info button says the rest, and Narrator keeps
+    // reading the whole note (speaker-note).
+    out property <string> status-not-on-network: @tr("Not on the network");
+    out property <string> status-standby: @tr("Standby");
+    out property <string> status-waiting: @tr("Waiting");
+    out property <string> status-needs-password: @tr("Needs password");
+    out property <string> status-enter-code: @tr("Enter the code");
+    out property <string> status-code-every-time: @tr("Code every time");
+    out property <string> status-cant-pair: @tr("Can't pair yet");
+    out property <string> status-in-use: @tr("In use");
+    out property <string> status-paused: @tr("Paused");
+    out property <string> status-muted: @tr("Muted");
+    out property <string> status-cast-group: @tr("Cast group");
+    out property <string> status-stereo-pair: @tr("Stereo pair");
+    out property <string> status-home-theater: @tr("Home theater");
+    out property <string> status-speaker-missing: @tr("Speaker missing");
+    out property <string> detail-not-on-network: @tr("It plays by itself once it's back on the network.");
+    out property <string> detail-standby: @tr("The receiver turns its network off in standby, so AudioSync can't reach it.\nOn the receiver, choose Network > Network Control > Always On.");
+    out property <string> detail-standby-aside: @tr("On older models the setting is called IP Control.");
+    out property <string> detail-waiting-for-airplay2: @tr("AudioSync plays up to {} AirPlay 2 speakers at once. This one starts once one of them stops.", root.airplay2-sessions);
+    out property <string> detail-waiting-for-ptp: @tr("AudioSync is playing to AirPlay 2 speakers on another network. Turn those speakers off and this one starts.");
+    out property <string> detail-pairing-not-yet: @tr("This speaker needs pairing, which AudioSync doesn't support for it yet.");
+    out property <string> detail-code-every-time: @tr("This speaker asks for a code each time it connects, so auto-connect leaves it off. AudioSync asks you for the code when you turn the speaker on.");
+    out property <string> detail-in-use: @tr("Another app is using this output. AudioSync plays to it once it is free.");
+    out property <string> detail-paused: @tr("Paused on the speaker itself.");
+    out property <string> detail-muted: @tr("Muted on the speaker itself.");
+    out property <string> detail-muted-group: @tr("Muted on the group itself.");
+    public pure function status-title(name: string, status: string) -> string {
+        return @tr("{0}: {1}", name, status);
+    }
+    public pure function standby-title(name: string) -> string {
+        return @tr("{} is in standby", name);
+    }
+    // What Narrator reads for the info button: "More about Standby on Living Room".
+    public pure function status-info-label(status: string, name: string) -> string {
+        return @tr("More about {0} on {1}", status, name);
+    }
+    out property <string> keep-reachable-in-standby: @tr("Keep Reachable in Standby…");
+
     // A speaker row's note after its zone's, in the main window and the
     // tray flyout: that another device uses it, else its Cast note, else its state note and its availability
     // note together, state first (S442), else that it was added by address.

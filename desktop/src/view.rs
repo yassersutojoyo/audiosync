@@ -58,8 +58,8 @@ use crate::{
     KeyboardFocus, LeftOutItem, MainControl, MainWindow, MixAppItem, Motion, NameField, NoticeItem,
     NoticeKind, OutgoingSong, Palette, PasswordDialog, PinDialog, PinPhase, PresetItem,
     ProductKind, RowPart, RowState, ScreenReader, SlideLook, SourceLook, SourceRowKind,
-    SpeakerGroup, SpeakerItem, SpeakerKind, Strings, Tokens, TrackMotion, TrayFlyout, UpdateButton,
-    ZoneChoice, ZoneItem, ZoneNameDialog, ZoneTarget, speaker_names,
+    SpeakerGroup, SpeakerItem, SpeakerKind, StatusPop, Strings, Tokens, TrackMotion, TrayFlyout,
+    UpdateButton, ZoneChoice, ZoneItem, ZoneNameDialog, ZoneTarget, speaker_names,
 };
 
 mod engine;
@@ -1211,6 +1211,47 @@ pub fn focus_input(
         | WindowEvent::Touch(_) => Some(FocusInput::Pointer),
         _ => None,
     }
+}
+
+/// Closes the status popover (ROW-STATUS-SET) on a press anywhere, before
+/// the press reaches the row under it, and on a scroll or resize, which
+/// would leave it beside its row. Esc closes it and is taken.
+fn status_pop_event(
+    main: &MainWindow,
+    event: &slint::winit_030::winit::event::WindowEvent,
+) -> bool {
+    use slint::winit_030::winit::event::{ElementState, WindowEvent};
+    use slint::winit_030::winit::keyboard::{Key, NamedKey};
+    let pop = main.global::<StatusPop>();
+    match event {
+        WindowEvent::MouseInput {
+            state: ElementState::Pressed,
+            ..
+        } => pop.invoke_press(),
+        // Slint handles the release, and so the click, after this filter.
+        WindowEvent::MouseInput {
+            state: ElementState::Released,
+            ..
+        } => {
+            let main = main.as_weak();
+            Timer::single_shot(Duration::ZERO, move || {
+                if let Some(main) = main.upgrade() {
+                    main.global::<StatusPop>().invoke_released();
+                }
+            });
+        }
+        WindowEvent::MouseWheel { .. } | WindowEvent::Resized(_) => pop.invoke_close(false),
+        WindowEvent::KeyboardInput { event, .. }
+            if event.state == ElementState::Pressed
+                && event.logical_key == Key::Named(NamedKey::Escape)
+                && !pop.get_id().is_empty() =>
+        {
+            pop.invoke_close(true);
+            return true;
+        }
+        _ => {}
+    }
+    false
 }
 
 /// What a titled window does on gaining the focus besides taking its frame.
@@ -2690,6 +2731,11 @@ impl App {
                 with_app(&weak, |app| app.note_focus_input(input));
             }
             if kind == Titled::Main {
+                let mut taken = false;
+                with_app(&weak, |app| taken = status_pop_event(&app.main, event));
+                if taken {
+                    return EventResult::PreventDefault;
+                }
                 let mut outcome = None;
                 with_app(&weak, |app| {
                     outcome = keys.borrow_mut().event(&app.main, event);
@@ -2948,6 +2994,7 @@ impl App {
                 });
             row.cast_group_note = cast_group_note(&strings, speaker);
             row.group_note = group_note(&strings, speaker);
+            set_row_status(&strings, &mut row, speaker);
             if let Some(zone) = state.zone_of(&speaker.id) {
                 row.zone_id = zone.id.as_str().into();
                 row.zone_name = zone.name.as_str().into();
@@ -6832,6 +6879,12 @@ pub fn speaker_item(
         fresh: false,
         leaving: false,
         hand_off: SharedString::default(),
+        standby: speaker.standby,
+        // Needs the strings: set by the caller (`App::refresh`).
+        status: SharedString::default(),
+        status_title: SharedString::default(),
+        status_detail: SharedString::default(),
+        status_aside: SharedString::default(),
     }
 }
 
@@ -6934,6 +6987,120 @@ fn group_note(strings: &Strings<'_>, speaker: &ui_model::Speaker) -> SharedStrin
         joined(strings, &group.missing),
         group.incomplete,
     )
+}
+
+/// A row's short status and its popover (ROW-STATUS-SET): the status about
+/// now leads (standby, a Cast or row state), then what the speaker needs,
+/// then what it is; a second status goes into the popover.
+fn set_row_status(strings: &Strings<'_>, row: &mut SpeakerItem, speaker: &ui_model::Speaker) {
+    let s = strings;
+    let every_time = row.code_every_time
+        && (row.availability == Availability::NeedsCode
+            || (row.availability == Availability::Open && row.state == RowState::Off));
+    let prompting = matches!(
+        row.state,
+        RowState::WaitingForPassword | RowState::WaitingForPin
+    );
+    let need = match row.availability {
+        _ if prompting => None,
+        _ if every_time => Some((
+            s.get_status_code_every_time(),
+            s.get_detail_code_every_time(),
+        )),
+        Availability::NeedsCode => Some((
+            s.invoke_availability(Availability::NeedsCode),
+            s.invoke_speaker_availability_help(Availability::NeedsCode, false, row.state),
+        )),
+        Availability::PairingNotYet => {
+            Some((s.get_status_cant_pair(), s.get_detail_pairing_not_yet()))
+        }
+        Availability::Airplay2NotYet | Availability::Unsupported => Some((
+            s.invoke_availability(row.availability),
+            SharedString::default(),
+        )),
+        _ => None,
+    };
+    let none = SharedString::default;
+    let now = match row.state {
+        _ if speaker.standby => Some((s.get_status_standby(), s.get_detail_standby())),
+        RowState::Taken => Some((
+            s.get_status_in_use(),
+            format!("{}.", s.get_in_use_by_another_device()).into(),
+        )),
+        _ if row.cast && row.cast_state == CastState::Connecting => Some((
+            s.invoke_cast_note(CastState::Connecting, false, none()),
+            none(),
+        )),
+        _ if row.cast && row.cast_state == CastState::Reconnecting => {
+            Some((s.get_reconnecting(), none()))
+        }
+        _ if row.cast && row.cast_state == CastState::Paused => {
+            Some((s.get_status_paused(), s.get_detail_paused()))
+        }
+        _ if row.cast && row.cast_state == CastState::Playing && row.muted => Some((
+            s.get_status_muted(),
+            if row.cast_group {
+                s.get_detail_muted_group()
+            } else {
+                s.get_detail_muted()
+            },
+        )),
+        RowState::NotOnNetwork => {
+            Some((s.get_status_not_on_network(), s.get_detail_not_on_network()))
+        }
+        RowState::WaitingForDevice => Some((s.get_status_in_use(), s.get_detail_in_use())),
+        RowState::Reconnecting => Some((s.get_reconnecting(), none())),
+        RowState::WaitingForAirplay2 => {
+            Some((s.get_status_waiting(), s.get_detail_waiting_for_airplay2()))
+        }
+        RowState::WaitingForPtp => Some((s.get_status_waiting(), s.get_detail_waiting_for_ptp())),
+        RowState::WaitingForPassword => Some((s.get_status_needs_password(), none())),
+        RowState::WaitingForPin => Some((s.get_status_enter_code(), none())),
+        _ => None,
+    };
+    let kind = || -> Option<(SharedString, SharedString)> {
+        if let Some(group) = cast_group(speaker) {
+            let members = match &group.members {
+                ui_model::CastMembers::Known(names) => joined(s, names),
+                _ => none(),
+            };
+            return Some((s.get_status_cast_group(), members));
+        }
+        let group = speaker.group.as_ref()?;
+        if group.incomplete {
+            return Some((
+                s.get_status_speaker_missing(),
+                format!("{}.", row.group_note).into(),
+            ));
+        }
+        let word = match group.kind {
+            AirPlayGroupKind::StereoPair => s.get_status_stereo_pair(),
+            AirPlayGroupKind::HomeTheater => s.get_status_home_theater(),
+        };
+        Some((word, joined(s, &group.members)))
+    };
+    let added = || {
+        row.cast_added_by_address
+            .then(|| (s.get_cast_added_by_address(), none()))
+    };
+    let (status, detail) = match (now, need) {
+        (Some((word, detail)), Some((_, other))) if detail.is_empty() => (word, other),
+        (Some(now), _) => now,
+        (None, Some(need)) => need,
+        (None, None) => kind().or_else(added).unwrap_or_default(),
+    };
+    row.status_title = if speaker.standby {
+        s.invoke_standby_title(row.name.clone())
+    } else {
+        s.invoke_status_title(row.name.clone(), status.clone())
+    };
+    row.status_aside = if speaker.standby {
+        s.get_detail_standby_aside()
+    } else {
+        none()
+    };
+    row.status = status;
+    row.status_detail = detail;
 }
 
 /// A local output with an offset (not the reference, AirPlay or Cast) that
@@ -10270,6 +10437,268 @@ pub(crate) mod tests {
         assert!(!app.snapshot().speaker("local:busy").unwrap().enabled);
     }
 
+    /// ROW-STATUS-SET: each row status is a word or two, at most as long as
+    /// "Not on the network" and without a period; only the statuses with
+    /// more to say get a popover (and an info button), and Narrator keeps
+    /// the whole old note.
+    #[test]
+    fn a_speaker_row_shows_a_short_status_and_keeps_the_rest_for_its_popover() {
+        use crate::audio::backend::{AirPlayGroup, AirPlayGroupKind};
+        let mut backend = MockBackend::new();
+        backend.set_running(true);
+        let state = backend.snapshot();
+        let base = state.speaker("airplay:kitchen").unwrap().clone();
+        let local = state.speaker("local:speakers").unwrap().clone();
+        let mut add =
+            |id: &str, from: &ui_model::Speaker, edit: &dyn Fn(&mut ui_model::Speaker)| {
+                let mut speaker = from.clone();
+                speaker.id = id.into();
+                edit(&mut speaker);
+                backend.add_speaker(speaker);
+            };
+        use ui_model::{Availability as Have, Waiting};
+        add("airplay:gone", &base, &|s| {
+            s.waiting = Some(Waiting::NotOnNetwork)
+        });
+        add("airplay:slot", &base, &|s| {
+            s.waiting = Some(Waiting::ForAirPlay2Slot)
+        });
+        add("airplay:ptp", &base, &|s| s.waiting = Some(Waiting::ForPtp));
+        add("airplay:retry", &base, &|s| {
+            s.waiting = Some(Waiting::Reconnecting)
+        });
+        add("airplay:password", &base, &|s| {
+            s.waiting = Some(Waiting::ForPassword)
+        });
+        add("airplay:pin", &base, &|s| s.waiting = Some(Waiting::ForPin));
+        add("airplay:code", &base, &|s| {
+            s.enabled = false;
+            s.availability = Have::NeedsCode;
+        });
+        add("airplay:every", &base, &|s| {
+            s.enabled = false;
+            s.code_every_time = true;
+        });
+        add("airplay:nopair", &base, &|s| {
+            s.enabled = false;
+            s.availability = Have::PairingNotYet;
+        });
+        add("airplay:pair", &base, &|s| {
+            s.enabled = false;
+            s.group = Some(AirPlayGroup {
+                kind: AirPlayGroupKind::StereoPair,
+                members: vec!["Left".into(), "Right".into()],
+                member_ids: vec![],
+                missing: vec![],
+                missing_ids: vec![],
+                incomplete: false,
+            });
+        });
+        add("airplay:half", &base, &|s| {
+            s.enabled = false;
+            s.group = Some(AirPlayGroup {
+                kind: AirPlayGroupKind::StereoPair,
+                members: vec!["Left".into(), "Right".into()],
+                member_ids: vec![],
+                missing: vec!["Right".into()],
+                missing_ids: vec![],
+                incomplete: true,
+            });
+        });
+        add("local:busy", &local, &|s| {
+            s.waiting = Some(Waiting::ForDevice)
+        });
+        let app = app_over(backend);
+        let row = |id: &str| row_of(&app, id);
+        let shown = |id: &str| {
+            let row = row(id);
+            (row.status.to_string(), row.status_detail.to_string())
+        };
+        let detail = |id: &str| shown(id).1;
+        assert_eq!(shown("airplay:gone").0, "Not on the network");
+        assert_eq!(
+            detail("airplay:gone"),
+            "It plays by itself once it's back on the network."
+        );
+        assert_eq!(shown("airplay:slot").0, "Waiting");
+        assert!(detail("airplay:slot").starts_with("AudioSync plays up to "));
+        assert_eq!(shown("airplay:ptp").0, "Waiting");
+        assert_eq!(
+            shown("airplay:retry"),
+            ("Reconnecting\u{2026}".into(), String::new())
+        );
+        assert_eq!(
+            shown("airplay:password"),
+            ("Needs password".into(), String::new())
+        );
+        assert_eq!(
+            shown("airplay:pin"),
+            ("Enter the code".into(), String::new())
+        );
+        assert_eq!(shown("airplay:code").0, "Asks for a code");
+        assert!(detail("airplay:code").contains("asks for a code or password"));
+        assert_eq!(shown("airplay:every").0, "Code every time");
+        assert_eq!(shown("airplay:nopair").0, "Can't pair yet");
+        assert_eq!(
+            shown("airplay:pair"),
+            ("Stereo pair".into(), "Left and Right".into())
+        );
+        assert_eq!(
+            shown("airplay:half"),
+            (
+                "Speaker missing".into(),
+                "Stereo pair, missing Right.".into()
+            )
+        );
+        assert_eq!(shown("local:busy").0, "In use");
+        assert_eq!(
+            row("airplay:gone").status_title,
+            "Kitchen: Not on the network"
+        );
+
+        let limit = "Not on the network".chars().count();
+        for id in [
+            "airplay:gone",
+            "airplay:slot",
+            "airplay:ptp",
+            "airplay:retry",
+            "airplay:password",
+            "airplay:pin",
+            "airplay:code",
+            "airplay:every",
+            "airplay:nopair",
+            "airplay:pair",
+            "airplay:half",
+            "local:busy",
+        ] {
+            let status = row(id).status.to_string();
+            assert!(
+                !status.is_empty() && status.chars().count() <= limit,
+                "{id}: {status}"
+            );
+            assert!(!status.ends_with('.'), "{id}: {status}");
+        }
+
+        // Narrator still hears the whole note the row showed before.
+        let strings = app.strings();
+        assert_eq!(
+            strings.invoke_speaker_note(row("airplay:gone")),
+            "Not on the network right now, plays once it's back"
+        );
+    }
+
+    /// A Denon or Marantz receiver asleep off the network reads Standby; its
+    /// popover names the setting, and its menu offers Keep Reachable in
+    /// Standby… (DENON-STANDBY-HINT-095).
+    #[test]
+    fn a_receiver_in_standby_says_so_and_names_its_network_setting() {
+        let mut backend = MockBackend::new();
+        backend.set_running(true);
+        let mut receiver = backend
+            .snapshot()
+            .speaker("airplay:kitchen")
+            .unwrap()
+            .clone();
+        receiver.id = "airplay:denon".into();
+        receiver.name = "Living Room".into();
+        receiver.waiting = Some(ui_model::Waiting::NotOnNetwork);
+        receiver.standby = true;
+        backend.add_speaker(receiver);
+        let app = app_over(backend);
+        let row = row_of(&app, "airplay:denon");
+        assert!(row.standby);
+        assert_eq!(row.status, "Standby");
+        assert_eq!(row.status_title, "Living Room is in standby");
+        assert!(
+            row.status_detail
+                .contains("Network > Network Control > Always On")
+        );
+        assert_eq!(
+            row.status_aside,
+            "On older models the setting is called IP Control."
+        );
+        assert_eq!(
+            app.strings().get_keep_reachable_in_standby(),
+            "Keep Reachable in Standby\u{2026}"
+        );
+        assert_eq!(
+            app.strings()
+                .invoke_status_info_label(row.status.clone(), row.name.clone()),
+            "More about Standby on Living Room"
+        );
+        assert!(!row_of(&app, "airplay:kitchen").standby);
+    }
+
+    /// The tray flyout shows the same short word as the main window's row.
+    #[test]
+    fn the_tray_flyout_shows_the_rows_short_status() {
+        let mut backend = MockBackend::new();
+        backend.set_running(true);
+        let mut gone = backend
+            .snapshot()
+            .speaker("airplay:kitchen")
+            .unwrap()
+            .clone();
+        gone.id = "airplay:gone".into();
+        gone.waiting = Some(ui_model::Waiting::NotOnNetwork);
+        backend.add_speaker(gone);
+        let app = app_over(backend);
+        let flyout = app
+            .models
+            .flyout_this_pc
+            .iter()
+            .chain(app.models.flyout_connected.iter())
+            .find(|s| s.id == "airplay:gone")
+            .expect("listed in the flyout");
+        assert_eq!(flyout.status, "Not on the network");
+        assert_eq!(flyout.status, row_of(&app, "airplay:gone").status);
+    }
+
+    /// One popover at a time; a press closes it before the click lands, so
+    /// the click on its own info button leaves it closed and a click on
+    /// another row's opens that one; Esc gives the focus back.
+    #[test]
+    fn the_status_popover_opens_one_at_a_time_and_a_press_closes_it() {
+        let app = app_over(MockBackend::new());
+        let pop = app.main.global::<StatusPop>();
+        let open = |id: &str| {
+            pop.invoke_toggle(id.into(), 10.0, 20.0, "T".into(), "D".into(), "".into());
+        };
+        open("a");
+        assert_eq!(pop.get_id(), "a");
+        pop.invoke_press();
+        open("a");
+        assert_eq!(
+            pop.get_id(),
+            "",
+            "the click on the open one's button closes it"
+        );
+        open("a");
+        pop.invoke_press();
+        open("b");
+        assert_eq!(
+            pop.get_id(),
+            "b",
+            "a click on another row's button opens that one"
+        );
+        open("b");
+        assert_eq!(pop.get_id(), "", "Enter on the open one's button closes it");
+        open("a");
+        pop.invoke_press();
+        pop.invoke_released();
+        open("a");
+        assert_eq!(
+            pop.get_id(),
+            "a",
+            "after a click elsewhere closed it, Enter on its button opens it"
+        );
+        pop.invoke_close(true);
+        assert_eq!(
+            (pop.get_id().as_str(), pop.get_refocus_id().as_str()),
+            ("", "a")
+        );
+    }
+
     /// The delay field's text on the desk's row.
     fn desk_delay_text(app: &App) -> String {
         desk_row(app).delay_text.to_string()
@@ -12096,32 +12525,6 @@ pub(crate) mod tests {
         }
     }
 
-    /// A note too long for its line wraps to a second line and the row grows,
-    /// as the Mac's (MainWindow.swift:2424-2430, `.lineLimit(2)`), instead of
-    /// ending in "…" after a few words.
-    #[test]
-    fn a_long_row_note_wraps_to_two_lines() {
-        use i_slint_backend_testing::ElementHandle;
-        let mut backend = MockBackend::new();
-        backend.set_running(true);
-        let mut gone = backend
-            .snapshot()
-            .speaker("airplay:kitchen")
-            .unwrap()
-            .clone();
-        gone.id = "airplay:gone".into();
-        gone.waiting = Some(ui_model::Waiting::NotOnNetwork);
-        backend.add_speaker(gone);
-        let app = app_over(backend);
-        app.main.show().expect("the main window shows");
-        draw_frames_at(696, 632);
-        draw_frames_at(696, 632);
-        let tallest = ElementHandle::find_by_element_id(&app.main, "SpeakerRow::note-label")
-            .map(|note| note.size().height)
-            .fold(0.0, f32::max);
-        // Two caption lines of about 13.5 px, not one (17 px with the name), nor three.
-        assert!((24.0..=32.0).contains(&tallest), "{tallest} px");
-    }
     /// A long name's line stops 6 px before the row's delay column, the Mac row's
     /// spacing (MainWindow.swift:2371), however close the value sits to the
     /// options after it.
@@ -14965,44 +15368,6 @@ pub(crate) mod tests {
         );
     }
 
-    /// A row's code note leads with the Mac's lock, 10 px at the caption's
-    /// size and 3 px before the text (AvailabilityNote, MenuBar.swift:2311-2318).
-    #[test]
-    fn a_rows_code_note_leads_with_a_lock_3_px_before_its_text() {
-        let app = narrow_app(MockBackend::new());
-        draw_frames_at(776, 680);
-        let note = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
-            &app.main,
-            "Asks for a code",
-        )
-        .next()
-        .expect("the code note");
-        let (top, left) = (note.absolute_position().y, note.absolute_position().x);
-        let in_note = |part: &i_slint_backend_testing::ElementHandle| {
-            let at = part.absolute_position();
-            (top - 0.5..=top + note.size().height).contains(&at.y)
-                && (left - 0.5..=left + note.size().width).contains(&at.x)
-        };
-        let label = i_slint_backend_testing::ElementHandle::find_by_element_id(
-            &app.main,
-            "SpeakerRow::note-label",
-        )
-        .find(&in_note)
-        .expect("its text");
-        let lock = i_slint_backend_testing::ElementHandle::find_by_element_id(
-            &app.main,
-            "SpeakerRow::note-icon",
-        )
-        .find(&in_note)
-        .expect("the lock");
-        let text_x = label.absolute_position().x;
-        assert_eq!(lock.size().width, 10.0);
-        assert_eq!(
-            text_x - (lock.absolute_position().x + lock.size().width),
-            3.0
-        );
-    }
-
     /// The master volume row is the Mac's 18 high (MasterMuteButton and
     /// MasterSlider, MenuBar.swift:2958 and :2976), so the rows under it sit
     /// where the Mac's do; the mute button keeps its 24 px target over it.
@@ -15197,42 +15562,6 @@ pub(crate) mod tests {
             .window()
             .set_size(slint::LogicalSize::new(776.0, 680.0));
         slint::platform::update_timers_and_animations();
-    }
-
-    /// The narrow app scrolled to a stereo pair of `member` and Right, the
-    /// last speaker listed.
-    fn pair_app(member: &str) -> Rc<App> {
-        use crate::audio::backend::AirPlayGroup;
-        let mut backend = MockBackend::new();
-        let mut speaker = long_named_speaker(&backend, "airplay:pair");
-        speaker.name = "Pair".into();
-        speaker.group = Some(AirPlayGroup {
-            kind: AirPlayGroupKind::StereoPair,
-            members: vec![member.to_owned(), "Right".to_owned()],
-            member_ids: Vec::new(),
-            missing: Vec::new(),
-            missing_ids: Vec::new(),
-            incomplete: false,
-        });
-        backend.add_speaker(speaker);
-        let app = narrow_app(backend);
-        scroll_to_end(&app);
-        app
-    }
-
-    // covers: S420
-    #[test]
-    fn a_cut_pair_line_shows_in_full_in_its_tooltip() {
-        let app = pair_app("The long living room speaker by the window and the bookshelf");
-        shows_in_full(&app, "SpeakerRow::group-line", "SpeakerRow::group-tip");
-    }
-
-    // covers: S420
-    #[test]
-    fn a_pair_line_that_fits_shows_no_tooltip() {
-        let app = pair_app("Left");
-        let (_, tip) = rest_on(&app, "SpeakerRow::group-line", "SpeakerRow::group-tip");
-        assert!(tip.is_none());
     }
 
     /// With a long zone name, the "in <zone>" link in an In zones row gives

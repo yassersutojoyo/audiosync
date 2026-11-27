@@ -2454,6 +2454,7 @@ struct SpeakerRow: View {
     @StateObject private var hover = HoverState()
     @FocusState private var optionsFocused: Bool
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @StateObject private var statusPopover = StatusPopoverState()
 
     private static let lineGap: CGFloat = 5
 
@@ -2492,24 +2493,14 @@ struct SpeakerRow: View {
                                 // A double-click renames; a single click works like the
                                 // rest of the row, once it can't be a double-click.
                                 .gesture(TapGesture(count: 2).onEnded { model.startRename(speaker) }
-                                    .exclusively(before: TapGesture().onEnded { rowTapped() }))
+                                    .exclusively(before: TapGesture().onEnded { nameTapped() }))
                         }
                         if showTag {
                             SpeakerTypeIcon(kind: speaker.tag, state: state, text: t, airPlay2: speaker.airPlay2)
                         }
-                        if speaker.codeWait == nil {
-                            AvailabilityNote(availability: speaker.availability, text: t)
-                        }
-                        if let note {
-                            // Read in the speaker's hint.
-                            Text(note)
-                                .font(.caption)
-                                .foregroundStyle(Brand.secondaryText)
-                                // A group's member list can outrun the row.
-                                .lineLimit(2)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .help(note)
-                                .accessibilityHidden(true)
+                        if let status {
+                            // Read in full in the speaker's hint.
+                            RowStatusLine(status: status, name: speaker.name, text: t, popover: statusPopover)
                         }
                         if speaker.autoConnect {
                             Image(systemName: "bolt.fill")
@@ -2655,6 +2646,11 @@ struct SpeakerRow: View {
         else { model.closeDelayPanels() }
     }
 
+    /// The name line opens the status popover where the row has one.
+    private func nameTapped() {
+        if status?.detail != nil { statusPopover.shown.toggle() } else { rowTapped() }
+    }
+
     @ViewBuilder
     private func menuItems(_ t: UIStrings) -> some View {
         Button(t.renameSpeaker) { model.startRename(speaker) }
@@ -2669,6 +2665,9 @@ struct SpeakerRow: View {
             if cast.removable { Button(t.castRemove) { model.actions.removeCastAddress(speaker.id) } }
         } else {
             autoConnectToggle(t)
+            if speaker.standby {
+                Button(t.keepReachableInStandby) { statusPopover.shown = true }
+            }
             if speaker.paired || speaker.holdsCredentials {
                 Button(t.forgetPairing) { model.actions.forgetAirPlayPairing(speaker.id) }
                     .help(t.forgetPairingHelp)
@@ -2715,6 +2714,16 @@ struct SpeakerRow: View {
                            waitingForPtp: speaker.waitingForPtp, reconnecting: speaker.reconnecting,
                            taken: speaker.taken, codeWait: speaker.codeWait, name: speaker.name,
                            unannounced: speaker.unannounced, target: speaker.airPlayTarget) ?? zoneNote
+    }
+
+    /// The short status after the kind icon; a zone's note stands as it is.
+    private var status: RowStatus? {
+        model.text.rowStatus(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
+                             waitingForPtp: speaker.waitingForPtp, reconnecting: speaker.reconnecting,
+                             taken: speaker.taken, codeWait: speaker.codeWait, name: speaker.name,
+                             unannounced: speaker.unannounced, target: speaker.airPlayTarget,
+                             availability: speaker.availability, standby: speaker.standby)
+            ?? zoneNote.map { RowStatus(word: $0, title: "", detail: nil, aside: nil) }
     }
 
     /// The device's own volume moves only while a session reaches it.
@@ -3595,5 +3604,69 @@ struct SyncControls: View {
             // would put it below 4.5:1 contrast.
             .foregroundStyle(.primary)
             .background(DelayStepArea(rowID: id).accessibilityHidden(true))
+    }
+}
+
+/// Whether a row's status popover shows; a class, as plain `@State` doesn't
+/// build with the Command Line Tools.
+final class StatusPopoverState: ObservableObject {
+    @Published var shown = false
+}
+
+/// A row's short status and the info button that opens its detail in a
+/// popover (ROW-STATUS-SET): the status, 4 pt, the button, whose 16 pt
+/// glyph box takes clicks 4 pt around it.
+struct RowStatusLine: View {
+    let status: RowStatus
+    let name: String
+    let text: UIStrings
+    @ObservedObject var popover: StatusPopoverState
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(status.word)
+                .font(.caption)
+                .foregroundStyle(Brand.secondaryText)
+                .lineLimit(1)
+                .accessibilityHidden(true)
+                .onTapGesture { popover.shown.toggle() }
+                .allowsHitTesting(status.detail != nil)
+            if let detail = status.detail {
+                Button { popover.shown.toggle() } label: {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 13))
+                        .foregroundStyle(popover.shown ? Color.primary : Brand.secondaryText)
+                        .frame(width: 16, height: 16)
+                        .padding(4)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(-4)
+                .accessibilityLabel(text.statusInfoLabel(status.word, name: name))
+                .popover(isPresented: $popover.shown, arrowEdge: .bottom) {
+                    RowStatusPopover(title: status.title, detail: detail, aside: status.aside)
+                }
+            }
+        }
+    }
+}
+
+/// The popover's title, its text and a quieter last line, 290 pt wide.
+private struct RowStatusPopover: View {
+    let title: String
+    let detail: String
+    let aside: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.system(size: 13, weight: .semibold))
+            Text(detail).font(.system(size: 12))
+            if let aside {
+                Text(aside).font(.system(size: 12)).foregroundStyle(Brand.secondaryText)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: 262, alignment: .leading)
+        .padding(EdgeInsets(top: 12, leading: 14, bottom: 13, trailing: 14))
     }
 }

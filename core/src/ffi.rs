@@ -67,6 +67,7 @@ pub mod remote;
 pub mod render;
 pub mod ring;
 pub mod source_quit;
+pub mod standby;
 pub mod sync;
 pub mod zones;
 
@@ -81,6 +82,7 @@ pub use self::remote::*;
 pub use self::render::*;
 pub use self::ring::*;
 pub use self::source_quit::*;
+pub use self::standby::*;
 pub use self::sync::*;
 pub use self::zones::*;
 
@@ -631,7 +633,7 @@ mod tests {
     const HEADER: &str = include_str!("../include/audiosync_core.h");
 
     /// Every source file of the C interface, by its path under `src/`.
-    const SOURCES: [(&str, &str); 14] = [
+    const SOURCES: [(&str, &str); 15] = [
         ("ffi.rs", include_str!("ffi.rs")),
         ("ffi/airplay.rs", include_str!("ffi/airplay.rs")),
         ("ffi/calibrate.rs", include_str!("ffi/calibrate.rs")),
@@ -647,6 +649,7 @@ mod tests {
         ("ffi/render.rs", include_str!("ffi/render.rs")),
         ("ffi/ring.rs", include_str!("ffi/ring.rs")),
         ("ffi/source_quit.rs", include_str!("ffi/source_quit.rs")),
+        ("ffi/standby.rs", include_str!("ffi/standby.rs")),
         ("ffi/sync.rs", include_str!("ffi/sync.rs")),
         ("ffi/zones.rs", include_str!("ffi/zones.rs")),
     ];
@@ -1816,6 +1819,43 @@ mod tests {
             ("ASC_REMOTE_ERROR_LISTEN", REMOTE_ERROR_LISTEN.to_string()),
             ("ASC_REMOTE_ERROR_RANDOM", REMOTE_ERROR_RANDOM.to_string()),
             ("ASC_REMOTE_ERROR_FAILED", REMOTE_ERROR_FAILED.to_string()),
+            ("ASC_DENON_NOT_IN_VIEW", DENON_NOT_IN_VIEW.to_string()),
+            ("ASC_DENON_NONE", DENON_NONE.to_string()),
+            ("ASC_DENON_MANUFACTURER", DENON_MANUFACTURER.to_string()),
+            ("ASC_DENON_ADDRESS_BLOCK", DENON_ADDRESS_BLOCK.to_string()),
+            ("ASC_STANDBY_OUTCOME_NONE", STANDBY_OUTCOME_NONE.to_string()),
+            (
+                "ASC_STANDBY_OUTCOME_PLAYED",
+                STANDBY_OUTCOME_PLAYED.to_string(),
+            ),
+            (
+                "ASC_STANDBY_OUTCOME_UNANNOUNCED",
+                STANDBY_OUTCOME_UNANNOUNCED.to_string(),
+            ),
+            (
+                "ASC_STANDBY_OUTCOME_NO_ANSWER",
+                STANDBY_OUTCOME_NO_ANSWER.to_string(),
+            ),
+            (
+                "ASC_STANDBY_OUTCOME_BETWEEN",
+                STANDBY_OUTCOME_BETWEEN.to_string(),
+            ),
+            (
+                "ASC_STANDBY_OUTCOME_BREAKS",
+                STANDBY_OUTCOME_BREAKS.to_string(),
+            ),
+            (
+                "ASC_STANDBY_BY_STORED_MARK",
+                STANDBY_BY_STORED_MARK.to_string(),
+            ),
+            (
+                "ASC_STANDBY_CAUSE_UNANNOUNCED",
+                STANDBY_CAUSE_UNANNOUNCED.to_string(),
+            ),
+            (
+                "ASC_STANDBY_CAUSE_NO_ANSWER",
+                STANDBY_CAUSE_NO_ANSWER.to_string(),
+            ),
         ]
         .into_iter()
         .map(|(name, value)| (name.to_owned(), value))

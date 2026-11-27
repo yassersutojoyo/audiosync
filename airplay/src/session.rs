@@ -27,7 +27,9 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV6};
 use std::time::{Duration, Instant};
 
 use crate::digest::{self, Challenge};
-use crate::error::{ErrorKind, SessionError, UnsupportedReason, Warning};
+use crate::error::{
+    ConnectFailures, ErrorKind, SessionError, UnreachableCause, UnsupportedReason, Warning,
+};
 use crate::ids::SessionIds;
 use crate::metadata::{
     Artwork, ArtworkLadder, ArtworkSize, Metadata, MetadataError, MetadataSupport, Queued,
@@ -414,6 +416,7 @@ pub struct Session {
     verified_unconfirmed: bool,
     /// That reconnect was used (P58).
     reverified: bool,
+    connect_failures: ConnectFailures,
 }
 
 impl Session {
@@ -453,6 +456,7 @@ impl Session {
             methods: None,
             verified_unconfirmed: false,
             reverified: false,
+            connect_failures: ConnectFailures::default(),
         };
         match session.config.addresses.first() {
             Some(&address) => session.outputs.push_back(Output::Connect(address)),
@@ -602,20 +606,36 @@ impl Session {
     /// The TCP connect was refused or found no route: the next address is
     /// tried, and after the last one the session is Unreachable (P17, P134).
     pub fn handle_connect_failed(&mut self, now: Instant) {
+        self.handle_connect_error(now, None);
+    }
+
+    /// [`Session::handle_connect_failed`] with what the connect's error
+    /// showed, which the Unreachable after the last address carries (P262).
+    pub fn handle_connect_error(&mut self, now: Instant, cause: Option<UnreachableCause>) {
         if self.state == State::Connecting {
-            self.next_attempt(now, None);
+            self.next_attempt(now, cause, None);
         }
     }
 
     /// Moves to the next address, or fails as Unreachable after the last.
-    fn next_attempt(&mut self, now: Instant, detail: Option<&'static str>) {
+    fn next_attempt(
+        &mut self,
+        now: Instant,
+        cause: Option<UnreachableCause>,
+        detail: Option<&'static str>,
+    ) {
+        self.connect_failures.add(cause);
         self.attempt += 1;
         match self.config.addresses.get(self.attempt) {
             Some(&address) => {
                 self.attempt_started = now;
                 self.outputs.push_back(Output::Connect(address));
             }
-            None => self.fail(ErrorKind::Unreachable, None, None, detail),
+            None => self.fail_with(SessionError {
+                detail,
+                unreachable: self.connect_failures.cause(),
+                ..SessionError::new(ErrorKind::Unreachable)
+            }),
         }
     }
 
@@ -705,7 +725,11 @@ impl Session {
         }
         if self.state == State::Connecting {
             if now >= self.attempt_started + CONNECT_TIMEOUT {
-                self.next_attempt(now, Some("connect timed out"));
+                self.next_attempt(
+                    now,
+                    Some(UnreachableCause::NoAnswer),
+                    Some("connect timed out"),
+                );
             }
             return;
         }
@@ -938,6 +962,7 @@ impl Session {
             retry_after: None,
             back_off: None,
             detail,
+            unreachable: None,
         });
     }
 

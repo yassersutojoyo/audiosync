@@ -76,6 +76,7 @@ use audiosync_core::policy::airplay_pairing::{
 use audiosync_core::policy::airplay_reconnect::{
     NoticeClear, NoticeEnd, notice_clear, ptp_notice_clears, ptp_notice_raised,
 };
+use audiosync_core::policy::airplay_standby::StandbyMarks;
 use audiosync_core::policy::delay::{
     native_airplay_adjustment_ms, native_airplay_latency_ms, sanitize_airplay_adjustment_ms,
     sanitize_offset_ms,
@@ -985,6 +986,21 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 let _ = self.audio.set_output_enabled(id, true);
             }
         }
+        let ids = saved
+            .standby_recognized
+            .iter()
+            .chain(&saved.standby_hint_shown);
+        let marks = ids
+            .map(|id| {
+                let marks = StandbyMarks {
+                    recognized: saved.standby_recognized.contains(id),
+                    hint_shown: saved.standby_hint_shown.contains(id),
+                };
+                (id.clone(), marks)
+            })
+            .collect();
+        self.audio
+            .restore_airplay_standby_marks(marks, saved.standby_names.clone());
         for (id, speaker) in &saved.airplay {
             self.audio.set_airplay_volume(id, speaker.volume);
             if speaker.enabled
@@ -1172,6 +1188,28 @@ impl<A: AudioBackend> AudioAdapter<A> {
             &self.audio.enabled_airplay(),
             &self.airplay_unrestored,
         );
+        let (standby_recognized, standby_hint_shown, standby_names) =
+            match self.audio.airplay_standby_marks() {
+                Some((marks, names)) => {
+                    let marked = |mark: fn(&StandbyMarks) -> bool| {
+                        marks
+                            .iter()
+                            .filter(|(_, marks)| mark(marks))
+                            .map(|(id, _)| id.clone())
+                            .collect()
+                    };
+                    (
+                        marked(|marks| marks.recognized),
+                        marked(|marks| marks.hint_shown),
+                        names,
+                    )
+                }
+                None => (
+                    self.saved.standby_recognized.clone(),
+                    self.saved.standby_hint_shown.clone(),
+                    self.saved.standby_names.clone(),
+                ),
+            };
         Settings {
             version: settings::VERSION,
             source: match &self.chosen {
@@ -1211,6 +1249,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
             outputs,
             airplay,
             auto_connect: self.auto_connect.clone(),
+            standby_recognized,
+            standby_hint_shown,
+            standby_names,
             speaker_names: self.custom_names.saved(),
             hidden_speakers: self.hidden.clone(),
             groups: self.groups.clone(),
@@ -3196,6 +3237,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             holds_password: false,
             holds_credentials: false,
             code_every_time: false,
+            standby: false,
             refused_for_code: false,
             own_volume: speaker.volume_known.then_some(speaker.volume),
             device_volume: None,
@@ -5097,6 +5139,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             holds_password: speaker.holds_password,
             holds_credentials: speaker.holds_credentials,
             code_every_time: speaker.code_every_time,
+            standby: speaker.standby_hint,
             refused_for_code: self.airplay_refused.contains_key(&speaker.id),
             own_volume: Some(speaker.volume),
             // An AirPlay speaker's volume is its own slider (S192).
@@ -5165,6 +5208,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             holds_password: false,
             holds_credentials: false,
             code_every_time: false,
+            standby: false,
             refused_for_code: false,
             // Read only while the output is on (S192).
             own_volume: None,

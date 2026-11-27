@@ -82,24 +82,6 @@ fn the_header_status_cross_fades() {
     assert!(source.contains("text: root.status-b;"));
 }
 
-/// MenuBar.swift AvailabilityNote: a small lock (needs a code, a code
-/// every time) or a warning triangle leads the note.
-#[test]
-fn the_availability_note_leads_with_a_lock_or_a_triangle() {
-    let row = component("FlyoutRow");
-    assert!(row.contains("Glyphs.lock : Glyphs.warning"), "{row}");
-    assert_eq!(
-        flyout()
-            .matches("availability: speaker.availability;")
-            .count(),
-        3
-    );
-    assert!(
-        include_str!("../../ui/widgets.slint")
-            .contains("out property <string> lock: \"\\u{E72E}\";")
-    );
-}
-
 /// PanelColors.swift audioSyncPanelBacking: the surface light, the window
 /// background dark.
 #[test]
@@ -203,14 +185,13 @@ fn a_long_names_timer_rests_while_the_flyout_is_hidden() {
     assert_eq!(flyout().matches("live: root.shown;").count(), 3);
 }
 
-/// The lock or warning sits 3 px before its note at the row's end, as the
-/// Mac's AvailabilityNote after its Spacer (MenuBar.swift:2042, :2313-2318),
-/// not at the start of the room the note may take.
+/// The status sits at the row's end, as the Mac's AvailabilityNote after
+/// its Spacer (MenuBar.swift:2042), not at the start of the room it may take.
 #[test]
 fn the_availability_icon_stays_beside_its_note() {
     let row = component("FlyoutRow");
     let at = row
-        .find("// The Mac's AvailabilityNote leads with")
+        .find("// The zone's note, then the row's short status")
         .expect("the note");
     let note = &row[at..at + 900];
     assert!(note.contains("alignment: end;"), "{note}");

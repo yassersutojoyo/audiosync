@@ -63,6 +63,14 @@
 //! `loss <percent>` and `loss off` switch the packet loss, `hide` sends
 //! the mDNS goodbye while the session already playing goes on, `show`
 //! advertises it again, and `quit` stops it, goodbye included, as Ctrl+C does.
+//! `sleep` closes its connections without a TEARDOWN answer and sends the
+//! goodbye, `sleep quiet` only closes them, and `wake` advertises it again;
+//! that it then answers no connect and no packet is the cell's part, which
+//! drops the packets to its ports (P265).
+//!
+//! `--denon` advertises and answers `/info` as a Denon receiver (model
+//! `AVR-X3500H`, manufacturer `Sound United`) with a `deviceid` in the
+//! `00:05:CD` block unless `--deviceid` names one (P265).
 
 #[path = "../tests/common/mod.rs"]
 mod common;
@@ -109,6 +117,9 @@ fn advertise(options: &Options, port: u16) -> Result<(ServiceDaemon, ServiceInfo
     };
     if options.ptp_only {
         entries = television::ptp_only_txt(entries);
+    }
+    if options.denon {
+        entries = television::denon_txt(entries);
     }
     let txt: Vec<(&str, &str)> = entries
         .iter()
@@ -373,6 +384,9 @@ fn main() -> ExitCode {
     if options.ptp_only {
         television::ptp_only(&mut fake);
     }
+    if options.denon {
+        television::denon(&mut fake);
+    }
     if options.homepod {
         fake.second_info_body = Some(fake.info_body.clone());
     }
@@ -488,7 +502,7 @@ fn main() -> ExitCode {
         println!("{}", loss_line(start, options.loss, loss.counts()));
     }
     println!(
-        "{} stdin: vol <dB> moves the level, loss <percent> and loss off switch packet loss, hide and show the mDNS record, quit or Ctrl+C stops",
+        "{} stdin: vol <dB> moves the level, loss <percent> and loss off switch packet loss, hide and show the mDNS record, sleep, sleep quiet and wake, quit or Ctrl+C stops",
         stamp(start)
     );
     if let Some((daemon, info)) = &advertised {
@@ -585,6 +599,31 @@ fn main() -> ExitCode {
                     );
                 }
             },
+            Line::Sleep { goodbye: send } => {
+                server.cut();
+                let mdns = match &advertised {
+                    Some((daemon, info)) if send && shown => {
+                        shown = false;
+                        goodbye(daemon, info.get_fullname())
+                    }
+                    _ => "no goodbye",
+                };
+                println!("{} asleep: connections closed, mDNS: {mdns}", stamp(start));
+            }
+            Line::Wake => {
+                let mdns = match &advertised {
+                    Some((daemon, info)) if !shown => {
+                        shown = daemon.register(info.clone()).is_ok();
+                        if shown {
+                            "advertised again"
+                        } else {
+                            "advertising failed"
+                        }
+                    }
+                    _ => "unchanged",
+                };
+                println!("{} awake, mDNS: {mdns}", stamp(start));
+            }
             Line::Empty => {}
             Line::Unknown => println!("{} commands: {}", stamp(start), stdin::COMMANDS),
         }

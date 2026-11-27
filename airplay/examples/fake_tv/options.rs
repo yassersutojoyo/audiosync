@@ -16,6 +16,7 @@ pub struct Options {
     pub ptp_only: bool,
     pub summary: bool,
     pub homepod: bool,
+    pub denon: bool,
     pub dump: Option<PathBuf>,
     pub loss: f64,
 }
@@ -33,6 +34,7 @@ pub fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> 
         ptp_only: false,
         summary: false,
         homepod: false,
+        denon: false,
         dump: None,
         loss: 0.0,
     };
@@ -43,6 +45,7 @@ pub fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> 
             "--ptp-only" => options.ptp_only = true,
             "--summary" => options.summary = true,
             "--homepod" => options.homepod = true,
+            "--denon" => options.denon = true,
             "--dump" => options.dump = Some(PathBuf::from(value()?)),
             "--name" => name = Some(value()?),
             "--loss" => {
@@ -84,6 +87,12 @@ pub fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> 
     }
     if pin_given && password_given {
         return Err("--password excludes --pin and --code".to_owned());
+    }
+    if options.denon && options.homepod {
+        return Err("--denon excludes --homepod".to_owned());
+    }
+    if options.denon && options.device_id == DEVICE_ID {
+        options.device_id = television::DENON_DEVICE_ID;
     }
     options.name = name.unwrap_or_else(|| {
         if options.homepod {

@@ -366,6 +366,9 @@ component FlyoutRow inherits Rectangle {
     in property <string> caption;
     // The note the main window row gives (Strings.speaker-note).
     in property <string> note;
+    // The short word the main window's row shows (ROW-STATUS-SET), without
+    // its info button.
+    in property <string> status;
     in property <string> value-text;
     // A renamed speaker's own name, shown in the row's tooltip; else empty.
     in property <string> system-name;
@@ -494,20 +497,14 @@ component FlyoutRow inherits Rectangle {
                 horizontal-stretch: 1;
             }
 
-            // The Mac's AvailabilityNote leads with a lock or a triangle, 3 apart.
+            // The zone's note, then the row's short status (ROW-STATUS-SET).
             HorizontalLayout {
                 horizontal-stretch: 1;
                 alignment: end;
                 spacing: 3px;
 
-                if root.availability-note != "": Glyph {
-                    glyph: root.availability == Availability.needs-code || root.code-every-time ? Glyphs.lock : Glyphs.warning;
-                    font-size: 10px;
-                    color: Tokens.secondary-text;
-                }
-
-                if Strings.speaker-caption(root.caption, root.note) != "": QuietText {
-                    text: Strings.speaker-caption(root.caption, root.note);
+                if Strings.speaker-caption(root.caption, root.status) != "": QuietText {
+                    text: Strings.speaker-caption(root.caption, root.status);
                     horizontal-alignment: right;
                     vertical-alignment: center;
                     wrap: no-wrap;
@@ -1539,6 +1536,7 @@ export component TrayFlyout inherits Window {
                                                     label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.product, speaker.show-kind, speaker.system-name);
                                                     description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
                                                     note: Strings.speaker-note(speaker);
+                                                    status: speaker.status;
                                                     system-name: speaker.system-name;
                                                     state: speaker.state;
                                                     plays: speaker.plays;
@@ -1666,6 +1664,7 @@ export component TrayFlyout inherits Window {
                                                     description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
                                                     caption: speaker.zone-note;
                                                     note: Strings.speaker-note(speaker);
+                                                    status: speaker.status;
                                                     system-name: speaker.system-name;
                                                     kind: speaker.kind;
                                                     show-kind: speaker.show-kind && !speaker.cast-group;
@@ -1699,6 +1698,7 @@ export component TrayFlyout inherits Window {
                                                 label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.product, speaker.show-kind, speaker.system-name);
                                                 description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
                                                 note: Strings.speaker-note(speaker);
+                                                status: speaker.status;
                                                 system-name: speaker.system-name;
                                                 kind: speaker.kind;
                                                 show-kind: speaker.show-kind && !speaker.cast-group;

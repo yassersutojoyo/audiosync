@@ -816,6 +816,7 @@ extension AppDelegate {
                                     taken: receiver.map { native?.taken.contains($0) == true } ?? false,
                                     codeWait: receiver.flatMap { native?.codeWait($0) },
                                     unannounced: receiver.map { native?.isUnannounced($0) == true } ?? false,
+                                    standby: receiver.map { native?.standbyHint($0) == true } ?? false,
                                     paired: receiver.map { native?.isPaired($0) == true } ?? false,
                                     holdsCredentials: receiver.map { native?.keepsCredentials($0) == true } ?? false,
                                     holdsPassword: receiver.map { native?.holdsPassword($0) == true } ?? false,

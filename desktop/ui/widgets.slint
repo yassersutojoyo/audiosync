@@ -1071,6 +1071,8 @@ export component IconButton inherits Rectangle {
     in property <bool> active;
     // No hover or press fill, as a Mac `.plain` button; the glyph still dims on a press.
     in property <bool> plain;
+    // Off while something the button opened already covers its tooltip's place.
+    in property <bool> tip-shown: true;
     callback clicked();
     // The button gained (true) or lost (false) keyboard focus.
     callback focus-changed(bool);
@@ -1117,7 +1119,7 @@ export component IconButton inherits Rectangle {
             root.clicked();
         }
 
-        if root.label != "": Tooltip {
+        if root.label != "" && root.tip-shown: Tooltip {
             tip := LabelTip {
                 text: root.label;
                 max-tip-width: 240px;
@@ -3352,6 +3354,122 @@ export global MenuRoom {
     }
 }
 
+// The speaker status popover of the main window (ROW-STATUS-SET): one at a
+// time, drawn over the rows by StatusPopover at the anchor's window place.
+// It holds text only and takes no pointer input, so a click that closes it
+// still reaches the row under the pointer.
+export global StatusPop {
+    in-out property <string> id;
+    in-out property <length> x;
+    in-out property <length> y;
+    in-out property <string> title;
+    in-out property <string> detail;
+    in-out property <string> aside;
+    // The popover a press just closed: the click that follows on its own
+    // info button leaves it closed instead of opening it again.
+    in-out property <string> closed-id;
+    // The row whose info button takes the focus back after Esc.
+    in-out property <string> refocus-id;
+
+    public function open(id: string, x: length, y: length, title: string, detail: string, aside: string) {
+        self.id = id;
+        self.x = x;
+        self.y = y;
+        self.title = title;
+        self.detail = detail;
+        self.aside = aside;
+    }
+
+    // An info button or a status line was clicked.
+    public function toggle(id: string, x: length, y: length, title: string, detail: string, aside: string) {
+        if self.closed-id == id {
+            self.closed-id = "";
+            return;
+        }
+        self.closed-id = "";
+        if self.id == id {
+            self.id = "";
+            return;
+        }
+        self.open(id, x, y, title, detail, aside);
+    }
+
+    // A pointer press anywhere in the window, before the window handles it.
+    public function press() {
+        self.closed-id = self.id;
+        self.id = "";
+    }
+
+    // After the click that follows a press: Enter on a focused info button
+    // opens its popover again.
+    public function released() {
+        self.closed-id = "";
+    }
+
+    public function close(refocus: bool) {
+        if refocus {
+            self.refocus-id = self.id;
+        }
+        self.id = "";
+        self.closed-id = "";
+    }
+}
+
+// The popover itself: a Fluent flyout with no arrow, 8 px under its anchor
+// and kept 8 px inside the window.
+export component StatusPopover inherits Rectangle {
+    property <length> wide: 290px;
+    visible: StatusPop.id != "";
+    x: max(8px, min(StatusPop.x - 26px, root.window-width - root.wide - 8px));
+    y: StatusPop.y + root.flip;
+    in property <length> window-width;
+    in property <length> window-height;
+    property <length> flip: StatusPop.y + 8px + body.preferred-height > root.window-height - 8px ? -body.preferred-height - 8px - 24px : 8px;
+    width: root.wide;
+    height: body.preferred-height;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Fluent.stroke;
+    background: Tokens.surface;
+    drop-shadow-blur: 24px;
+    drop-shadow-offset-y: 8px;
+    drop-shadow-color: #00000038;
+    accessible-role: none;
+
+    body := VerticalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 12px;
+        padding-bottom: 13px;
+        spacing: 6px;
+
+        Text {
+            text: StatusPop.title;
+            font-size: 13px;
+            font-weight: Fluent.weight-semibold;
+            color: Tokens.text;
+            wrap: word-wrap;
+            accessible-role: none;
+        }
+
+        Text {
+            text: StatusPop.detail;
+            font-size: 12px;
+            color: Tokens.text;
+            wrap: word-wrap;
+            accessible-role: none;
+        }
+
+        if StatusPop.aside != "": Text {
+            text: StatusPop.aside;
+            font-size: 12px;
+            color: Tokens.secondary-text;
+            wrap: word-wrap;
+            accessible-role: none;
+        }
+    }
+}
+
 // One menu shows at a time: each opening claims the next serial, and the
 // menu holding an older one closes. `open` is the serial of the menu that
 // shows (0: none), so Invoke on its button closes it again.
@@ -3753,7 +3871,8 @@ export component SpeakerRow inherits Rectangle {
     // Move to Zone's rows show under it.
     property <bool> menu-move-open;
     property <int> i-auto: root.menu-rename ? 1 : 0;
-    property <int> i-mute: root.i-auto + (root.menu-auto ? 1 : 0);
+    property <int> i-standby: root.i-auto + (root.menu-auto ? 1 : 0);
+    property <int> i-mute: root.i-standby + (root.item.standby ? 1 : 0);
     property <int> i-resync: root.i-mute + (root.menu-mute ? 1 : 0);
     property <int> i-pairing: root.i-resync + (root.cast-live ? 1 : 0);
     property <int> i-cast-remove: root.i-pairing + (root.menu-pairing || root.menu-password ? 1 : 0);
@@ -3905,6 +4024,8 @@ export component SpeakerRow inherits Rectangle {
     // "Reconnecting…").
     property <string> availability-note: Strings.speaker-availability(root.item.availability, root.item.code-every-time, root.item.state);
     property <string> note: root.item.zone-note != "" ? root.item.zone-note : Strings.speaker-note(root.item);
+    property <string> status: root.item.zone-note != "" ? root.item.zone-note : root.item.status;
+    property <bool> has-info: root.item.zone-note == "" && root.item.status-detail != "";
     property <string> note-help: root.availability-note != "" && root.note == Strings.speaker-caption(Strings.row-note(root.item.state, root.item.name), root.availability-note) ? Strings.speaker-availability-help(root.item.availability, root.item.code-every-time, root.item.state) : "";
 
     // A click on the row's box works like its delay or System button; a row
@@ -3929,6 +4050,17 @@ export component SpeakerRow inherits Rectangle {
         running: false;
         triggered => {
             self.running = false;
+            root.status-clicked();
+        }
+    }
+
+    // A click on the name line opens the status popover where the row has
+    // one (ROW-STATUS-SET), else works as a click on the row's box.
+    property <int> status-asks;
+    function status-clicked() {
+        if root.has-info {
+            root.status-asks += 1;
+        } else {
             root.box-clicked();
         }
     }
@@ -4147,20 +4279,17 @@ export component SpeakerRow inherits Rectangle {
                                         kind: root.item.kind;
                                         lit: root.item.plays;
                                         clicked => {
-                                            root.box-clicked();
+                                            root.status-clicked();
                                         }
                                     }
 
-                                    // An AirPlay speaker's note can be long; it ends in "…"
-                                    // rather than run into the delay column (Narrator reads
-                                    // the whole note from the toggle).
-                                    if root.note != "" && !root.item.missing: note-box := Rectangle {
-                                        // The Mac's AvailabilityNote leads with its lock or warning, 3 pt before the text (MenuBar.swift:2311-2318).
-                                        property <length> lead: root.availability-note != "" && root.note == Strings.speaker-caption(Strings.row-note(root.item.state, root.item.name), root.availability-note) ? Tokens.font-size-caption + 3px : 0px;
+                                    // The short status (ROW-STATUS-SET), never longer than "Not on the
+                                    // network"; Narrator reads the whole note from the toggle.
+                                    if root.status != "" && !root.item.missing: note-box := Rectangle {
                                         horizontal-stretch: 1;
                                         min-width: 0px;
-                                        preferred-width: note-label.preferred-width + self.lead;
-                                        max-width: note-label.preferred-width + self.lead;
+                                        preferred-width: note-label.preferred-width;
+                                        max-width: note-label.preferred-width;
                                         property <length> wanted: min(note-label.preferred-height, 2 * one-line.preferred-height);
                                         init => {
                                             root.note-height = self.wanted;
@@ -4176,24 +4305,14 @@ export component SpeakerRow inherits Rectangle {
                                             accessible-role: none;
                                         }
 
-                                        if note-box.lead > 0: note-icon := Glyph {
-                                            x: 0;
-                                            width: Tokens.font-size-caption;
-                                            height: 100%;
-                                            glyph: root.item.availability == Availability.needs-code || (root.item.code-every-time && root.item.availability == Availability.open) ? Glyphs.lock : Glyphs.warning;
-                                            font-size: Tokens.font-size-caption;
-                                            color: Tokens.secondary-text;
-                                        }
-
                                         note-label := Text {
-                                            x: note-box.lead;
-                                            width: parent.width - note-box.lead;
+                                            width: parent.width;
                                             height: 100%;
-                                            text: root.note;
+                                            text: root.status;
                                             font-size: Tokens.font-size-caption;
                                             color: Tokens.secondary-text;
                                             vertical-alignment: center;
-                                            wrap: word-wrap;
+                                            wrap: no-wrap;
                                             overflow: elide;
                                             accessible-role: none;
                                         }
@@ -4204,16 +4323,45 @@ export component SpeakerRow inherits Rectangle {
                                             accessible-label: root.availability-note;
                                         }
 
-                                        if root.note-help != "": TouchArea {
+                                        TouchArea {
                                             clicked => {
-                                                root.box-clicked();
+                                                root.status-clicked();
                                             }
+                                        }
+                                    }
 
-                                            Tooltip {
-                                                LabelTip {
-                                                    text: root.note-help;
-                                                    max-tip-width: root.width;
-                                                }
+                                    // The mockup's 20 px box 6 px after the status, its glyph
+                                    // drawn 2 px left so the hit area is 24 px wide.
+                                    if root.has-info && !root.item.missing: info := IconButton {
+                                        width: 24px;
+                                        glyph-shift: -2px;
+                                        height: 17px;
+                                        glyph: Glyphs.info;
+                                        glyph-size: 13px;
+                                        glyph-color: StatusPop.id == root.item.id ? Tokens.text : Tokens.secondary-text;
+                                        label: Strings.status-info-label(root.item.status, root.item.name);
+                                        // The open popover says it all; the tip would cover the status.
+                                        tip-shown: StatusPop.id != root.item.id;
+                                        property <int> asks: root.status-asks;
+                                        changed asks => {
+                                            self.toggle();
+                                        }
+                                        property <bool> refocus: StatusPop.refocus-id == root.item.id;
+                                        changed refocus => {
+                                            if self.refocus {
+                                                StatusPop.refocus-id = "";
+                                                self.focus();
+                                            }
+                                        }
+                                        function toggle() {
+                                            StatusPop.toggle(root.item.id, self.absolute-position.x + self.width / 2, self.absolute-position.y + self.height + 3px, root.item.status-title, root.item.status-detail, root.item.status-aside);
+                                        }
+                                        clicked => {
+                                            self.toggle();
+                                        }
+                                        focus-changed(focused) => {
+                                            if !focused && StatusPop.id == root.item.id {
+                                                StatusPop.close(false);
                                             }
                                         }
                                     }
@@ -4243,45 +4391,6 @@ export component SpeakerRow inherits Rectangle {
                                                     text: Strings.auto-connect;
                                                     max-tip-width: root.width;
                                                 }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // A stereo pair or home theater group names its members
-                                // on a line of its own, under the name.
-                                if root.item.group-note != "": Rectangle {
-                                    min-width: 0px;
-                                    preferred-width: group-line.preferred-width;
-                                    height: group-line.preferred-height;
-
-                                    group-line := QuietText {
-                                        width: 100%;
-                                        height: 100%;
-                                        text: root.item.group-note;
-                                        wrap: no-wrap;
-                                        overflow: elide;
-                                    }
-
-                                    TouchArea {
-                                        changed has-hover => {
-                                            if !self.has-hover {
-                                                root.tip-allowed = true;
-                                            }
-                                        }
-                                        pointer-event(event) => {
-                                            if event.kind == PointerEventKind.down {
-                                                root.tip-allowed = false;
-                                            }
-                                        }
-                                        clicked => {
-                                            root.box-clicked();
-                                        }
-
-                                        if root.tip-allowed && group-line.preferred-width > group-line.width: Tooltip {
-                                            group-tip := LabelTip {
-                                                text: root.item.group-note;
-                                                max-tip-width: root.width;
                                             }
                                         }
                                     }
@@ -4901,6 +5010,21 @@ export component SpeakerRow inherits Rectangle {
                 done <=> panel.done;
                 activated => {
                     root.auto-connect-toggled(!root.item.auto-connect);
+                }
+            }
+
+            if root.item.standby: MenuRow {
+                index: root.i-standby;
+                text: Strings.keep-reachable-in-standby;
+                check-column: root.menu-auto;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    menu.close();
+                    StatusPop.refocus-id = root.item.id;
+                    root.status-asks += 1;
                 }
             }
 

@@ -186,6 +186,75 @@ pub struct SessionError {
     pub back_off: Option<Duration>,
     /// A short diagnostic for protocol errors. Never contains the password.
     pub detail: Option<&'static str>,
+    /// What the connects of an Unreachable showed; `None` for any other
+    /// kind and for an Unreachable no connect explains (P134, P262).
+    pub unreachable: Option<UnreachableCause>,
+}
+
+/// What the failed connects of an Unreachable showed (P262).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UnreachableCause {
+    /// A connect was answered with a reset: the receiver's network is up.
+    Refused,
+    /// Every connect went unanswered for 5 s, or found the host or the
+    /// network unreachable.
+    NoAnswer,
+}
+
+impl UnreachableCause {
+    /// The cause a failed connect's error gives, `None` for one that tells
+    /// nothing about the receiver.
+    pub fn of(error: &std::io::Error) -> Option<UnreachableCause> {
+        use std::io::ErrorKind as Io;
+        // EHOSTDOWN, which std leaves uncategorized: a Mac connect to a
+        // listed receiver whose network sleeps ends in it.
+        #[cfg(target_vendor = "apple")]
+        const HOST_DOWN: Option<i32> = Some(64);
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        const HOST_DOWN: Option<i32> = Some(112);
+        #[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "android")))]
+        const HOST_DOWN: Option<i32> = None;
+        if HOST_DOWN.is_some() && error.raw_os_error() == HOST_DOWN {
+            return Some(UnreachableCause::NoAnswer);
+        }
+        match error.kind() {
+            Io::ConnectionRefused | Io::ConnectionReset => Some(UnreachableCause::Refused),
+            Io::TimedOut | Io::HostUnreachable | Io::NetworkUnreachable | Io::NetworkDown => {
+                Some(UnreachableCause::NoAnswer)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// The failed connects of one session, over all of its addresses.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct ConnectFailures {
+    refused: bool,
+    no_answer: bool,
+    unexplained: bool,
+}
+
+impl ConnectFailures {
+    pub(crate) fn add(&mut self, cause: Option<UnreachableCause>) {
+        match cause {
+            Some(UnreachableCause::Refused) => self.refused = true,
+            Some(UnreachableCause::NoAnswer) => self.no_answer = true,
+            None => self.unexplained = true,
+        }
+    }
+
+    /// One reset shows the receiver's network is up; an error that tells
+    /// nothing leaves the cause unknown.
+    pub(crate) fn cause(self) -> Option<UnreachableCause> {
+        if self.refused {
+            Some(UnreachableCause::Refused)
+        } else if self.no_answer && !self.unexplained {
+            Some(UnreachableCause::NoAnswer)
+        } else {
+            None
+        }
+    }
 }
 
 impl SessionError {
@@ -208,6 +277,7 @@ impl SessionError {
             retry_after: None,
             back_off: None,
             detail: None,
+            unreachable: None,
         }
     }
 }

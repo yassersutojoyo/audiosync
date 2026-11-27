@@ -72,6 +72,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::clock::SenderClock;
+use crate::error::UnreachableCause;
 use crate::rtp::{self, ResendRequest};
 use crate::rtsp;
 use crate::session::{CONNECT_TIMEOUT, Connection, RESPONSE_TIMEOUT, UdpSendResult};
@@ -113,7 +114,12 @@ pub(crate) enum IoEvent {
     },
     /// Connect attempt `attempt` was refused, found no route or ran out of
     /// time (P134).
-    ConnectFailed { session: SessionKey, attempt: u32 },
+    ConnectFailed {
+        session: SessionKey,
+        attempt: u32,
+        /// What the error showed (P262).
+        cause: Option<UnreachableCause>,
+    },
     /// Bytes the receiver wrote on the RTSP connection of connect attempt
     /// `attempt`.
     Rtsp {
@@ -203,12 +209,20 @@ pub(crate) fn connect(
                     attempt,
                     stream,
                 },
-                Err(_) => IoEvent::ConnectFailed { session, attempt },
+                Err(error) => IoEvent::ConnectFailed {
+                    session,
+                    attempt,
+                    cause: UnreachableCause::of(&error),
+                },
             };
             notify(event);
         },
         move || {
-            failed(IoEvent::ConnectFailed { session, attempt });
+            failed(IoEvent::ConnectFailed {
+                session,
+                attempt,
+                cause: None,
+            });
         },
     )
     .map(drop)
@@ -1207,7 +1221,9 @@ mod tests {
         let (notify, received) = panicking_on(|event| matches!(event, IoEvent::Connected { .. }));
         connect(SessionKey(3), 7, address, notify).expect("thread");
         match received.recv_timeout(WAIT) {
-            Ok(IoEvent::ConnectFailed { session, attempt }) => {
+            Ok(IoEvent::ConnectFailed {
+                session, attempt, ..
+            }) => {
                 assert_eq!((session, attempt), (SessionKey(3), 7));
             }
             other => panic!("expected a failed connect, got {other:?}"),

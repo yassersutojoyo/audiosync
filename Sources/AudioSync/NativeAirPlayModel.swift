@@ -636,6 +636,12 @@ struct NativeAirPlayModel {
     /// them (`appearedCantPlay`), so their notice comes once per appearance.
     private(set) var cantPlayAppeared: Set<String> = []
 
+    /// Names the receivers with a standby mark as they were last seen,
+    /// until discovery names them (P263).
+    mutating func restoreNames(_ stored: [String: String]) {
+        names.merge(stored) { seen, _ in seen }
+    }
+
     mutating func apply(_ change: NativeReceiverChange) {
         switch change {
         case .appeared(let receiver), .changed(let receiver):
@@ -785,6 +791,8 @@ struct NativeAirPlayModel {
     func rows(enabled: Set<String>) -> [String] {
         var ids = Set(receivers.keys.filter { access($0) != nil })
         ids.formUnion(states.keys.filter { isPlaying($0) || receivers[$0] == nil || NativeTarget.kind($0) != nil })
+        // A receiver asleep since launch is never listed; its hint is its row (P263).
+        ids.formUnion(standby.known.filter { standby.hint($0) })
         ids = ids.filter { holdingTarget($0, on: enabled.contains(NativeAirPlayID.app($0))) == nil }
         return ids.sorted { a, b in
             let (x, y) = ((names[a] ?? a).lowercased(), (names[b] ?? b).lowercased())
@@ -1281,6 +1289,12 @@ struct NativeAirPlayModel {
     /// The let-go receivers yielded to another sender: their rows say
     /// another device uses them (S482).
     var taken: Set<String> = []
+    /// The standby hints of Denon and Marantz receivers, by receiver ID
+    /// (P262 to P264).
+    var standby = AirPlayStandby()
+
+    /// Whether the row of receiver `id` shows the standby hint (P263).
+    func standbyHint(_ id: String) -> Bool { standby.hint(id) }
 
     /// Forgets the let-go receivers whose switch is off (app IDs in
     /// `enabled`), however it was switched: one switched on again joins.

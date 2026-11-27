@@ -272,6 +272,15 @@ export struct SpeakerItem {
     // A Bluetooth device whose reported name has a headphone word: its
     // glyph is headphones, else a speaker (SpeakerLayout.swift:70).
     headphone-name: bool,
+    // A Denon or Marantz receiver asleep off the network: its menu offers
+    // Keep Reachable in Standby…, which opens its status popover.
+    standby: bool,
+    // The short status after the kind icon, and its popover's title, text
+    // and secondary last line; no popover (and no info button) without text.
+    status: string,
+    status-title: string,
+    status-detail: string,
+    status-aside: string,
 }
 
 // A zone member that plays as part of a stereo pair or home theater: the

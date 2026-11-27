@@ -1060,6 +1060,8 @@ fn no_text_promises_airplay() {
                     "waits while AudioSync plays to AirPlay 2 speakers on another network."
                 )
                 || line.contains("@tr(\"Waiting: AirPlay 2 speakers on another network\")")
+                || line.contains("AirPlay 2 speakers at once. This one starts once one of them stops.")
+                || line.contains("AudioSync is playing to AirPlay 2 speakers on another network. Turn those")
                 || line.contains("needs-airplay2: @tr(\"Needs AirPlay 2\")")
                 || line.contains("release-when-quiet: @tr(\"Auto-disconnect AirPlay and Cast\")")
                 || line.contains(
@@ -1905,12 +1907,12 @@ fn a_flyout_row_shows_the_speakers_note() {
     let note = lines
         .iter()
         .position(|line| {
-            *line == "if Strings.speaker-caption(root.caption, root.note) != \"\": QuietText {"
+            *line == "if Strings.speaker-caption(root.caption, root.status) != \"\": QuietText {"
         })
         .expect("FlyoutRow shows a QuietText while its state has a note");
     assert_eq!(
         lines.get(note + 1).copied(),
-        Some("text: Strings.speaker-caption(root.caption, root.note);"),
+        Some("text: Strings.speaker-caption(root.caption, root.status);"),
         "the QuietText shows the note"
     );
     assert_eq!(

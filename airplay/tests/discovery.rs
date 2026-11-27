@@ -8,9 +8,9 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::time::{Duration, Instant};
 
 use audiosync_airplay::discovery::{
-    BrowseEvent, Browser, Device, DeviceId, DeviceKey, Directory, DirectoryEvent, DnsRecord,
-    Features, ProductKind, ProtocolPath, Resolver, ScopedAddr, SecurityMode, ServiceKind,
-    ServiceRecord, StatusFlags, Txt, connect_order, parse_raop_instance,
+    BrowseEvent, Browser, DenonBrand, Device, DeviceId, DeviceKey, Directory, DirectoryEvent,
+    DnsRecord, Features, ProductKind, ProtocolPath, Resolver, ScopedAddr, SecurityMode,
+    ServiceKind, ServiceRecord, StatusFlags, Txt, connect_order, parse_raop_instance,
 };
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason};
 use audiosync_airplay::metadata::MetadataSupport;
@@ -1381,4 +1381,102 @@ fn a_device_kind_comes_from_model_manufacturer_and_features_never_the_name() {
     )
     .expect("device");
     assert_eq!(changed.product(), Tv);
+}
+
+/// The P261 vectors: brand and model together, the brand from
+/// `manufacturer` or from the identifier's address block, never from the
+/// name.
+// covers: P261
+#[test]
+fn a_denon_or_marantz_receiver_needs_its_brand_and_a_receiver_model() {
+    use DenonBrand::{AddressBlock, Manufacturer};
+    let vectors: &[(&[&str], Option<DenonBrand>)] = &[
+        (
+            &[
+                "manufacturer=Sound United",
+                "model=AVR-X3500H",
+                "deviceid=00:05:CD:D4:42:96",
+            ],
+            Some(Manufacturer),
+        ),
+        (
+            &[
+                "manufacturer=sound united",
+                "model=avr-x3500h",
+                "deviceid=02:11:22:33:44:55",
+            ],
+            Some(Manufacturer),
+        ),
+        (
+            &["manufacturer=Marantz", "model=SR6013"],
+            Some(Manufacturer),
+        ),
+        (
+            &["manufacturer=Marantz", "model=Cinema 40"],
+            Some(Manufacturer),
+        ),
+        (
+            &["manufacturer=Marantz", "model=Cinema50"],
+            Some(Manufacturer),
+        ),
+        (
+            &["manufacturer= D&M Holdings ", "model=NR1607"],
+            Some(Manufacturer),
+        ),
+        (
+            &["manufacturer=Denon", "model=AVC-X3800H"],
+            Some(Manufacturer),
+        ),
+        (
+            &["model=AV10", "deviceid=8C:A9:6F:00:00:01"],
+            Some(AddressBlock),
+        ),
+        (
+            &["model=AVR-S760H", "deviceid=94:4F:4C:00:00:01"],
+            Some(AddressBlock),
+        ),
+        (
+            &["model=SR7009", "deviceid=00:06:78:00:00:01"],
+            Some(AddressBlock),
+        ),
+        (&["manufacturer=Sound United", "model=HEOS 1"], None),
+        (&["manufacturer=Denon", "model=DNP-2000NE"], None),
+        (
+            &[
+                "manufacturer=Acme",
+                "model=AVR-X3500H",
+                "deviceid=02:11:22:33:44:55",
+            ],
+            None,
+        ),
+        (&["manufacturer=Marantz", "model=SRS1"], None),
+        (&["manufacturer=Marantz", "model=Cinema"], None),
+        (&["model=AVR-X3500H"], None),
+        (&["manufacturer=Denon"], None),
+    ];
+    for (txt, brand) in vectors {
+        let record = airplay("Den", txt);
+        let device =
+            Device::from_records(record.device_key(), None, Some(&record)).expect("device");
+        assert_eq!(device.denon_receiver(), *brand, "{txt:?}");
+    }
+
+    let raop_only = raop("0005CD112233@Living Room", &["am=AVR-X1700H"]);
+    let device =
+        Device::from_records(raop_only.device_key(), Some(&raop_only), None).expect("device");
+    assert_eq!(device.denon_receiver(), Some(AddressBlock));
+
+    let named = airplay("Denon AVR", &["model=Speaker1,1"]);
+    let device = Device::from_records(named.device_key(), None, Some(&named)).expect("device");
+    assert_eq!(device.denon_receiver(), None, "the name is never read");
+
+    // `model` goes before `am` (P239), and a TXT change is read anew (P19).
+    let key = DeviceKey::Id(DeviceId([0x00, 0x05, 0xCD, 1, 2, 3]));
+    let raop_record = raop("0005CD010203@Den", &["am=AVR-X1700H"]);
+    let speaker = airplay("Den", &["model=Speaker1,1"]);
+    let receiver = airplay("Den", &["model=AVR-X1700H"]);
+    let before = Device::from_records(key.clone(), Some(&raop_record), Some(&speaker));
+    assert_eq!(before.expect("device").denon_receiver(), None);
+    let after = Device::from_records(key, Some(&raop_record), Some(&receiver));
+    assert_eq!(after.expect("device").denon_receiver(), Some(AddressBlock));
 }

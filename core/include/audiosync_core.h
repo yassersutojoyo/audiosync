@@ -131,6 +131,25 @@ extern "C" {
 #define ASC_PRODUCT_SOUNDBAR 4 /* a soundbar or an AV receiver */
 #define ASC_PRODUCT_COMPUTER 5 /* a computer */
 
+/* Whether a receiver is a Denon or Marantz AV receiver (AscAirPlayReceiver.denon, P261), and asc_standby_update's record. */
+#define ASC_DENON_NOT_IN_VIEW -1  /* asc_standby_update only: no record of it in view */
+#define ASC_DENON_NONE 0          /* not one */
+#define ASC_DENON_MANUFACTURER 1  /* one by its advertised manufacturer */
+#define ASC_DENON_ADDRESS_BLOCK 2 /* one by the address block of its device identifier */
+
+/* A state or error event's outcome for the standby rule (AscAirPlayEvent.standby, P262). */
+#define ASC_STANDBY_OUTCOME_NONE 0        /* not a state or error event */
+#define ASC_STANDBY_OUTCOME_PLAYED 1      /* it played */
+#define ASC_STANDBY_OUTCOME_UNANNOUNCED 2 /* it stopped announcing itself */
+#define ASC_STANDBY_OUTCOME_NO_ANSWER 3   /* unreachable: a connect got no answer */
+#define ASC_STANDBY_OUTCOME_BETWEEN 4     /* connecting or waiting for a retry: neither counts nor breaks */
+#define ASC_STANDBY_OUTCOME_BREAKS 5      /* any other outcome, which breaks the run */
+
+/* Why the standby hint showed (AscStandbyShown). */
+#define ASC_STANDBY_BY_STORED_MARK 3      /* .recognized: by the stored mark (else an ASC_DENON_* code) */
+#define ASC_STANDBY_CAUSE_UNANNOUNCED 1   /* .cause: unannounced or not in view */
+#define ASC_STANDBY_CAUSE_NO_ANSWER 2     /* .cause: its connects go unanswered */
+
 /* What a sender event reports (AscAirPlayEvent.kind). */
 #define ASC_AIRPLAY_EVENT_STATE 1    /* a speaker's state changed: .state */
 #define ASC_AIRPLAY_EVENT_ERROR 2    /* an error ended a speaker's session: .error */
@@ -1292,6 +1311,46 @@ const char *asc_device_volume_decision_name(uint32_t decision_code);
  */
 uint32_t asc_source_quit_decide(const char *setting, const char *source, const char *quit_app, uint32_t streaming);
 
+/* ---- A Denon or Marantz receiver asleep off the network (P262 to P264) ---- */
+
+/*
+ * One AirPlay speaker's standby state. The host sets the two marks from the
+ * speaker's saved settings (asc_standby_new), stores them again after each
+ * call, and reads .hint for its row; it never writes the other fields.
+ */
+typedef struct AscStandby {
+    bool recognized_mark; /* stored: it was recognized as a Denon or Marantz receiver */
+    bool hint_shown_mark; /* stored: the hint showed since it last played */
+    bool hint;            /* the hint shows on its row now */
+    double run_since;     /* when the run of counted outcomes started; negative for none */
+    int32_t cause;        /* the last counted outcome's ASC_STANDBY_CAUSE_*; 0 for none */
+} AscStandby;
+
+/* Why the hint showed, for the host's one debug log line. */
+typedef struct AscStandbyShown {
+    int32_t recognized; /* ASC_DENON_MANUFACTURER, ASC_DENON_ADDRESS_BLOCK or ASC_STANDBY_BY_STORED_MARK */
+    int32_t cause;      /* ASC_STANDBY_CAUSE_* */
+} AscStandbyShown;
+
+/* A fresh state with the stored marks. Pure function for the control thread. */
+AscStandby asc_standby_new(bool recognized_mark, bool hint_shown_mark);
+
+/*
+ * Takes a speaker event's .standby outcome at `now`, seconds on the host's
+ * monotonic clock; ASC_STANDBY_OUTCOME_NONE and unknown codes change nothing.
+ * A NULL `standby` does nothing. Control thread.
+ */
+void asc_standby_outcome(AscStandby *standby, int32_t outcome, double now);
+
+/*
+ * Brings the speaker up to date at `now`: `record` is its receiver's last
+ * .denon, or ASC_DENON_NOT_IN_VIEW; `wanted` whether the host wants it (on,
+ * alone or in a zone, while streaming runs). Call it on each of its events
+ * and at least once a second. True when the hint shows now, with `shown`
+ * (NULL allowed) filled for the log line. Control thread.
+ */
+bool asc_standby_update(AscStandby *standby, int32_t record, bool wanted, double now, AscStandbyShown *shown);
+
 /* ---- Apps listening to a microphone -------------------------------------- */
 
 /*
@@ -1767,6 +1826,7 @@ typedef struct AscAirPlayReceiver {
     const char *control;  /* a home theater group's Apple TV, by its id, or "" (P229) */
     const char *missing;  /* a target's members out of view or playing nothing, by name, one per line, or "" (P181) */
     int32_t product;      /* ASC_PRODUCT_*: its kind, a target's by its members (P238, P241) */
+    int32_t denon;        /* ASC_DENON_*: a Denon or Marantz AV receiver, and by what (P261) */
 } AscAirPlayReceiver;
 
 /*
@@ -1793,6 +1853,7 @@ typedef struct AscAirPlayEvent {
     int64_t receiver_latency_us;     /* a latency event's reported latency R_s in microseconds; 0 when no source gave one */
     uint32_t receiver_latency_sources; /* a latency event's ASC_AIRPLAY_LATENCY_SOURCE_* bits; 0 when none */
     double device_level;             /* a volume event's device level D, 0 to 100 (show asc_airplay_row_level of it) */
+    int32_t standby;                 /* a state or error event's ASC_STANDBY_OUTCOME_*, for asc_standby_outcome */
 } AscAirPlayEvent;
 
 /*

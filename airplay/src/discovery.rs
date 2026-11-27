@@ -449,6 +449,52 @@ fn apple_model_kind(model: &str) -> Option<ProductKind> {
     }
 }
 
+/// Which half of the brand test named a Denon or Marantz AV receiver
+/// (P261).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DenonBrand {
+    Manufacturer,
+    AddressBlock,
+}
+
+/// Whether a model, a manufacturer and a device identifier, each as
+/// advertised, make a Denon or Marantz AV receiver, and by what (P261).
+pub fn denon_receiver(
+    model: Option<&str>,
+    manufacturer: Option<&str>,
+    id: Option<DeviceId>,
+) -> Option<DenonBrand> {
+    const BRANDS: [&str; 4] = ["denon", "marantz", "sound united", "d&m holdings"];
+    const BLOCKS: [[u8; 3]; 4] = [
+        [0x00, 0x05, 0xCD],
+        [0x00, 0x06, 0x78],
+        [0x8C, 0xA9, 0x6F],
+        [0x94, 0x4F, 0x4C],
+    ];
+    let model = shown_text(model?).trim().to_ascii_lowercase();
+    let digit_after = |prefix: &str| {
+        model
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+    };
+    let receiver_model = model.starts_with("avr-")
+        || model.starts_with("avc-")
+        || ["nr", "sr", "av"].into_iter().any(digit_after)
+        || digit_after("cinema")
+        || digit_after("cinema ");
+    if !receiver_model {
+        return None;
+    }
+    let by_name = manufacturer
+        .map(|text| shown_text(text).trim().to_ascii_lowercase())
+        .is_some_and(|name| BRANDS.contains(&name.as_str()));
+    if by_name {
+        return Some(DenonBrand::Manufacturer);
+    }
+    id.filter(|DeviceId(bytes)| BLOCKS.iter().any(|block| bytes.starts_with(block)))
+        .map(|_| DenonBrand::AddressBlock)
+}
+
 /// The protocol path for a device (P2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProtocolPath {
@@ -541,6 +587,24 @@ impl Device {
             model,
             airplay.and_then(|txt| txt.manufacturer.as_deref()),
             features,
+        )
+    }
+
+    /// Whether it is a Denon or Marantz AV receiver, from its records as
+    /// they are now (P261).
+    pub fn denon_receiver(&self) -> Option<DenonBrand> {
+        let airplay = self.airplay_txt.as_ref();
+        let model = airplay
+            .and_then(|txt| txt.model.as_deref())
+            .or_else(|| self.raop_txt.as_ref().and_then(|txt| txt.model.as_deref()));
+        let id = match &self.key {
+            DeviceKey::Id(id) => Some(*id),
+            DeviceKey::Instance(..) => None,
+        };
+        denon_receiver(
+            model,
+            airplay.and_then(|txt| txt.manufacturer.as_deref()),
+            id,
         )
     }
 

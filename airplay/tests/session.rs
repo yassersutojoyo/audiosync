@@ -7,7 +7,9 @@ mod common;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::time::Duration;
 
-use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason, Warning};
+use audiosync_airplay::error::{
+    ErrorKind, UnreachableCause, UnsupportedReason, UserReason, Warning,
+};
 use audiosync_airplay::ids::{Entropy, EntropyUnavailable, OsEntropy, SessionIds};
 use audiosync_airplay::metadata::{Artwork, Metadata, MetadataError, MetadataSupport, TrackInfo};
 use audiosync_airplay::rtsp::{JackKind, JackStatus, Method};
@@ -1197,6 +1199,96 @@ fn errors_connect_and_response_timeouts() {
     assert_eq!(error.method.map(|m| m.as_str()), Some("SETUP"));
     assert!(link.closed);
     assert_eq!(link.session.poll_timeout(), None);
+}
+
+// A receiver asleep off the network but still listed fails a Mac connect
+// with EHOSTDOWN, which std leaves uncategorized; a network that is down
+// tells as little of the receiver as one that is unreachable.
+#[test]
+fn a_host_or_network_that_is_down_counts_as_no_answer() {
+    use std::io::{Error, ErrorKind as Io};
+
+    assert_eq!(
+        UnreachableCause::of(&Error::from(Io::NetworkDown)),
+        Some(UnreachableCause::NoAnswer)
+    );
+    #[cfg(target_vendor = "apple")]
+    let host_down = Some(64);
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let host_down = Some(112);
+    #[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "android")))]
+    let host_down: Option<i32> = None;
+    if let Some(code) = host_down {
+        assert_eq!(
+            UnreachableCause::of(&Error::from_raw_os_error(code)),
+            Some(UnreachableCause::NoAnswer)
+        );
+    }
+}
+
+// The crate's part of P262: an Unreachable says whether a connect was
+// refused or went unanswered, over all of the session's addresses.
+#[test]
+fn an_unreachable_says_whether_a_connect_was_refused_or_unanswered() {
+    use audiosync_airplay::error::UnreachableCause::{NoAnswer, Refused};
+    use std::io::{Error, ErrorKind as Io};
+
+    assert_eq!(
+        UnreachableCause::of(&Error::from(Io::ConnectionRefused)),
+        Some(Refused)
+    );
+    for kind in [Io::TimedOut, Io::HostUnreachable, Io::NetworkUnreachable] {
+        assert_eq!(
+            UnreachableCause::of(&Error::from(kind)),
+            Some(NoAnswer),
+            "{kind:?}"
+        );
+    }
+    assert_eq!(
+        UnreachableCause::of(&Error::from(Io::PermissionDenied)),
+        None
+    );
+
+    let v4 = SocketAddr::new(RECEIVER, RAOP_PORT);
+    let v6 = SocketAddr::new(RECEIVER_V6, RAOP_PORT);
+    let two = || SessionConfig::new(vec![v4, v6], Volume::Db(-15.0));
+    let cause = |link: &Link| link.failure().expect("failed").unreachable;
+
+    let mut link = Link::new(config(), FakeReceiver::new());
+    link.session.handle_connect_error(link.now, Some(Refused));
+    link.pump();
+    assert_eq!(cause(&link), Some(Refused));
+
+    let mut link = Link::new(config(), FakeReceiver::new());
+    link.advance(Duration::from_secs(5));
+    assert_eq!(cause(&link), Some(NoAnswer), "no connect within 5 s");
+
+    let mut link = Link::new(two(), FakeReceiver::new());
+    link.session.handle_connect_error(link.now, Some(NoAnswer));
+    link.advance(Duration::from_secs(5));
+    assert_eq!(cause(&link), Some(NoAnswer), "unanswered on both");
+
+    let mut link = Link::new(two(), FakeReceiver::new());
+    link.session.handle_connect_error(link.now, Some(Refused));
+    link.advance(Duration::from_secs(5));
+    assert_eq!(
+        cause(&link),
+        Some(Refused),
+        "one reset shows its network is up"
+    );
+
+    let mut link = Link::new(two(), FakeReceiver::new());
+    link.session.handle_connect_failed(link.now);
+    link.session.handle_connect_error(link.now, Some(NoAnswer));
+    link.pump();
+    assert_eq!(cause(&link), None, "an error that tells nothing");
+
+    let mut receiver = FakeReceiver::new();
+    receiver.silent = Some("SETUP".to_owned());
+    let mut link = Link::new(config(), receiver);
+    link.connect();
+    link.advance(Duration::from_secs(10));
+    assert_eq!(cause(&link), None, "a Timeout carries none");
 }
 
 // covers: P17

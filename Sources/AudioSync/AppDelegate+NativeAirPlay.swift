@@ -44,6 +44,23 @@ extension AppDelegate {
         native.demandPeak = { [weak self] in self?.engine.takeDemandPeak() }
         native.onDemand = { [weak self] receiver, letGo, taken in self?.nativeDemand(receiver, letGo: letGo, taken: taken) }
         native.onDemandPlaying = { [weak self] playing in self?.castSender?.setQuiet(!playing) }   // C141
+        let saved = store.load()
+        native.model.standby = AirPlayStandby(recognized: saved.standbyRecognized, hintShown: saved.standbyHintShown)
+        native.model.restoreNames(saved.standbyNames)
+        native.standbyWanted = { [weak self] receiver in
+            guard let self else { return false }
+            return self.engine.isRunning && self.enabledAirPlay.contains(NativeAirPlayID.app(receiver))
+        }
+        native.standbySwitchedOn = { [weak self] receiver in
+            self?.enabledAirPlay.contains(NativeAirPlayID.app(receiver)) ?? false
+        }
+        native.onStandbyMarks = { [weak self] recognized, hintShown in
+            self?.store.save(ids: recognized, forKey: Keys.standbyRecognized)
+            self?.store.save(ids: hintShown, forKey: Keys.standbyHintShown)
+            let marked = recognized.union(hintShown)
+            let names = self?.nativeAirPlay?.model.names.filter { marked.contains($0.key) } ?? [:]
+            self?.store.save(standbyNames: names)
+        }
         nativeAirPlay = native   // reconciles meanwhile don't start a second one
         sendPlayback()
         native.setZones(nativeZoneVolumes())

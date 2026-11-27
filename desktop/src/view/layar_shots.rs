@@ -1160,6 +1160,18 @@ fn b03() -> Vec<Row> {
             })?;
             s.main()
         }),
+        row("B03", "MAIN-ROW-STANDBY-POPOVER", |s| {
+            s.speaker(KITCHEN, |kitchen| {
+                kitchen.waiting = Some(Waiting::NotOnNetwork);
+                kitchen.standby = true;
+            })?;
+            s.speaker(BEDROOM, |bedroom| {
+                bedroom.waiting = Some(Waiting::ForAirPlay2Slot);
+            })?;
+            let shown = s.main();
+            click(&s.app.main, "More about Standby on Kitchen")?;
+            shown
+        }),
         row("B03", "MAIN-ROW-DEVICE-TURNED-DOWN", |s| {
             s.speaker(DESK, |desk| {
                 desk.enabled = true;

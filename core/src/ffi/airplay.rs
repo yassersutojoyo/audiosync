@@ -99,6 +99,7 @@ use audiosync_airplay::targets::{Target, TargetChange, TargetId};
 use audiosync_airplay::volume::Volume;
 
 use super::ring::AscRingWriter;
+use super::standby::{DENON_NONE, STANDBY_OUTCOME_NONE, denon_code, standby_outcome_code};
 use super::{host_slice, stereo_samples};
 use crate::airplay_pairings::{Access, Loaded, PairingStore};
 use crate::airplay2_identity::IdentityStore;
@@ -106,6 +107,7 @@ use crate::airplay2_timing::{self, TimingStore};
 use crate::eq::{self, BAND_COUNT, EqSettings};
 use crate::fade::InputFade;
 use crate::policy::Seconds;
+use crate::policy::airplay_standby::Outcome;
 use crate::policy::airplay_volume::{
     MAC, Reads, kept_volume, refuses_reads, slider_held, within_echo_window,
 };
@@ -504,6 +506,9 @@ pub struct AscAirPlayReceiver {
     /// `PRODUCT_*`: its kind, a target's by its members (P238, P241);
     /// `PRODUCT_UNKNOWN` for a gone receiver.
     pub product: i32,
+    /// `DENON_*`: whether it is a Denon or Marantz AV receiver, and by
+    /// what (P261); `DENON_NONE` for a target and a gone receiver.
+    pub denon: i32,
 }
 
 /// One thing that happened to a speaker, or to the stream. The strings are
@@ -550,6 +555,9 @@ pub struct AscAirPlayEvent {
     /// A volume event's device level D, 0 to 100, which the row shows
     /// rounded down (S290).
     pub device_level: f64,
+    /// A state or error event's `STANDBY_OUTCOME_*` for the standby rule
+    /// (P262); `STANDBY_OUTCOME_NONE` for any other kind.
+    pub standby: i32,
 }
 
 /// A speaker the host added.
@@ -2098,9 +2106,11 @@ impl AscAirPlay {
         let mut control = String::new();
         let mut missing = String::new();
         let mut product = PRODUCT_UNKNOWN;
+        let mut denon = DENON_NONE;
         let (code, id, name, model, (availability, unsupported), flags) = match &event {
             ReceiverEvent::Appeared(info) | ReceiverEvent::Changed(info) => {
                 product = product_code(info.device.product());
+                denon = denon_code(info.device.denon_receiver());
                 let id = receiver_id(&info.device.key);
                 let mut paired = self.paired(&id);
                 let (availability, mut flags) = if self.over_airplay2(&id, info) {
@@ -2238,6 +2248,7 @@ impl AscAirPlay {
             control: self.receiver_strings[4].as_ptr(),
             missing: self.receiver_strings[5].as_ptr(),
             product,
+            denon,
         }
     }
 
@@ -2261,6 +2272,7 @@ impl AscAirPlay {
             receiver_latency_us: 0,
             receiver_latency_sources: 0,
             device_level: 0.0,
+            standby: STANDBY_OUTCOME_NONE,
         };
         let (id, detail) = match pending {
             Pending::Remote(id, control) => {
@@ -2274,6 +2286,7 @@ impl AscAirPlay {
             }
             Pending::Speaker(id, SpeakerEvent::State(state)) => {
                 event.kind = AIRPLAY_EVENT_STATE;
+                event.standby = standby_outcome_code(Outcome::of_state(state));
                 event.state = match state {
                     SpeakerState::Connecting => AIRPLAY_STATE_CONNECTING,
                     SpeakerState::Playing => AIRPLAY_STATE_PLAYING,
@@ -2296,6 +2309,7 @@ impl AscAirPlay {
                 }),
             ) => {
                 event.kind = AIRPLAY_EVENT_ERROR;
+                event.standby = standby_outcome_code(Outcome::of_error(&error));
                 (event.error, event.unsupported) = error_code(reason);
                 event.retry_ms = retry_at.map_or(-1, millis_until);
                 (id, error.to_string())
@@ -4892,6 +4906,7 @@ mod tests {
             control: ptr::null(),
             missing: ptr::null(),
             product: -1,
+            denon: -1,
         }
     }
 
@@ -5490,6 +5505,7 @@ mod tests {
             receiver_latency_us: 0,
             receiver_latency_sources: 0,
             device_level: 0.0,
+            standby: 0,
         }
     }
 
@@ -8405,7 +8421,8 @@ mod tests {
     #[cfg(target_pointer_width = "64")]
     fn the_event_layout_matches_the_header() {
         // The Swift smoke test checks the same size against the header.
-        assert_eq!(std::mem::size_of::<AscAirPlayEvent>(), 112);
+        assert_eq!(std::mem::size_of::<AscAirPlayEvent>(), 120);
+        assert_eq!(std::mem::offset_of!(AscAirPlayEvent, standby), 112);
         assert_eq!(std::mem::offset_of!(AscAirPlayEvent, device_level), 104);
         assert_eq!(std::mem::offset_of!(AscAirPlayEvent, volume), 72);
         assert_eq!(std::mem::offset_of!(AscAirPlayEvent, warning), 80);

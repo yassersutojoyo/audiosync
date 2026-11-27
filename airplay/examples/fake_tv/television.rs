@@ -26,6 +26,11 @@ pub const NAME: &str = "AudioSync Test TV";
 pub const MODEL: &str = "Speaker1,1";
 /// A locally administered address in the documentation block of RFC 7042.
 pub const DEVICE_ID: [u8; 6] = [0x02, 0x00, 0x5E, 0x00, 0x53, 0x55];
+/// The `--denon` profile (P265): a Denon receiver as a published `/info`
+/// answer names it, with an identifier in a D&M address block.
+pub const DENON_MODEL: &str = "AVR-X3500H";
+pub const DENON_MANUFACTURER: &str = "Sound United";
+pub const DENON_DEVICE_ID: [u8; 6] = [0x00, 0x05, 0xCD, 0x00, 0x53, 0x55];
 /// The environment variable that sets the output latency it reports, in
 /// microseconds.
 pub const LATENCY_VAR: &str = "FAKE_TV_LATENCY_US";
@@ -232,6 +237,30 @@ pub fn ptp_only_txt(entries: Vec<(&'static str, String)>) -> Vec<(&'static str, 
                 format!("{low},{:#x}", FEATURES_HIGH | FEATURE_PTP_HIGH),
             )
         })
+        .collect()
+}
+
+/// Makes `fake` answer `/info` as the `--denon` profile's receiver.
+pub fn denon(fake: &mut FakeAp2) {
+    let mut info = read_dict(&fake.info_body).expect("the television's /info is a dictionary");
+    info.insert("model".to_owned(), Value::String(DENON_MODEL.to_owned()));
+    info.insert(
+        "manufacturer".to_owned(),
+        Value::String(DENON_MANUFACTURER.to_owned()),
+    );
+    fake.info_body = plist(Value::Dictionary(info));
+}
+
+/// `entries` from [`txt`] with the `--denon` profile's model and
+/// manufacturer.
+pub fn denon_txt(entries: Vec<(&'static str, String)>) -> Vec<(&'static str, String)> {
+    entries
+        .into_iter()
+        .map(|(key, value)| match key {
+            "model" => (key, DENON_MODEL.to_owned()),
+            _ => (key, value),
+        })
+        .chain([("manufacturer", DENON_MANUFACTURER.to_owned())])
         .collect()
 }
 

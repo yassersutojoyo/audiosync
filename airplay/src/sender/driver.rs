@@ -2103,9 +2103,9 @@ impl Driver {
                     Err(_) => active.session.handle_connect_failed(now),
                 }
             }
-            IoEvent::ConnectFailed { attempt, .. } => {
+            IoEvent::ConnectFailed { attempt, cause, .. } => {
                 if attempt == active.attempt {
-                    active.session.handle_connect_failed(now);
+                    active.session.handle_connect_error(now, cause);
                 }
             }
             // Only the current connection's: after the reconnect of P58 the
