@@ -50,6 +50,11 @@ AudioSync's animations follow the system's own switch, which has a different nam
 
 The app's text uses the system font on the Mac and Segoe UI Variable on Windows. Linux has no font every distribution ships, so AudioSync brings Inter along and looks the same everywhere.
 
+## A graphics driver reset
+
+- **Mac:** not applicable. The Mac app's windows are AppKit's and don't draw through the renderer the other two use.
+- **Windows and Linux:** when a driver reset takes the window's surface away, AudioSync starts itself again and the speakers come back. If that happens three times in ten minutes, Windows switches to drawing in software and carries on, while Linux, which has no software fallback in the app, stops with a message.
+
 ## Updates
 
 - **Mac and Windows:** Install Update replaces the app. On Windows, an install for everyone on the PC asks for an administrator once per update, as Windows requires for files in Program Files.

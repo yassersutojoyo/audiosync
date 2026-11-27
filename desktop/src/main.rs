@@ -70,6 +70,8 @@ mod setup_check;
 #[cfg(any(os_backend, target_os = "linux", test))]
 mod single_instance;
 mod speaker_names;
+#[cfg(any(windows, target_os = "linux"))]
+mod surface_loss;
 mod test_instance;
 mod title_bar;
 mod track_slide;
@@ -216,7 +218,7 @@ fn main() -> ExitCode {
         log.log(|| note);
     }
 
-    match run(&log, &instance) {
+    match run(&log, &instance, relaunched) {
         Ok(()) => {
             log.log(|| "exiting".to_owned());
             log.flush(LOG_FLUSH_AT_EXIT);
@@ -246,6 +248,8 @@ enum StartError {
         expect(dead_code, reason = "the mock backend always opens")
     )]
     Audio(String),
+    /// The window stopped drawing after the app ran, and no new copy took over.
+    WindowLost(String),
 }
 
 impl StartError {
@@ -261,6 +265,9 @@ impl StartError {
                     strings.invoke_audio_failed(error.as_str().into()).into()
                 })
                 .unwrap_or_else(|_| format!("AudioSync could not start: {error}")),
+            StartError::WindowLost(why) => {
+                format!("AudioSync stopped because its window could not draw: {why}")
+            }
         }
     }
 }
@@ -287,7 +294,7 @@ fn opens_setup_at_launch(settings: &std::path::Path) -> bool {
 const SETUP_SEEN_FILE: &str = "setup-seen";
 
 /// Shows the main window and runs the UI until the user exits.
-fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
+fn run(log: &DebugLog, instance: &os::Instance, relaunched: bool) -> Result<(), StartError> {
     // Read before the engine starts: its first change writes the file. Linux
     // has no Setup window yet.
     let first_install = cfg!(windows)
@@ -463,7 +470,48 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
             }),
         }
     }
-    slint::run_event_loop_until_quit()?;
+    let ran = std::rc::Rc::new(std::cell::Cell::new(surface_loss::after_loss(
+        std::env::args_os(),
+    )));
+    let past_start = ran.clone();
+    slint::Timer::single_shot(surface_loss::START, move || past_start.set(true));
+    #[cfg(windows)]
+    let can_fall_back = renderer_record.is_some();
+    #[cfg(not(windows))]
+    let can_fall_back = false;
+    let fake_value = log
+        .enabled()
+        .then(|| std::env::var(surface_loss::FAKE_LOSS_VAR).ok())
+        .flatten();
+    let faked = std::rc::Rc::new(std::cell::Cell::new(false));
+    if let Some(after) = surface_loss::fake_loss_after(
+        log.enabled(),
+        fake_value.as_deref(),
+        relaunched,
+        can_fall_back || cfg!(not(windows)),
+    ) {
+        log.log(|| {
+            format!(
+                "surface loss faked in {after:?} ({})",
+                surface_loss::FAKE_LOSS_VAR
+            )
+        });
+        let faked = faked.clone();
+        slint::Timer::single_shot(after, move || {
+            faked.set(true);
+            let _ = slint::quit_event_loop();
+        });
+    }
+    let ended = slint::run_event_loop_until_quit().and_then(|()| {
+        if faked.get() {
+            Err(slint::PlatformError::from(surface_loss::FAKE_ERROR))
+        } else {
+            Ok(())
+        }
+    });
+    if let Err(error) = ended {
+        return after_loop_error(log, &app, error, ran.get(), can_fall_back);
+    }
     log.log(|| "the event loop ended".to_owned());
     #[cfg(windows)]
     if let Some(record) = &renderer_record {
@@ -471,6 +519,66 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
     }
     app.at_quit();
     Ok(())
+}
+
+/// The event loop ended with `error`. After the app ran, it is a lost surface,
+/// as from a GPU driver reset: a new copy of the exe takes over and opens its
+/// window as this one had it; speakers come back through auto-connect.
+fn after_loop_error(
+    log: &DebugLog,
+    app: &view::App,
+    error: slint::PlatformError,
+    ran: bool,
+    can_fall_back: bool,
+) -> Result<(), StartError> {
+    use updater::relaunch::{START_WAIT, Start, start_and_wait};
+    let folder = data_folder::folder();
+    let losses = if ran {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_secs());
+        surface_loss::note_loss(folder.as_deref(), now)
+    } else {
+        0
+    };
+    let outcome = surface_loss::after_loop_error(ran, losses, can_fall_back);
+    log.log(|| {
+        format!(
+            "the event loop ended with an error ({error}); losses in {} min: {losses}; {outcome:?}",
+            surface_loss::WINDOW.as_secs() / 60
+        )
+    });
+    let software = match outcome {
+        surface_loss::Outcome::StartFailed => return Err(error.into()),
+        surface_loss::Outcome::Stop => {
+            app.at_quit();
+            return Err(StartError::WindowLost(error.to_string()));
+        }
+        surface_loss::Outcome::Relaunch { software } => software,
+    };
+    #[cfg(windows)]
+    if software && let Err(why) = renderer_choice::fall_back(folder.as_deref()) {
+        log.log(|| format!("renderer: software not recorded ({why})"));
+    }
+    #[cfg(not(windows))]
+    let _ = software;
+    let own = std::process::id();
+    let args = surface_loss::relaunch_args(std::env::args_os().skip(1), app.main_visible(), own);
+    let start = match std::env::current_exe() {
+        Ok(exe) => start_and_wait(std::process::Command::new(exe).args(args), own, START_WAIT),
+        Err(why) => Start::Failed(why),
+    };
+    // The new copy waits for this one to end before it takes the instance and the settings.
+    app.at_quit();
+    match start {
+        Start::Signalled { pid } => {
+            log.log(|| format!("process {pid} started in this one's place"));
+            Ok(())
+        }
+        other => Err(StartError::WindowLost(format!(
+            "{error}; starting it again failed ({other:?})"
+        ))),
+    }
 }
 
 /// The value of `AUDIOSYNC_PREVIEW_PLAY`, only while the debug log is on; an
