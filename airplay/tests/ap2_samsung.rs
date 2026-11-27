@@ -878,7 +878,7 @@ fn heard(
 // /info.
 #[test]
 fn capture_switch_without_flush() {
-    let (gap, host_gap) = capture_switch(REBUILD);
+    let (gap, host_gap) = capture_switch(REBUILD, false);
     cell(
         "W6.switch",
         &format!(
@@ -893,13 +893,22 @@ fn capture_switch_without_flush() {
 // Load stretches the host's rebuild; the silence follows it.
 #[test]
 fn capture_switch_after_a_slow_rebuild() {
-    capture_switch(SLOW_REBUILD);
+    capture_switch(SLOW_REBUILD, false);
 }
 
-/// Plays to the fake Samsung, switches the capture after `rebuild` and
-/// returns the silence the switch left on the television and the time the
-/// host wrote nothing.
-fn capture_switch(rebuild: Duration) -> (Duration, Duration) {
+// covers: P143
+// A sender kept from running past L during the switch, as on a loaded
+// machine, restarts the timeline: the restart's FLUSH is the only one.
+#[test]
+fn capture_switch_while_the_sender_stalls() {
+    capture_switch(SLOW_REBUILD, true);
+}
+
+/// Plays to the fake Samsung, switches the capture after `rebuild`, with
+/// the timeline restarted at the switch when `stalled`, and returns the
+/// silence the switch left on the television and the time the host wrote
+/// nothing.
+fn capture_switch(rebuild: Duration, stalled: bool) -> (Duration, Duration) {
     let _serial = serial();
     let (socket, audio) = data_port();
     let mut fake = FakeAp2::samsung();
@@ -919,7 +928,10 @@ fn capture_switch(rebuild: Duration) -> (Duration, Duration) {
         ]
         .map(|key| (key, count(server, key)))
     };
-    let before = requests(&server);
+    // A sender kept from running past L restarts the timeline (P143), as a
+    // loaded runner did once; only that restart may flush.
+    let restarts = timeline_flushes(&mut tv);
+    let mut before = requests(&server);
     let prompts = |tv: &Playing| {
         tv.events
             .seen
@@ -945,6 +957,9 @@ fn capture_switch(rebuild: Duration) -> (Duration, Duration) {
         })
         .expect("the stream start's first-sound time");
     let switched = Instant::now();
+    if stalled {
+        tv.sender.restart_timeline();
+    }
     let host_gap = switch_capture(&mut tv, rebuild);
     tv.run(Duration::from_secs(4), false);
 
@@ -964,6 +979,12 @@ fn capture_switch(rebuild: Duration) -> (Duration, Duration) {
         gap.as_millis(),
         host_gap.as_millis()
     );
+    let restarted = timeline_flushes(&mut tv) - restarts;
+    assert!(
+        restarted >= usize::from(stalled),
+        "the stall restarted the timeline"
+    );
+    before[0].1 += restarted;
     assert_eq!(requests(&server), before, "requests on the switch");
     assert_eq!(prompts(&tv), 0, "PIN prompts");
     tv.assert_no_error();
