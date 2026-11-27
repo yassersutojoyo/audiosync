@@ -1867,6 +1867,14 @@ impl AirPlaySpeakers {
         self.standby_marks = marks;
     }
 
+    /// Restores the names the receivers with a standby mark last had (P263).
+    pub fn restore_standby_names(&mut self, _names: BTreeMap<String, String>) {}
+
+    /// The names to store with the standby marks, each the last one seen.
+    pub fn standby_names(&self) -> BTreeMap<String, String> {
+        BTreeMap::new()
+    }
+
     /// The standby marks to store, every speaker's that isn't the default.
     pub fn standby_marks(&self) -> BTreeMap<String, StandbyMarks> {
         self.standby_marks
@@ -8737,6 +8745,40 @@ pub mod tests {
         airplay.update_standby(start);
         airplay.update_standby(start + Duration::from_secs(40));
         assert!(hint(&airplay, &id), "{:?}", airplay.speakers());
+    }
+
+    // The kept row shows the name the receiver had when last seen, as the
+    // mark does, and goes once the speaker is switched off.
+    // covers: P263
+    #[test]
+    fn a_receiver_asleep_since_launch_shows_its_last_name_and_goes_when_off() {
+        let den = denon_receiver();
+        let fake = FakeAirPlay::new();
+        let (mut first, id) = denon_playing(&fake, &den);
+        first.set_streaming(false);
+        first.update_standby(Instant::now());
+        let (marks, names) = (first.standby_marks(), first.standby_names());
+        let fake = FakeAirPlay::new();
+        let mut asleep = speakers(&fake);
+        asleep.restore_standby_marks(marks);
+        asleep.restore_standby_names(names);
+        let _ = asleep.set_enabled(&id, true);
+        asleep.set_streaming(true);
+        let launch = Instant::now();
+        asleep.update_standby(launch);
+        asleep.update_standby(launch + Duration::from_secs(40));
+        let row = |airplay: &AirPlaySpeakers| {
+            airplay
+                .speakers()
+                .into_iter()
+                .find(|speaker| speaker.id == id)
+                .map(|speaker| (speaker.name, speaker.standby_hint))
+        };
+        assert_eq!(row(&asleep), Some(("Den".to_owned(), true)));
+
+        asleep.set_enabled(&id, false).unwrap();
+        asleep.update_standby(launch + Duration::from_secs(41));
+        assert_eq!(row(&asleep), None, "switched off, the row goes");
     }
 
     // A speaker that isn't a Denon or Marantz receiver never shows it.

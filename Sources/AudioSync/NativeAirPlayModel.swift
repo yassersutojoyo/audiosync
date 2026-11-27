@@ -636,6 +636,10 @@ struct NativeAirPlayModel {
     /// them (`appearedCantPlay`), so their notice comes once per appearance.
     private(set) var cantPlayAppeared: Set<String> = []
 
+    /// Names the receivers with a standby mark as they were last seen,
+    /// until discovery names them (P263).
+    mutating func restoreNames(_ stored: [String: String]) {}
+
     mutating func apply(_ change: NativeReceiverChange) {
         switch change {
         case .appeared(let receiver), .changed(let receiver):

@@ -58,6 +58,8 @@ struct AppSettings: Equatable {
         static let standbyRecognized = "airPlayStandbyRecognized"
         /// Receiver IDs whose standby hint showed since they last played (P263), as an array.
         static let standbyHintShown = "airPlayStandbyHintShown"
+        /// The name each receiver with a standby mark last had, by receiver ID (P263).
+        static let standbyNames = "airPlayStandbyNames"
         /// The names the user gave speakers, by speaker key (`SpeakerNames`).
         static let speakerNames = "speakerNamesByKey"
         /// The speakers hidden with Hide Speaker (`HiddenSpeakers.stored`):
@@ -180,6 +182,7 @@ struct AppSettings: Equatable {
     /// whose standby hint showed since they last played (P263).
     var standbyRecognized: Set<String> = []
     var standbyHintShown: Set<String> = []
+    var standbyNames: [String: String] = [:]
     var speakerNames = SpeakerNames()
     var hiddenSpeakers = HiddenSpeakers()
     var showVirtualDevices = false
@@ -237,6 +240,7 @@ struct AppSettings: Equatable {
         s.autoConnect = ids(read(Keys.autoConnect))
         s.standbyRecognized = ids(read(Keys.standbyRecognized))
         s.standbyHintShown = ids(read(Keys.standbyHintShown))
+        s.standbyNames = read(Keys.standbyNames) as? [String: String] ?? [:]
         s.speakerNames = SpeakerNames(stored: read(Keys.speakerNames))
         s.hiddenSpeakers = HiddenSpeakers(stored: read(Keys.hiddenSpeakers))
         s.master = read(Keys.master).flatMap(number).map(volume) ?? defaultMaster
@@ -513,6 +517,8 @@ struct SettingsStore {
 
     /// A set of IDs, sorted so the stored array doesn't churn.
     func save(ids: Set<String>, forKey key: String) { write(ids.sorted(), key) }
+
+    func save(standbyNames: [String: String]) { write(standbyNames, Keys.standbyNames) }
 
     func save(cast id: String?) { write(id, Keys.enabledCast) }
 

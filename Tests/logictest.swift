@@ -20741,6 +20741,14 @@ do {
             && asleepModel.standbyHint(den),
           "standby: a receiver asleep since launch keeps a row with its hint",
           "\(asleepModel.rows(enabled: [NativeAirPlayID.app(den)]))")
+    standbyStore.save(standbyNames: [den: "Den"])
+    asleepModel.restoreNames(standbyStore.load().standbyNames)
+    // covers: P263
+    check(asleepModel.names[den] == "Den",
+          "standby: a receiver asleep since launch keeps the name it last had", "\(asleepModel.names)")
+    _ = asleepModel.standby.update(records: [:], wanted: { _ in false }, now: 41)
+    check(asleepModel.rows(enabled: []).isEmpty,
+          "standby: switched off, the row of a receiver asleep since launch goes")
 }
 
 // ROW-STATUS-SET: a row's status is a word or two, at most as long as "Not
