@@ -50,6 +50,9 @@ extension AppDelegate {
             guard let self else { return false }
             return self.engine.isRunning && self.enabledAirPlay.contains(NativeAirPlayID.app(receiver))
         }
+        native.standbySwitchedOn = { [weak self] receiver in
+            self?.enabledAirPlay.contains(NativeAirPlayID.app(receiver)) ?? false
+        }
         native.onStandbyMarks = { [weak self] recognized, hintShown in
             self?.store.save(ids: recognized, forKey: Keys.standbyRecognized)
             self?.store.save(ids: hintShown, forKey: Keys.standbyHintShown)

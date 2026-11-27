@@ -9953,6 +9953,7 @@ do {
         (Keys.zones, "speakerZones"),
         (Keys.zonesMigrated, "speakerZonesMigrated"), (Keys.zonesNoticeDue, "speakerZonesNoticeDue"),
         (Keys.presets, "speakerPresets"), (Keys.presetsMigrated, "speakerPresetsMigrated"),
+        (Keys.standbyRecognized, "airPlayStandbyRecognized"), (Keys.standbyHintShown, "airPlayStandbyHintShown"),
     ]
     let renamed = pinned.filter { $0.0 != $0.1 }.map(\.1)
     check(renamed.isEmpty, "settings: every UserDefaults key keeps the name existing installs use",

@@ -552,6 +552,9 @@ final class NativeAirPlay {
     /// Whether the app wants receiver `id`: on, alone or in a zone, while
     /// streaming runs (main queue, P262).
     var standbyWanted: ((String) -> Bool)?
+    /// Whether receiver `id` is switched on, streaming or not; the rule
+    /// looks at those and at the ones it already holds, as on Windows and Linux.
+    var standbySwitchedOn: ((String) -> Bool)?
     /// Gets the standby marks to store, recognized and hint shown, when
     /// they change (main queue, P263).
     var onStandbyMarks: ((Set<String>, Set<String>) -> Void)?
@@ -838,7 +841,11 @@ final class NativeAirPlay {
         let now = ProcessInfo.processInfo.systemUptime
         let before = (model.standby.recognized, model.standby.hintShown)
         for (id, code) in outcomes { model.standby.outcome(id, code, now: now) }
-        let records = model.receivers.mapValues { $0.denon }
+        let switchedOn = standbySwitchedOn ?? { _ in false }
+        let known = model.standby.known
+        let records = model.receivers
+            .filter { switchedOn($0.key) || known.contains($0.key) }
+            .mapValues { $0.denon }
         let wanted: (String) -> Bool = standbyWanted ?? { _ in false }
         let shown = model.standby.update(records: records, wanted: wanted, now: now)
         for (id, why) in shown {

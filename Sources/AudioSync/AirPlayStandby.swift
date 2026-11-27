@@ -19,6 +19,9 @@ struct AirPlayStandby {
     /// The receivers whose hint showed since they last played, to store.
     var hintShown: Set<String> { Set(states.filter { $0.value.hint_shown_mark }.keys) }
 
+    /// The receivers the rule already holds a state for.
+    var known: Set<String> { Set(states.keys) }
+
     /// Whether the hint shows on the row of receiver `id`.
     func hint(_ id: String) -> Bool { states[id]?.hint ?? false }
 
