@@ -2390,6 +2390,10 @@ impl App {
         *self.after_main_shows.borrow_mut() = Some(Box::new(after));
     }
 
+    pub fn main_visible(&self) -> bool {
+        self.main.window().is_visible()
+    }
+
     /// Shows the main window and brings it to the front.
     pub fn show_main(&self) {
         #[cfg(all(any(windows, target_os = "linux"), not(test)))]

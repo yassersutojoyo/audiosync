@@ -74,6 +74,16 @@ pub fn arm(record: &Path) -> io::Result<()> {
     std::fs::write(record, format!("{} {starts}", Renderer::Skia.name()))
 }
 
+/// Puts every start from the next on the software renderer, as after a GPU
+/// that keeps losing the window's surface.
+pub fn fall_back(folder: Option<&Path>) -> io::Result<()> {
+    let Some(folder) = folder else {
+        return Ok(());
+    };
+    std::fs::create_dir_all(folder)?;
+    std::fs::write(folder.join(RECORD_NAME), Renderer::Software.name())
+}
+
 /// Picks this start's renderer and selects it for Slint; the record's path
 /// when it is Skia.
 #[cfg(windows)]
@@ -82,7 +92,7 @@ pub fn select(log: &crate::debug_log::DebugLog) -> Option<PathBuf> {
     log.log(|| match renderer {
         Renderer::Skia => "renderer: Skia".to_owned(),
         Renderer::Software => {
-            "renderer: software (three starts with Skia in a row failed in their first second)"
+            "renderer: software (Skia failed three times in a row, at start or by losing the window's surface)"
                 .to_owned()
         }
     });
@@ -118,7 +128,7 @@ pub fn confirm(record: &Path, log: &crate::debug_log::DebugLog) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Renderer, arm, choose, confirm, for_start};
+    use super::{Renderer, arm, choose, confirm, fall_back, for_start};
 
     #[test]
     fn skia_until_three_starts_in_a_row_neither_draw_nor_quit_then_software() {
@@ -203,6 +213,20 @@ mod tests {
                 .expect("the record is written");
         }
         assert_eq!(choose(Some(&folder)).0, Renderer::Skia);
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn a_fall_back_keeps_every_next_start_on_software() {
+        let folder = empty_folder("fall-back");
+        fall_back(Some(&folder)).expect("the record is written");
+        assert_eq!(choose(Some(&folder)), (Renderer::Software, None));
+        assert_eq!(
+            std::fs::read_to_string(folder.join(super::RECORD_NAME))
+                .ok()
+                .as_deref(),
+            Some("software")
+        );
         let _ = std::fs::remove_dir_all(&folder);
     }
 
