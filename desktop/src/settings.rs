@@ -778,6 +778,13 @@ pub struct Settings {
         deserialize_with = "strings_that_read"
     )]
     pub standby_hint_shown: BTreeSet<String>,
+    /// The name each AirPlay speaker with a standby mark last had, for its
+    /// row while it sleeps out of view (P263).
+    #[serde(
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "names_that_are_text"
+    )]
+    pub standby_names: BTreeMap<String, String>,
     /// The names the user gave speakers, by speaker key (spec S228).
     #[serde(
         skip_serializing_if = "BTreeMap::is_empty",
@@ -1065,6 +1072,7 @@ impl Default for Settings {
             auto_connect: BTreeSet::new(),
             standby_recognized: BTreeSet::new(),
             standby_hint_shown: BTreeSet::new(),
+            standby_names: BTreeMap::new(),
             speaker_names: BTreeMap::new(),
             hidden_speakers: Vec::new(),
             groups: Vec::new(),
@@ -1366,6 +1374,7 @@ impl Settings {
                 .into_iter()
                 .take(MAX_ENTRIES)
                 .collect(),
+            standby_names: self.standby_names.into_iter().take(MAX_ENTRIES).collect(),
             speaker_names: SpeakerNames::from_saved(
                 &self
                     .speaker_names
@@ -1617,6 +1626,7 @@ fn unreadable_fields(text: &str) -> Vec<String> {
         ("auto_connect", Value::is_array),
         ("standby_recognized", Value::is_array),
         ("standby_hint_shown", Value::is_array),
+        ("standby_names", Value::is_object),
         ("speaker_names", Value::is_object),
         ("hidden_speakers", Value::is_array),
         ("groups", Value::is_array),
@@ -2139,6 +2149,7 @@ mod tests {
             auto_connect: sample.auto_connect,
             standby_recognized: BTreeSet::from(["receiver".to_owned()]),
             standby_hint_shown: BTreeSet::from(["receiver".to_owned()]),
+            standby_names: BTreeMap::from([("receiver".to_owned(), "Den".to_owned())]),
             speaker_names: sample.speaker_names,
             hidden_speakers: vec![SavedHidden {
                 key: "lc:hidden".to_owned(),
@@ -2707,6 +2718,7 @@ mod tests {
             auto_connect,
             standby_recognized,
             standby_hint_shown,
+            standby_names,
             speaker_names,
             hidden_speakers,
             groups,
@@ -2755,6 +2767,7 @@ mod tests {
         assert_ne!(auto_connect, default.auto_connect);
         assert_ne!(standby_recognized, default.standby_recognized);
         assert_ne!(standby_hint_shown, default.standby_hint_shown);
+        assert_ne!(standby_names, default.standby_names);
         assert_ne!(speaker_names, default.speaker_names);
         assert_ne!(hidden_speakers, default.hidden_speakers);
         assert_ne!(groups, default.groups);

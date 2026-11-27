@@ -22,6 +22,9 @@ use super::cast_address::CastAddress;
 use super::outputs::OutputSettings;
 use super::routing::DirectPath;
 
+/// The standby marks and the names of their receivers, by receiver ID (P263).
+pub type StoredStandby = (BTreeMap<String, StandbyMarks>, BTreeMap<String, String>);
+
 /// The zone volume, 0 to 100, of every speaker in a zone (spec S249), by
 /// kind under the backend's own IDs: endpoint, AirPlay and Cast device IDs.
 /// A speaker not listed is in no zone.
@@ -1159,13 +1162,18 @@ pub trait AudioBackend {
     /// (false): a level it reads back meanwhile is ignored (S271).
     fn set_airplay_volume_dragging(&mut self, _id: &str, _dragging: bool) {}
 
-    /// Restores the AirPlay speakers' standby marks from the saved settings
-    /// (P263).
-    fn restore_airplay_standby_marks(&mut self, _marks: BTreeMap<String, StandbyMarks>) {}
+    /// Restores the AirPlay speakers' standby marks from the saved settings,
+    /// and the names those receivers last had (P263).
+    fn restore_airplay_standby_marks(
+        &mut self,
+        _marks: BTreeMap<String, StandbyMarks>,
+        _names: BTreeMap<String, String>,
+    ) {
+    }
 
-    /// The AirPlay speakers' standby marks to save; `None` without an
-    /// AirPlay sender, when the saved ones stay as they are (P263).
-    fn airplay_standby_marks(&self) -> Option<BTreeMap<String, StandbyMarks>> {
+    /// The AirPlay speakers' standby marks and names to save; `None`
+    /// without an AirPlay sender, when the saved ones stay as they are (P263).
+    fn airplay_standby_marks(&self) -> Option<StoredStandby> {
         None
     }
 

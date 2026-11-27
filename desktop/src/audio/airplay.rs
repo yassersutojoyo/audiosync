@@ -1868,11 +1868,22 @@ impl AirPlaySpeakers {
     }
 
     /// Restores the names the receivers with a standby mark last had (P263).
-    pub fn restore_standby_names(&mut self, _names: BTreeMap<String, String>) {}
+    /// Discovery's name wins once it comes.
+    pub fn restore_standby_names(&mut self, names: BTreeMap<String, String>) {
+        for (id, name) in names {
+            self.names.entry(id).or_insert(name);
+        }
+    }
 
     /// The names to store with the standby marks, each the last one seen.
     pub fn standby_names(&self) -> BTreeMap<String, String> {
-        BTreeMap::new()
+        self.standby_marks()
+            .into_keys()
+            .filter_map(|id| {
+                let name = self.names.get(&id)?.clone();
+                Some((id, name))
+            })
+            .collect()
     }
 
     /// The standby marks to store, every speaker's that isn't the default.

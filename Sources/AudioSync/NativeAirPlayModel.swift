@@ -638,7 +638,9 @@ struct NativeAirPlayModel {
 
     /// Names the receivers with a standby mark as they were last seen,
     /// until discovery names them (P263).
-    mutating func restoreNames(_ stored: [String: String]) {}
+    mutating func restoreNames(_ stored: [String: String]) {
+        names.merge(stored) { seen, _ in seen }
+    }
 
     mutating func apply(_ change: NativeReceiverChange) {
         switch change {

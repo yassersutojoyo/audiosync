@@ -999,7 +999,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 (id.clone(), marks)
             })
             .collect();
-        self.audio.restore_airplay_standby_marks(marks);
+        self.audio
+            .restore_airplay_standby_marks(marks, saved.standby_names.clone());
         for (id, speaker) in &saved.airplay {
             self.audio.set_airplay_volume(id, speaker.volume);
             if speaker.enabled
@@ -1187,25 +1188,28 @@ impl<A: AudioBackend> AudioAdapter<A> {
             &self.audio.enabled_airplay(),
             &self.airplay_unrestored,
         );
-        let (standby_recognized, standby_hint_shown) = match self.audio.airplay_standby_marks() {
-            Some(marks) => {
-                let marked = |mark: fn(&StandbyMarks) -> bool| {
-                    marks
-                        .iter()
-                        .filter(|(_, marks)| mark(marks))
-                        .map(|(id, _)| id.clone())
-                        .collect()
-                };
-                (
-                    marked(|marks| marks.recognized),
-                    marked(|marks| marks.hint_shown),
-                )
-            }
-            None => (
-                self.saved.standby_recognized.clone(),
-                self.saved.standby_hint_shown.clone(),
-            ),
-        };
+        let (standby_recognized, standby_hint_shown, standby_names) =
+            match self.audio.airplay_standby_marks() {
+                Some((marks, names)) => {
+                    let marked = |mark: fn(&StandbyMarks) -> bool| {
+                        marks
+                            .iter()
+                            .filter(|(_, marks)| mark(marks))
+                            .map(|(id, _)| id.clone())
+                            .collect()
+                    };
+                    (
+                        marked(|marks| marks.recognized),
+                        marked(|marks| marks.hint_shown),
+                        names,
+                    )
+                }
+                None => (
+                    self.saved.standby_recognized.clone(),
+                    self.saved.standby_hint_shown.clone(),
+                    self.saved.standby_names.clone(),
+                ),
+            };
         Settings {
             version: settings::VERSION,
             source: match &self.chosen {
@@ -1247,6 +1251,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             auto_connect: self.auto_connect.clone(),
             standby_recognized,
             standby_hint_shown,
+            standby_names,
             speaker_names: self.custom_names.saved(),
             hidden_speakers: self.hidden.clone(),
             groups: self.groups.clone(),
