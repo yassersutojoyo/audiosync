@@ -1228,6 +1228,18 @@ fn status_pop_event(
             state: ElementState::Pressed,
             ..
         } => pop.invoke_press(),
+        // Slint handles the release, and so the click, after this filter.
+        WindowEvent::MouseInput {
+            state: ElementState::Released,
+            ..
+        } => {
+            let main = main.as_weak();
+            Timer::single_shot(Duration::ZERO, move || {
+                if let Some(main) = main.upgrade() {
+                    main.global::<StatusPop>().invoke_released();
+                }
+            });
+        }
         WindowEvent::MouseWheel { .. } | WindowEvent::Resized(_) => pop.invoke_close(false),
         WindowEvent::KeyboardInput { event, .. }
             if event.state == ElementState::Pressed
@@ -10668,6 +10680,14 @@ pub(crate) mod tests {
         open("b");
         assert_eq!(pop.get_id(), "", "Enter on the open one's button closes it");
         open("a");
+        pop.invoke_press();
+        pop.invoke_released();
+        open("a");
+        assert_eq!(
+            pop.get_id(),
+            "a",
+            "after a click elsewhere closed it, Enter on its button opens it"
+        );
         pop.invoke_close(true);
         assert_eq!(
             (pop.get_id().as_str(), pop.get_refocus_id().as_str()),

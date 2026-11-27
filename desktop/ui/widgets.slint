@@ -1071,6 +1071,8 @@ export component IconButton inherits Rectangle {
     in property <bool> active;
     // No hover or press fill, as a Mac `.plain` button; the glyph still dims on a press.
     in property <bool> plain;
+    // Off while something the button opened already covers its tooltip's place.
+    in property <bool> tip-shown: true;
     callback clicked();
     // The button gained (true) or lost (false) keyboard focus.
     callback focus-changed(bool);
@@ -1117,7 +1119,7 @@ export component IconButton inherits Rectangle {
             root.clicked();
         }
 
-        if root.label != "": Tooltip {
+        if root.label != "" && root.tip-shown: Tooltip {
             tip := LabelTip {
                 text: root.label;
                 max-tip-width: 240px;
@@ -3395,6 +3397,12 @@ export global StatusPop {
         self.id = "";
     }
 
+    // After the click that follows a press: Enter on a focused info button
+    // opens its popover again.
+    public function released() {
+        self.closed-id = "";
+    }
+
     public function close(refocus: bool) {
         if refocus {
             self.refocus-id = self.id;
@@ -4327,6 +4335,8 @@ export component SpeakerRow inherits Rectangle {
                                         glyph-size: 13px;
                                         glyph-color: StatusPop.id == root.item.id ? Tokens.text : Tokens.secondary-text;
                                         label: Strings.status-info-label(root.item.status, root.item.name);
+                                        // The open popover says it all; the tip would cover the status.
+                                        tip-shown: StatusPop.id != root.item.id;
                                         property <int> asks: root.status-asks;
                                         changed asks => {
                                             self.toggle();
