@@ -54,6 +54,10 @@ struct AppSettings: Equatable {
         static let presetsMigrated = "speakerPresetsMigrated"
         /// Speaker keys (`SpeakerKey`) marked for auto-connect, as an array.
         static let autoConnect = "autoConnectSpeakers"
+        /// Receiver IDs recognized as a Denon or Marantz receiver (P263), as an array.
+        static let standbyRecognized = "airPlayStandbyRecognized"
+        /// Receiver IDs whose standby hint showed since they last played (P263), as an array.
+        static let standbyHintShown = "airPlayStandbyHintShown"
         /// The names the user gave speakers, by speaker key (`SpeakerNames`).
         static let speakerNames = "speakerNamesByKey"
         /// The speakers hidden with Hide Speaker (`HiddenSpeakers.stored`):
@@ -172,6 +176,10 @@ struct AppSettings: Equatable {
     /// The main window's preset list is folded open (S259).
     var presetsListOpen = false
     var autoConnect: Set<String> = []
+    /// Receiver IDs recognized as a Denon or Marantz receiver, and those
+    /// whose standby hint showed since they last played (P263).
+    var standbyRecognized: Set<String> = []
+    var standbyHintShown: Set<String> = []
     var speakerNames = SpeakerNames()
     var hiddenSpeakers = HiddenSpeakers()
     var showVirtualDevices = false
@@ -227,6 +235,8 @@ struct AppSettings: Equatable {
         s.enabledLocal = ids(read(Keys.enabledLocal))
         s.enabledCast = read(Keys.enabledCast) as? String
         s.autoConnect = ids(read(Keys.autoConnect))
+        s.standbyRecognized = ids(read(Keys.standbyRecognized))
+        s.standbyHintShown = ids(read(Keys.standbyHintShown))
         s.speakerNames = SpeakerNames(stored: read(Keys.speakerNames))
         s.hiddenSpeakers = HiddenSpeakers(stored: read(Keys.hiddenSpeakers))
         s.master = read(Keys.master).flatMap(number).map(volume) ?? defaultMaster

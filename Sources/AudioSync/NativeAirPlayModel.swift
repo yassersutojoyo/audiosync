@@ -1281,6 +1281,12 @@ struct NativeAirPlayModel {
     /// The let-go receivers yielded to another sender: their rows say
     /// another device uses them (S482).
     var taken: Set<String> = []
+    /// The standby hints of Denon and Marantz receivers, by receiver ID
+    /// (P262 to P264).
+    var standby = AirPlayStandby()
+
+    /// Whether the row of receiver `id` shows the standby hint (P263).
+    func standbyHint(_ id: String) -> Bool { standby.hint(id) }
 
     /// Forgets the let-go receivers whose switch is off (app IDs in
     /// `enabled`), however it was switched: one switched on again joins.

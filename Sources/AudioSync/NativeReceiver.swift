@@ -54,6 +54,8 @@ struct NativeReceiver: Equatable {
     var missing: [String] = []
     /// Its kind from its records, a target's by P241.
     var product: ProductKind = .unknown
+    /// `ASC_DENON_*`: a Denon or Marantz AV receiver, and by what (P261).
+    var denon: Int32 = 0
 
     /// How the speaker list shows it, if at all: one that can play is open;
     /// one that asks for a PIN or a password needs a code, which AudioSync

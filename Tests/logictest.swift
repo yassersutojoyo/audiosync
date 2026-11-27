@@ -20687,5 +20687,49 @@ do {
           "taken: a Cast speaker waiting for sound is taken until the user's switch brings it back")
 }
 
+// MARK: Standby hint of a Denon or Marantz receiver (AirPlayStandby.swift, P262 to P264)
+do {
+    typealias Keys = AppSettings.Keys
+    final class StandbyStored { var values: [String: Any] = [:] }
+    let standbyStored = StandbyStored()
+    let standbyStore = SettingsStore(read: { standbyStored.values[$0] },
+                                     write: { value, key in standbyStored.values[key] = value })
+    let den = "0005CD112233"
+    let wantsDen: (String) -> Bool = { $0 == den }
+    var standby = AirPlayStandby()
+    _ = standby.update(records: [den: ASC_DENON_MANUFACTURER], wanted: wantsDen, now: 0)
+    standby.outcome(den, ASC_STANDBY_OUTCOME_PLAYED, now: 0)
+    standby.outcome(den, ASC_STANDBY_OUTCOME_UNANNOUNCED, now: 1)
+    let standbyEarly = standby.update(records: [:], wanted: wantsDen, now: 30.9)
+    let standbyShown = standby.update(records: [:], wanted: wantsDen, now: 31)
+    // covers: P263
+    check(standbyEarly.isEmpty && standbyShown.map { $0.id } == [den] && standby.hint(den)
+            && standby.recognized == [den] && standby.hintShown == [den],
+          "standby: a recognized receiver asleep for 30 s shows the hint once and marks it")
+
+    standbyStore.save(ids: standby.recognized, forKey: Keys.standbyRecognized)
+    standbyStore.save(ids: standby.hintShown, forKey: Keys.standbyHintShown)
+    let standbyLoaded = standbyStore.load()
+    var relaunched = AirPlayStandby(recognized: standbyLoaded.standbyRecognized,
+                                    hintShown: standbyLoaded.standbyHintShown)
+    _ = relaunched.update(records: [:], wanted: wantsDen, now: 100)
+    let relaunchedShown = relaunched.update(records: [:], wanted: wantsDen, now: 140)
+    check(standbyLoaded.standbyRecognized == [den] && standbyLoaded.standbyHintShown == [den]
+            && relaunchedShown.isEmpty && !relaunched.hint(den),
+          "standby: the stored marks come back after a relaunch, and a hint already shown stays off")
+
+    _ = standby.update(records: [:], wanted: { _ in false }, now: 32)
+    let offClears = !standby.hint(den) && standby.hintShown == [den]
+    standby.outcome(den, ASC_STANDBY_OUTCOME_PLAYED, now: 40)
+    // covers: P264
+    check(offClears && standby.hintShown.isEmpty && standby.recognized == [den],
+          "standby: switching off clears the hint and keeps its mark; playing clears the mark")
+
+    var standbyModel = NativeAirPlayModel()
+    standbyModel.standby = standby
+    check(!standbyModel.standbyHint(den) && !standbyModel.standbyHint("other"),
+          "standby: the model answers the row's hint by receiver ID")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)
