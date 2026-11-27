@@ -8707,6 +8707,30 @@ pub mod tests {
         assert!(hint(&relaunched, &id));
     }
 
+    // A receiver asleep since the app started is never discovered, so its
+    // row comes from the switch and the stored mark alone, and shows the hint.
+    // covers: P263
+    #[test]
+    fn a_receiver_asleep_since_launch_keeps_a_row_with_its_standby_hint() {
+        let den = denon_receiver();
+        let id = id_of(&den);
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        airplay.restore_standby_marks(BTreeMap::from([(
+            id.clone(),
+            StandbyMarks {
+                recognized: true,
+                hint_shown: false,
+            },
+        )]));
+        let _ = airplay.set_enabled(&id, true);
+        airplay.set_streaming(true);
+        let start = Instant::now();
+        airplay.update_standby(start);
+        airplay.update_standby(start + Duration::from_secs(40));
+        assert!(hint(&airplay, &id), "{:?}", airplay.speakers());
+    }
+
     // A speaker that isn't a Denon or Marantz receiver never shows it.
     // covers: P262
     #[test]

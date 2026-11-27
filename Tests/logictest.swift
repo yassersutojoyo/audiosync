@@ -20730,6 +20730,17 @@ do {
     standbyModel.standby = standby
     check(!standbyModel.standbyHint(den) && !standbyModel.standbyHint("other"),
           "standby: the model answers the row's hint by receiver ID")
+
+    // A receiver asleep since launch is never listed: its row comes from the stored mark.
+    var asleepModel = NativeAirPlayModel()
+    asleepModel.standby = AirPlayStandby(recognized: [den])
+    _ = asleepModel.standby.update(records: [:], wanted: wantsDen, now: 0)
+    _ = asleepModel.standby.update(records: [:], wanted: wantsDen, now: 40)
+    // covers: P263
+    check(asleepModel.rows(enabled: [NativeAirPlayID.app(den)]) == [NativeAirPlayID.app(den)]
+            && asleepModel.standbyHint(den),
+          "standby: a receiver asleep since launch keeps a row with its hint",
+          "\(asleepModel.rows(enabled: [NativeAirPlayID.app(den)]))")
 }
 
 // ROW-STATUS-SET: a row's status is a word or two, at most as long as "Not
