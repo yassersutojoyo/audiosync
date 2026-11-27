@@ -30,7 +30,10 @@ An app that's using a microphone, like a call, is left out of a whole-system str
 
 ## Volume keys
 
-Volume Keys Control AudioSync: Mac and Windows only. On Linux the desktop keeps the volume keys (Wayland lets no app grab keys for the whole desktop), so they change the desktop's volume and AudioSync's master stays where you set it.
+Volume Keys Control AudioSync: Mac and Windows only. On Linux the desktop keeps the volume keys, so they change the desktop's volume and AudioSync's master stays where you set it. On Mac and Windows the switch takes the keys away from the system as soon as it's on, and Linux has no way to do that:
+
+- **Wayland:** an app only gets keys while its window has the focus. The one route to a key anywhere on the desktop is the [Global Shortcuts portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.GlobalShortcuts.html), where the app can only suggest a key and you pick it in the desktop's own dialog. The desktop's volume control already holds the volume keys, so you'd have to take them away from it by hand first. GNOME has the portal only [since GNOME 48](https://release.gnome.org/48/developers/), so GNOME 46 and 47 have no route at all.
+- **X11:** an app takes a key for the whole screen with `XGrabKey`, and that [fails with BadAccess](https://tronche.com/gui/x/xlib/input/XGrabKey.html) when another program holds the same key. GNOME and KDE hold the volume keys themselves. Watching the keys without taking them would move both volumes at once.
 
 ## Permissions and the network
 
