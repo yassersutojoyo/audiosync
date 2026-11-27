@@ -772,6 +772,7 @@ impl Pairing {
                 retry_after: None,
                 back_off: None,
                 detail,
+                unreachable: None,
             },
             false,
         );
@@ -1044,6 +1045,7 @@ impl Pairing {
             retry_after: None,
             back_off: None,
             detail,
+            unreachable: None,
         };
         self.fail_with(error, wrong_pin);
     }

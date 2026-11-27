@@ -13,7 +13,9 @@ use std::time::{Duration, Instant};
 
 use crate::digest::{self, Challenge};
 use crate::discovery::Features;
-use crate::error::{ErrorKind, SessionError, UnsupportedReason, Warning};
+use crate::error::{
+    ConnectFailures, ErrorKind, SessionError, UnreachableCause, UnsupportedReason, Warning,
+};
 use crate::homekit::{
     self, HomeKitCredentials, Identity, Mode, PairSetup, PairVerify, SetupStep, SharedSecret,
     SrpDone, SrpWork, Stored, VerifyStep,
@@ -413,6 +415,7 @@ pub struct Ap2Session {
     pin_not_before: Option<Instant>,
     /// M1 is ready and waits for `pin_not_before`.
     pin_held: bool,
+    connect_failures: ConnectFailures,
     /// The volume is answered and the stream SETUP waits for the event
     /// connection (P70).
     stream_setup_waiting: bool,
@@ -543,6 +546,7 @@ impl Ap2Session {
             events_retry_at: None,
             pin_not_before: None,
             pin_held: false,
+            connect_failures: ConnectFailures::default(),
             stream_setup_waiting: false,
             stream: None,
             stream_torn_down: false,
@@ -866,19 +870,35 @@ impl Ap2Session {
     /// The connect failed: the next address, or Unreachable after the last
     /// (P17, P134).
     pub fn handle_connect_failed(&mut self, now: Instant) {
+        self.handle_connect_error(now, None);
+    }
+
+    /// [`Ap2Session::handle_connect_failed`] with what the connect's error
+    /// showed, which the Unreachable after the last address carries (P262).
+    pub fn handle_connect_error(&mut self, now: Instant, cause: Option<UnreachableCause>) {
         if self.state == Ap2State::Connecting {
-            self.next_attempt(now, None);
+            self.next_attempt(now, cause, None);
         }
     }
 
-    fn next_attempt(&mut self, now: Instant, detail: Option<&'static str>) {
+    fn next_attempt(
+        &mut self,
+        now: Instant,
+        cause: Option<UnreachableCause>,
+        detail: Option<&'static str>,
+    ) {
+        self.connect_failures.add(cause);
         self.attempt += 1;
         match self.config.addresses.get(self.attempt) {
             Some(&address) => {
                 self.attempt_started = now;
                 self.outputs.push_back(Output::Connect(address));
             }
-            None => self.fail(ErrorKind::Unreachable, None, None, detail),
+            None => self.fail_with(SessionError {
+                detail,
+                unreachable: self.connect_failures.cause(),
+                ..SessionError::new(ErrorKind::Unreachable)
+            }),
         }
     }
 
@@ -1027,7 +1047,11 @@ impl Ap2Session {
         }
         if self.state == Ap2State::Connecting {
             if now >= self.attempt_started + CONNECT_TIMEOUT {
-                self.next_attempt(now, Some("connect timed out"));
+                self.next_attempt(
+                    now,
+                    Some(UnreachableCause::NoAnswer),
+                    Some("connect timed out"),
+                );
             }
             return;
         }
@@ -1384,6 +1408,7 @@ impl Ap2Session {
             retry_after: None,
             back_off: None,
             detail,
+            unreachable: None,
         });
     }
 

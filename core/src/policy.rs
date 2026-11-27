@@ -34,6 +34,7 @@ pub mod airplay_groups;
 pub mod airplay_latency;
 pub mod airplay_pairing;
 pub mod airplay_reconnect;
+pub mod airplay_standby;
 pub mod airplay_volume;
 pub mod call_listeners;
 pub mod capture;

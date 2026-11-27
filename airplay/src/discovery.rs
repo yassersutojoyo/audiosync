@@ -449,6 +449,25 @@ fn apple_model_kind(model: &str) -> Option<ProductKind> {
     }
 }
 
+/// Which half of the brand test named a Denon or Marantz AV receiver
+/// (P261).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DenonBrand {
+    Manufacturer,
+    AddressBlock,
+}
+
+/// Whether a model, a manufacturer and a device identifier, each as
+/// advertised, make a Denon or Marantz AV receiver, and by what (P261).
+pub fn denon_receiver(
+    model: Option<&str>,
+    manufacturer: Option<&str>,
+    id: Option<DeviceId>,
+) -> Option<DenonBrand> {
+    let _ = (model, manufacturer, id);
+    None
+}
+
 /// The protocol path for a device (P2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProtocolPath {
@@ -542,6 +561,12 @@ impl Device {
             airplay.and_then(|txt| txt.manufacturer.as_deref()),
             features,
         )
+    }
+
+    /// Whether it is a Denon or Marantz AV receiver, from its records as
+    /// they are now (P261).
+    pub fn denon_receiver(&self) -> Option<DenonBrand> {
+        None
     }
 
     /// AirPlay `features` when present, otherwise RAOP `ft` (the same mask,

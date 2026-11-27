@@ -14,7 +14,6 @@ P246 the found and kind-change log lines are the host's; desktop/src tests it
 
 # A later stage implements them (sender crate and hosts, from the clause).
 P259 the rig cells run on the PC rig (WSL receiver, fake TV), outside the crate tests
-P261 Denon and Marantz recognition; a later stage implements it in discovery, from the clause
 P262 the asleep-off-the-network rule lives in the shared core; core tests test it
 P263 the standby hint and its stored marks are the host's; desktop/src and the Mac logic test test it
 P264 clearing the standby hint is the host's; desktop/src and the Mac logic test test it

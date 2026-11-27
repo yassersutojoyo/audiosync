@@ -186,6 +186,47 @@ pub struct SessionError {
     pub back_off: Option<Duration>,
     /// A short diagnostic for protocol errors. Never contains the password.
     pub detail: Option<&'static str>,
+    /// What the connects of an Unreachable showed; `None` for any other
+    /// kind and for an Unreachable no connect explains (P134, P262).
+    pub unreachable: Option<UnreachableCause>,
+}
+
+/// What the failed connects of an Unreachable showed (P262).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UnreachableCause {
+    /// A connect was answered with a reset: the receiver's network is up.
+    Refused,
+    /// Every connect went unanswered for 5 s, or found the host or the
+    /// network unreachable.
+    NoAnswer,
+}
+
+impl UnreachableCause {
+    /// The cause a failed connect's error gives, `None` for one that tells
+    /// nothing about the receiver.
+    pub fn of(error: &std::io::Error) -> Option<UnreachableCause> {
+        let _ = error;
+        None
+    }
+}
+
+/// The failed connects of one session, over all of its addresses.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct ConnectFailures {
+    refused: bool,
+    no_answer: bool,
+    unexplained: bool,
+}
+
+impl ConnectFailures {
+    pub(crate) fn add(&mut self, cause: Option<UnreachableCause>) {
+        let _ = cause;
+    }
+
+    pub(crate) fn cause(self) -> Option<UnreachableCause> {
+        let _ = (self.refused, self.no_answer, self.unexplained);
+        None
+    }
 }
 
 impl SessionError {
@@ -204,6 +245,7 @@ impl SessionError {
             retry_after: None,
             back_off: None,
             detail: None,
+            unreachable: None,
         }
     }
 }

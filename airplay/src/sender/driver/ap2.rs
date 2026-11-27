@@ -1139,9 +1139,9 @@ impl Driver {
                     Err(_) => active.session.handle_connect_failed(now),
                 }
             }
-            IoEvent::ConnectFailed { attempt, .. } => {
+            IoEvent::ConnectFailed { attempt, cause, .. } => {
                 if attempt == active.attempt {
-                    active.session.handle_connect_failed(now);
+                    active.session.handle_connect_error(now, cause);
                 }
             }
             IoEvent::Rtsp { attempt, bytes, .. } => {
