@@ -3232,6 +3232,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             holds_password: false,
             holds_credentials: false,
             code_every_time: false,
+            standby: false,
             refused_for_code: false,
             own_volume: speaker.volume_known.then_some(speaker.volume),
             device_volume: None,
@@ -5133,6 +5134,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             holds_password: speaker.holds_password,
             holds_credentials: speaker.holds_credentials,
             code_every_time: speaker.code_every_time,
+            standby: speaker.standby_hint,
             refused_for_code: self.airplay_refused.contains_key(&speaker.id),
             own_volume: Some(speaker.volume),
             // An AirPlay speaker's volume is its own slider (S192).
@@ -5201,6 +5203,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             holds_password: false,
             holds_credentials: false,
             code_every_time: false,
+            standby: false,
             refused_for_code: false,
             // Read only while the output is on (S192).
             own_volume: None,

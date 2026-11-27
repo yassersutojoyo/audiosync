@@ -952,6 +952,7 @@ pub(crate) mod tests {
             holds_password: false,
             holds_credentials: false,
             code_every_time: false,
+            standby: false,
             refused_for_code: false,
             own_volume: None,
             device_volume: None,

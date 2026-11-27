@@ -270,6 +270,9 @@ pub struct Speaker {
     /// An AirPlay speaker that asks for a code every time it connects:
     /// auto-connect leaves it off, and its row says why.
     pub code_every_time: bool,
+    /// A Denon or Marantz receiver asleep off the network (P262): its row
+    /// says Standby and names the receiver's network standby setting.
+    pub standby: bool,
     /// An AirPlay speaker turned off because it refused a session for want
     /// of a pairing (S223): the web remote can't turn it on.
     pub refused_for_code: bool,
@@ -2293,6 +2296,7 @@ impl MockBackend {
             holds_password: false,
             holds_credentials: false,
             code_every_time: false,
+            standby: false,
             refused_for_code: false,
             own_volume: None,
             device_volume: None,
@@ -3146,6 +3150,7 @@ impl Backend for MockBackend {
                 holds_password: false,
                 holds_credentials: false,
                 code_every_time: false,
+                standby: false,
                 refused_for_code: false,
                 own_volume: None,
                 device_volume: None,
@@ -3656,6 +3661,7 @@ mod tests {
             holds_password: false,
             holds_credentials: false,
             code_every_time: false,
+            standby: false,
             refused_for_code: false,
             own_volume: None,
             device_volume: None,
